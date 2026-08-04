@@ -65,53 +65,51 @@ export default function RootLayout({
 
   return (
     <html lang="pl">
-      <body className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased">
+      <body className="min-h-screen bg-sky-50 text-slate-900 flex flex-col font-sans antialiased">
         
-        {/* Górny Pasek (Top Navigation Bar) */}
-        <header className="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-4 flex items-center justify-between sticky top-0 z-40">
+        {/* Górny Pasek */}
+        <header className="h-16 border-b border-sky-200 bg-white/90 backdrop-blur-md px-4 flex items-center justify-between sticky top-0 z-40 shadow-sm">
           <div className="flex items-center gap-4">
-            {/* Przycisk Hamburgera */}
             <button 
               onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="p-2 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-all text-xl"
+              className="p-2 text-slate-700 hover:text-sky-600 rounded-lg hover:bg-sky-100 transition-all text-xl"
             >
               ☰
             </button>
-            <span className="text-base font-black text-amber-500 uppercase tracking-wider">
+            <span className="text-base font-black text-sky-600 uppercase tracking-wider">
               Forma Marzeń
             </span>
           </div>
 
-          {/* Prawe ikonki na pasku górnym */}
-          <div className="flex items-center gap-3 text-slate-400 text-sm">
-            <button className="p-2 hover:bg-slate-800 rounded-lg">🔍</button>
-            <button className="p-2 hover:bg-slate-800 rounded-lg">👤+</button>
-            <button className="p-2 hover:bg-slate-800 rounded-lg">📅</button>
-            <div className="w-8 h-8 bg-amber-500 rounded-full flex items-center justify-center font-bold text-slate-950 text-xs ml-2">
+          <div className="flex items-center gap-3 text-slate-600 text-sm">
+            <button className="p-2 hover:bg-sky-100 rounded-lg">🔍</button>
+            <button className="p-2 hover:bg-sky-100 rounded-lg">👤+</button>
+            <button className="p-2 hover:bg-sky-100 rounded-lg">📅</button>
+            <div className="w-8 h-8 bg-sky-600 rounded-full flex items-center justify-center font-bold text-white text-xs ml-2">
               FM
             </div>
           </div>
         </header>
 
-        {/* Tło przy otwartym menu (Overlay) */}
+        {/* Overlay */}
         {isMenuOpen && (
           <div 
             onClick={() => setIsMenuOpen(false)}
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 transition-opacity"
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 transition-opacity"
           />
         )}
 
-        {/* Wysuwane Menu Boczne (Drawer) */}
-        <aside className={`fixed top-0 left-0 h-full w-72 bg-slate-900 border-r border-slate-800 p-5 z-50 transform transition-transform duration-300 overflow-y-auto ${
+        {/* Wysuwane Menu Boczne */}
+        <aside className={`fixed top-0 left-0 h-full w-72 bg-white border-r border-sky-200 p-5 z-50 transform transition-transform duration-300 overflow-y-auto shadow-2xl ${
           isMenuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}>
-          <div className="flex justify-between items-center pb-6 border-b border-slate-800 mb-4">
-            <span className="text-lg font-black text-amber-500 uppercase tracking-wider">
+          <div className="flex justify-between items-center pb-4 border-b border-sky-100 mb-4">
+            <span className="text-lg font-black text-sky-600 uppercase tracking-wider">
               Menu Systemu
             </span>
             <button 
               onClick={() => setIsMenuOpen(false)}
-              className="text-slate-400 hover:text-white p-1 rounded-lg text-lg"
+              className="text-slate-400 hover:text-slate-700 p-1 rounded-lg text-lg"
             >
               ✕
             </button>
@@ -120,7 +118,7 @@ export default function RootLayout({
           <nav className="space-y-6">
             {menuSections.map((section, idx) => (
               <div key={idx}>
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 mb-2">
+                <div className="text-[10px] font-bold text-sky-800/60 uppercase tracking-wider px-2 mb-2">
                   {section.title}
                 </div>
                 <div className="space-y-1">
@@ -129,7 +127,7 @@ export default function RootLayout({
                       key={item.href}
                       href={item.href}
                       onClick={() => setIsMenuOpen(false)}
-                      className="flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-amber-400 transition-all"
+                      className="flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-sky-100 hover:text-sky-700 transition-all"
                     >
                       <span className="text-sm">{item.icon}</span>
                       <span>{item.label}</span>
