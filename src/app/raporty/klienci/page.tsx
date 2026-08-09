@@ -7,6 +7,7 @@ export default function ClientsReportPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [clients, setClients] = useState<any[]>([]);
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
+  const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
 
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -25,7 +26,6 @@ export default function ClientsReportPage() {
   const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [activeProfileTab, setActiveProfileTab] = useState<'osobowe' | 'faktury' | 'rodzinne' | 'karta'>('osobowe');
   const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'przeszle' | 'wypisy' | 'automatyczne'>('nadchodzace');
 
   const [isWalletHistoryOpen, setIsWalletHistoryOpen] = useState(false);
@@ -61,25 +61,28 @@ export default function ClientsReportPage() {
   });
 
   const loadData = async () => {
-    // 1. Pobieranie danych równolegle
     const [
-      { data: klienciData, error: klienciError },
-      { data: karnetyData, error: karnetyError },
-      { data: transakcjeData, error: transakcjeError }
+      { data: klienciData },
+      { data: karnetyData },
+      { data: transakcjeData },
+      { data: trenerzyData }
     ] = await Promise.all([
       supabase.from('klienci').select('*'),
       supabase.from('karnety').select('*'),
-      supabase.from('transakcje').select('*').order('created_at', { ascending: false })
+      supabase.from('transakcje').select('*').order('created_at', { ascending: false }),
+      supabase.from('trenerzy').select('*')
     ]);
 
-    if (klienciError) console.error("Błąd odczytu klientów", klienciError);
-    if (karnetyError) console.error("Błąd odczytu karnetów", karnetyError);
-    if (transakcjeError) console.error("Błąd odczytu transakcji", transakcjeError);
+    if (trenerzyData) {
+      setZespolTrenerzy(trenerzyData);
+    }
 
     if (klienciData) {
       const enriched = klienciData.map((c: any) => {
-        // Zbieramy wszystkie transakcje danego klienta
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => t.klient_id === c.id) : [];
+
+        // Sprawdzamy czy klient jest powiązany z trenerem
+        const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
 
         return {
           ...c,
@@ -97,8 +100,10 @@ export default function ClientsReportPage() {
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
           birthDate: c.birthDate || '',
+          isTrainer: !!powiazanyTrener,
+          trenerInfo: powiazanyTrener || null,
           karnetyKlubowicza: c.karnetyKlubowicza || c.karnetyklubowicza || [],
-          transakcje: clientTransakcje, // Podpinamy logi bezpośrednio z bazy
+          transakcje: clientTransakcje,
           zapisyNadchodzace: c.zapisyNadchodzace || [],
           zapisyPrzeszle: c.zapisyPrzeszle || [],
           zapisyWypisy: c.zapisyWypisy || []
@@ -125,6 +130,25 @@ export default function ClientsReportPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleToggleClientTrainer = async (client: any) => {
+    if (!client.isTrainer) {
+      const { error } = await supabase.from('trenerzy').insert([{
+        imie_nazwisko: `${client.firstName} ${client.lastName}`,
+        email: client.email,
+        telefon: client.phone
+      }]);
+      if (error) {
+        alert("Błąd przypisywania do zespołu: " + error.message);
+        return;
+      }
+    } else {
+      if (client.email) {
+        await supabase.from('trenerzy').delete().eq('email', client.email);
+      }
+    }
+    loadData();
+  };
 
   const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,7 +195,6 @@ export default function ClientsReportPage() {
       });
     }
 
-    // Odciągnięcie kwoty początkowego karnetu od stanu portfela (tworzy zadłużenie jeśli brak wpłaty)
     const poczatkowyStan = (parseFloat(newClient.wallet) || 0) - cenaWartosc;
     const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
     const newClientId = Date.now();
@@ -191,7 +214,6 @@ export default function ClientsReportPage() {
     ]);
 
     if (!error && newClient.selectedPass) {
-      // Zapis transakcji zakupu do bazy
       await supabase.from('transakcje').insert([{
         klient_id: newClientId,
         typ_operacji: 'zakup_karnetu',
@@ -201,8 +223,7 @@ export default function ClientsReportPage() {
     }
 
     if (error) {
-      console.error("Błąd zapisu do Supabase:", error);
-      alert("Wystąpił błąd podczas dodawania klienta. Sprawdź konsolę (F12).");
+      alert("Wystąpił błąd podczas dodawania klienta.");
     } else {
       setIsAddModalOpen(false);
       setNewClient({
@@ -225,7 +246,6 @@ export default function ClientsReportPage() {
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingClient) return;
-
     await supabase.from('klienci').update({ Imię: editingClient.firstName, Nazwisko: editingClient.lastName }).eq('id', editingClient.id);
     setEditingClient(null);
     loadData();
@@ -234,7 +254,6 @@ export default function ClientsReportPage() {
   const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient) return;
-
     await supabase.from('klienci').update({ Imię: profileClient.firstName, Nazwisko: profileClient.lastName, telefon: profileClient.phone, email: profileClient.email, płeć: profileClient.gender }).eq('id', profileClient.id);
     setIsEditProfileInfoOpen(false);
     loadData();
@@ -242,7 +261,6 @@ export default function ClientsReportPage() {
 
   const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
-      // Usunięcie klienta (transakcje mogą mieć on delete cascade w bazie, ale usuwamy też dla pewności z poziomu aplikacji logikę klienta)
       await supabase.from('klienci').delete().eq('id', id);
       await supabase.from('transakcje').delete().eq('klient_id', id);
       
@@ -311,7 +329,6 @@ export default function ClientsReportPage() {
     const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
     const kwotaKarnetu = parseFloat(nowaCena.replace(/[^0-9.]/g, '')) || 0;
 
-    // Pobranie i pomniejszenie stanu portfela
     const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
     const nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
@@ -329,19 +346,12 @@ export default function ClientsReportPage() {
       return k;
     });
 
-    // Aktualizacja tabeli klientów
-    const { error } = await supabase.from('klienci').update({
+    await supabase.from('klienci').update({
       karnetyKlubowicza: uaktualnioneKarnety,
       Cena: nowaCena,
       Portfel: nowyStanStr
     }).eq('id', profileClient.id);
 
-    if (error) {
-      alert(`Błąd zapisu: ${error.message}`);
-      return;
-    }
-
-    // Logujemy operację zakupową
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
       typ_operacji: 'zakup_karnetu',
@@ -354,8 +364,8 @@ export default function ClientsReportPage() {
     loadData();
   };
 
-  const handleAddSecondPassSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // 🌟 FUNKCJA DODAJĄCA DRUGI KARNET (Z DWOMA OPCJAMI PŁATNOŚCI)
+  const handleAddSecondPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !selectedPassToAdd) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
@@ -378,10 +388,18 @@ export default function ClientsReportPage() {
     const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
     const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
 
-    // Pobranie i pomniejszenie portfela
-    const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-    const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
-    const nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+    let nowyStanStr = profileClient.wallet; // Domyślnie brak zmiany w portfelu
+    let logKwota = 0;
+    let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
+
+    // Jeśli zapłaci później -> obciążamy portfel
+    if (paymentMethod === 'later') {
+      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+      const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
+      nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+      logKwota = -kwotaKarnetu;
+      logOpis = `Dodano karnet: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`;
+    }
 
     const nowyKarnetObj = {
       id: Date.now(),
@@ -411,12 +429,11 @@ export default function ClientsReportPage() {
       return;
     }
 
-    // Logujemy zakup
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
       typ_operacji: 'zakup_karnetu',
-      kwota: -kwotaKarnetu,
-      opis: `Dodatkowy karnet: ${selectedPassToAdd} (Obciążenie portfela)`
+      kwota: logKwota,
+      opis: logOpis
     }]);
 
     setSelectedPassToAdd('');
@@ -471,7 +488,7 @@ export default function ClientsReportPage() {
       dataZawieszenia: karnetTarget.zawieszonyOd,
       dataAtywacji: karnetTarget.zawieszonyDo,
       okres: `${dniZawieszenia} dni`,
-      przezKogo: 'Maciej Klaput'
+      przezKogo: 'Zarządca systemu'
     };
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
@@ -518,7 +535,6 @@ export default function ClientsReportPage() {
 
     await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
 
-    // Log edycji detali (bez wpływu na saldo)
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
       typ_operacji: 'edycja_karnetu',
@@ -615,7 +631,6 @@ export default function ClientsReportPage() {
     const nowyStan = currentWalletNum + kwotaZmiany;
     const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
 
-    // 1. Zapisujemy w nowej tabeli Logów Transakcji (Supabase)
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
       typ_operacji: 'portfel',
@@ -623,7 +638,6 @@ export default function ClientsReportPage() {
       opis: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta / Odpis z portfela')
     }]);
 
-    // 2. Aktualizujemy w kliencie faktyczny stan portfela
     await supabase.from('klienci').update({ Portfel: nowyStanStr }).eq('id', profileClient.id);
 
     setWalletAmountInput('');
@@ -647,7 +661,6 @@ export default function ClientsReportPage() {
     if (sortField === 'firstName') { valA = a.firstName || ''; valB = b.firstName || ''; }
     else if (sortField === 'lastName') { valA = a.lastName || ''; valB = b.lastName || ''; }
     else if (sortField === 'registered') { valA = a.registered || ''; valB = b.registered || ''; }
-    else if (sortField === 'activated') { valA = a.activated || ''; valB = b.activated || ''; }
     else if (sortField === 'email') { valA = a.email || ''; valB = b.email || ''; }
     else if (sortField === 'phone') { valA = a.phone || ''; valB = b.phone || ''; }
     else if (sortField === 'pass') { 
@@ -676,25 +689,64 @@ export default function ClientsReportPage() {
     return 0;
   });
 
-  const isWalletNegative = (walletStr: string) => {
-    if (!walletStr) return false;
-    return walletStr.includes('-');
-  };
+  const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
+
+  const klienciTrenerzyList = clients.filter(c => c.isTrainer);
 
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden">
       
-      {/* Pasek Nagłówka z DODANYM PRZYCISKIEM "+ DODAJ KLUBOWICZA" */}
+      {/* Pasek Nagłówka */}
       <div className="flex justify-between items-center border-b border-sky-200 pb-4">
         <h1 className="text-xl font-bold uppercase tracking-wider text-sky-950">
           👥 Klienci
         </h1>
         <div className="flex items-center gap-2">
-          <button onClick={() => setIsAddModalOpen(true)} className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition-all text-xs uppercase tracking-wider cursor-pointer">
+          <button onClick={() => setIsAddModalOpen(true)} className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition-all text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap">
             + DODAJ KLUBOWICZA
           </button>
           <button className="p-2 bg-white border border-sky-200 text-slate-700 rounded-xl hover:bg-sky-50 shadow-sm transition-all cursor-pointer" title="Ustawienia tabeli">⚙️</button>
           <button className="p-2 bg-white border border-sky-200 text-slate-700 rounded-xl hover:bg-sky-50 shadow-sm transition-all cursor-pointer" title="Eksportuj">📥</button>
+        </div>
+      </div>
+
+      {/* 🌟 NOWY PANEL (OKIENKO) NAD TABELĄ: KLIENT = TRENER */}
+      <div className="bg-gradient-to-r from-sky-900 to-slate-900 border border-sky-700/40 rounded-2xl p-5 shadow-lg text-white space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">⭐</span>
+            <h3 className="text-sm font-bold uppercase tracking-wider text-amber-400">Klubowicze pełniący funkcję Trenerów</h3>
+          </div>
+          <span className="bg-amber-500/20 text-amber-300 text-xs font-bold px-3 py-1 rounded-full border border-amber-500/30">
+            {klienciTrenerzyList.length} przypisanych
+          </span>
+        </div>
+        <p className="text-xs text-sky-200">
+          Poniżej znajdują się klienci, którzy są powiązani z kontem trenera w zespole. Możesz zarządzać ich powiązaniami bezpośrednio z ich profilu.
+        </p>
+
+        <div className="flex flex-wrap gap-2 pt-2">
+          {klienciTrenerzyList.length > 0 ? (
+            klienciTrenerzyList.map(t => (
+              <div 
+                key={t.id} 
+                onClick={() => setProfileClient(t)}
+                className="bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl px-4 py-2.5 flex items-center gap-3 cursor-pointer transition-all shadow-sm"
+              >
+                <div className="w-7 h-7 rounded-full bg-amber-500 text-slate-950 font-black flex items-center justify-center text-xs">
+                  {t.firstName?.[0]}{t.lastName?.[0]}
+                </div>
+                <div className="text-xs">
+                  <div className="font-bold text-white whitespace-nowrap">{t.firstName} {t.lastName}</div>
+                  <div className="text-[10px] text-amber-300 whitespace-nowrap">Trener w zespole</div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="text-xs text-sky-300 italic py-2">
+              Brak klientów przypisanych jako trenerzy. Aby przypisać klienta jako trenera, wejdź w jego profil i kliknij opcję powiązania.
+            </div>
+          )}
         </div>
       </div>
 
@@ -711,7 +763,7 @@ export default function ClientsReportPage() {
               className="w-full bg-white border border-sky-200 rounded-xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
             />
           </div>
-          <button className="px-4 py-2.5 bg-rose-800 hover:bg-rose-700 text-white text-xs font-bold rounded-xl uppercase tracking-wider flex items-center justify-center gap-2 shrink-0 shadow-sm transition-all cursor-pointer">
+          <button className="px-4 py-2.5 bg-rose-800 hover:bg-rose-700 text-white text-xs font-bold rounded-xl uppercase tracking-wider flex items-center justify-center gap-2 shrink-0 shadow-sm transition-all cursor-pointer whitespace-nowrap">
             <span>🎛️</span> Ustaw filtry
           </button>
         </div>
@@ -723,19 +775,18 @@ export default function ClientsReportPage() {
           <table className="w-full text-left text-xs min-w-[1100px]">
             <thead>
               <tr className="bg-sky-50/80 text-sky-900 uppercase text-[10px] tracking-wider border-b border-sky-200">
-                <th className="py-3 px-3 text-center w-10"><input type="checkbox" className="rounded border-sky-300" /></th>
-                <th onClick={() => handleSort('firstName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Imię {sortField === 'firstName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('lastName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Nazwisko {sortField === 'lastName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('registered')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Zarejestrowany {sortField === 'registered' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('activated')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Aktywowany {sortField === 'activated' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('email')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Email {sortField === 'email' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('phone')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Telefon {sortField === 'phone' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('pass')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Karnet {sortField === 'pass' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('price')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Cena {sortField === 'price' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('expiresDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Wygasa {sortField === 'expiresDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('wallet')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Portfel {sortField === 'wallet' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('birthDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors">Urodziny {sortField === 'birthDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th className="py-3 px-3 text-right font-bold w-20">Akcje</th>
+                <th className="py-3 px-3 text-center w-10 whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></th>
+                <th onClick={() => handleSort('firstName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Imię {sortField === 'firstName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('lastName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Nazwisko {sortField === 'lastName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('registered')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Dołączył {sortField === 'registered' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('email')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Email {sortField === 'email' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('phone')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Telefon {sortField === 'phone' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('pass')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Karnet {sortField === 'pass' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('price')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Cena {sortField === 'price' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('expiresDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Wygasa {sortField === 'expiresDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('wallet')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Portfel {sortField === 'wallet' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th onClick={() => handleSort('birthDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Urodziny {sortField === 'birthDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th className="py-3 px-3 text-right font-bold w-20 whitespace-nowrap">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -748,32 +799,36 @@ export default function ClientsReportPage() {
 
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
-                    <td className="py-3.5 px-3 text-center"><input type="checkbox" className="rounded border-sky-300" /></td>
-                    <td className="py-3.5 px-3 font-bold text-slate-900">{client.firstName}</td>
-                    <td className="py-3.5 px-3 font-bold text-slate-900">{client.lastName}</td>
-                    <td className="py-3.5 px-3 font-mono text-slate-500">{client.registered}</td>
-                    <td className="py-3.5 px-3 font-mono text-slate-500">{client.activated}</td>
-                    <td onClick={() => setProfileClient(client)} className="py-3.5 px-3 text-sky-700 font-medium hover:underline cursor-pointer truncate max-w-[150px]">{client.email || '-'}</td>
-                    <td className="py-3.5 px-3 font-mono text-slate-600">{client.phone || '-'}</td>
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
+                    <td className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        {client.firstName}
+                        {client.isTrainer && <span className="text-[10px]" title="Trener w zespole">⭐</span>}
+                      </div>
+                    </td>
+                    <td className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap">{client.lastName}</td>
+                    <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.registered}</td>
+                    <td onClick={() => setProfileClient(client)} className="py-3.5 px-3 text-sky-700 font-medium hover:underline cursor-pointer whitespace-nowrap">{client.email || '-'}</td>
+                    <td className="py-3.5 px-3 font-mono text-slate-600 whitespace-nowrap">{client.phone || '-'}</td>
+                    <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col gap-1">
                         <span className="font-semibold text-slate-800">{nazwaKarnetu}</span>
                         {aktywnyKarnetZawieszony && (
-                          <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-200 inline-block w-fit">
+                          <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-200 inline-block w-fit whitespace-nowrap">
                             ⏸️ Zawieszony: od {aktywnyKarnetZawieszony.zawieszonyOd} do {aktywnyKarnetZawieszony.zawieszonyDo}
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="py-3.5 px-3 font-medium text-slate-800"><div>{client.price}</div></td>
-                    <td className="py-3.5 px-3 font-mono text-slate-600">{maKarnet ? dataWygasnieciaKarnetu : '-'}</td>
-                    <td className="py-3.5 px-3 font-bold">
-                      <span className={`px-2 py-0.5 rounded-lg text-xs ${negativeW ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'}`}>
+                    <td className="py-3.5 px-3 font-medium text-slate-800 whitespace-nowrap">{client.price}</td>
+                    <td className="py-3.5 px-3 font-mono text-slate-600 whitespace-nowrap">{maKarnet ? dataWygasnieciaKarnetu : '-'}</td>
+                    <td className="py-3.5 px-3 font-bold whitespace-nowrap">
+                      <span className={`px-2 py-0.5 rounded-lg text-xs whitespace-nowrap ${negativeW ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'}`}>
                         {client.wallet}
                       </span>
                     </td>
-                    <td className="py-3.5 px-3 font-mono text-slate-500">{client.birthDate || 'Nie podano'}</td>
-                    <td className="py-3.5 px-3 text-right">
+                    <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.birthDate || 'Nie podano'}</td>
+                    <td className="py-3.5 px-3 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
                         <button onClick={() => setProfileClient(client)} className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer" title="Otwórz profil">👤</button>
                         <button onClick={() => setTableActionClient(client)} className="p-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg border border-amber-200 cursor-pointer" title="Zarządzaj klubowiczem">✏️</button>
@@ -799,9 +854,9 @@ export default function ClientsReportPage() {
                   👤
                 </div>
                 <div className="text-xs space-y-0.5">
-                  <div className="font-black text-slate-900 text-sm">{tableActionClient.firstName} {tableActionClient.lastName}</div>
+                  <div className="font-black text-slate-900 text-sm whitespace-nowrap">{tableActionClient.firstName} {tableActionClient.lastName}</div>
                   <div className="font-mono text-slate-600 flex items-center gap-1.5"><span>📞</span> {tableActionClient.phone || 'Nie podano'}</div>
-                  <div className="text-slate-500 flex items-center gap-1.5"><span>✉️</span> {tableActionClient.email || 'Nie podano'}</div>
+                  <div className="text-slate-500 flex items-center gap-1.5 whitespace-nowrap"><span>✉️</span> {tableActionClient.email || 'Nie podano'}</div>
                 </div>
               </div>
               <button onClick={() => setTableActionClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
@@ -837,7 +892,7 @@ export default function ClientsReportPage() {
             <div className="space-y-2">
               <div className="flex justify-between items-center text-xs">
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{tableActionClient.karnetyKlubowicza && tableActionClient.karnetyKlubowicza.length > 0 ? tableActionClient.karnetyKlubowicza.map((k:any)=>k.nazwa).join(', ') : 'Brak karnetu'}</div>
-                <div className="bg-slate-100 px-3 py-1 rounded-xl text-slate-700 font-semibold">
+                <div className="bg-slate-100 px-3 py-1 rounded-xl text-slate-700 font-semibold whitespace-nowrap">
                   <div>Ważny do: {tableActionClient.karnetyKlubowicza && tableActionClient.karnetyKlubowicza.length > 0 ? tableActionClient.karnetyKlubowicza[0].waznyDo : '-'}</div>
                   <div className="text-[10px] text-slate-500">Cena: {tableActionClient.price || '0.00 PLN'}</div>
                 </div>
@@ -895,7 +950,7 @@ export default function ClientsReportPage() {
         </div>
       )}
 
-      {/* MODAL PROFILU KLIENTA */}
+      {/* MODAL PROFILU KLIENTA Z OPCJĄ OZNACZANIA TRENERA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto">
@@ -903,7 +958,7 @@ export default function ClientsReportPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
               <button onClick={() => setProfileClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
               <div className="flex items-center gap-3">
-                <button onClick={() => setIsWalletHistoryOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer">🕒 LOGI UŻYTKOWNIKA</button>
+                <button onClick={() => setIsWalletHistoryOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer whitespace-nowrap">🕒 LOGI UŻYTKOWNIKA</button>
               </div>
             </div>
 
@@ -912,7 +967,7 @@ export default function ClientsReportPage() {
               <div className="flex justify-between items-start gap-6 bg-slate-50/70 border border-slate-200 rounded-2xl p-6">
                 <div className="space-y-3">
                   <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-black text-slate-900">{profileClient.firstName} {profileClient.lastName}</h2>
+                    <h2 className="text-xl font-black text-slate-900 whitespace-nowrap">{profileClient.firstName} {profileClient.lastName}</h2>
                     <button 
                       onClick={() => setIsEditProfileInfoOpen(true)}
                       className="w-8 h-8 bg-white hover:bg-sky-50 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center text-xs shadow-sm cursor-pointer transition-all"
@@ -922,11 +977,24 @@ export default function ClientsReportPage() {
                     </button>
                   </div>
 
-                  <div className="text-xs text-slate-600 space-y-1">
-                    <div><span className="font-semibold">Telefon:</span> {profileClient.phone ? profileClient.phone : 'Nie podano'}</div>
-                    <div><span className="font-semibold">Email:</span> {profileClient.email ? profileClient.email : 'Nie podano'}</div>
-                    <div><span className="font-semibold">Płeć:</span> {profileClient.gender ? profileClient.gender : 'Nie podano'}</div>
-                    <div><span className="font-semibold">Urodziny:</span> {profileClient.birthDate ? profileClient.birthDate : 'Nie podano'}</div>
+                  <div className="pt-1">
+                    <button 
+                      onClick={() => handleToggleClientTrainer(profileClient)}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                        profileClient.isTrainer 
+                          ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200' 
+                          : 'bg-sky-100 text-sky-900 border border-sky-300 hover:bg-sky-200'
+                      }`}
+                    >
+                      <span>{profileClient.isTrainer ? '⭐ Klient jest trenerem (Kliknij, aby usunąć powiązanie)' : '➕ Oznacz jako Trener w zespole'}</span>
+                    </button>
+                  </div>
+
+                  <div className="text-xs text-slate-600 space-y-1 pt-2">
+                    <div><span className="font-semibold">Telefon:</span> <span className="whitespace-nowrap">{profileClient.phone ? profileClient.phone : 'Nie podano'}</span></div>
+                    <div><span className="font-semibold">Email:</span> <span className="whitespace-nowrap">{profileClient.email ? profileClient.email : 'Nie podano'}</span></div>
+                    <div><span className="font-semibold">Płeć:</span> <span className="whitespace-nowrap">{profileClient.gender ? profileClient.gender : 'Nie podano'}</span></div>
+                    <div><span className="font-semibold">Urodziny:</span> <span className="whitespace-nowrap">{profileClient.birthDate ? profileClient.birthDate : 'Nie podano'}</span></div>
                   </div>
                 </div>
 
@@ -952,7 +1020,7 @@ export default function ClientsReportPage() {
                   />
                   <button 
                     onClick={() => fileInputRef.current?.click()} 
-                    className="bg-white hover:bg-sky-50 text-sky-900 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 shadow-sm cursor-pointer transition-all"
+                    className="bg-white hover:bg-sky-50 text-sky-900 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 shadow-sm cursor-pointer transition-all whitespace-nowrap"
                   >
                     ✏️ Edytuj zdjęcie
                   </button>
@@ -962,12 +1030,12 @@ export default function ClientsReportPage() {
               {/* SEKCJA KARNETÓW */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Karnety klubowicza</h3>
+                  <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
                   
                   <div className="flex items-center gap-2">
                     <button 
                       onClick={() => { setSelectedPassToAdd(dostepneKarnety[0]?.nazwa || ''); setIsAddSecondPassModalOpen(true); }} 
-                      className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer shadow-sm"
+                      className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer shadow-sm whitespace-nowrap"
                     >
                       + DODAJ DRUGI KARNET
                     </button>
@@ -995,13 +1063,13 @@ export default function ClientsReportPage() {
                               alert("Brak aktywnego karnetu do przedłużenia.");
                             }
                             setIsGlobalPassMenuOpen(false); 
-                          }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">🕒 Przedłuż karnet</button>
-                          <button onClick={() => { alert("Umowa wypowiedziana"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">📄 Wypowiedz umowę</button>
-                          <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) { setSuspendPassTarget(profileClient.karnetyKlubowicza[0]); setSuspendStartDate(profileClient.karnetyKlubowicza[0].zawieszonyOd || '2026-08-06'); setSuspendEndDate(profileClient.karnetyKlubowicza[0].zawieszonyDo || '2026-08-08'); setIsSuspendModalOpen(true); } setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">⏸️ Zawieś karnet</button>
-                          <button onClick={() => { setIsSuspendHistoryModalOpen(true); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">📜 Historia zawieszeń</button>
-                          <button onClick={() => { alert("Wygenerowano link do płatności"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">💳 Wygeneruj link do płatności</button>
+                          }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🕒 Przedłuż karnet</button>
+                          <button onClick={() => { alert("Umowa wypowiedziana"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📄 Wypowiedz umowę</button>
+                          <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) { setSuspendPassTarget(profileClient.karnetyKlubowicza[0]); setSuspendStartDate(profileClient.karnetyKlubowicza[0].zawieszonyOd || '2026-08-06'); setSuspendEndDate(profileClient.karnetyKlubowicza[0].zawieszonyDo || '2026-08-08'); setIsSuspendModalOpen(true); } setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">⏸️ Zawieś karnet</button>
+                          <button onClick={() => { setIsSuspendHistoryModalOpen(true); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📜 Historia zawieszeń</button>
+                          <button onClick={() => { alert("Wygenerowano link do płatności"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">💳 Wygeneruj link do płatności</button>
                           <div className="border-t border-slate-100 my-1"></div>
-                          <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) handleConfirmDeletePass(profileClient.karnetyKlubowicza[0].id); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2.5 cursor-pointer">🗑️ Usuń karnet</button>
+                          <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) handleConfirmDeletePass(profileClient.karnetyKlubowicza[0].id); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🗑️ Usuń karnet</button>
                         </div>
                       )}
                     </div>
@@ -1015,15 +1083,15 @@ export default function ClientsReportPage() {
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                           <div className="space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
+                              <h4 className="font-black text-slate-900 text-base whitespace-nowrap">{karnet.nazwa}</h4>
                               {karnet.blokadaDo && (
-                                <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
+                                <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200 whitespace-nowrap">
                                   ⚠️ Zablokowane do: {karnet.blokadaDo}
                                 </span>
                               )}
                               
                               {karnet.zawieszonyOd && karnet.zawieszonyDo && (
-                                <div className="flex items-center gap-1.5 bg-amber-100 text-amber-900 text-xs font-black px-3 py-1 rounded border border-amber-200">
+                                <div className="flex items-center gap-1.5 bg-amber-100 text-amber-900 text-xs font-black px-3 py-1 rounded border border-amber-200 whitespace-nowrap">
                                   <span>⏸️ Zawieszony od {karnet.zawieszonyOd} do {karnet.zawieszonyDo}</span>
                                   <button 
                                     onClick={() => { setSuspendPassTarget(karnet); setSuspendStartDate(karnet.zawieszonyOd); setSuspendEndDate(karnet.zawieszonyDo); setIsSuspendModalOpen(true); }}
@@ -1037,14 +1105,14 @@ export default function ClientsReportPage() {
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-rose-200">
+                              <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-rose-200 whitespace-nowrap">
                                 {karnet.statusTekst}
                               </span>
-                              <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
+                              <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200 whitespace-nowrap">
                                 Cena: {karnet.cena} {karnet.znizkaProcentowa && <strong className="text-emerald-700 font-extrabold ml-1">{karnet.znizkaProcentowa}</strong>}
                               </span>
                               {karnet.rata && (
-                                <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
+                                <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200 whitespace-nowrap">
                                   Rata: {karnet.rata}
                                 </span>
                               )}
@@ -1052,7 +1120,7 @@ export default function ClientsReportPage() {
                           </div>
 
                           <div className="flex items-center gap-2">
-                            <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer">⚙️ ZARZĄDZAJ BLOKADĄ</button>
+                            <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer whitespace-nowrap">⚙️ ZARZĄDZAJ BLOKADĄ</button>
                             
                             <button 
                               onClick={() => {
@@ -1063,7 +1131,7 @@ export default function ClientsReportPage() {
                                 setExtendNewDate(curDate.toISOString().split('T')[0]);
                                 setIsExtendPassModalOpen(true);
                               }}
-                              className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer flex items-center gap-1.5"
+                              className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
                               title="Przedłuż karnet"
                             >
                               🕒 Przedłuż
@@ -1091,26 +1159,26 @@ export default function ClientsReportPage() {
 
               {/* Sekcja Portfel */}
               <div className="space-y-4">
-                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Portfel</h3>
+                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
-                  <span className={`font-black px-3 py-1 rounded-xl text-sm border ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'}`}>{profileClient.wallet}</span>
+                  <span className={`font-black px-3 py-1 rounded-xl text-sm border whitespace-nowrap ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'}`}>{profileClient.wallet}</span>
                   <div className="flex gap-3">
-                    <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer">🕒 POKAŻ HISTORIĘ PORTFELA I OPERACJI</button>
-                    <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer">+ UZUPEŁNIJ PORTFEL</button>
+                    <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer whitespace-nowrap">🕒 POKAŻ HISTORIĘ PORTFELA I OPERACJI</button>
+                    <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap">+ UZUPEŁNIJ PORTFEL</button>
                   </div>
                 </div>
               </div>
 
               {/* Sekcja Zapisy na zajęcia */}
               <div className="space-y-4">
-                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Zapisy na zajęcia</h3>
+                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Zapisy na zajęcia</h3>
                 
                 <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                   <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold text-slate-600">
-                    <button onClick={() => setActiveZapisyTab('nadchodzace')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer ${activeZapisyTab === 'nadchodzace' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>NADCHODZĄCE</button>
-                    <button onClick={() => setActiveZapisyTab('przeszle')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer ${activeZapisyTab === 'przeszle' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>PRZESZŁE</button>
-                    <button onClick={() => setActiveZapisyTab('wypisy')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer ${activeZapisyTab === 'wypisy' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>WYPISY</button>
-                    <button onClick={() => setActiveZapisyTab('automatyczne')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer ${activeZapisyTab === 'automatyczne' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>AUTOMATYCZNE ZAPISY</button>
+                    <button onClick={() => setActiveZapisyTab('nadchodzace')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'nadchodzace' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>NADCHODZĄCE</button>
+                    <button onClick={() => setActiveZapisyTab('przeszle')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'przeszle' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>PRZESZŁE</button>
+                    <button onClick={() => setActiveZapisyTab('wypisy')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'wypisy' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>WYPISY</button>
+                    <button onClick={() => setActiveZapisyTab('automatyczne')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'automatyczne' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>AUTOMATYCZNE ZAPISY</button>
                   </div>
 
                   <div className="overflow-x-auto">
@@ -1118,23 +1186,23 @@ export default function ClientsReportPage() {
                       <table className="w-full text-left text-xs">
                         <thead>
                           <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10">#</th>
-                            <th className="py-2.5 px-4">Data zajęć</th>
-                            <th className="py-2.5 px-4">Zajęcia</th>
-                            <th className="py-2.5 px-4">Karnet</th>
-                            <th className="py-2.5 px-4">Kto zapisał</th>
-                            <th className="py-2.5 px-4 text-right">Wypisz</th>
+                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał</th>
+                            <th className="py-2.5 px-4 text-right whitespace-nowrap">Wypisz</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
                           {profileClient.zapisyNadchodzace && profileClient.zapisyNadchodzace.map((item: any, idx: number) => (
                             <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono">{item.data}</td>
-                              <td className="py-3 px-4 font-bold">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold">{item.karnet}</td>
-                              <td className="py-3 px-4"><span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded text-[10px] font-bold border border-sky-200">{item.zapisujacy}</span></td>
-                              <td className="py-3 px-4 text-right"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️</button></td>
+                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
+                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
+                              <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
+                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded text-[10px] font-bold border border-sky-200">{item.zapisujacy}</span></td>
+                              <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️</button></td>
                             </tr>
                           ))}
                         </tbody>
@@ -1144,21 +1212,21 @@ export default function ClientsReportPage() {
                       <table className="w-full text-left text-xs">
                         <thead>
                           <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10">#</th>
-                            <th className="py-2.5 px-4">Data zajęć</th>
-                            <th className="py-2.5 px-4">Zajęcia</th>
-                            <th className="py-2.5 px-4">Karnet</th>
-                            <th className="py-2.5 px-4">Obecność</th>
+                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Obecność</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
                           {profileClient.zapisyPrzeszle && profileClient.zapisyPrzeszle.map((item: any, idx: number) => (
                             <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono">{item.data}</td>
-                              <td className="py-3 px-4 font-bold">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold">{item.karnet}</td>
-                              <td className="py-3 px-4"><span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200">{item.obecnosc}</span></td>
+                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
+                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
+                              <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
+                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200">{item.obecnosc}</span></td>
                             </tr>
                           ))}
                         </tbody>
@@ -1168,19 +1236,19 @@ export default function ClientsReportPage() {
                       <table className="w-full text-left text-xs">
                         <thead>
                           <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10">#</th>
-                            <th className="py-2.5 px-4">Data zajęć</th>
-                            <th className="py-2.5 px-4">Zajęcia</th>
-                            <th className="py-2.5 px-4">Informacja</th>
+                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Informacja</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
                           {profileClient.zapisyWypisy && profileClient.zapisyWypisy.map((item: any, idx: number) => (
                             <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono">{item.data}</td>
-                              <td className="py-3 px-4 font-bold">{item.zajecia}</td>
-                              <td className="py-3 px-4"><span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-200">{item.wypisujacy}</span></td>
+                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
+                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
+                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-200">{item.wypisujacy}</span></td>
                             </tr>
                           ))}
                         </tbody>
@@ -1205,7 +1273,7 @@ export default function ClientsReportPage() {
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
                 <span>🕒</span> Przedłuż karnet dla {profileClient.firstName} {profileClient.lastName}
               </h3>
               <button onClick={() => setIsExtendPassModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
@@ -1214,9 +1282,9 @@ export default function ClientsReportPage() {
             <form onSubmit={handleConfirmExtendPass} className="space-y-4 text-xs">
               
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1">
-                <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Aktualny karnet</div>
-                <div className="font-bold text-slate-900 text-sm">Karnet: {extendPassTarget.nazwa}</div>
-                <div className="font-mono text-slate-600">Wygasa: {extendPassTarget.waznyDo}</div>
+                <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">Aktualny karnet</div>
+                <div className="font-bold text-slate-900 text-sm whitespace-nowrap">Karnet: {extendPassTarget.nazwa}</div>
+                <div className="font-mono text-slate-600 whitespace-nowrap">Wygasa: {extendPassTarget.waznyDo}</div>
               </div>
 
               <div className="flex justify-center">
@@ -1224,10 +1292,10 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 space-y-3">
-                <div className="text-[10px] font-black text-sky-800 uppercase tracking-wider">Nowy karnet</div>
+                <div className="text-[10px] font-black text-sky-800 uppercase tracking-wider whitespace-nowrap">Nowy karnet</div>
                 
                 <div className="flex items-center justify-between">
-                  <div className="flex-1">
+                  <div className="flex-1 whitespace-nowrap">
                     <span className="font-bold text-slate-700">Karnet: </span>
                     {isEditingNewPassType ? (
                       <select 
@@ -1240,7 +1308,7 @@ export default function ClientsReportPage() {
                         ))}
                       </select>
                     ) : (
-                      <span className="font-black text-slate-900">{extendSelectedNewPassName}</span>
+                      <span className="font-black text-slate-900 whitespace-nowrap">{extendSelectedNewPassName}</span>
                     )}
                   </div>
                   <button 
@@ -1254,7 +1322,7 @@ export default function ClientsReportPage() {
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <div className="flex-1">
+                  <div className="flex-1 whitespace-nowrap">
                     <span className="font-bold text-slate-700">Data: </span>
                     {isEditingNewDate ? (
                       <input 
@@ -1264,7 +1332,7 @@ export default function ClientsReportPage() {
                         className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800"
                       />
                     ) : (
-                      <span className="font-mono font-bold text-slate-900">{extendNewDate}</span>
+                      <span className="font-mono font-bold text-slate-900 whitespace-nowrap">{extendNewDate}</span>
                     )}
                   </div>
                   <button 
@@ -1280,8 +1348,8 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-3 border-t border-sky-100">
-                <button type="button" onClick={() => setIsExtendPassModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase">Anuluj</button>
-                <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider">🕒 Przedłuż</button>
+                <button type="button" onClick={() => setIsExtendPassModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase whitespace-nowrap">Anuluj</button>
+                <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">🕒 Przedłuż</button>
               </div>
 
             </form>
@@ -1294,7 +1362,7 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">✏️ Edytuj dane konta</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane konta</h3>
               <button onClick={() => setIsEditProfileInfoOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleSaveProfileInfoSubmit} className="space-y-4 text-xs">
@@ -1356,8 +1424,8 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsEditProfileInfoOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz zmiany</button>
+                <button type="button" onClick={() => setIsEditProfileInfoOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zapisz zmiany</button>
               </div>
             </form>
           </div>
@@ -1369,7 +1437,7 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
                 <span>⏸️</span> Zawieś karnet
               </h3>
               <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
@@ -1383,7 +1451,7 @@ export default function ClientsReportPage() {
               <button 
                 type="button" 
                 onClick={() => { setIsSuspendModalOpen(false); setIsSuspendHistoryModalOpen(true); }}
-                className="text-amber-900 font-black underline uppercase text-[10px] tracking-wider cursor-pointer block pt-1"
+                className="text-amber-900 font-black underline uppercase text-[10px] tracking-wider cursor-pointer block pt-1 whitespace-nowrap"
               >
                 📜 Zobacz historię zawieszeń
               </button>
@@ -1420,15 +1488,15 @@ export default function ClientsReportPage() {
                   <button 
                     type="button"
                     onClick={() => { handleCancelSuspension(suspendPassTarget); setIsSuspendModalOpen(false); }}
-                    className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-black px-4 py-2.5 rounded-xl cursor-pointer"
+                    className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-black px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap"
                   >
                     🚫 Odwołaj zawieszenie
                   </button>
                 ) : <div></div>}
 
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase">Anuluj</button>
-                  <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider">⏸️ Zawieś</button>
+                  <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase whitespace-nowrap">Anuluj</button>
+                  <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">⏸️ Zawieś</button>
                 </div>
               </div>
             </form>
@@ -1441,7 +1509,7 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
                 <span>📜</span> Historia zawieszeń
               </h3>
               <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
@@ -1451,21 +1519,21 @@ export default function ClientsReportPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                    <th className="py-2.5 px-3 w-10">#</th>
-                    <th className="py-2.5 px-3">Data zawieszenia</th>
-                    <th className="py-2.5 px-3">Data aktywacji</th>
-                    <th className="py-2.5 px-3">Okres</th>
-                    <th className="py-2.5 px-3">Przez kogo</th>
+                    <th className="py-2.5 px-3 w-10 whitespace-nowrap">#</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Data zawieszenia</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Data aktywacji</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Okres</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Przez kogo</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.flatMap((k: any) => k.historiaZawieszen || []).map((item: any, idx: number) => (
                     <tr key={item.id || idx}>
-                      <td className="py-3 px-3 font-mono text-slate-400">{idx + 1}.</td>
-                      <td className="py-3 px-3 font-mono">{item.dataZawieszenia}</td>
-                      <td className="py-3 px-3 font-mono">{item.dataAtywacji}</td>
-                      <td className="py-3 px-3 font-bold text-sky-900">{item.okres}</td>
-                      <td className="py-3 px-3 font-semibold">{item.przezKogo}</td>
+                      <td className="py-3 px-3 font-mono text-slate-400 whitespace-nowrap">{idx + 1}.</td>
+                      <td className="py-3 px-3 font-mono whitespace-nowrap">{item.dataZawieszenia}</td>
+                      <td className="py-3 px-3 font-mono whitespace-nowrap">{item.dataAtywacji}</td>
+                      <td className="py-3 px-3 font-bold text-sky-900 whitespace-nowrap">{item.okres}</td>
+                      <td className="py-3 px-3 font-semibold whitespace-nowrap">{item.przezKogo}</td>
                     </tr>
                   ))}
                   {(!profileClient.karnetyKlubowicza || profileClient.karnetyKlubowicza.flatMap((k: any) => k.historiaZawieszen || []).length === 0) && (
@@ -1478,7 +1546,7 @@ export default function ClientsReportPage() {
             </div>
 
             <div className="pt-3 flex justify-end border-t border-sky-100">
-              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer text-xs uppercase">Anuluj</button>
+              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer text-xs uppercase whitespace-nowrap">Anuluj</button>
             </div>
           </div>
         </div>
@@ -1489,13 +1557,13 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">Edytuj karnet</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">Edytuj karnet</h3>
               <button onClick={() => setEditingPassModal(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
 
             <form onSubmit={handleSavePassEditSubmit} className="space-y-4 text-xs">
               <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700">Karnet</label>
+                <label className="font-bold text-slate-700 whitespace-nowrap">Karnet</label>
                 <div className="col-span-2 space-y-1">
                   <select 
                     value={editingPassModal.nazwa}
@@ -1519,7 +1587,7 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700">Data zakończenia</label>
+                <label className="font-bold text-slate-700 whitespace-nowrap">Data zakończenia</label>
                 <div className="col-span-2">
                   <input 
                     type="date"
@@ -1531,7 +1599,7 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700">Cena</label>
+                <label className="font-bold text-slate-700 whitespace-nowrap">Cena</label>
                 <div className="col-span-2 flex items-center gap-2">
                   <input 
                     type="text"
@@ -1545,7 +1613,7 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700">Obecna rata</label>
+                <label className="font-bold text-slate-700 whitespace-nowrap">Obecna rata</label>
                 <div className="col-span-2 flex items-center gap-2">
                   <input 
                     type="text"
@@ -1560,14 +1628,14 @@ export default function ClientsReportPage() {
                 <button 
                   type="button"
                   onClick={() => handleConfirmDeletePass(editingPassModal.id)}
-                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-black px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
+                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-black px-4 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap"
                 >
                   🗑️ Usuń karnet
                 </button>
                 
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setEditingPassModal(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                  <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider">Zapisz karnet</button>
+                  <button type="button" onClick={() => setEditingPassModal(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                  <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">Zapisz karnet</button>
                 </div>
               </div>
             </form>
@@ -1577,15 +1645,17 @@ export default function ClientsReportPage() {
 
       {/* MODAL DODAWANIA DRUGIEGO KARNETU */}
       {isAddSecondPassModalOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200 relative">
+            
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Przypisz karnet z bazy</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">🎟️ Przypisz karnet z bazy</h3>
               <button onClick={() => setIsAddSecondPassModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
-            <form onSubmit={handleAddSecondPassSubmit} className="space-y-4 text-xs">
+            
+            <div className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
+                <label className="font-bold text-slate-700 block whitespace-nowrap">Wybierz karnet *</label>
                 <select value={selectedPassToAdd} onChange={(e) => setSelectedPassToAdd(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer">
                   <option value="">-- Wybierz karnet --</option>
                   {dostepneKarnety.map(k => (
@@ -1593,11 +1663,44 @@ export default function ClientsReportPage() {
                   ))}
                 </select>
               </div>
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsAddSecondPassModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Przypisz</button>
+
+              {selectedPassToAdd && (
+                <div className="bg-sky-50 p-3 rounded-xl border border-sky-100 text-sky-900 font-medium">
+                  Wybierz w jaki sposób rozliczyć ten karnet:
+                </div>
+              )}
+
+              <div className="pt-4 flex flex-col gap-3 border-t border-sky-100">
+                <div className="grid grid-cols-2 gap-2">
+                  <button 
+                    type="button" 
+                    disabled={!selectedPassToAdd}
+                    onClick={() => handleAddSecondPass('paid')} 
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-4 py-3 rounded-xl cursor-pointer whitespace-nowrap shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center justify-center transition-colors"
+                  >
+                    <span className="text-sm">✅ Zapłacił</span>
+                    <span className="text-[9px] font-normal opacity-90">Karnet opłacony z góry</span>
+                  </button>
+                  <button 
+                    type="button" 
+                    disabled={!selectedPassToAdd}
+                    onClick={() => handleAddSecondPass('later')} 
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-black px-4 py-3 rounded-xl cursor-pointer whitespace-nowrap shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center justify-center transition-colors"
+                  >
+                    <span className="text-sm">⏳ Zapłaci później</span>
+                    <span className="text-[9px] font-normal opacity-90">Dolicz do długu (Portfela)</span>
+                  </button>
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => setIsAddSecondPassModalOpen(false)} 
+                  className="w-full bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap hover:bg-slate-200 transition-colors"
+                >
+                  Anuluj dodawanie
+                </button>
               </div>
-            </form>
+            </div>
+            
           </div>
         </div>
       )}
@@ -1607,22 +1710,22 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚙️ Zarządzanie blokadą</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">⚙️ Zarządzanie blokadą</h3>
               <button onClick={() => setIsBlockModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleSaveBlockModification} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="font-bold">Liczba dni blokady (0 aby zdjąć)</label>
+                <label className="font-bold whitespace-nowrap">Liczba dni blokady (0 aby zdjąć)</label>
                 <input type="number" value={blockDaysInput} onChange={(e) => { setBlockDaysInput(e.target.value); if(e.target.value) setBlockDateInput(''); }} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
-              <div className="text-center font-bold text-slate-400 uppercase text-[10px]">LUB</div>
+              <div className="text-center font-bold text-slate-400 uppercase text-[10px] whitespace-nowrap">LUB</div>
               <div className="space-y-1">
-                <label className="font-bold">Data końcowa blokady</label>
+                <label className="font-bold whitespace-nowrap">Data końcowa blokady</label>
                 <input type="date" value={blockDateInput} onChange={(e) => { setBlockDateInput(e.target.value); if(e.target.value) setBlockDaysInput(''); }} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsBlockModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz</button>
+                <button type="button" onClick={() => setIsBlockModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zapisz</button>
               </div>
             </form>
           </div>
@@ -1634,21 +1737,21 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">💰 Modyfikacja portfela</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">💰 Modyfikacja portfela</h3>
               <button onClick={() => setIsTopUpWalletOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleTopUpWalletSubmit} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="font-bold">Kwota (+/-)</label>
+                <label className="font-bold whitespace-nowrap">Kwota (+/-)</label>
                 <input type="number" step="0.01" required value={walletAmountInput} onChange={(e) => setWalletAmountInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
               <div className="space-y-1">
-                <label className="font-bold">Tytuł operacji (opcjonalnie)</label>
+                <label className="font-bold whitespace-nowrap">Tytuł operacji (opcjonalnie)</label>
                 <input type="text" value={walletReasonInput} placeholder="np. Gotówka w recepcji" onChange={(e) => setWalletReasonInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zatwierdź</button>
+                <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zatwierdź</button>
               </div>
             </form>
           </div>
@@ -1660,13 +1763,13 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Historia operacji i portfela</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">🕒 Historia operacji i portfela</h3>
               <button onClick={() => setIsWalletHistoryOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex justify-between items-center text-xs">
-              <span className="font-bold text-amber-900 uppercase">Aktualne saldo klubowicza:</span>
-              <span className={`text-base font-black px-3 py-1 rounded-lg border ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
+              <span className="font-bold text-amber-900 uppercase whitespace-nowrap">Aktualne saldo klubowicza:</span>
+              <span className={`text-base font-black px-3 py-1 rounded-lg border whitespace-nowrap ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
                 {profileClient.wallet}
               </span>
             </div>
@@ -1675,21 +1778,21 @@ export default function ClientsReportPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-sky-50 text-sky-900 uppercase text-[10px] tracking-wider border-b border-sky-200 sticky top-0">
-                    <th className="py-2.5 px-3">Data operacji</th>
-                    <th className="py-2.5 px-3">Kategoria</th>
-                    <th className="py-2.5 px-3">Kwota transakcji</th>
-                    <th className="py-2.5 px-3">Szczegóły</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Data operacji</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Kategoria</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Kwota transakcji</th>
+                    <th className="py-2.5 px-3 whitespace-nowrap">Szczegóły</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {profileClient.transakcje && profileClient.transakcje.map((item: any) => (
                     <tr key={item.id} className="hover:bg-sky-50/30 transition-colors">
-                      <td className="py-3 px-3 font-mono">{new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
-                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800">{item.typ_operacji.replace('_', ' ')}</td>
-                      <td className={`py-3 px-3 font-black text-sm ${item.kwota !== null && item.kwota < 0 ? 'text-rose-600' : item.kwota !== null && item.kwota > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                      <td className="py-3 px-3 font-mono whitespace-nowrap">{new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800 whitespace-nowrap">{item.typ_operacji.replace('_', ' ')}</td>
+                      <td className={`py-3 px-3 font-black text-sm whitespace-nowrap ${item.kwota !== null && item.kwota < 0 ? 'text-rose-600' : item.kwota !== null && item.kwota > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
                         {item.kwota !== null ? `${item.kwota > 0 ? '+' : ''}${item.kwota.toFixed(2)} PLN` : '-'}
                       </td>
-                      <td className="py-3 px-3 text-slate-600" title={item.opis}>{item.opis}</td>
+                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap" title={item.opis}>{item.opis}</td>
                     </tr>
                   ))}
                   {(!profileClient.transakcje || profileClient.transakcje.length === 0) && (
@@ -1701,7 +1804,7 @@ export default function ClientsReportPage() {
               </table>
             </div>
             <div className="pt-3 flex justify-end border-t border-sky-100">
-              <button onClick={() => setIsWalletHistoryOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer">Zamknij</button>
+              <button onClick={() => setIsWalletHistoryOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer whitespace-nowrap">Zamknij</button>
             </div>
           </div>
         </div>
@@ -1712,17 +1815,17 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">✏️ Edytuj dane</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane</h3>
               <button onClick={() => setEditingClient(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1"><label className="font-bold">Imię</label><input type="text" value={editingClient.firstName || ''} onChange={(e) => setEditingClient({...editingClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
-                <div className="space-y-1"><label className="font-bold">Nazwisko</label><input type="text" value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
+                <div className="space-y-1"><label className="font-bold whitespace-nowrap">Imię</label><input type="text" value={editingClient.firstName || ''} onChange={(e) => setEditingClient({...editingClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
+                <div className="space-y-1"><label className="font-bold whitespace-nowrap">Nazwisko</label><input type="text" value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setEditingClient(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2 rounded-xl cursor-pointer">Zaktualizuj</button>
+                <button type="button" onClick={() => setEditingClient(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2 rounded-xl cursor-pointer whitespace-nowrap">Zaktualizuj</button>
               </div>
             </form>
           </div>
@@ -1734,31 +1837,31 @@ export default function ClientsReportPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">👤 Dodaj nowego klubowicza</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">👤 Dodaj nowego klubowicza</h3>
               <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer transition-colors">✕</button>
             </div>
             <form onSubmit={handleAddClientSubmit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Imię *</label>
+                  <label className="font-bold text-slate-700 whitespace-nowrap">Imię *</label>
                   <input required type="text" value={newClient.firstName} onChange={(e) => setNewClient({...newClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Nazwisko *</label>
+                  <label className="font-bold text-slate-700 whitespace-nowrap">Nazwisko *</label>
                   <input required type="text" value={newClient.lastName} onChange={(e) => setNewClient({...newClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="font-bold text-slate-700">Telefon</label>
+                <label className="font-bold text-slate-700 whitespace-nowrap">Telefon</label>
                 <input type="text" value={newClient.phone} onChange={(e) => setNewClient({...newClient, phone: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
               </div>
               <div className="space-y-1">
-                <label className="font-bold text-slate-700">Email</label>
+                <label className="font-bold text-slate-700 whitespace-nowrap">Email</label>
                 <input type="email" value={newClient.email} onChange={(e) => setNewClient({...newClient, email: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
               </div>
               
               <div className="space-y-1 pt-2">
-                <label className="font-bold text-slate-700 block">Wybierz karnet początkowy (opcjonalnie)</label>
+                <label className="font-bold text-slate-700 block whitespace-nowrap">Wybierz karnet początkowy (opcjonalnie)</label>
                 <select 
                   value={newClient.selectedPass} 
                   onChange={(e) => setNewClient({...newClient, selectedPass: e.target.value})} 
@@ -1772,8 +1875,8 @@ export default function ClientsReportPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsAddModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors">Anuluj</button>
-                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer transition-colors">Zapisz do bazy</button>
+                <button type="button" onClick={() => setIsAddModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap">Anuluj</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap">Zapisz do bazy</button>
               </div>
             </form>
           </div>

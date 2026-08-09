@@ -126,11 +126,11 @@ export default function SchedulePage() {
     if (jednorazoweData) {
       setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
         id: j.id,
-        title: j.title,
-        start: j.start_time,
-        end: j.end_time,
+        title: j.title || j.nazwa,
+        start: j.start_time || j.start,
+        end: j.end_time || j.end,
         trainer: j.trainer,
-        limit: j.limit_miejsc,
+        limit: j.limit_miejsc || j.limit,
         displayDate: j.display_date,
         fullDateStr: j.full_date_str,
         isJednorazowe: true
@@ -146,16 +146,16 @@ export default function SchedulePage() {
       }
     }
 
-    // 7. Szablony zajęć (stały grafik) z Supabase
-    const { data: szablonyData } = await supabase.from('szablony_zajec').select('*');
+    // 7. Szablony zajęć (stały grafik) z Supabase (tabela: grafik_zajec)
+    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
     if (szablonyData) {
       setZapisaneZajecia(szablonyData.map((s: any) => ({
         id: s.id,
-        title: s.title,
-        start: s.start_time,
-        end: s.end_time,
-        trainer: s.trainer,
-        limit: s.limit_miejsc,
+        title: s.title || s.nazwa,
+        start: s.start || s.start_time,
+        end: s.end || s.end_time,
+        trainer: s.trainer || s.prowadzacy,
+        limit: s.limit || s.limit_miejsc,
         days: s.days || {}
       })));
     }
@@ -170,6 +170,15 @@ export default function SchedulePage() {
   useEffect(() => {
     setIsMounted(true);
     const now = new Date();
+    
+    // SPRAWDZENIE WEEKENDU - jeśli sobota (6) lub niedziela (0), przeskocz na przyszły poniedziałek
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 6) { // Sobota
+      now.setDate(now.getDate() + 2);
+    } else if (dayOfWeek === 0) { // Niedziela
+      now.setDate(now.getDate() + 1);
+    }
+
     setCurrentDate(now);
     setCalendarViewDate(now);
 
@@ -798,7 +807,7 @@ export default function SchedulePage() {
               ))}
 
               {zajeciaDnia.length > 0 ? (
-                zajeciaDnia.map((item: any) => {
+                zajeciaDnia.map((item: any, classIdx: number) => {
                   const durationText = calculateDuration(item.start, item.end);
                   const classKey = `${item.id}_${col.date}`;
                   const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
@@ -813,7 +822,7 @@ export default function SchedulePage() {
 
                   return (
                     <div 
-                      key={item.id}
+                      key={`${item.id}_${col.date}_${classIdx}`}
                       onClick={() => {
                         if (item.isOdwołane || item.isUsunięte) return;
                         setSelectedClass({

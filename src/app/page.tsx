@@ -108,14 +108,33 @@ export default function DashboardPage() {
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) setRodzajeZajec(rodzajeData);
 
-    const { data: szablonyData } = await supabase.from('szablony_zajec').select('*');
+    // ZMIANA: Pobieranie z `grafik_zajec` z nowymi (angielskimi) nazwami kolumn
+    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
     if (szablonyData) {
-      setZapisaneZajecia(szablonyData.map((s: any) => ({ ...s, start: s.start_time, end: s.end_time, limit: s.limit_miejsc })));
+      setZapisaneZajecia(szablonyData.map((s: any) => ({ 
+        ...s, 
+        title: s.title || s.nazwa,
+        start: s.start || s.start_time, 
+        end: s.end || s.end_time, 
+        limit: s.limit || s.limit_miejsc,
+        trainer: s.trainer || s.prowadzacy,
+        days: s.days || {}
+      })));
     }
 
+    // ZMIANA: Pobieranie z `zajecia_jednorazowe` (dla pewności obsługuje obie wersje kolumn)
     const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
     if (jednorazoweData) {
-      setJednorazoweZajecia(jednorazoweData.map((j: any) => ({ ...j, start: j.start_time, end: j.end_time, limit: j.limit_miejsc })));
+      setJednorazoweZajecia(jednorazoweData.map((j: any) => ({ 
+        ...j, 
+        title: j.title || j.nazwa,
+        start: j.start_time || j.start, 
+        end: j.end_time || j.end, 
+        limit: j.limit_miejsc || j.limit,
+        trainer: j.trainer || j.prowadzacy,
+        displayDate: j.display_date,
+        fullDateStr: j.full_date_str
+      })));
     }
 
     const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
@@ -458,12 +477,11 @@ export default function DashboardPage() {
     return fullName.includes(query) || email.includes(query);
   });
 
-    // WYLICZANIE DYNAMICZNEGO KALENDARZA (Z PRZEŁĄCZANIEM NA KOLEJNY TYDZIEŃ W SOBOTĘ I NIEDZIELĘ)
+  // WYLICZANIE DYNAMICZNEGO KALENDARZA (Z PRZEŁĄCZANIEM NA KOLEJNY TYDZIEŃ W SOBOTĘ I NIEDZIELĘ)
   const getMonday = (d: Date) => {
     const dCopy = new Date(d);
     const day = dCopy.getDay();
     
-    // Jeśli dzisiaj jest sobota (6) lub niedziela (0), przeskocz od razu do poniedziałku następnego tygodnia
     if (day === 6) {
       dCopy.setDate(dCopy.getDate() + 2);
     } else if (day === 0) {
@@ -1187,5 +1205,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-

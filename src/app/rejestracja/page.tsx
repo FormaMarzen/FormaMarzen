@@ -4,19 +4,33 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../raporty/klienci/supabase';
 
+interface ClassItem {
+  id?: string | number;
+  title?: string;
+  nazwa?: string;
+  time?: string;
+  godzina?: string;
+  trainer?: string;
+  prowadzacy?: string;
+  start?: string;
+  start_time?: string;
+}
+
 export default function FreeRegistrationPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [customLogo, setCustomLogo] = useState('');
   
-  const [selectedClass, setSelectedClass] = useState<{ title: string; time: string; date: string } | null>(null);
-  const [classesList, setClassesList] = useState<any[]>([]);
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedClass, setSelectedClass] = useState<{ id?: any; title: string; time: string; date: string } | null>(null);
+  const [classesList, setClassesList] = useState<ClassItem[]>([]);
 
   // Stan formularza danych (Krok 2)
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState(''); // 🔑 Nowe pole na hasło
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [acceptPay, setAcceptPay] = useState(false);
   const [acceptReturn, setAcceptReturn] = useState(false);
@@ -28,24 +42,36 @@ export default function FreeRegistrationPage() {
     const savedLogo = localStorage.getItem('forma_marzen_logo');
     if (savedLogo) setCustomLogo(savedLogo);
 
-    fetchGrafik();
-  }, []);
+    fetchGrafik(currentDate);
+  }, [currentDate]);
 
-  // Pobieranie zajęć wyłącznie z bazy danych Supabase
-  const fetchGrafik = async () => {
-    const { data, error } = await supabase.from('grafik').select('*');
-    if (data && !error) {
-      setClassesList(data);
-    } else {
-      setClassesList([]);
-    }
+  const fetchGrafik = async (date: Date) => {
+    const dateStr = date.toISOString().split('T')[0];
+    const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
+
+    const { data: cykliczne } = await supabase.from('grafik_zajec').select('*');
+    const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr);
+
+    const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
+    
+    setClassesList([
+      ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
+      ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
+    ]);
   };
 
-  const handleSelectClass = (cls: { title: string; time: string }) => {
+  const changeDay = (days: number) => {
+    const newDate = new Date(currentDate);
+    newDate.setDate(newDate.getDate() + days);
+    setCurrentDate(newDate);
+  };
+
+  const handleSelectClass = (cls: ClassItem) => {
     setSelectedClass({
-      title: cls.title || cls.nazwa,
-      time: cls.time || cls.godzina,
-      date: '10.08.2026'
+      id: cls.id,
+      title: cls.title || cls.nazwa || 'Zajęcia',
+      time: cls.time || cls.godzina || cls.start || '',
+      date: currentDate.toLocaleDateString('pl-PL')
     });
     setStep(2);
   };
@@ -57,14 +83,18 @@ export default function FreeRegistrationPage() {
       return;
     }
 
+    if (!password || password.length < 6) {
+      setErrorMsg('Hasło musi mieć co najmniej 6 znaków.');
+      return;
+    }
+
     setIsLoading(true);
     setErrorMsg('');
 
-    const tempPassword = Math.random().toString(36).slice(-8) + 'A1!';
-
+    // 1. Rejestracja w Supabase Auth z podanym przez użytkownika hasłem
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: email,
-      password: tempPassword,
+      password: password,
       options: {
         data: { first_name: firstName, last_name: lastName, phone: phone }
       }
@@ -76,20 +106,53 @@ export default function FreeRegistrationPage() {
       return;
     }
 
-    await supabase.from('klienciData').insert([
+    const newClientId = Date.now();
+    const todayIsoStr = new Date().toISOString().split('T')[0];
+
+    // 2. Dodanie klienta do tabeli "klienci", aby od razu pojawił się w zakładce Klienci i miał panel klubowicza
+    const { error: klientError } = await supabase.from('klienci').insert([
       {
-        name: `${firstName} ${lastName}`,
-        email: email,
-        phone: phone,
-        pass: `Pierwsze bezpłatne zajęcia: ${selectedClass?.title}`,
-        statusText: `Zapisano na: ${selectedClass?.date} ${selectedClass?.time}`,
-        statusType: 'warning'
+        id: newClientId,
+        Imię: firstName,
+        Nazwisko: lastName,
+        "Numer tel.": phone,
+        "E-mail": email,
+        Zarejestrowany: todayIsoStr,
+        Portfel: '0.00 PLN',
+        karnetyKlubowicza: [],
+        zapisyNadchodzace: [
+          {
+            id: Date.now(),
+            data: `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`,
+            zajecia: selectedClass?.title,
+            karnet: 'Pierwsze bezpłatne',
+            zapisujacy: 'Zapisany przez stronę www'
+          }
+        ]
       }
     ]);
 
+    if (klientError) {
+      console.error("Błąd zapisu klienta do bazy:", klientError);
+    }
+
+    // 3. Dodanie wpisu do tabeli zapisów na zajęcia (jeśli wybrano konkretne zajęcia)
+    if (selectedClass?.id) {
+      const classKey = `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`;
+      await supabase.from('zapisy_zajec').insert([
+        {
+          class_key: classKey,
+          klient_id: newClientId,
+          status: 'zapisany',
+          obecny: false
+        }
+      ]);
+    }
+
+    // 4. Automatyczne logowanie po rejestracji
     const { error: loginError } = await supabase.auth.signInWithPassword({
       email: email,
-      password: tempPassword,
+      password: password,
     });
 
     setIsLoading(false);
@@ -140,12 +203,24 @@ export default function FreeRegistrationPage() {
             </div>
 
             <div className="flex justify-between items-center bg-slate-100 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-800">
-              <button className="w-7 h-7 bg-sky-500 text-white rounded-full flex items-center justify-center shadow-sm">‹</button>
-              <div className="text-center">
-                <div className="uppercase tracking-wider text-[11px] text-slate-600">PONIEDZIAŁEK</div>
-                <div className="text-sky-600 font-black text-sm">10.08.2026</div>
+              <button onClick={() => changeDay(-1)} className="w-7 h-7 bg-sky-500 text-white rounded-full flex items-center justify-center shadow-sm cursor-pointer">‹</button>
+              <div className="text-center flex flex-col items-center">
+                <div className="uppercase tracking-wider text-[11px] text-slate-600">{currentDate.toLocaleDateString('pl-PL', { weekday: 'long' }).toUpperCase()}</div>
+                <div className="text-sky-600 font-black text-sm flex items-center gap-1.5">
+                  {currentDate.toLocaleDateString('pl-PL')}
+                  <div className="relative cursor-pointer" title="Wybierz z kalendarza">
+                    <input 
+                      type="date" 
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" 
+                      onChange={(e) => {
+                        if (e.target.value) setCurrentDate(new Date(e.target.value));
+                      }} 
+                    />
+                    <span>📅</span>
+                  </div>
+                </div>
               </div>
-              <button className="w-7 h-7 bg-sky-500 text-white rounded-full flex items-center justify-center shadow-sm">›</button>
+              <button onClick={() => changeDay(1)} className="w-7 h-7 bg-sky-500 text-white rounded-full flex items-center justify-center shadow-sm cursor-pointer">›</button>
             </div>
 
             <div className="space-y-2.5 pt-2">
@@ -157,18 +232,20 @@ export default function FreeRegistrationPage() {
                     className="bg-white border border-slate-200 hover:border-sky-400 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group"
                   >
                     <div>
-                      <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">{cls.title || cls.nazwa}</h4>
-                      <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer || cls.prowadzacy || 'Brak'}</span>
+                      <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">
+                        {cls.title ?? cls.nazwa ?? 'Zajęcia'}
+                      </h4>
+                      <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer ?? cls.prowadzacy ?? 'Brak'}</span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs font-semibold text-slate-700">{cls.time || cls.godzina}</span>
+                      <span className="text-xs font-semibold text-slate-700">{cls.time ?? cls.godzina ?? cls.start ?? ''}</span>
                       <span className="text-slate-400 group-hover:text-sky-600">→</span>
                     </div>
                   </div>
                 ))
               ) : (
                 <div className="text-center py-6 text-xs text-slate-400">
-                  Brak dostępnych zajęć w bazie grafiku.
+                  Brak dostępnych zajęć w bazie grafiku w tym dniu.
                 </div>
               )}
             </div>
@@ -202,6 +279,11 @@ export default function FreeRegistrationPage() {
                 value={phone} onChange={(e) => setPhone(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-sky-500"
               />
+              <input 
+                type="password" required placeholder="Ustaw hasło do konta (min. 6 znaków) *"
+                value={password} onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-sky-500"
+              />
             </div>
 
             <div className="space-y-2 pt-2 text-[11px] text-slate-600">
@@ -222,13 +304,13 @@ export default function FreeRegistrationPage() {
             <div className="flex gap-2 pt-3">
               <button 
                 type="button" onClick={() => setStep(1)}
-                className="px-4 py-3 bg-slate-200 hover:bg-slate-300 font-bold rounded-xl text-slate-700"
+                className="px-4 py-3 bg-slate-200 hover:bg-slate-300 font-bold rounded-xl text-slate-700 cursor-pointer"
               >
                 Wstecz
               </button>
               <button 
                 type="submit" disabled={isLoading}
-                className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 rounded-xl shadow-md transition-colors disabled:opacity-70"
+                className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 rounded-xl shadow-md transition-colors disabled:opacity-70 cursor-pointer"
               >
                 {isLoading ? 'Zapisywanie i logowanie...' : '📅 ZAPISZ NA ZAJĘCIA'}
               </button>

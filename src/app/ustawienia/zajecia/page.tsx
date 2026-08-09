@@ -20,7 +20,7 @@ export default function ZarzadzajGrafikiemPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
 
   const [wybranyRodzajZajec, setWybranyRodzajZajec] = useState('');
-  const [wybranyTrener, setWybranyTrener] = useState('Kłaput Maciek');
+  const [wybranyTrener, setWybranyTrener] = useState('');
   
   const [startH, setStartH] = useState('08');
   const [startM, setStartM] = useState('00');
@@ -36,47 +36,57 @@ export default function ZarzadzajGrafikiemPage() {
   };
 
   const [maxOsob, setMaxOsob] = useState('12');
-  const [dataJednorazowa, setDataJednorazowa] = useState('2026-08-07');
+  const [dataJednorazowa, setDataJednorazowa] = useState(new Date().toISOString().split('T')[0]);
   const [wybraneDni, setWybraneDni] = useState({ pon: true, wt: false, sr: true, czw: false, pt: false, sb: false, nd: false });
 
   // POBIERANIE WSZYSTKICH DANYCH Z SUPABASE
   const loadData = async () => {
     // 1. Rodzaje zajęć
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
-    if (rodzajeData) setDostepneRodzajeZajec(rodzajeData);
+    if (rodzajeData) {
+      setDostepneRodzajeZajec(rodzajeData);
+      if (rodzajeData.length > 0 && !wybranyRodzajZajec) {
+        setWybranyRodzajZajec(rodzajeData[0].nazwa);
+      }
+    }
 
     // 2. Trenerzy
     const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
-    if (trenerzyData) setListaTrenerow(trenerzyData);
+    if (trenerzyData) {
+      setListaTrenerow(trenerzyData);
+      if (trenerzyData.length > 0 && !wybranyTrener) {
+        setWybranyTrener(trenerzyData[0].imie_nazwisko);
+      }
+    }
 
-    // 3. Szablony (Cykliczne)
-    const { data: szablonyData } = await supabase.from('szablony_zajec').select('*');
+    // 3. Cykliczne (Poprawione mapowanie na zgodne ze schematem bazy)
+    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
     if (szablonyData) {
       setCykliczneClasses(szablonyData.map((s: any) => ({
         id: s.id,
         title: s.title,
         startDate: `Utworzono: ${s.created_at ? s.created_at.split('T')[0] : 'Brak'}`,
-        start: s.start_time,
-        end: s.end_time,
-        limit: s.limit_miejsc,
+        start: s.start || '08:00',
+        end: s.end || '09:00',
+        limit: s.limit || 12,
         days: s.days || {},
         trainer: s.trainer,
         advanced: ['Powtarzalność: Co tydzień']
       })));
     }
 
-    // 4. Jednorazowe zajęcia
+    // 4. Jednorazowe (Zostaje jak było, skoro działało poprawnie)
     const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
     if (jednorazoweData) {
       setJednorazoweClasses(jednorazoweData.map((j: any) => ({
         id: j.id,
-        title: j.title,
-        displayDate: j.display_date,
-        fullDateStr: j.full_date_str,
-        start: j.start_time,
-        end: j.end_time,
-        limit: j.limit_miejsc,
-        trainer: j.trainer,
+        title: j.title || j.nazwa,
+        displayDate: j.display_date || j.data,
+        fullDateStr: j.full_date_str || j.data,
+        start: j.start_time || (j.godzina ? j.godzina.split(' - ')[0] : '08:00'),
+        end: j.end_time || (j.godzina ? j.godzina.split(' - ')[1] : '09:00'),
+        limit: j.limit_miejsc || 12,
+        trainer: j.trainer || j.prowadzacy,
         isJednorazowe: true,
         advanced: ['Zajęcia jednorazowe']
       })));
@@ -88,22 +98,10 @@ export default function ZarzadzajGrafikiemPage() {
     loadData();
   }, []);
 
-  useEffect(() => {
-    if (dostepneRodzajeZajec.length > 0 && !wybranyRodzajZajec) {
-      setWybranyRodzajZajec(dostepneRodzajeZajec[0].nazwa);
-    }
-  }, [dostepneRodzajeZajec]);
-
-  useEffect(() => {
-    if (listaTrenerow.length > 0 && !wybranyTrener) {
-      setWybranyTrener(listaTrenerow[0].imie_nazwisko);
-    }
-  }, [listaTrenerow]);
-
   const handleOpenAdd = () => {
     setEditingId(null);
-    setWybranyRodzajZajec(dostepneRodzajeZajec[0] ? dostepneRodzajeZajec[0].nazwa : '');
-    setWybranyTrener(listaTrenerow[0] ? listaTrenerow[0].imie_nazwisko : 'Kłaput Maciek');
+    setWybranyRodzajZajec(dostepneRodzajeZajec.length > 0 ? dostepneRodzajeZajec[0].nazwa : '');
+    setWybranyTrener(listaTrenerow.length > 0 ? listaTrenerow[0].imie_nazwisko : '');
     setStartH('08');
     setStartM('00');
     setKoniecH('09');
@@ -115,7 +113,7 @@ export default function ZarzadzajGrafikiemPage() {
   const handleOpenEdit = (item: any) => {
     setEditingId(item.id);
     setWybranyRodzajZajec(item.title || '');
-    setWybranyTrener(item.trainer || 'Kłaput Maciek');
+    setWybranyTrener(item.trainer || '');
     if (item.start) {
       const [sh, sm] = item.start.split(':');
       if (sh) setStartH(sh);
@@ -136,74 +134,84 @@ export default function ZarzadzajGrafikiemPage() {
     setIsModalOpen(true);
   };
 
-  // ZAPIS ZAJĘĆ DO SUPABASE
   const handleAddOrUpdateZajecia = async (e: React.FormEvent) => {
     e.preventDefault();
-    const nazwaDoZapisu = wybranyRodzajZajec || (dostepneRodzajeZajec[0] ? dostepneRodzajeZajec[0].nazwa : 'Zajęcia ogólne');
+    const nazwaDoZapisu = wybranyRodzajZajec || 'Ogólnorozwojowe';
     const startStr = `${startH}:${startM}`;
     const endStr = `${koniecH}:${koniecM}`;
     const limitNum = parseInt(maxOsob) || 12;
 
-    try {
-      if (activeTab === 'cykliczne') {
-        const payload = {
-          title: nazwaDoZapisu,
-          start_time: startStr,
-          end_time: endStr,
-          limit_miejsc: limitNum,
-          trainer: wybranyTrener,
-          days: wybraneDni
-        };
+    if (activeTab === 'cykliczne') {
+      // ✅ Payload w 100% zgodny z tabelą `grafik_zajec`
+      const payload = {
+        title: nazwaDoZapisu,
+        start: startStr,
+        end: endStr,
+        limit: limitNum,
+        trainer: wybranyTrener,
+        days: wybraneDni
+      };
 
-        if (editingId !== null) {
-          await supabase.from('szablony_zajec').update(payload).eq('id', editingId);
-        } else {
-          await supabase.from('szablony_zajec').insert([payload]);
-        }
+      let result;
+      if (editingId !== null) {
+        result = await supabase.from('grafik_zajec').update(payload).eq('id', editingId);
       } else {
-        // Jednorazowe
-        const [y, m, d] = dataJednorazowa.split('-');
-        const displayDateStr = `${d}/${m}`;
-
-        const payload = {
-          title: nazwaDoZapisu,
-          start_time: startStr,
-          end_time: endStr,
-          limit_miejsc: limitNum,
-          trainer: wybranyTrener,
-          display_date: displayDateStr,
-          full_date_str: dataJednorazowa
-        };
-
-        if (editingId !== null) {
-          await supabase.from('zajecia_jednorazowe').update(payload).eq('id', editingId);
-        } else {
-          await supabase.from('zajecia_jednorazowe').insert([payload]);
-        }
+        result = await supabase.from('grafik_zajec').insert([payload]);
       }
 
-      loadData();
-      setIsModalOpen(false);
-    } catch (err: any) {
-      console.error("Błąd zapisu zajęć:", err);
-      alert("Wystąpił problem podczas zapisywania zajęć do chmury.");
+      if (result.error) {
+        alert(`BŁĄD BAZY DANYCH (Cykliczne):\n\nWiadomość: ${result.error.message}\nSzczegóły: ${result.error.details || 'Brak'}\nKod błędu: ${result.error.code}`);
+        return;
+      }
+    } else {
+      // Zapis do tabeli: zajecia_jednorazowe (Zostawiamy jak było, skoro działało)
+      const [y, m, d] = dataJednorazowa.split('-');
+      const displayDateStr = `${d}/${m}`;
+
+      const payload = {
+        title: nazwaDoZapisu,
+        start_time: startStr,
+        end_time: endStr,
+        limit_miejsc: limitNum,
+        trainer: wybranyTrener,
+        display_date: displayDateStr,
+        full_date_str: dataJednorazowa
+      };
+
+      let result;
+      if (editingId !== null) {
+        result = await supabase.from('zajecia_jednorazowe').update(payload).eq('id', editingId);
+      } else {
+        result = await supabase.from('zajecia_jednorazowe').insert([payload]);
+      }
+
+      if (result.error) {
+        alert(`BŁĄD BAZY DANYCH (Jednorazowe):\n\nWiadomość: ${result.error.message}\nSzczegóły: ${result.error.details || 'Brak'}\nKod błędu: ${result.error.code}`);
+        return;
+      }
     }
+
+    loadData();
+    setIsModalOpen(false);
   };
 
-  // USUWANIE Z SUPABASE
   const handleDelete = async (id: number) => {
     if (!confirm("Czy na pewno chcesz usunąć te zajęcia? Znikną z grafiku wszystkich użytkowników!")) return;
 
-    try {
-      if (activeTab === 'cykliczne') {
-        await supabase.from('szablony_zajec').delete().eq('id', id);
-      } else {
-        await supabase.from('zajecia_jednorazowe').delete().eq('id', id);
+    if (activeTab === 'cykliczne') {
+      const { error } = await supabase.from('grafik_zajec').delete().eq('id', id);
+      if (error) {
+        alert(`Błąd podczas usuwania: ${error.message}`);
+        return;
       }
-      loadData();
-    } catch (err) {
-      alert("Wystąpił błąd podczas usuwania z chmury.");
+    } else {
+      const { error } = await supabase.from('zajecia_jednorazowe').delete().eq('id', id);
+      if (error) {
+        alert(`Błąd podczas usuwania: ${error.message}`);
+        return;
+      }
     }
+    loadData();
   };
 
   if (!isMounted) {
@@ -414,7 +422,7 @@ export default function ZarzadzajGrafikiemPage() {
                         <option key={t.id} value={t.imie_nazwisko}>{t.imie_nazwisko}</option>
                       ))
                     ) : (
-                      <option value="Kłaput Maciek">Kłaput Maciek (Brak trenerów w bazie)</option>
+                      <option value="">Brak trenerów w bazie (dodaj w zespole)</option>
                     )}
                   </select>
                 </div>

@@ -11,6 +11,12 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [customLogo, setCustomLogo] = useState('');
+  
+  // Stany dla odzyskiwania hasła
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [isResetLoading, setIsResetLoading] = useState(false);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -38,6 +44,23 @@ export default function LoginPage() {
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsResetLoading(true);
+    
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+      redirectTo: `${window.location.origin}/update-password`,
+    });
+    
+    setIsResetLoading(false);
+    if (error) {
+      alert("Błąd: " + error.message);
+    } else {
+      alert("Sprawdź skrzynkę e-mail. Wysłaliśmy link do zresetowania hasła.");
+      setIsResetModalOpen(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-8 font-sans antialiased text-slate-800 relative overflow-hidden">
       
@@ -48,7 +71,6 @@ export default function LoginPage() {
         </svg>
       </div>
 
-      {/* Środek: Logo + Karta logowania */}
       <div className="w-full max-w-md space-y-6 z-10">
         
         {/* Logo i nazwa klubu */}
@@ -111,9 +133,13 @@ export default function LoginPage() {
                 />
                 <span className="text-slate-600 font-medium">Zapamiętaj mnie</span>
               </label>
-              <a href="#" onClick={(e) => { e.preventDefault(); alert("Funkcja odzyskiwania hasła"); }} className="text-sky-600 hover:text-sky-700 font-semibold transition-colors">
+              <button 
+                type="button"
+                onClick={() => setIsResetModalOpen(true)}
+                className="text-sky-600 hover:text-sky-700 font-semibold transition-colors bg-transparent border-none cursor-pointer"
+              >
                 Zapomniałeś hasła?
-              </a>
+              </button>
             </div>
 
             <button 
@@ -141,8 +167,30 @@ export default function LoginPage() {
             </li>
           </ul>
         </div>
-
       </div>
+
+      {/* MODAL RESETOWANIA HASŁA */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white p-6 rounded-3xl max-w-sm w-full shadow-2xl space-y-4">
+            <h3 className="font-bold text-lg">Zresetuj hasło</h3>
+            <p className="text-xs text-slate-500">Wpisz swój e-mail, a wyślemy Ci instrukcje.</p>
+            <input 
+              type="email" 
+              placeholder="Twój adres e-mail" 
+              value={resetEmail} 
+              onChange={(e) => setResetEmail(e.target.value)} 
+              className="w-full p-3 border rounded-xl text-sm border-slate-300 focus:outline-none focus:border-sky-500" 
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-2 bg-slate-200 rounded-lg font-bold cursor-pointer">Anuluj</button>
+              <button onClick={handleResetPassword} disabled={isResetLoading} className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50">
+                {isResetLoading ? 'Wysyłanie...' : 'Wyślij link'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
