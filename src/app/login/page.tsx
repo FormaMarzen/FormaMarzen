@@ -40,7 +40,7 @@ export default function LoginPage() {
       setErrorMsg('Nieprawidłowy e-mail lub hasło.');
       setIsLoading(false);
     } else if (data.user) {
-      router.push('/'); 
+      window.location.href = '/'; 
     }
   };
 
