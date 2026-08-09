@@ -31,26 +31,20 @@ export default function FreeRegistrationPage() {
     fetchGrafik();
   }, []);
 
-  // Pobieranie zajęć z tabeli grafik w Supabase
+  // Pobieranie zajęć wyłącznie z bazy danych Supabase
   const fetchGrafik = async () => {
     const { data, error } = await supabase.from('grafik').select('*');
     if (data && !error) {
       setClassesList(data);
     } else {
-      // Fallback, jeśli tabela jest pusta
-      setClassesList([
-        { title: 'Ogólnorozwojowe', time: '16:05 - 17:05', trainer: 'Monika Ratajczak' },
-        { title: 'Ogólnorozwojowe', time: '17:15 - 18:15', trainer: 'Monika Ratajczak' },
-        { title: 'Ogólnorozwojowe', time: '18:25 - 19:25', trainer: 'Monika Ratajczak' },
-        { title: 'HIIT / TABATA', time: '19:25 - 19:45', trainer: 'Monika Ratajczak' },
-      ]);
+      setClassesList([]);
     }
   };
 
   const handleSelectClass = (cls: { title: string; time: string }) => {
     setSelectedClass({
-      title: cls.title,
-      time: cls.time,
+      title: cls.title || cls.nazwa,
+      time: cls.time || cls.godzina,
       date: '10.08.2026'
     });
     setStep(2);
@@ -155,22 +149,28 @@ export default function FreeRegistrationPage() {
             </div>
 
             <div className="space-y-2.5 pt-2">
-              {classesList.map((cls, idx) => (
-                <div 
-                  key={idx}
-                  onClick={() => handleSelectClass(cls)}
-                  className="bg-white border border-slate-200 hover:border-sky-400 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group"
-                >
-                  <div>
-                    <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">{cls.title || cls.nazwa}</h4>
-                    <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer || cls.prowadzacy || 'Monika Ratajczak'}</span>
+              {classesList.length > 0 ? (
+                classesList.map((cls, idx) => (
+                  <div 
+                    key={idx}
+                    onClick={() => handleSelectClass(cls)}
+                    className="bg-white border border-slate-200 hover:border-sky-400 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group"
+                  >
+                    <div>
+                      <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">{cls.title || cls.nazwa}</h4>
+                      <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer || cls.prowadzacy || 'Brak'}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-semibold text-slate-700">{cls.time || cls.godzina}</span>
+                      <span className="text-slate-400 group-hover:text-sky-600">→</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-slate-700">{cls.time || cls.godzina}</span>
-                    <span className="text-slate-400 group-hover:text-sky-600">→</span>
-                  </div>
+                ))
+              ) : (
+                <div className="text-center py-6 text-xs text-slate-400">
+                  Brak dostępnych zajęć w bazie grafiku.
                 </div>
-              ))}
+              )}
             </div>
           </div>
         )}
