@@ -160,7 +160,7 @@ export default function FreeRegistrationPage() {
     if (loginError) {
       router.push('/login');
     } else {
-      router.push('/');
+      window.location.href = '/';
     }
   };
 
