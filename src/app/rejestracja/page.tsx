@@ -6,11 +6,11 @@ import { supabase } from '../raporty/klienci/supabase';
 
 export default function FreeRegistrationPage() {
   const router = useRouter();
-  const [step, setStep] = useState(1); // 1: Wybór zajęć, 2: Formularz danych
+  const [step, setStep] = useState(1);
   const [customLogo, setCustomLogo] = useState('');
   
-  // Stan wybranego treningu
   const [selectedClass, setSelectedClass] = useState<{ title: string; time: string; date: string } | null>(null);
+  const [classesList, setClassesList] = useState<any[]>([]);
 
   // Stan formularza danych (Krok 2)
   const [firstName, setFirstName] = useState('');
@@ -27,15 +27,25 @@ export default function FreeRegistrationPage() {
   useEffect(() => {
     const savedLogo = localStorage.getItem('forma_marzen_logo');
     if (savedLogo) setCustomLogo(savedLogo);
+
+    fetchGrafik();
   }, []);
 
-  // Przykładowa lista zajęć na dany dzień
-  const classesList = [
-    { title: 'Ogólnorozwojowe', time: '16:05 - 17:05', trainer: 'Monika Ratajczak' },
-    { title: 'Ogólnorozwojowe', time: '17:15 - 18:15', trainer: 'Monika Ratajczak' },
-    { title: 'Ogólnorozwojowe', time: '18:25 - 19:25', trainer: 'Monika Ratajczak' },
-    { title: 'HIIT / TABATA', time: '19:25 - 19:45', trainer: 'Monika Ratajczak' },
-  ];
+  // Pobieranie zajęć z tabeli grafik w Supabase
+  const fetchGrafik = async () => {
+    const { data, error } = await supabase.from('grafik').select('*');
+    if (data && !error) {
+      setClassesList(data);
+    } else {
+      // Fallback, jeśli tabela jest pusta
+      setClassesList([
+        { title: 'Ogólnorozwojowe', time: '16:05 - 17:05', trainer: 'Monika Ratajczak' },
+        { title: 'Ogólnorozwojowe', time: '17:15 - 18:15', trainer: 'Monika Ratajczak' },
+        { title: 'Ogólnorozwojowe', time: '18:25 - 19:25', trainer: 'Monika Ratajczak' },
+        { title: 'HIIT / TABATA', time: '19:25 - 19:45', trainer: 'Monika Ratajczak' },
+      ]);
+    }
+  };
 
   const handleSelectClass = (cls: { title: string; time: string }) => {
     setSelectedClass({
@@ -43,7 +53,7 @@ export default function FreeRegistrationPage() {
       time: cls.time,
       date: '10.08.2026'
     });
-    setStep(2); // Przejście do kroku drugiego
+    setStep(2);
   };
 
   const handleRegisterAndLogin = async (e: React.FormEvent) => {
@@ -56,19 +66,13 @@ export default function FreeRegistrationPage() {
     setIsLoading(true);
     setErrorMsg('');
 
-    // Poprawione generowanie bezpiecznego hasła tymczasowego
     const tempPassword = Math.random().toString(36).slice(-8) + 'A1!';
 
-    // 1. Rejestracja w Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: email,
       password: tempPassword,
       options: {
-        data: {
-          first_name: firstName,
-          last_name: lastName,
-          phone: phone,
-        }
+        data: { first_name: firstName, last_name: lastName, phone: phone }
       }
     });
 
@@ -78,8 +82,7 @@ export default function FreeRegistrationPage() {
       return;
     }
 
-    // 2. Dodanie klienta do tabeli bazodanowej
-    const { error: dbError } = await supabase.from('klienciData').insert([
+    await supabase.from('klienciData').insert([
       {
         name: `${firstName} ${lastName}`,
         email: email,
@@ -90,7 +93,6 @@ export default function FreeRegistrationPage() {
       }
     ]);
 
-    // 3. Automatyczne zalogowanie sesji po rejestracji
     const { error: loginError } = await supabase.auth.signInWithPassword({
       email: email,
       password: tempPassword,
@@ -107,10 +109,8 @@ export default function FreeRegistrationPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-start p-4 sm:p-8 font-sans antialiased text-slate-800">
-      
       <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-xl p-6 sm:p-8 space-y-6 my-auto">
         
-        {/* Nagłówek z logo i tekstem */}
         <div className="flex flex-col items-center space-y-3 text-center border-b border-slate-100 pb-6">
           <div className="w-16 h-16 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center p-2 overflow-hidden">
             {customLogo ? (
@@ -123,7 +123,6 @@ export default function FreeRegistrationPage() {
             Cześć, zapraszam Cię na zajęcia.<br />Myślę, że znajdziesz coś dla siebie.
           </p>
 
-          {/* Zakładki kroków */}
           <div className="w-full grid grid-cols-2 pt-4 text-xs font-bold border-b border-slate-200">
             <div className={`pb-2 border-b-2 ${step === 1 ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-400'}`}>
               1. WYBIERZ ZAJĘCIA
@@ -140,14 +139,12 @@ export default function FreeRegistrationPage() {
           </div>
         )}
 
-        {/* KROK 1: WYBIERZ ZAJĘCIA */}
         {step === 1 && (
           <div className="space-y-4">
             <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-xs text-sky-900 font-medium text-center">
               Cześć! Bardzo się cieszymy, że chcesz do nas dołączyć! Wybierz datę i zajęcia, na które chcesz się zapisać.
             </div>
 
-            {/* Wybór daty */}
             <div className="flex justify-between items-center bg-slate-100 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-800">
               <button className="w-7 h-7 bg-sky-500 text-white rounded-full flex items-center justify-center shadow-sm">‹</button>
               <div className="text-center">
@@ -157,7 +154,6 @@ export default function FreeRegistrationPage() {
               <button className="w-7 h-7 bg-sky-500 text-white rounded-full flex items-center justify-center shadow-sm">›</button>
             </div>
 
-            {/* Lista zajęć */}
             <div className="space-y-2.5 pt-2">
               {classesList.map((cls, idx) => (
                 <div 
@@ -166,11 +162,11 @@ export default function FreeRegistrationPage() {
                   className="bg-white border border-slate-200 hover:border-sky-400 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group"
                 >
                   <div>
-                    <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">{cls.title}</h4>
-                    <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer}</span>
+                    <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">{cls.title || cls.nazwa}</h4>
+                    <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer || cls.prowadzacy || 'Monika Ratajczak'}</span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-slate-700">{cls.time}</span>
+                    <span className="text-xs font-semibold text-slate-700">{cls.time || cls.godzina}</span>
                     <span className="text-slate-400 group-hover:text-sky-600">→</span>
                   </div>
                 </div>
@@ -179,7 +175,6 @@ export default function FreeRegistrationPage() {
           </div>
         )}
 
-        {/* KROK 2: PRZEDSTAW SIĘ (FORMULARZ) */}
         {step === 2 && (
           <form onSubmit={handleRegisterAndLogin} className="space-y-4 text-xs">
             <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-xs text-sky-900 font-medium text-center">
@@ -188,40 +183,27 @@ export default function FreeRegistrationPage() {
 
             <div className="space-y-3">
               <input 
-                type="text" 
-                required
-                placeholder="Imię *"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                type="text" required placeholder="Imię *"
+                value={firstName} onChange={(e) => setFirstName(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-sky-500"
               />
               <input 
-                type="text" 
-                required
-                placeholder="Nazwisko *"
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                type="text" required placeholder="Nazwisko *"
+                value={lastName} onChange={(e) => setLastName(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-sky-500"
               />
               <input 
-                type="email" 
-                required
-                placeholder="Adres e-mail *"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                type="email" required placeholder="Adres e-mail *"
+                value={email} onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-sky-500"
               />
               <input 
-                type="tel" 
-                required
-                placeholder="Numer telefonu *"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                type="tel" required placeholder="Numer telefonu *"
+                value={phone} onChange={(e) => setPhone(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-sky-500"
               />
             </div>
 
-            {/* Zgody regulaminowe */}
             <div className="space-y-2 pt-2 text-[11px] text-slate-600">
               <label className="flex items-start gap-2 cursor-pointer">
                 <input type="checkbox" checked={acceptPay} onChange={(e) => setAcceptPay(e.target.checked)} className="mt-0.5 accent-blue-600" />
@@ -239,15 +221,13 @@ export default function FreeRegistrationPage() {
 
             <div className="flex gap-2 pt-3">
               <button 
-                type="button" 
-                onClick={() => setStep(1)}
+                type="button" onClick={() => setStep(1)}
                 className="px-4 py-3 bg-slate-200 hover:bg-slate-300 font-bold rounded-xl text-slate-700"
               >
                 Wstecz
               </button>
               <button 
-                type="submit"
-                disabled={isLoading}
+                type="submit" disabled={isLoading}
                 className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 rounded-xl shadow-md transition-colors disabled:opacity-70"
               >
                 {isLoading ? 'Zapisywanie i logowanie...' : '📅 ZAPISZ NA ZAJĘCIA'}
@@ -257,7 +237,6 @@ export default function FreeRegistrationPage() {
         )}
 
       </div>
-
     </div>
   );
 }

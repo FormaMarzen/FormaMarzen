@@ -131,7 +131,7 @@ export default function LoginPage() {
           <p className="font-medium">Nie posiadasz jeszcze konta? Nie ma problemu:</p>
           <ul className="space-y-1 pl-1">
             <li 
-              onClick={() => router.push('/zajecia')} 
+              onClick={() => router.push('/rejestracja')} 
               className="flex items-center gap-2 text-sky-600 hover:underline cursor-pointer"
             >
               <span className="w-1.5 h-1.5 bg-sky-600 rounded-full"></span> Zapisz się na pierwsze zajęcia bez kupna karnetu
