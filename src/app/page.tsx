@@ -211,6 +211,43 @@ export default function DashboardPage() {
     loadData(); 
   };
 
+  const handleConfirmExtendPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !extendPassTarget) return;
+
+    const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
+    const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
+
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === extendPassTarget.id) {
+        return {
+          ...k,
+          nazwa: extendSelectedNewPassName || k.nazwa,
+          waznyDo: extendNewDate,
+          cena: nowaCena,
+          statusTekst: `Ważny do: ${extendNewDate}`
+        };
+      }
+      return k;
+    });
+
+    const updatedClient = {
+      ...profileClient,
+      karnetyKlubowicza: uaktualnioneKarnety,
+      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '),
+      price: nowaCena,
+      expiresDate: extendNewDate
+    };
+
+    await updateSupabaseClient(updatedClient, { 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      Cena: nowaCena
+    });
+    
+    alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`);
+    setIsExtendPassModalOpen(false);
+  };
+
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -228,60 +265,63 @@ export default function DashboardPage() {
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
 
-    const karnetyList = currentUser.karnetyKlubowicza || [];
-    let maxDateStr = '';
-    if (karnetyList.length > 0) {
-      let maxTime = 0;
-      karnetyList.forEach((k: any) => {
-        if (k.waznyDo) {
-          const parts = k.waznyDo.split('-');
-          if (parts.length === 3) {
-            const t = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])).getTime();
-            if (t > maxTime) { maxTime = t; maxDateStr = k.waznyDo; }
-          }
-        }
-      });
-    }
-
-    let baseStartDate = new Date();
-    if (activationMode === 'after' && maxDateStr) {
-      const parts = maxDateStr.split('-');
-      baseStartDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-    }
-
-    const dataWygasniecia = new Date(baseStartDate);
-    dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-    
-    const year = dataWygasniecia.getFullYear();
-    const month = String(dataWygasniecia.getMonth() + 1).padStart(2, '0');
-    const day = String(dataWygasniecia.getDate()).padStart(2, '0');
-    const dataWygasnieciaStr = `${year}-${month}-${day}`;
-
+    let karnetyList = [...(currentUser.karnetyKlubowicza || [])];
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
 
-    const statusTekst = activationMode === 'after' 
-      ? `Oczekujący (Ważny od: ${maxDateStr} do: ${dataWygasnieciaStr})`
-      : `Ważny do: ${dataWygasnieciaStr}`;
+    let updatedKarnety = [];
 
-    const nowyKarnetObj = {
-      id: Date.now(),
-      nazwa: selectedBuyPass,
-      waznyDo: dataWygasnieciaStr,
-      pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
-      cena: cenaStr,
-      znizkaProcentowa: '',
-      rata: '1 / 1',
-      statusTekst: statusTekst,
-      blokadaDo: null,
-      powodBlokady: null,
-      zawieszonyOd: null,
-      zawieszonyDo: null,
-      historiaZawieszen: []
-    };
+    if (karnetyList.length > 0 && activationMode === 'after') {
+      updatedKarnety = karnetyList.map((k, index) => {
+        if (index === 0) {
+          let baseDate = new Date();
+          if (k.waznyDo) {
+            const parts = k.waznyDo.split('-');
+            if (parts.length === 3) {
+              baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            }
+          }
+          baseDate.setDate(baseDate.getDate() + dniWażności);
+          const newExpStr = baseDate.toISOString().split('T')[0];
 
-    const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
+          const addedEntries = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 0;
+          const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
+
+          return {
+            ...k,
+            nazwa: selectedBuyPass,
+            waznyDo: newExpStr,
+            pozostaloWejsc: limitWejscBaza !== null ? currentEntries + addedEntries : null,
+            cena: cenaStr,
+            statusTekst: `Ważny do: ${newExpStr}`
+          };
+        }
+        return k;
+      });
+    } else {
+      const dataWygasniecia = new Date();
+      dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
+      const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+
+      const nowyKarnetObj = {
+        id: Date.now(),
+        nazwa: selectedBuyPass,
+        waznyDo: dataWygasnieciaStr,
+        pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+        cena: cenaStr,
+        znizkaProcentowa: '',
+        rata: '1 / 1',
+        statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
+        blokadaDo: null,
+        powodBlokady: null,
+        zawieszonyOd: null,
+        zawieszonyDo: null,
+        historiaZawieszen: []
+      };
+
+      updatedKarnety = [nowyKarnetObj];
+    }
 
     const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
@@ -290,25 +330,26 @@ export default function DashboardPage() {
     const nowaHistoriaEntry = {
       id: Date.now(),
       date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      type: `Zakup karnetu (Panel): ${selectedBuyPass}`,
+      type: `Zakup/Przedłużenie (Panel): ${selectedBuyPass}`,
       amount: `-${cenaWartosc.toFixed(2)} PLN`,
       balance: nowyStanPortfelaStr
     };
 
     const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
+    const ostatecznaDataWygasniecia = updatedKarnety[0]?.waznyDo || '';
 
     const updatedClient = {
       ...currentUser,
-      karnetyKlubowicza: uaktualnioneKarnety,
+      karnetyKlubowicza: updatedKarnety,
       pass: selectedBuyPass,
       price: cenaStr,
-      expiresDate: dataWygasnieciaStr,
+      expiresDate: ostatecznaDataWygasniecia,
       wallet: nowyStanPortfelaStr,
       walletHistory: updatedWalletHistory
     };
 
     await updateSupabaseClient(updatedClient, {
-      karnetyKlubowicza: uaktualnioneKarnety,
+      karnetyKlubowicza: updatedKarnety,
       Cena: cenaStr,
       Portfel: nowyStanPortfelaStr,
       walletHistory: updatedWalletHistory
@@ -323,7 +364,7 @@ export default function DashboardPage() {
       }]);
     }
 
-    alert(`Gratulacje! Twój nowy karnet "${selectedBuyPass}" został przypisany.`);
+    alert(`Gratulacje! Karnet został zaktualizowany do dnia ${ostatecznaDataWygasniecia}.`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
     window.location.reload();
@@ -390,43 +431,6 @@ export default function DashboardPage() {
     reader.readAsDataURL(file);
   };
 
-  const handleConfirmExtendPass = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profileClient || !extendPassTarget) return;
-
-    const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-    const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
-
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === extendPassTarget.id) {
-        return {
-          ...k,
-          nazwa: extendSelectedNewPassName,
-          waznyDo: extendNewDate,
-          cena: nowaCena,
-          statusTekst: `Ważny do: ${extendNewDate}`
-        };
-      }
-      return k;
-    });
-
-    const updatedClient = {
-      ...profileClient,
-      karnetyKlubowicza: uaktualnioneKarnety,
-      pass: extendSelectedNewPassName,
-      price: nowaCena,
-      expiresDate: extendNewDate
-    };
-
-    await updateSupabaseClient(updatedClient, { 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Cena: nowaCena
-    });
-    
-    alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`);
-    setIsExtendPassModalOpen(false);
-  };
-
   const handleAddSecondPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !selectedPassToAdd) return;
@@ -481,25 +485,6 @@ export default function DashboardPage() {
 
     setSelectedPassToAdd('');
     setIsAddSecondPassModalOpen(false);
-  };
-
-  const handleConfirmSuspendPass = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profileClient || !suspendPassTarget) return;
-
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === suspendPassTarget.id) {
-        return { ...k, zawieszonyOd: suspendStartDate, zawieszonyDo: suspendEndDate };
-      }
-      return k;
-    });
-
-    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-    
-    await updateSupabaseClient(updatedClient, { karnetyKlubowicza: uaktualnioneKarnety });
-    
-    alert(`Karnet został zawieszony od ${suspendStartDate} do ${suspendEndDate}.`);
-    setIsSuspendModalOpen(false);
   };
 
   const handleSaveBlockModification = async (e: React.FormEvent) => {
