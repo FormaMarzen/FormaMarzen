@@ -30,10 +30,11 @@ export default function MojeZapisyPage() {
       if (klientData) {
         setCurrentUser(klientData);
 
-        // 2. Pobieramy grafiki i zajęcia jednorazowe, by dopasować nazwy
-        const [{ data: szablonyData }, { data: jednorazoweData }, { data: zData }] = await Promise.all([
+        // 2. Pobieramy grafiki, zajęcia jednorazowe, nadpisania oraz zapisy z bazy
+        const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
           supabase.from('grafik_zajec').select('*'),
           supabase.from('zajecia_jednorazowe').select('*'),
+          supabase.from('nadpisania_zajec').select('*'),
           supabase.from('zapisy_zajec').select('*').eq('klient_id', klientData.id)
         ]);
 
@@ -49,16 +50,25 @@ export default function MojeZapisyPage() {
             const classId = parts[0];
             let dataZajecStr = parts[1] || ''; 
             
-            // Szukamy nazwy w szablonach lub jednorazowych
+            // Szukamy nazwy oraz godziny w szablonach, jednorazowych lub nadpisaniach
             let znalezionaNazwa = z.tytul || z.zajecia || null;
-            if (!znalezionaNazwa && classId) {
+            let znalezionaGodzina = '';
+
+            const override = nadpisaniaData?.find((n: any) => n.class_key === z.class_key);
+            if (override && override.start) {
+              znalezionaGodzina = override.start;
+            }
+
+            if (classId) {
               const szablon = szablonyData?.find((s: any) => String(s.id) === String(classId));
               if (szablon) {
-                znalezionaNazwa = szablon.title || szablon.nazwa;
+                if (!znalezionaNazwa) znalezionaNazwa = szablon.title || szablon.nazwa;
+                if (!znalezionaGodzina) znalezionaGodzina = szablon.start || szablon.start_time;
               } else {
                 const jednorazowe = jednorazoweData?.find((j: any) => String(j.id) === String(classId));
                 if (jednorazowe) {
-                  znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
+                  if (!znalezionaNazwa) znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
+                  if (!znalezionaGodzina) znalezionaGodzina = jednorazowe.start_time || jednorazowe.start;
                 }
               }
             }
@@ -72,13 +82,16 @@ export default function MojeZapisyPage() {
             }
 
             const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
-            
+            const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
+
             const itemObj = {
               id: z.id,
               classKey: z.class_key,
               data: formatDataPL,
               rawDate: dataObj,
-              zajecia: znalezionaNazwa || 'Trening klubowy',
+              zajecia: nazwaZGodzina,
+              tytulCzysty: znalezionaNazwa || 'Trening klubowy',
+              godzina: znalezionaGodzina,
               karnet: klientData.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
               obecnosc: z.obecny ? 'Obecny' : 'Nieobecny / Oczekujący'
             };
@@ -106,7 +119,6 @@ export default function MojeZapisyPage() {
   const handleConfirmWypisanie = async () => {
     if (!currentUser || !itemToUnregister) return;
 
-    // Usuwamy wpis z tabeli 'zapisy_zajec' w bazie
     const { error } = await supabase
       .from('zapisy_zajec')
       .delete()
@@ -118,7 +130,6 @@ export default function MojeZapisyPage() {
       return;
     }
 
-    // Dodanie wpisu do logów transakcji
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'zajecia_wypis',
