@@ -9,7 +9,6 @@ export default function MojeZapisyPage() {
   const [zapisyNadchodzace, setZapisyNadchodzace] = useState<any[]>([]);
   const [zapisyPrzeszle, setZapisyPrzeszle] = useState<any[]>([]);
   
-  // Stan do modalu potwierdzenia wypisania
   const [itemToUnregister, setItemToUnregister] = useState<any | null>(null);
 
   useEffect(() => {
@@ -21,6 +20,7 @@ export default function MojeZapisyPage() {
     const userEmail = session?.user?.email;
 
     if (userEmail) {
+      // 1. Pobieramy klienta
       const { data: klientData } = await supabase
         .from('klienci')
         .select('*')
@@ -29,12 +29,59 @@ export default function MojeZapisyPage() {
         
       if (klientData) {
         setCurrentUser(klientData);
-        
-        const nadchodzace = klientData.zapisyNadchodzace || [];
-        const przeszle = klientData.zapisyPrzeszle || [];
 
-        setZapisyNadchodzace(nadchodzace);
-        setZapisyPrzeszle(przeszle);
+        // 2. Pobieramy realne zapisy z tabeli 'zapisy_zajec' dla tego klienta
+        const { data: zData } = await supabase
+          .from('zapisy_zajec')
+          .select('*')
+          .eq('klient_id', klientData.id);
+
+        if (zData) {
+          const nadchodzace: any[] = [];
+          const przeszle: any[] = [];
+          const dzis = new Date();
+          dzis.setHours(0, 0, 0, 0);
+
+          zData.forEach((z: any) => {
+            // z.class_key ma format np. "1_10/08" lub "1_2026-08-10"
+            const parts = z.class_key ? z.class_key.split('_') : [];
+            let dataZajecStr = parts[1] || ''; // np. "10/08" lub "2026-08-10"
+            
+            let dataObj = new Date();
+            if (dataZajecStr.includes('/')) {
+              const [d, m] = dataZajecStr.split('/');
+              dataObj = new Date(dzis.getFullYear(), parseInt(m) - 1, parseInt(d));
+            } else if (dataZajecStr.includes('-')) {
+              dataObj = new Date(dataZajecStr);
+            }
+
+            const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+            
+            const itemObj = {
+              id: z.id,
+              classKey: z.class_key,
+              data: formatDataPL,
+              rawDate: dataObj,
+              zajecia: z.tytul || z.zajecia || 'Zajęcia klubowe',
+              karnet: klientData.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
+              obecnosc: z.obecny ? 'Obecny' : 'Nieobecny / Oczekujący'
+            };
+
+            if (dataObj >= dzis) {
+              nadchodzace.push(itemObj);
+            } else {
+              przeszle.push(itemObj);
+            }
+          });
+
+          // Sortowanie nadchodzących od najbliższych
+          nadchodzace.sort((a, b) => a.rawDate.getTime() - b.rawDate.getTime());
+          // Sortowanie przeszłych od najnowszych
+          przeszle.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
+
+          setZapisyNadchodzace(nadchodzace);
+          setZapisyPrzeszle(przeszle);
+        }
       }
     }
     setIsLoading(false);
@@ -43,34 +90,24 @@ export default function MojeZapisyPage() {
   const handleConfirmWypisanie = async () => {
     if (!currentUser || !itemToUnregister) return;
 
-    const uaktualnioneNadchodzace = zapisyNadchodzace.filter((z: any) => z.id !== itemToUnregister.id);
-    const nowyWypis = { 
-      ...itemToUnregister, 
-      wypisujacy: 'Wypisany przez klubowicza',
-      dataWypisania: new Date().toISOString().split('T')[0]
-    };
-    const uaktualnioneWypisy = [nowyWypis, ...(currentUser.zapisyWypisy || [])];
-
-    // Zapis w bazie Supabase
+    // Usuwamy wpis z tabeli 'zapisy_zajec' w bazie
     const { error } = await supabase
-      .from('klienci')
-      .update({ 
-        zapisyNadchodzace: uaktualnioneNadchodzace, 
-        zapisyWypisy: uaktualnioneWypisy 
-      })
-      .eq('id', currentUser.id);
+      .from('zapisy_zajec')
+      .delete()
+      .eq('class_key', itemToUnregister.classKey)
+      .eq('klient_id', currentUser.id);
 
     if (error) {
       alert(`Błąd podczas wypisywania: ${error.message}`);
       return;
     }
 
-    // Dodanie wpisu do transakcji / logów
+    // Dodanie wpisu do logów transakcji
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'zajecia_wypis',
-      kwota: null,
-      opis: `Samodzielne wypisanie z zajęć: ${itemToUnregister.zajecia} (${itemToUnregister.data})`
+      class_key: itemToUnregister.classKey,
+      opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć (${itemToUnregister.data})`
     }]);
 
     setItemToUnregister(null);
@@ -78,7 +115,7 @@ export default function MojeZapisyPage() {
   };
 
   if (isLoading) {
-    return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie zapisów...</div>;
+    return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie zapisów z bazy...</div>;
   }
 
   return (
@@ -111,7 +148,7 @@ export default function MojeZapisyPage() {
                       <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
                       <td className="py-4 px-5 font-mono font-bold text-slate-900">{item.data}</td>
                       <td className="py-4 px-5 font-bold text-sky-950">{item.zajecia}</td>
-                      <td className="py-4 px-5 font-semibold text-slate-600">{item.karnet || 'OPEN'}</td>
+                      <td className="py-4 px-5 font-semibold text-slate-600">{item.karnet}</td>
                       <td className="py-4 px-5 text-right">
                         <button 
                           onClick={() => setItemToUnregister(item)}
@@ -156,10 +193,10 @@ export default function MojeZapisyPage() {
                       <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
                       <td className="py-4 px-5 font-mono">{item.data}</td>
                       <td className="py-4 px-5 font-bold text-slate-900">{item.zajecia}</td>
-                      <td className="py-4 px-5 text-slate-600">{item.karnet || 'OPEN'}</td>
+                      <td className="py-4 px-5 text-slate-600">{item.karnet}</td>
                       <td className="py-4 px-5">
                         <span className="bg-emerald-50 text-emerald-700 font-bold px-2.5 py-1 rounded-md border border-emerald-200 text-[10px]">
-                          {item.obecnosc || 'Odbyte'}
+                          {item.obecnosc}
                         </span>
                       </td>
                     </tr>
