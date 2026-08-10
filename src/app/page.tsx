@@ -22,6 +22,7 @@ export default function DashboardPage() {
 
   const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('admin');
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   // Pełne stany zarządzania klubowiczem i modali profilu
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
@@ -54,15 +55,23 @@ export default function DashboardPage() {
   const [editingPassModal, setEditingPassModal] = useState<any | null>(null);
   const [isAddSecondPassModalOpen, setIsAddSecondPassModalOpen] = useState(false);
   const [selectedPassToAdd, setSelectedPassToAdd] = useState('');
+  
+  // ZMIENNE DLA MODALA ZAKUPU (KLIENT)
+  const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
+  const [selectedBuyPass, setSelectedBuyPass] = useState('');
 
   // 1. POBIERANIE DANYCH Z BAZY SUPABASE DLA KOKPITU
   const loadData = async () => {
+    let savedRole = 'klubowicz';
     if (typeof window !== 'undefined') {
-      const savedRole = localStorage.getItem('forma_marzen_app_role');
+      savedRole = localStorage.getItem('forma_marzen_app_role') || 'klubowicz';
       if (savedRole === 'klubowicz' || savedRole === 'admin') {
-        setAppRole(savedRole);
+        setAppRole(savedRole as 'admin' | 'klubowicz');
       }
     }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const userEmail = session?.user?.email;
 
     // A. Klienci
     const { data: klienciData } = await supabase.from('klienci').select('*');
@@ -87,6 +96,11 @@ export default function DashboardPage() {
         walletHistory: c.walletHistory || []
       }));
       setKlienciList(enriched);
+
+      if (userEmail) {
+        const myUser = enriched.find((c: any) => c.email === userEmail);
+        if (myUser) setCurrentUser(myUser);
+      }
     }
 
     // B. Karnety do list rozwijanych
@@ -108,7 +122,6 @@ export default function DashboardPage() {
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) setRodzajeZajec(rodzajeData);
 
-    // ZMIANA: Pobieranie z `grafik_zajec` z nowymi (angielskimi) nazwami kolumn
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
     if (szablonyData) {
       setZapisaneZajecia(szablonyData.map((s: any) => ({ 
@@ -122,7 +135,6 @@ export default function DashboardPage() {
       })));
     }
 
-    // ZMIANA: Pobieranie z `zajecia_jednorazowe` (dla pewności obsługuje obie wersje kolumn)
     const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
     if (jednorazoweData) {
       setJednorazoweZajecia(jednorazoweData.map((j: any) => ({ 
@@ -174,8 +186,103 @@ export default function DashboardPage() {
     if (profileClient && profileClient.id === updatedClient.id) {
       setProfileClient(updatedClient);
     }
+    if (currentUser && currentUser.id === updatedClient.id) {
+      setCurrentUser(updatedClient);
+    }
     await supabase.from('klienci').update(payload).eq('id', updatedClient.id);
     loadData(); 
+  };
+
+  // OBSŁUGA ZAKUPU KARNETU PRZEZ KLIENTA Z POZIOMU BANERA
+  const handleBuyPassSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !selectedBuyPass) return;
+
+    const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
+    let dniWażności = 30;
+
+    if (defKarnetu && defKarnetu.dlugosc) {
+      const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
+      if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
+      else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
+      else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
+      else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
+      else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
+      else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
+    }
+
+    const dataWygasniecia = new Date();
+    dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
+    const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+    const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+    const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
+
+    // Próba pobrania limitu wejść, jeśli istnieje w bazie
+    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+
+    const nowyKarnetObj = {
+      id: Date.now(),
+      nazwa: selectedBuyPass,
+      waznyDo: dataWygasnieciaStr,
+      pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+      cena: cenaStr,
+      znizkaProcentowa: '',
+      rata: '1 / 1',
+      statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
+      blokadaDo: null,
+      powodBlokady: null,
+      zawieszonyOd: null,
+      zawieszonyDo: null,
+      historiaZawieszen: []
+    };
+
+    const uaktualnioneKarnety = [...(currentUser.karnetyKlubowicza || []), nowyKarnetObj];
+
+    // Obciążenie portfela
+    const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
+    const nowyStanPortfela = currentWalletNum - cenaWartosc;
+    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+
+    const nowaHistoriaEntry = {
+      id: Date.now(),
+      date: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      type: `Zakup karnetu (Panel): ${selectedBuyPass}`,
+      amount: `-${cenaWartosc.toFixed(2)} PLN`,
+      balance: nowyStanPortfelaStr
+    };
+
+    const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
+
+    const updatedClient = {
+      ...currentUser,
+      karnetyKlubowicza: uaktualnioneKarnety,
+      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '),
+      price: cenaStr,
+      expiresDate: dataWygasnieciaStr,
+      wallet: nowyStanPortfelaStr,
+      walletHistory: updatedWalletHistory
+    };
+
+    // Zapis do bazy
+    await updateSupabaseClient(updatedClient, {
+      karnetyKlubowicza: uaktualnioneKarnety,
+      Cena: cenaStr,
+      Portfel: nowyStanPortfelaStr,
+      walletHistory: updatedWalletHistory
+    });
+
+    if (cenaWartosc > 0) {
+      await supabase.from('transakcje').insert([{
+        klient_id: currentUser.id,
+        typ_operacji: 'zakup_karnetu',
+        kwota: -cenaWartosc,
+        opis: `Zakup (Panel klienta): ${selectedBuyPass}`
+      }]);
+    }
+
+    alert(`Gratulacje! Twój nowy karnet "${selectedBuyPass}" został przypisany.`);
+    setSelectedBuyPass('');
+    setIsBuyPassModalOpen(false);
   };
 
   const handleDeleteClient = async (id: number) => {
@@ -297,10 +404,14 @@ export default function DashboardPage() {
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
 
+    // Pobranie ewentualnego limitu wejść
+    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+
     const nowyKarnetObj = {
       id: Date.now(),
       nazwa: selectedPassToAdd,
       waznyDo: dataWygasnieciaStr,
+      pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
       cena: defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN',
       znizkaProcentowa: '',
       rata: '1 / 1',
@@ -477,7 +588,7 @@ export default function DashboardPage() {
     return fullName.includes(query) || email.includes(query);
   });
 
-  // WYLICZANIE DYNAMICZNEGO KALENDARZA (Z PRZEŁĄCZANIEM NA KOLEJNY TYDZIEŃ W SOBOTĘ I NIEDZIELĘ)
+  // WYLICZANIE DYNAMICZNEGO KALENDARZA
   const getMonday = (d: Date) => {
     const dCopy = new Date(d);
     const day = dCopy.getDay();
@@ -531,9 +642,114 @@ export default function DashboardPage() {
   if (salesPeriod === 'Dziś') salesPeriodTitle = todayStr;
   if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
 
+  // ==========================================
+  // INTELIGENTNY SYSTEM BANERÓW DLA KLUBOWICZA
+  // ==========================================
+  let needsNewPass = false;
+  let isPassExpiringSoon = false;
+  let expiringMessage = "";
+
+  if (appRole === 'klubowicz' && currentUser) {
+    const karnety = currentUser.karnetyKlubowicza || [];
+    
+    if (karnety.length === 0) {
+      needsNewPass = true; // Użytkownik nie ma żadnych karnetów
+    } else {
+      const todayDate = new Date();
+      todayDate.setHours(0, 0, 0, 0);
+
+      let hasAnyValid = false;
+
+      for (const k of karnety) {
+        let isValid = true;
+        let isExpiring = false;
+        let msg = "";
+
+        // Sprawdzanie po dacie wygaśnięcia (Karnety Czasowe)
+        if (k.waznyDo) {
+          const expDate = new Date(k.waznyDo);
+          expDate.setHours(0, 0, 0, 0);
+          const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+          
+          if (diffDays < 0) {
+            isValid = false; // Karnet przeterminowany
+          } else if (diffDays <= 5) {
+            isExpiring = true;
+            msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`;
+          }
+        }
+
+        // Sprawdzanie po wejściach (Karnety Wejściówkowe)
+        if (k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
+          if (k.pozostaloWejsc <= 0) {
+            isValid = false; // Brak wejść = nieważny
+          } else if (k.pozostaloWejsc <= 2) {
+            isExpiring = true;
+            msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`;
+          }
+        }
+
+        if (isValid) {
+          hasAnyValid = true;
+          if (isExpiring) {
+            isPassExpiringSoon = true;
+            expiringMessage = msg;
+          }
+        }
+      }
+
+      // Jeśli po przeanalizowaniu wszystkich karnetów żaden nie jest ważny
+      if (!hasAnyValid) {
+        needsNewPass = true;
+      }
+    }
+  }
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
       
+      {/* BANER 1: BRAK KARNETU LUB WSZYSTKIE WYGASŁY */}
+      {appRole === 'klubowicz' && needsNewPass && (
+        <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center shrink-0 border border-amber-200">
+              <span className="text-2xl">🎟️</span>
+            </div>
+            <div>
+              <h3 className="font-black text-amber-950 text-sm sm:text-base uppercase tracking-wider">Nie masz aktywnego karnetu!</h3>
+              <p className="text-xs text-amber-800 font-medium mt-0.5">Aby w pełni korzystać z klubu i zapisywać się na zajęcia, wybierz swój karnet.</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsBuyPassModalOpen(true)} 
+            className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+          >
+            Kup karnet
+          </button>
+        </div>
+      )}
+
+      {/* BANER 2: KOŃCZY SIĘ KARNET LUB WEJŚCIA */}
+      {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
+        <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
+              <span className="text-2xl">⚠️</span>
+            </div>
+            <div>
+              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Kończy się twój karnet!</h3>
+              <p className="text-xs text-rose-800 font-medium mt-0.5">{expiringMessage}</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsBuyPassModalOpen(true)} 
+            className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+          >
+            Kup nowy / Przedłuż
+          </button>
+        </div>
+      )}
+
       {/* 1. GRAFIK NA CAŁĄ SZEROKOŚĆ (5 DNI) */}
       <section className="space-y-4">
         <div className="flex items-center justify-between bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
@@ -663,160 +879,213 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* 2. DOLNY PANEL: SPRZEDAŻ (LEWA) ORAZ KLIENCI (PRAWA) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
-        
-        {/* SPRZEDAŻ (LEWA STRONA) */}
-        <section className="lg:col-span-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <Link 
-              href="/raporty/transakcje" 
-              className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
-            >
-              SPRZEDAŻ Z BAZY <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
-            </Link>
-          </div>
-
-          <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center font-bold text-sky-700 text-sm">
-                  $
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-800 uppercase">RAPORT FINANSOWY</div>
-                  <div className="text-[10px] text-slate-500">{salesPeriodTitle}</div>
-                </div>
-              </div>
-              <select 
-                value={salesPeriod}
-                onChange={(e) => setSalesPeriod(e.target.value)}
-                className="bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
+      {/* 2. DOLNY PANEL - UKRYTY DLA KLIENTA (TYLKO DLA ADMINA) */}
+      {appRole === 'admin' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
+          
+          {/* SPRZEDAŻ (LEWA STRONA) */}
+          <section className="lg:col-span-6 space-y-3">
+            <div className="flex items-center justify-between">
+              <Link 
+                href="/raporty/transakcje" 
+                className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
               >
-                <option value="Dziś">Dziś</option>
-                <option value="Miesiąc">Ten miesiąc</option>
-              </select>
+                SPRZEDAŻ Z BAZY <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
+              </Link>
             </div>
 
-            <div className="bg-sky-50 p-3 rounded-xl border border-sky-100 flex justify-between items-center text-xs">
-              <span className="text-slate-600 font-medium">Łączny bilans operacji:</span>
-              <span className={`font-bold text-sm ${sumaTransakcji < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
-                {sumaTransakcji.toFixed(2)} PLN
-              </span>
-            </div>
-
-            <div className="text-[11px] max-h-60 overflow-y-auto pr-2">
-              <div className="flex justify-between text-slate-500 pb-2 border-b border-sky-100 font-semibold sticky top-0 bg-white z-10">
-                <span>Operacja</span>
-                <span>Ilość</span>
-                <span>Kwota brutto</span>
-              </div>
-              
-              {filteredTransakcje.length === 0 ? (
-                <div className="flex justify-between text-slate-400 py-4 border-b border-slate-100 text-center">
-                  <span className="w-full">Brak zarejestrowanych transakcji w tym okresie.</span>
-                </div>
-              ) : (
-                filteredTransakcje.map((t: any) => (
-                  <div key={t.id} className="flex justify-between text-slate-700 py-2.5 border-b border-slate-100">
-                    <span className="truncate pr-2 max-w-[200px]" title={t.opis}>{t.opis || t.typ_operacji}</span>
-                    <span>1</span>
-                    <span className={`font-bold ${t.kwota < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {Number(t.kwota).toFixed(2)} PLN
-                    </span>
+            <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center font-bold text-sky-700 text-sm">
+                    $
                   </div>
-                ))
-              )}
+                  <div>
+                    <div className="text-xs font-bold text-slate-800 uppercase">RAPORT FINANSOWY</div>
+                    <div className="text-[10px] text-slate-500">{salesPeriodTitle}</div>
+                  </div>
+                </div>
+                <select 
+                  value={salesPeriod}
+                  onChange={(e) => setSalesPeriod(e.target.value)}
+                  className="bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
+                >
+                  <option value="Dziś">Dziś</option>
+                  <option value="Miesiąc">Ten miesiąc</option>
+                </select>
+              </div>
 
-              <div className="flex justify-between text-slate-900 pt-3 font-bold text-xs sticky bottom-0 bg-white">
-                <span>Podsumowanie:</span>
-                <span className={sumaTransakcji < 0 ? 'text-rose-700' : 'text-emerald-700'}>
+              <div className="bg-sky-50 p-3 rounded-xl border border-sky-100 flex justify-between items-center text-xs">
+                <span className="text-slate-600 font-medium">Łączny bilans operacji:</span>
+                <span className={`font-bold text-sm ${sumaTransakcji < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
                   {sumaTransakcji.toFixed(2)} PLN
                 </span>
               </div>
-            </div>
-          </div>
-        </section>
 
-        {/* KLIENCI (PRAWA STRONA) */}
-        <section className="lg:col-span-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <Link 
-              href="/raporty/klienci" 
-              className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
-            >
-              KLIENCI ({klienciList.length}) <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
-            </Link>
-          </div>
-
-          <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
-            <div className="flex gap-2">
-              <input 
-                type="text"
-                placeholder="Szukaj klienta po imieniu, nazwisku lub e-mail..."
-                value={clientSearch}
-                onChange={(e) => setClientSearch(e.target.value)}
-                className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
-              />
-            </div>
-
-            <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
-              {filteredClients.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 text-xs font-medium">
-                  Brak klientów pasujących do wyszukiwania.
+              <div className="text-[11px] max-h-60 overflow-y-auto pr-2">
+                <div className="flex justify-between text-slate-500 pb-2 border-b border-sky-100 font-semibold sticky top-0 bg-white z-10">
+                  <span>Operacja</span>
+                  <span>Ilość</span>
+                  <span>Kwota brutto</span>
                 </div>
-              ) : (
-                filteredClients.map((client) => {
-                  const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
-                  const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
-
-                  return (
-                    <div 
-                      key={client.id}
-                      className="bg-sky-50/50 border border-sky-100 rounded-xl p-4 space-y-3 hover:border-sky-300 transition-all shadow-sm"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-sky-100 border-2 border-amber-500 rounded-full overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
-                            {client.avatarUrl ? (
-                              <img src={client.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                            ) : (
-                              '👤'
-                            )}
-                          </div>
-                          <div>
-                            <h4 className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</h4>
-                            <span className="text-[10px] text-slate-500 block mt-0.5">✉ {client.email}</span>
-                          </div>
-                        </div>
-                        {appRole === 'admin' && (
-                          <div className="flex items-center gap-1.5 text-slate-400 text-xs">
-                            <button onClick={() => setTableActionClient(client)} className="hover:text-slate-700 cursor-pointer p-1.5 bg-white border border-slate-200 rounded-md shadow-sm" title="Zarządzaj klubowiczem">✏️</button>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="text-[11px] font-bold text-sky-900 pl-1">
-                        Karnet: {nazwaKarnetu}
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-amber-100 text-amber-800 border border-amber-200 uppercase">
-                          {client.status || 'Aktywny'}
-                        </span>
-                        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                          Rejestracja: {client.registered}
-                        </span>
-                      </div>
+                
+                {filteredTransakcje.length === 0 ? (
+                  <div className="flex justify-between text-slate-400 py-4 border-b border-slate-100 text-center">
+                    <span className="w-full">Brak zarejestrowanych transakcji w tym okresie.</span>
+                  </div>
+                ) : (
+                  filteredTransakcje.map((t: any) => (
+                    <div key={t.id} className="flex justify-between text-slate-700 py-2.5 border-b border-slate-100">
+                      <span className="truncate pr-2 max-w-[200px]" title={t.opis}>{t.opis || t.typ_operacji}</span>
+                      <span>1</span>
+                      <span className={`font-bold ${t.kwota < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {Number(t.kwota).toFixed(2)} PLN
+                      </span>
                     </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </section>
+                  ))
+                )}
 
-      </div>
+                <div className="flex justify-between text-slate-900 pt-3 font-bold text-xs sticky bottom-0 bg-white">
+                  <span>Podsumowanie:</span>
+                  <span className={sumaTransakcji < 0 ? 'text-rose-700' : 'text-emerald-700'}>
+                    {sumaTransakcji.toFixed(2)} PLN
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* KLIENCI (PRAWA STRONA) */}
+          <section className="lg:col-span-6 space-y-3">
+            <div className="flex items-center justify-between">
+              <Link 
+                href="/raporty/klienci" 
+                className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
+              >
+                KLIENCI ({klienciList.length}) <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
+              </Link>
+            </div>
+
+            <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
+              <div className="flex gap-2">
+                <input 
+                  type="text"
+                  placeholder="Szukaj klienta po imieniu, nazwisku lub e-mail..."
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                  className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
+                />
+              </div>
+
+              <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+                {filteredClients.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400 text-xs font-medium">
+                    Brak klientów pasujących do wyszukiwania.
+                  </div>
+                ) : (
+                  filteredClients.map((client) => {
+                    const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
+                    const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
+
+                    return (
+                      <div 
+                        key={client.id}
+                        className="bg-sky-50/50 border border-sky-100 rounded-xl p-4 space-y-3 hover:border-sky-300 transition-all shadow-sm"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-sky-100 border-2 border-amber-500 rounded-full overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
+                              {client.avatarUrl ? (
+                                <img src={client.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                              ) : (
+                                '👤'
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</h4>
+                              <span className="text-[10px] text-slate-500 block mt-0.5">✉ {client.email}</span>
+                            </div>
+                          </div>
+                          {appRole === 'admin' && (
+                            <div className="flex items-center gap-1.5 text-slate-400 text-xs">
+                              <button onClick={() => setTableActionClient(client)} className="hover:text-slate-700 cursor-pointer p-1.5 bg-white border border-slate-200 rounded-md shadow-sm" title="Zarządzaj klubowiczem">✏️</button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="text-[11px] font-bold text-sky-900 pl-1">
+                          Karnet: {nazwaKarnetu}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-amber-100 text-amber-800 border border-amber-200 uppercase">
+                            {client.status || 'Aktywny'}
+                          </span>
+                          <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            Rejestracja: {client.registered}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </section>
+
+        </div>
+      )}
+
+      {/* MODAL ZAKUPU KARNETU DLA KLIENTA */}
+      {isBuyPassModalOpen && currentUser && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup nowy karnet</h3>
+              <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+            
+            <form onSubmit={handleBuyPassSubmit} className="space-y-5 text-xs">
+              <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
+                Wybierz karnet z poniższej listy, aby w pełni korzystać z funkcji klubu i zapisywać się na wybrane zajęcia.
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
+                <select 
+                  required
+                  value={selectedBuyPass} 
+                  onChange={(e) => setSelectedBuyPass(e.target.value)} 
+                  className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-amber-500 cursor-pointer text-slate-800"
+                >
+                  <option value="" disabled>-- Wybierz karnet --</option>
+                  {dostepneKarnety.map(k => (
+                    <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button 
+                  type="button" 
+                  onClick={() => setIsBuyPassModalOpen(false)} 
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button 
+                  type="submit" 
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer"
+                >
+                  Kupuję
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* REZERTA MODALI ADMINISTRATORA PONIŻEJ... */}
 
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM */}
       {tableActionClient && (
@@ -1175,7 +1444,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: DODAWANIE DRUGIEGO KARNETU */}
+      {/* MODAL: DODAWANIE DRUGIEGO KARNETU (DLA ADMINA) */}
       {isAddSecondPassModalOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">

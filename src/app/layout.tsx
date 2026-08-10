@@ -37,7 +37,8 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  const isLoginPage = pathname === '/login';
+  // UWAGA: Zmiana logiczna. Oznaczamy obie publiczne ścieżki
+  const isPublicPage = pathname === '/login' || pathname?.startsWith('/rejestracja');
 
   useEffect(() => {
     setIsMounted(true);
@@ -46,7 +47,7 @@ export default function RootLayout({
       const { data: { session }, error } = await supabase.auth.getSession();
       
       if (!session?.user) {
-        if (!isLoginPage) {
+        if (!isPublicPage) {
           router.push('/login');
         }
         return;
@@ -93,7 +94,7 @@ export default function RootLayout({
 
     checkAuthAndRole();
     fetchKarnetyFromSupabase();
-  }, [pathname, router, isLoginPage]);
+  }, [pathname, router, isPublicPage]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -266,7 +267,7 @@ export default function RootLayout({
     setFormKarnet('');
     setIsAddClientModalOpen(false);
 
-        alert("Klubowicz został pomyślnie dodany do chmury!");
+    alert("Klubowicz został pomyślnie dodany do chmury!");
     window.location.reload();
   };
 
@@ -275,7 +276,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-sky-50/50 text-slate-800 flex font-sans antialiased h-screen overflow-hidden">
         
         <AuthGuard>
-          {isLoginPage ? (
+          {isPublicPage ? (
             <main className="flex-1 w-full h-screen overflow-y-auto bg-slate-50">
               {children}
             </main>
