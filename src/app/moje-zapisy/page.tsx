@@ -20,7 +20,6 @@ export default function MojeZapisyPage() {
     const userEmail = session?.user?.email;
 
     if (userEmail) {
-      // 1. Pobieramy dane klienta
       const { data: klientData } = await supabase
         .from('klienci')
         .select('*')
@@ -30,7 +29,6 @@ export default function MojeZapisyPage() {
       if (klientData) {
         setCurrentUser(klientData);
 
-        // 2. Pobieramy grafiki, zajęcia jednorazowe, nadpisania oraz zapisy z bazy
         const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
           supabase.from('grafik_zajec').select('*'),
           supabase.from('zajecia_jednorazowe').select('*'),
@@ -45,12 +43,10 @@ export default function MojeZapisyPage() {
           dzis.setHours(0, 0, 0, 0);
 
           zData.forEach((z: any) => {
-            // class_key np. "1_10/08" lub "15_2026-08-10"
             const parts = z.class_key ? z.class_key.split('_') : [];
             const classId = parts[0];
             let dataZajecStr = parts[1] || ''; 
             
-            // Szukamy nazwy oraz godziny w szablonach, jednorazowych lub nadpisaniach
             let znalezionaNazwa = z.tytul || z.zajecia || null;
             let znalezionaGodzina = '';
 
@@ -81,17 +77,19 @@ export default function MojeZapisyPage() {
               dataObj = new Date(dataZajecStr);
             }
 
+            // Formatowanie daty oraz dnia tygodnia
             const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+            const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
+            
             const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
 
             const itemObj = {
               id: z.id,
               classKey: z.class_key,
               data: formatDataPL,
+              dzienTygodnia: dzienTygodniaPL.charAt(0).toUpperCase() + dzienTygodniaPL.slice(1),
               rawDate: dataObj,
               zajecia: nazwaZGodzina,
-              tytulCzysty: znalezionaNazwa || 'Trening klubowy',
-              godzina: znalezionaGodzina,
               karnet: klientData.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
               obecnosc: z.obecny ? 'Obecny' : 'Nieobecny / Oczekujący'
             };
@@ -103,9 +101,7 @@ export default function MojeZapisyPage() {
             }
           });
 
-          // Sortowanie nadchodzących od najbliższych
           nadchodzace.sort((a, b) => a.rawDate.getTime() - b.rawDate.getTime());
-          // Sortowanie przeszłych od najnowszych
           przeszle.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
 
           setZapisyNadchodzace(nadchodzace);
@@ -173,7 +169,10 @@ export default function MojeZapisyPage() {
                   zapisyNadchodzace.map((item: any, index: number) => (
                     <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
                       <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
-                      <td className="py-4 px-5 font-mono font-bold text-slate-900">{item.data}</td>
+                      <td className="py-4 px-5">
+                        <div className="font-mono font-bold text-slate-900">{item.data}</div>
+                        <div className="text-[10px] text-slate-500 font-semibold uppercase">{item.dzienTygodnia}</div>
+                      </td>
                       <td className="py-4 px-5 font-bold text-sky-950">{item.zajecia}</td>
                       <td className="py-4 px-5 font-semibold text-slate-600">{item.karnet}</td>
                       <td className="py-4 px-5 text-right">
@@ -218,7 +217,10 @@ export default function MojeZapisyPage() {
                   zapisyPrzeszle.map((item: any, index: number) => (
                     <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
                       <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
-                      <td className="py-4 px-5 font-mono">{item.data}</td>
+                      <td className="py-4 px-5">
+                        <div className="font-mono font-bold text-slate-900">{item.data}</div>
+                        <div className="text-[10px] text-slate-500 font-semibold uppercase">{item.dzienTygodnia}</div>
+                      </td>
                       <td className="py-4 px-5 font-bold text-slate-900">{item.zajecia}</td>
                       <td className="py-4 px-5 text-slate-600">{item.karnet}</td>
                       <td className="py-4 px-5">
@@ -248,7 +250,7 @@ export default function MojeZapisyPage() {
               <p>Czy na pewno chcesz wypisać się z zajęć:</p>
               <div className="bg-sky-50 p-4 rounded-xl border border-sky-200 space-y-1">
                 <div className="font-black text-sky-950 text-sm">{itemToUnregister.zajecia}</div>
-                <div className="font-mono text-sky-800">Termin: {itemToUnregister.data}</div>
+                <div className="font-mono text-sky-800">Termin: {itemToUnregister.data} ({itemToUnregister.dzienTygodnia})</div>
               </div>
               <p className="text-[11px] text-slate-500">Operacja ta zwolni Twoje miejsce na liście uczestników.</p>
             </div>
