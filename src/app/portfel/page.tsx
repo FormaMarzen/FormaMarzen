@@ -5,6 +5,7 @@ import { supabase } from '../raporty/klienci/supabase';
 
 export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [transakcjePortfela, setTransakcjePortfela] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   // Stany modalów doładowania / spłaty
@@ -21,6 +22,7 @@ export default function PortfelPage() {
     const userEmail = session?.user?.email;
 
     if (userEmail) {
+      // 1. Pobieramy dane klienta
       const { data: klientData } = await supabase
         .from('klienci')
         .select('*')
@@ -28,17 +30,21 @@ export default function PortfelPage() {
         .single();
         
       if (klientData) {
-        // Obsługa historii portfela z bazy lub pusta tablica
-        let history = klientData.walletHistory || [];
-        if (typeof history === 'string') {
-          try { history = JSON.parse(history); } catch (e) { history = []; }
-        }
-
         setCurrentUser({
           ...klientData,
-          wallet: klientData.Portfel || klientData.portfel || '0.00 PLN',
-          walletHistory: history
+          wallet: klientData.Portfel || klientData.portfel || '0.00 PLN'
         });
+
+        // 2. Pobieramy historię transakcji dla tego klienta z tabeli 'transakcje'
+        const { data: tData } = await supabase
+          .from('transakcje')
+          .select('*')
+          .eq('klient_id', klientData.id)
+          .order('created_at', { ascending: false });
+
+        if (tData) {
+          setTransakcjePortfela(tData);
+        }
       }
     }
     setIsLoading(false);
@@ -55,22 +61,11 @@ export default function PortfelPage() {
     const nowyStan = currentWalletNum + kwotaZmiany;
     const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
 
-    const nowaHistoriaEntry = {
-      id: Date.now(),
-      date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      type: topUpReason || 'Uzupełnienie portfela',
-      amount: `+${kwotaZmiany.toFixed(2)} PLN`,
-      balance: nowyStanStr
-    };
-
-    const updatedHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
-
-    // Zapis w Supabase
+    // 1. Aktualizacja samego portfela w tabeli 'klienci'
     const { error } = await supabase
       .from('klienci')
       .update({ 
-        Portfel: nowyStanStr, 
-        walletHistory: updatedHistory 
+        Portfel: nowyStanStr
       })
       .eq('id', currentUser.id);
 
@@ -79,12 +74,12 @@ export default function PortfelPage() {
       return;
     }
 
-    // Dodanie rekordu do globalnych transakcji
+    // 2. Dodanie rekordu do tabeli 'transakcje'
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'uzupelnienie_portfela',
       kwota: kwotaZmiany,
-      opis: `Doładowanie portfela (Strefa klienta): +${kwotaZmiany.toFixed(2)} PLN`
+      opis: topUpReason || `Doładowanie portfela: +${kwotaZmiany.toFixed(2)} PLN`
     }]);
 
     alert("Portfel został pomyślnie doładowany!");
@@ -102,21 +97,10 @@ export default function PortfelPage() {
     const kwotaSplaty = Math.abs(currentWalletNum);
     const nowyStanStr = "0.00 PLN";
 
-    const nowaHistoriaEntry = {
-      id: Date.now(),
-      date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      type: 'Spłata portfela',
-      amount: `+${kwotaSplaty.toFixed(2)} PLN`,
-      balance: nowyStanStr
-    };
-
-    const updatedHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
-
     const { error } = await supabase
       .from('klienci')
       .update({ 
-        Portfel: nowyStanStr, 
-        walletHistory: updatedHistory 
+        Portfel: nowyStanStr
       })
       .eq('id', currentUser.id);
 
@@ -146,7 +130,7 @@ export default function PortfelPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in pb-20">
       
-      {/* SEKCJA 1: MÓJ PORTFEL (KAFELEK SALDA I PRZYCISKI) */}
+      {/* SEKCJA 1: MÓJ PORTFEL */}
       <div className="space-y-4">
         <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">MÓJ PORTFEL</h2>
         
@@ -182,7 +166,7 @@ export default function PortfelPage() {
         </div>
       </div>
 
-      {/* SEKCJA 2: HISTORIA PORTFELA */}
+      {/* SEKCJA 2: HISTORIA PORTFELA / TRANSAKCJI */}
       <div className="space-y-4">
         <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA PORTFELA</h2>
         
@@ -193,26 +177,27 @@ export default function PortfelPage() {
                 <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                   <th className="py-4 px-5">DATA</th>
                   <th className="py-4 px-5">KWOTA</th>
-                  <th className="py-4 px-5">STAN PO</th>
                   <th className="py-4 px-5">PRODUKT / OPERACJA</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {(!currentUser?.walletHistory || currentUser.walletHistory.length === 0) ? (
+                {transakcjePortfela.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-8 text-center text-slate-400">Brak historii operacji w portfelu.</td>
+                    <td colSpan={3} className="py-8 text-center text-slate-400">Brak historii operacji w portfelu.</td>
                   </tr>
                 ) : (
-                  currentUser.walletHistory.map((item: any) => {
-                    const isPositive = String(item.amount).startsWith('+');
+                  transakcjePortfela.map((t: any) => {
+                    const kwotaNum = Number(t.kwota) || 0;
+                    const isPositive = kwotaNum >= 0;
+                    const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
+
                     return (
-                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5 font-mono text-slate-600">{item.date}</td>
+                      <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="py-4 px-5 font-mono text-slate-600">{formattedDate}</td>
                         <td className={`py-4 px-5 font-bold flex items-center gap-1.5 ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          <span>{isPositive ? '▲' : '▼'}</span> {item.amount}
+                          <span>{isPositive ? '▲' : '▼'}</span> {isPositive ? `+${kwotaNum.toFixed(2)}` : kwotaNum.toFixed(2)} PLN
                         </td>
-                        <td className="py-4 px-5 font-bold text-slate-900">{item.balance}</td>
-                        <td className="py-4 px-5 font-medium text-slate-800">{item.type}</td>
+                        <td className="py-4 px-5 font-medium text-slate-800">{t.opis || t.typ_operacji}</td>
                       </tr>
                     );
                   })
