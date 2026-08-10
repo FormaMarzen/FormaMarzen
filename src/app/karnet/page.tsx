@@ -67,7 +67,15 @@ export default function KarnetPage() {
   };
 
   // Ustalanie najdalszej daty końca obecnych karnetów
-  const karnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
+  const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
+  
+  // 🌟 SORTOWANIE KARNETÓW: OD NAJSZYBCIEJ KOŃCZĄCYCH SIĘ NA SAMEJ GÓRZE
+  const karnetyList = [...rawKarnetyList].sort((a: any, b: any) => {
+    const dateA = a.waznyDo || '9999-12-31';
+    const dateB = b.waznyDo || '9999-12-31';
+    return dateA.localeCompare(dateB);
+  });
+
   const hasActivePasses = karnetyList.length > 0;
   
   let maxDateStr = '';
@@ -117,7 +125,7 @@ export default function KarnetPage() {
     const dataWygasniecia = new Date(baseStartDate);
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
     
-    // Bezpieczne formatowanie nowej daty ważności (Y-M-D), odporne na strefy czasowe
+    // Bezpieczne formatowanie nowej daty ważności (Y-M-D)
     const year = dataWygasniecia.getFullYear();
     const month = String(dataWygasniecia.getMonth() + 1).padStart(2, '0');
     const day = String(dataWygasniecia.getDate()).padStart(2, '0');
@@ -148,7 +156,7 @@ export default function KarnetPage() {
       historiaZawieszen: []
     };
 
-    const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
+    const uaktualnioneKarnety = [...rawKarnetyList, nowyKarnetObj];
 
     const currentWalletNum = parseFloat(currentUser.Portfel?.replace(/[^0-9.-]+/g, "") || "0");
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
@@ -215,32 +223,63 @@ export default function KarnetPage() {
               <p className="text-slate-500 text-xs">Wykup karnet, aby w pełni korzystać z możliwości klubu.</p>
             </div>
           ) : (
-            karnetyList.map((karnet: any) => (
-              <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                  <div className="space-y-3">
-                    <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200 shadow-sm">
-                        Aktywne zapisy: {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined ? karnet.pozostaloWejsc : 'Bez limitu'}
-                      </span>
-                      <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${karnet.statusTekst?.includes('Oczekujący') ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                        {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
-                      </span>
+            karnetyList.map((karnet: any) => {
+              // 🌟 INTELIGENTNE WYLICZANIE KOLORÓW ETYKIETY (ZGODNIE Z PANELEM ADMINA)
+              let isExpiring = false;
+              let isPending = karnet.statusTekst?.includes('Oczekujący');
+
+              if (!isPending) {
+                if (karnet.waznyDo) {
+                  const todayDate = new Date();
+                  todayDate.setHours(0, 0, 0, 0);
+                  const expDate = new Date(karnet.waznyDo);
+                  expDate.setHours(0, 0, 0, 0);
+                  const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+                  if (diffDays <= 5) {
+                    isExpiring = true;
+                  }
+                }
+                if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
+                  if (karnet.pozostaloWejsc <= 2) {
+                    isExpiring = true;
+                  }
+                }
+              }
+
+              let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; // Domyślnie zielony
+              if (isPending) {
+                statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; // Oczekujący żółty
+              } else if (isExpiring) {
+                statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; // Kończący się czerwony
+              }
+
+              return (
+                <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="space-y-3">
+                      <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200 shadow-sm">
+                          Aktywne zapisy: {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined ? karnet.pozostaloWejsc : 'Bez limitu'}
+                        </span>
+                        <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
+                          {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
+                        </span>
+                      </div>
                     </div>
                   </div>
+                  
+                  <div className="border-t border-slate-100 pt-4 flex justify-end">
+                    <button 
+                      onClick={openBuyModal}
+                      className="border-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer"
+                    >
+                      $ KUP KARNET
+                    </button>
+                  </div>
                 </div>
-                
-                <div className="border-t border-slate-100 pt-4 flex justify-end">
-                  <button 
-                    onClick={openBuyModal}
-                    className="border-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer"
-                  >
-                    $ KUP KARNET
-                  </button>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
