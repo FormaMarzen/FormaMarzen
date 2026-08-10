@@ -83,6 +83,15 @@ export default function ClientsReportPage() {
 
         // Sprawdzamy czy klient jest powiązany z trenerem
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
+        
+        let parsedKarnety = [];
+        if (Array.isArray(c.karnetyKlubowicza)) {
+          parsedKarnety = c.karnetyKlubowicza;
+        } else if (typeof c.karnetyKlubowicza === 'string') {
+          try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+        } else if (c.karnetyklubowicza) {
+          parsedKarnety = c.karnetyklubowicza;
+        }
 
         return {
           ...c,
@@ -102,7 +111,7 @@ export default function ClientsReportPage() {
           birthDate: c.birthDate || '',
           isTrainer: !!powiazanyTrener,
           trenerInfo: powiazanyTrener || null,
-          karnetyKlubowicza: c.karnetyKlubowicza || c.karnetyklubowicza || [],
+          karnetyKlubowicza: parsedKarnety,
           transakcje: clientTransakcje,
           zapisyNadchodzace: c.zapisyNadchodzace || [],
           zapisyPrzeszle: c.zapisyPrzeszle || [],
@@ -313,8 +322,17 @@ export default function ClientsReportPage() {
         ctx?.drawImage(img, 0, 0, width, height);
         const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
 
-        await supabase.from('klienci').update({ avatarUrl: compressedDataUrl }).eq('id', profileClient.id);
-        loadData();
+        // Zmiana natychmiastowa na ekranie, by zdjęcie nie znikało
+        setProfileClient((prev: any) => ({ ...prev, avatarUrl: compressedDataUrl }));
+        setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, avatarUrl: compressedDataUrl } : c));
+
+        // Zapis do Supabase w tle
+        const { error } = await supabase.from('klienci').update({ avatarUrl: compressedDataUrl }).eq('id', profileClient.id);
+        
+        // Ludzki komunikat zamiast błędu w konsoli
+        if (error) {
+            alert(`Błąd zapisu w bazie Supabase: ${error.message}`);
+        }
       };
       img.src = event.target?.result as string;
     };
@@ -364,7 +382,6 @@ export default function ClientsReportPage() {
     loadData();
   };
 
-  // 🌟 FUNKCJA DODAJĄCA DRUGI KARNET (Z DWOMA OPCJAMI PŁATNOŚCI)
   const handleAddSecondPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !selectedPassToAdd) return;
 
@@ -388,6 +405,8 @@ export default function ClientsReportPage() {
     const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
     const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
 
+    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+
     let nowyStanStr = profileClient.wallet; // Domyślnie brak zmiany w portfelu
     let logKwota = 0;
     let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
@@ -405,6 +424,7 @@ export default function ClientsReportPage() {
       id: Date.now(),
       nazwa: selectedPassToAdd,
       waznyDo: dataWygasnieciaStr,
+      pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
       cena: cenaObjKarnetu,
       znizkaProcentowa: '',
       rata: '1 / 1',
@@ -1078,80 +1098,84 @@ export default function ClientsReportPage() {
 
                 <div className="space-y-3">
                   {profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.length > 0 ? (
-                    profileClient.karnetyKlubowicza.map((karnet: any) => (
-                      <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 relative">
-                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h4 className="font-black text-slate-900 text-base whitespace-nowrap">{karnet.nazwa}</h4>
-                              {karnet.blokadaDo && (
-                                <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200 whitespace-nowrap">
-                                  ⚠️ Zablokowane do: {karnet.blokadaDo}
+                    [...profileClient.karnetyKlubowicza]
+                      .sort((a: any, b: any) => (a.waznyDo || '9999-12-31').localeCompare(b.waznyDo || '9999-12-31'))
+                      .map((karnet: any) => {
+                      
+                      let isExpiring = false;
+                      let isPending = karnet.statusTekst?.includes('Oczekujący');
+
+                      if (!isPending) {
+                        if (karnet.waznyDo) {
+                          const todayDate = new Date();
+                          todayDate.setHours(0, 0, 0, 0);
+                          const expDate = new Date(karnet.waznyDo);
+                          expDate.setHours(0, 0, 0, 0);
+                          const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+                          if (diffDays <= 5) {
+                            isExpiring = true;
+                          }
+                        }
+                        if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
+                          if (karnet.pozostaloWejsc <= 2) {
+                            isExpiring = true;
+                          }
+                        }
+                      }
+
+                      let statusColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                      if (isPending) {
+                        statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
+                      } else if (isExpiring) {
+                        statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
+                      }
+
+                      return (
+                        <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 relative">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
+                                {karnet.blokadaDo && (
+                                  <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
+                                    ⚠️ Zablokowane do: {karnet.blokadaDo}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`${statusColorClass} text-[11px] font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap`}>
+                                  {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                                 </span>
-                              )}
-                              
-                              {karnet.zawieszonyOd && karnet.zawieszonyDo && (
-                                <div className="flex items-center gap-1.5 bg-amber-100 text-amber-900 text-xs font-black px-3 py-1 rounded border border-amber-200 whitespace-nowrap">
-                                  <span>⏸️ Zawieszony od {karnet.zawieszonyOd} do {karnet.zawieszonyDo}</span>
-                                  <button 
-                                    onClick={() => { setSuspendPassTarget(karnet); setSuspendStartDate(karnet.zawieszonyOd); setSuspendEndDate(karnet.zawieszonyDo); setIsSuspendModalOpen(true); }}
-                                    className="w-5 h-5 bg-amber-200 hover:bg-amber-300 text-amber-900 rounded flex items-center justify-center text-[10px] cursor-pointer ml-1"
-                                    title="Modyfikuj lub odwołaj zawieszenie"
-                                  >
-                                    ✏️
-                                  </button>
-                                </div>
-                              )}
+                                <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
+                                  Cena: {karnet.cena}
+                                </span>
+                              </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-rose-200 whitespace-nowrap">
-                                {karnet.statusTekst}
-                              </span>
-                              <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200 whitespace-nowrap">
-                                Cena: {karnet.cena} {karnet.znizkaProcentowa && <strong className="text-emerald-700 font-extrabold ml-1">{karnet.znizkaProcentowa}</strong>}
-                              </span>
-                              {karnet.rata && (
-                                <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200 whitespace-nowrap">
-                                  Rata: {karnet.rata}
-                                </span>
-                              )}
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer">⚙️ BLOKADA</button>
+                              <button 
+                                onClick={() => {
+                                  setExtendPassTarget(karnet);
+                                  setExtendSelectedNewPassName(karnet.nazwa);
+                                  const curDate = new Date(karnet.waznyDo || Date.now());
+                                  curDate.setMonth(curDate.getMonth() + 1);
+                                  setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                  setIsExtendPassModalOpen(true);
+                                }}
+                                className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer"
+                              >
+                                🕒 Przedłuż
+                              </button>
+                              <button onClick={() => setEditingPassModal({ ...karnet })} className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer" title="Edytuj">✏️</button>
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer whitespace-nowrap">⚙️ ZARZĄDZAJ BLOKADĄ</button>
-                            
-                            <button 
-                              onClick={() => {
-                                setExtendPassTarget(karnet);
-                                setExtendSelectedNewPassName(karnet.nazwa);
-                                const curDate = new Date(karnet.waznyDo || Date.now());
-                                curDate.setMonth(curDate.getMonth() + 1);
-                                setExtendNewDate(curDate.toISOString().split('T')[0]);
-                                setIsExtendPassModalOpen(true);
-                              }}
-                              className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-                              title="Przedłuż karnet"
-                            >
-                              🕒 Przedłuż
-                            </button>
-
-                            <button 
-                              onClick={() => setEditingPassModal({ ...karnet })}
-                              className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm"
-                              title="Edytuj szczegóły karnetu"
-                            >
-                              ✏️
-                            </button>
-                          </div>
-
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center text-slate-400 text-xs">
-                      Brak przypisanych karnetów. Kliknij „+ Dodaj drugi karnet”, aby przypisać karnet.
+                      Brak przypisanych karnetów.
                     </div>
                   )}
                 </div>
@@ -1161,7 +1185,19 @@ export default function ClientsReportPage() {
               <div className="space-y-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
-                  <span className={`font-black px-3 py-1 rounded-xl text-sm border whitespace-nowrap ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'}`}>{profileClient.wallet}</span>
+                  
+                  {(() => {
+                    const walletVal = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+                    let walletClass = 'bg-slate-100 text-slate-800 border-slate-200';
+                    if (walletVal < 0) walletClass = 'bg-rose-100 text-rose-800 border-rose-200';
+                    else if (walletVal > 0) walletClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                    return (
+                      <span className={`font-black px-3 py-1 rounded-xl text-sm border whitespace-nowrap ${walletClass}`}>
+                        {profileClient.wallet}
+                      </span>
+                    );
+                  })()}
+
                   <div className="flex gap-3">
                     <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer whitespace-nowrap">🕒 POKAŻ HISTORIĘ PORTFELA I OPERACJI</button>
                     <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap">+ UZUPEŁNIJ PORTFEL</button>
@@ -1432,317 +1468,17 @@ export default function ClientsReportPage() {
         </div>
       )}
 
-      {/* MODAL: ZAWIEŚ KARNET */}
-      {isSuspendModalOpen && profileClient && suspendPassTarget && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
-                <span>⏸️</span> Zawieś karnet
-              </h3>
-              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 space-y-2">
-              <div className="flex items-start gap-2">
-                <span>ℹ️</span>
-                <div>Klubowicz miał zawieszony karnet, łącznie przez <strong>0 dni w roku 2026</strong>.</div>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => { setIsSuspendModalOpen(false); setIsSuspendHistoryModalOpen(true); }}
-                className="text-amber-900 font-black underline uppercase text-[10px] tracking-wider cursor-pointer block pt-1 whitespace-nowrap"
-              >
-                📜 Zobacz historię zawieszeń
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmSuspendPass} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Od kiedy chcesz zawiesić ten karnet?</label>
-                <input 
-                  type="date"
-                  value={suspendStartDate}
-                  onChange={(e) => setSuspendStartDate(e.target.value)}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Do kiedy?</label>
-                <input 
-                  type="date"
-                  value={suspendEndDate}
-                  onChange={(e) => setSuspendEndDate(e.target.value)}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                />
-              </div>
-
-              <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-900 flex items-start gap-2">
-                <span>ℹ️</span>
-                <div>Karnet zostanie automatycznie odwieszony w dniu: <strong>{suspendEndDate}</strong>. Okres ważności karnetu zostanie wydłużony po zakończeniu zawieszenia.</div>
-              </div>
-
-              <div className="pt-4 flex items-center justify-between border-t border-sky-100">
-                {suspendPassTarget.zawieszonyOd ? (
-                  <button 
-                    type="button"
-                    onClick={() => { handleCancelSuspension(suspendPassTarget); setIsSuspendModalOpen(false); }}
-                    className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-black px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap"
-                  >
-                    🚫 Odwołaj zawieszenie
-                  </button>
-                ) : <div></div>}
-
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase whitespace-nowrap">Anuluj</button>
-                  <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">⏸️ Zawieś</button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: HISTORIA ZAWIESZEŃ */}
-      {isSuspendHistoryModalOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
-                <span>📜</span> Historia zawieszeń
-              </h3>
-              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-
-            <div className="overflow-x-auto text-xs">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                    <th className="py-2.5 px-3 w-10 whitespace-nowrap">#</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Data zawieszenia</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Data aktywacji</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Okres</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Przez kogo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.flatMap((k: any) => k.historiaZawieszen || []).map((item: any, idx: number) => (
-                    <tr key={item.id || idx}>
-                      <td className="py-3 px-3 font-mono text-slate-400 whitespace-nowrap">{idx + 1}.</td>
-                      <td className="py-3 px-3 font-mono whitespace-nowrap">{item.dataZawieszenia}</td>
-                      <td className="py-3 px-3 font-mono whitespace-nowrap">{item.dataAtywacji}</td>
-                      <td className="py-3 px-3 font-bold text-sky-900 whitespace-nowrap">{item.okres}</td>
-                      <td className="py-3 px-3 font-semibold whitespace-nowrap">{item.przezKogo}</td>
-                    </tr>
-                  ))}
-                  {(!profileClient.karnetyKlubowicza || profileClient.karnetyKlubowicza.flatMap((k: any) => k.historiaZawieszen || []).length === 0) && (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-400">Brak historii zawieszeń karnetu.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="pt-3 flex justify-end border-t border-sky-100">
-              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer text-xs uppercase whitespace-nowrap">Anuluj</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL EDYCJI POSZCZEGÓLNEGO KARNETU */}
-      {editingPassModal && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">Edytuj karnet</h3>
-              <button onClick={() => setEditingPassModal(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-
-            <form onSubmit={handleSavePassEditSubmit} className="space-y-4 text-xs">
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700 whitespace-nowrap">Karnet</label>
-                <div className="col-span-2 space-y-1">
-                  <select 
-                    value={editingPassModal.nazwa}
-                    onChange={(e) => {
-                      const sel = e.target.value;
-                      const match = dostepneKarnety.find(k => k.nazwa === sel);
-                      setEditingPassModal({
-                        ...editingPassModal,
-                        nazwa: sel,
-                        cena: match ? `${match.cena} PLN` : editingPassModal.cena
-                      });
-                    }}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer"
-                  >
-                    {dostepneKarnety.map(k => (
-                      <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
-                    ))}
-                    <option value={editingPassModal.nazwa}>{editingPassModal.nazwa}</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700 whitespace-nowrap">Data zakończenia</label>
-                <div className="col-span-2">
-                  <input 
-                    type="date"
-                    value={editingPassModal.waznyDo}
-                    onChange={(e) => setEditingPassModal({...editingPassModal, waznyDo: e.target.value})}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700 whitespace-nowrap">Cena</label>
-                <div className="col-span-2 flex items-center gap-2">
-                  <input 
-                    type="text"
-                    value={editingPassModal.cena}
-                    onChange={(e) => setEditingPassModal({...editingPassModal, cena: e.target.value})}
-                    placeholder="Wpisz własną cenę"
-                    className="flex-1 bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                  />
-                  <span className="text-[11px] text-slate-500 font-bold whitespace-nowrap">Własna cena</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="font-bold text-slate-700 whitespace-nowrap">Obecna rata</label>
-                <div className="col-span-2 flex items-center gap-2">
-                  <input 
-                    type="text"
-                    value={editingPassModal.rata || ''}
-                    onChange={(e) => setEditingPassModal({...editingPassModal, rata: e.target.value})}
-                    className="flex-1 bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-4 flex items-center justify-between border-t border-sky-100">
-                <button 
-                  type="button"
-                  onClick={() => handleConfirmDeletePass(editingPassModal.id)}
-                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-black px-4 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap"
-                >
-                  🗑️ Usuń karnet
-                </button>
-                
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setEditingPassModal(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
-                  <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">Zapisz karnet</button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL DODAWANIA DRUGIEGO KARNETU */}
-      {isAddSecondPassModalOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200 relative">
-            
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">🎟️ Przypisz karnet z bazy</h3>
-              <button onClick={() => setIsAddSecondPassModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-            
-            <div className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block whitespace-nowrap">Wybierz karnet *</label>
-                <select value={selectedPassToAdd} onChange={(e) => setSelectedPassToAdd(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer">
-                  <option value="">-- Wybierz karnet --</option>
-                  {dostepneKarnety.map(k => (
-                    <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
-                  ))}
-                </select>
-              </div>
-
-              {selectedPassToAdd && (
-                <div className="bg-sky-50 p-3 rounded-xl border border-sky-100 text-sky-900 font-medium">
-                  Wybierz w jaki sposób rozliczyć ten karnet:
-                </div>
-              )}
-
-              <div className="pt-4 flex flex-col gap-3 border-t border-sky-100">
-                <div className="grid grid-cols-2 gap-2">
-                  <button 
-                    type="button" 
-                    disabled={!selectedPassToAdd}
-                    onClick={() => handleAddSecondPass('paid')} 
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-4 py-3 rounded-xl cursor-pointer whitespace-nowrap shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center justify-center transition-colors"
-                  >
-                    <span className="text-sm">✅ Zapłacił</span>
-                    <span className="text-[9px] font-normal opacity-90">Karnet opłacony z góry</span>
-                  </button>
-                  <button 
-                    type="button" 
-                    disabled={!selectedPassToAdd}
-                    onClick={() => handleAddSecondPass('later')} 
-                    className="bg-rose-600 hover:bg-rose-700 text-white font-black px-4 py-3 rounded-xl cursor-pointer whitespace-nowrap shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex flex-col items-center justify-center transition-colors"
-                  >
-                    <span className="text-sm">⏳ Zapłaci później</span>
-                    <span className="text-[9px] font-normal opacity-90">Dolicz do długu (Portfela)</span>
-                  </button>
-                </div>
-                <button 
-                  type="button" 
-                  onClick={() => setIsAddSecondPassModalOpen(false)} 
-                  className="w-full bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap hover:bg-slate-200 transition-colors"
-                >
-                  Anuluj dodawanie
-                </button>
-              </div>
-            </div>
-            
-          </div>
-        </div>
-      )}
-
-      {/* MODAL BLOKADY */}
-      {isBlockModalOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">⚙️ Zarządzanie blokadą</h3>
-              <button onClick={() => setIsBlockModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-            <form onSubmit={handleSaveBlockModification} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold whitespace-nowrap">Liczba dni blokady (0 aby zdjąć)</label>
-                <input type="number" value={blockDaysInput} onChange={(e) => { setBlockDaysInput(e.target.value); if(e.target.value) setBlockDateInput(''); }} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
-              </div>
-              <div className="text-center font-bold text-slate-400 uppercase text-[10px] whitespace-nowrap">LUB</div>
-              <div className="space-y-1">
-                <label className="font-bold whitespace-nowrap">Data końcowa blokady</label>
-                <input type="date" value={blockDateInput} onChange={(e) => { setBlockDateInput(e.target.value); if(e.target.value) setBlockDaysInput(''); }} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
-              </div>
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsBlockModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zapisz</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL PORTFELA */}
+      {/* MODAL: UZUPEŁNIJ PORTFEL */}
       {isTopUpWalletOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">💰 Modyfikacja portfela</h3>
-              <button onClick={() => setIsTopUpWalletOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">💰 Uzupełnij portfel</h3>
+              <button onClick={() => setIsTopUpWalletOpen(false)} className="text-slate-400 font-bold">✕</button>
             </div>
             <form onSubmit={handleTopUpWalletSubmit} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="font-bold whitespace-nowrap">Kwota (+/-)</label>
+                <label className="font-bold">Kwota (+/-)</label>
                 <input type="number" step="0.01" required value={walletAmountInput} onChange={(e) => setWalletAmountInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
               <div className="space-y-1">

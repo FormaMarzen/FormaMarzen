@@ -141,7 +141,7 @@ export default function KarnetyPage() {
     setTypKarnetu(item.typKarnetu || 'Na czas');
     setCzasIlosc(item.czasIlosc || '1');
     setCzasJednostka(item.czasJednostka || 'Miesiąc');
-    setIloscTreningow(item.iloscTreningow || '10');
+    setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10');
     setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true);
     setLimitIlosc(item.limitIlosc || '1');
     setLimitOkres(item.limitOkres || 'Miesiąc');
@@ -210,9 +210,12 @@ export default function KarnetyPage() {
     if (!nazwa.trim() || !cena.trim()) return;
 
     let wyliczonaDlugosc = '';
+    let dodanaIloscWejsc = null; // Specjalne pole dla inteligentnego systemu banerów
+
     if (typKarnetu === 'Na czas') {
       wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
     } else {
+      dodanaIloscWejsc = iloscTreningow; // <-- TUTAJ ZAPISUJEMY LIMIT WEJŚĆ
       if (dodajLimitCzasowy) {
         wyliczonaDlugosc = `${iloscTreningow} wejść / ${limitIlosc} ${limitOkres.toLowerCase()}${parseInt(limitIlosc) > 1 && limitOkres === 'Miesiąc' ? 'e' : ''}`;
       } else {
@@ -225,6 +228,7 @@ export default function KarnetyPage() {
       czasIlosc,
       czasJednostka,
       iloscTreningow,
+      ilosc_wejsc: dodanaIloscWejsc, // <-- To pole jest używane przez stronę główną!
       dodajLimitCzasowy,
       limitIlosc,
       limitOkres,

@@ -20,7 +20,7 @@ export default function DashboardPage() {
   // Stany dla Transakcji
   const [wszystkieTransakcje, setWszystkieTransakcje] = useState<any[]>([]);
 
-  const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('admin');
+  const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('klubowicz');
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
 
@@ -60,44 +60,62 @@ export default function DashboardPage() {
   const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
   const [selectedBuyPass, setSelectedBuyPass] = useState('');
 
+  // 🌟 STANY MODALU ZAJĘĆ (IDENTYCZNE JAK W ZAKŁADCE GRAFIK)
+  const [selectedClass, setSelectedClass] = useState<any | null>(null);
+  const [isSearchingClient, setIsSearchingClient] = useState(false);
+  const [searchClientQuery, setSearchClientQuery] = useState('');
+  const [clientToUnregister, setClientToUnregister] = useState<any | null>(null);
+  const [blokadaZapisow, setBlokadaZapisow] = useState(false);
+  const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
+
   // 1. POBIERANIE DANYCH Z BAZY SUPABASE DLA KOKPITU
   const loadData = async () => {
-    let savedRole = 'klubowicz';
-    if (typeof window !== 'undefined') {
-      savedRole = localStorage.getItem('forma_marzen_app_role') || 'klubowicz';
-      if (savedRole === 'klubowicz' || savedRole === 'admin') {
-        setAppRole(savedRole as 'admin' | 'klubowicz');
-      }
-    }
-
     const { data: { session } } = await supabase.auth.getSession();
     const userEmail = session?.user?.email;
+
+    // Rozpoznawanie roli na podstawie sesji
+    if (userEmail === 'maciejklaput@gmail.com') {
+      setAppRole('admin');
+    } else {
+      setAppRole('klubowicz');
+    }
 
     // A. Klienci
     const { data: klienciData } = await supabase.from('klienci').select('*');
     if (klienciData) {
-      const enriched = klienciData.map((c: any) => ({
-        ...c,
-        id: c.id,
-        firstName: c.Imię || '',
-        lastName: c.Nazwisko || '',
-        registered: c.Zarejestrowany || c.registered || '2026-08-07',
-        status: c.status || 'Aktywny',
-        expiresDate: c.expiresDate || '',
-        price: c.Cena || c.cena || c.price || '0.00 PLN',
-        discount: c.discount || '',
-        wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
-        avatarUrl: c.avatarUrl || c.avatar || null,
-        gender: c.płeć || c.gender || '',
-        phone: c['Numer tel.'] || c.telefon || c.phone || '',
-        email: c['E-mail'] || c.email || '',
-        birthDate: c.birthDate || '',
-        karnetyKlubowicza: c.karnetyKlubowicza || [],
-        walletHistory: c.walletHistory || []
-      }));
+      const enriched = klienciData.map((c: any) => {
+        let parsedKarnety = [];
+        if (Array.isArray(c.karnetyKlubowicza)) {
+          parsedKarnety = c.karnetyKlubowicza;
+        } else if (typeof c.karnetyKlubowicza === 'string') {
+          try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+        }
+
+        return {
+          ...c,
+          id: c.id,
+          firstName: c.Imię || '',
+          lastName: c.Nazwisko || '',
+          registered: c.Zarejestrowany || c.registered || '2026-08-07',
+          status: c.status || 'Aktywny',
+          expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
+          pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
+          price: c.Cena || c.cena || c.price || '0.00 PLN',
+          discount: c.discount || '',
+          wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+          avatarUrl: c.avatarUrl || c.avatar || null,
+          avatar: c.avatarUrl || c.avatar || null,
+          gender: c.płeć || c.gender || '',
+          phone: c['Numer tel.'] || c.telefon || c.phone || '',
+          email: c['E-mail'] || c.email || '',
+          birthDate: c.birthDate || '',
+          karnetyKlubowicza: parsedKarnety,
+          walletHistory: c.walletHistory || []
+        };
+      });
       setKlienciList(enriched);
 
-      if (userEmail) {
+      if (userEmail && userEmail !== 'maciejklaput@gmail.com') {
         const myUser = enriched.find((c: any) => c.email === userEmail);
         if (myUser) setCurrentUser(myUser);
       }
@@ -158,19 +176,24 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
-    if (wydarzeniaData) {
-      setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
-    }
-
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     if (zapisyData) {
       const grouped: { [key: string]: any[] } = {};
       zapisyData.forEach((z: any) => {
         if (!grouped[z.class_key]) grouped[z.class_key] = [];
-        grouped[z.class_key].push(z);
+        grouped[z.class_key].push({
+          ...z,
+          id: z.klient_id,
+          status: z.status,
+          obecny: z.obecny
+        });
       });
       setZapisyNaZajecia(grouped);
+    }
+
+    const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
+    if (wydarzeniaData) {
+      setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
     }
   };
 
@@ -217,7 +240,6 @@ export default function DashboardPage() {
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
 
-    // Próba pobrania limitu wejść, jeśli istnieje w bazie
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
 
     const nowyKarnetObj = {
@@ -238,7 +260,6 @@ export default function DashboardPage() {
 
     const uaktualnioneKarnety = [...(currentUser.karnetyKlubowicza || []), nowyKarnetObj];
 
-    // Obciążenie portfela
     const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
@@ -263,7 +284,6 @@ export default function DashboardPage() {
       walletHistory: updatedWalletHistory
     };
 
-    // Zapis do bazy
     await updateSupabaseClient(updatedClient, {
       karnetyKlubowicza: uaktualnioneKarnety,
       Cena: cenaStr,
@@ -283,6 +303,7 @@ export default function DashboardPage() {
     alert(`Gratulacje! Twój nowy karnet "${selectedBuyPass}" został przypisany.`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
+    window.location.reload();
   };
 
   const handleDeleteClient = async (id: number) => {
@@ -403,8 +424,6 @@ export default function DashboardPage() {
     const dataWygasniecia = new Date();
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
-
-    // Pobranie ewentualnego limitu wejść
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
 
     const nowyKarnetObj = {
@@ -556,6 +575,151 @@ export default function DashboardPage() {
     setIsEditProfileInfoOpen(false);
   };
 
+  // 🌟 FUNKCJE ZARZĄDZANIA ZAJĘCIAMI I OBECNOŚCIĄ (MODAL)
+  const getPrawdziweAktywneZapisy = (klientId: number) => {
+    let count = 0;
+    const now = new Date();
+    
+    Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
+      const parts = classKey.split('_');
+      const dateStr = parts[1];
+      if (dateStr) {
+        const [d, m] = dateStr.split('/').map(Number);
+        const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+
+        if (classDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => u.id === klientId)) {
+            count++;
+          }
+        }
+      }
+    });
+
+    return count;
+  };
+
+  const toggleObecny = async (klientId: number) => {
+    if (!selectedClass) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    const szukany = aktualni.find(k => k.id === klientId);
+    
+    if (!szukany) return;
+    const nowyStanObecny = !szukany.obecny;
+
+    await supabase
+      .from('zapisy_zajec')
+      .update({ obecny: nowyStanObecny })
+      .eq('class_key', classKey)
+      .eq('klient_id', klientId);
+
+    loadData();
+  };
+
+  const handleZapiszKlientaDoZajec = async (klient: any) => {
+    if (!selectedClass) return;
+    if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
+      alert("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!");
+      return;
+    }
+
+    if (klient.blokadaDo) {
+      const dataBlokady = new Date(klient.blokadaDo);
+      const teraz = new Date();
+      if (teraz <= dataBlokady) {
+        alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`);
+        return;
+      }
+    }
+
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+
+    if (aktualni.some(k => k.id === klient.id)) {
+      alert("Ten klient jest już zapisany na te zajęcia!");
+      return;
+    }
+
+    const limitZajec = selectedClass.limit || 12;
+    const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
+
+    const { error } = await supabase.from('zapisy_zajec').insert([
+      {
+        class_key: classKey,
+        klient_id: klient.id,
+        status: statusZpisu,
+        obecny: false
+      }
+    ]);
+
+    if (error) {
+      console.error("Błąd zapisu na zajęcia:", error);
+      alert(`Nie udało się zapisać: ${error.message}`);
+      return;
+    }
+
+    const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
+    const typWydarzenia = statusZpisu === 'krzesełko' 
+      ? `Zapisano na listę rezerwową (krzesełko)` 
+      : `Zapisano na zajęcia`;
+
+    await supabase.from('transakcje').insert([{
+      klient_id: klient.id,
+      typ_operacji: 'zajecia_zapis',
+      class_key: classKey,
+      opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}`
+    }]);
+
+    setIsSearchingClient(false);
+    setSearchClientQuery('');
+    loadData();
+  };
+
+  const handlePotwierdzWypisanie = async () => {
+    if (!selectedClass || !clientToUnregister) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const limitZajec = selectedClass.limit || 12;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+
+    const { error } = await supabase
+      .from('zapisy_zajec')
+      .delete()
+      .eq('class_key', classKey)
+      .eq('klient_id', clientToUnregister.id);
+
+    if (error) {
+      console.error("Błąd wypisywania z zajęć:", error);
+      alert(`Nie udało się wypisać: ${error.message}`);
+      return;
+    }
+
+    await supabase.from('transakcje').insert([{
+      klient_id: clientToUnregister.id,
+      typ_operacji: 'zajecia_wypis',
+      class_key: classKey,
+      opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub. Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}`
+    }]);
+
+    if (blokadaZapisow) {
+      const dni = parseInt(dlugoscBlokady) || 3;
+      const dataWypisania = new Date();
+      const dataWygaśnięcia = new Date(dataWypisania);
+      dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
+
+      const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
+      const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+
+      await supabase
+        .from('klienci')
+        .update({ blokadaDo: dataStr, powodBlokady: powod })
+        .eq('id', clientToUnregister.id);
+    }
+
+    setClientToUnregister(null);
+    setBlokadaZapisow(false);
+    loadData();
+  };
+
   // POMOCNICZE FUNKCJE GRAFIKU
   const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
     if (isOdwolane || isUsuniete) return '#fda4af';
@@ -581,11 +745,29 @@ export default function DashboardPage() {
     return "60 min";
   };
 
+  // 🌟 SORTOWANIE KLIENTÓW: OD NAJSZYBCIEJ KOŃCZĄCYCH SIĘ KARNETÓW
   const filteredClients = klienciList.filter(client => {
     const fullName = `${client.firstName || ''} ${client.lastName || ''}`.toLowerCase();
     const email = (client.email || '').toLowerCase();
     const query = clientSearch.toLowerCase();
     return fullName.includes(query) || email.includes(query);
+  }).sort((a, b) => {
+    const getEarliestExpirationDate = (client: any) => {
+      let karnety = client.karnetyKlubowicza || [];
+      if (karnety.length === 0) return '9999-12-31';
+      
+      let earliest = '9999-12-31';
+      for (const k of karnety) {
+        if (k.waznyDo && k.waznyDo < earliest) {
+          earliest = k.waznyDo;
+        }
+      }
+      return earliest;
+    };
+
+    const dateA = getEarliestExpirationDate(a);
+    const dateB = getEarliestExpirationDate(b);
+    return dateA.localeCompare(dateB); 
   });
 
   // WYLICZANIE DYNAMICZNEGO KALENDARZA
@@ -653,7 +835,7 @@ export default function DashboardPage() {
     const karnety = currentUser.karnetyKlubowicza || [];
     
     if (karnety.length === 0) {
-      needsNewPass = true; // Użytkownik nie ma żadnych karnetów
+      needsNewPass = true;
     } else {
       const todayDate = new Date();
       todayDate.setHours(0, 0, 0, 0);
@@ -665,24 +847,22 @@ export default function DashboardPage() {
         let isExpiring = false;
         let msg = "";
 
-        // Sprawdzanie po dacie wygaśnięcia (Karnety Czasowe)
         if (k.waznyDo) {
           const expDate = new Date(k.waznyDo);
           expDate.setHours(0, 0, 0, 0);
           const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
           
           if (diffDays < 0) {
-            isValid = false; // Karnet przeterminowany
+            isValid = false; 
           } else if (diffDays <= 5) {
             isExpiring = true;
             msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`;
           }
         }
 
-        // Sprawdzanie po wejściach (Karnety Wejściówkowe)
         if (k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
           if (k.pozostaloWejsc <= 0) {
-            isValid = false; // Brak wejść = nieważny
+            isValid = false; 
           } else if (k.pozostaloWejsc <= 2) {
             isExpiring = true;
             msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`;
@@ -698,7 +878,6 @@ export default function DashboardPage() {
         }
       }
 
-      // Jeśli po przeanalizowaniu wszystkich karnetów żaden nie jest ważny
       if (!hasAnyValid) {
         needsNewPass = true;
       }
@@ -827,8 +1006,18 @@ export default function DashboardPage() {
                       return (
                         <div 
                           key={classIdx}
+                          onClick={() => {
+                            if (item.isOdwołane || item.isUsunięte) return;
+                            setSelectedClass({
+                              ...item,
+                              displayDate: col.date,
+                              durationText
+                            });
+                            setIsSearchingClient(false);
+                            setSearchClientQuery('');
+                          }}
                           style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
-                          className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm ${item.isOdwołane || item.isUsunięte ? 'border-rose-200 opacity-80' : 'border-sky-100'}`}
+                          className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all cursor-pointer hover:border-sky-300 hover:shadow-md ${item.isOdwołane || item.isUsunięte ? 'border-rose-200 opacity-80 cursor-default' : 'border-sky-100'}`}
                         >
                           <div className="flex justify-between items-start">
                             <div>
@@ -879,7 +1068,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* 2. DOLNY PANEL - UKRYTY DLA KLIENTA (TYLKO DLA ADMINA) */}
+      {/* 2. DOLNY PANEL: SPRZEDAŻ (LEWA) ORAZ KLIENCI (PRAWA) - ZAWSZE WIDOCZNE DLA ADMINA */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
           
@@ -955,7 +1144,7 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* KLIENCI (PRAWA STRONA) */}
+          {/* KLIENCI (PRAWA STRONA) - POSORTOWANI OD NAJSZYBCIEJ KOŃCZĄCYCH SIĘ */}
           <section className="lg:col-span-6 space-y-3">
             <div className="flex items-center justify-between">
               <Link 
@@ -986,6 +1175,42 @@ export default function DashboardPage() {
                   filteredClients.map((client) => {
                     const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
                     const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
+                    
+                    let ostatecznaData = 'Brak';
+                    let badgeColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+
+                    if (maKarnet) {
+                      const earliestPass = client.karnetyKlubowicza.reduce((earliest: any, k: any) => {
+                        if (!earliest) return k;
+                        return (k.waznyDo < earliest.waznyDo) ? k : earliest;
+                      }, null);
+
+                      if (earliestPass) {
+                        ostatecznaData = earliestPass.waznyDo;
+                        
+                        let isPending = earliestPass.statusTekst?.includes('Oczekujący');
+                        let isExpiring = false;
+                        
+                        if (!isPending) {
+                          const todayDate = new Date();
+                          todayDate.setHours(0, 0, 0, 0);
+                          const expDate = new Date(earliestPass.waznyDo);
+                          expDate.setHours(0, 0, 0, 0);
+                          const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+                          
+                          if (diffDays <= 5) isExpiring = true;
+                          if (earliestPass.pozostaloWejsc !== null && earliestPass.pozostaloWejsc !== undefined) {
+                            if (earliestPass.pozostaloWejsc <= 2) isExpiring = true;
+                          }
+                        }
+
+                        if (isPending) {
+                          badgeColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
+                        } else if (isExpiring) {
+                          badgeColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
+                        }
+                      }
+                    }
 
                     return (
                       <div 
@@ -1006,15 +1231,18 @@ export default function DashboardPage() {
                               <span className="text-[10px] text-slate-500 block mt-0.5">✉ {client.email}</span>
                             </div>
                           </div>
-                          {appRole === 'admin' && (
-                            <div className="flex items-center gap-1.5 text-slate-400 text-xs">
-                              <button onClick={() => setTableActionClient(client)} className="hover:text-slate-700 cursor-pointer p-1.5 bg-white border border-slate-200 rounded-md shadow-sm" title="Zarządzaj klubowiczem">✏️</button>
-                            </div>
-                          )}
+                          <div className="flex items-center gap-1.5 text-slate-400 text-xs">
+                            <button onClick={() => setTableActionClient(client)} className="hover:text-slate-700 cursor-pointer p-1.5 bg-white border border-slate-200 rounded-md shadow-sm" title="Zarządzaj klubowiczem">✏️</button>
+                          </div>
                         </div>
 
-                        <div className="text-[11px] font-bold text-sky-900 pl-1">
-                          Karnet: {nazwaKarnetu}
+                        <div className="text-[11px] font-bold text-sky-900 pl-1 flex flex-wrap gap-2 items-center">
+                          <span>Karnet: {nazwaKarnetu}</span>
+                          {maKarnet && (
+                            <span className={`px-2 py-0.5 rounded-md border text-[9px] uppercase tracking-wider ${badgeColorClass}`}>
+                              Wygasa: {ostatecznaData}
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
@@ -1036,56 +1264,284 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL ZAKUPU KARNETU DLA KLIENTA */}
-      {isBuyPassModalOpen && currentUser && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup nowy karnet</h3>
-              <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+      {/* 🌟 MODAL ZARZĄDZANIA UCZESTNIKAMI ZAJĘĆ */}
+      {selectedClass && (() => {
+        const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+        const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
+        const limitZajec = selectedClass.limit || 12;
+
+        const sortAlfabet = (a: any, b: any) => {
+          const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
+          const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
+          return nameA.localeCompare(nameB);
+        };
+
+        const listaGlowna = [...zapisaniWszyscy.slice(0, limitZajec)].sort(sortAlfabet);
+        const listaKrzesełko = zapisaniWszyscy.slice(limitZajec);
+        const isFull = zapisaniWszyscy.length >= limitZajec;
+
+        const filteredSuggestions = klienciList
+          .filter(c => 
+            `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase().includes(searchClientQuery.toLowerCase()) ||
+            (c.email || '').toLowerCase().includes(searchClientQuery.toLowerCase())
+          )
+          .sort(sortAlfabet);
+
+        return (
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-slate-100 border border-sky-200 rounded-3xl max-w-5xl w-full p-6 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto relative">
+              
+              <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-sky-200 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wide">
+                    {selectedClass.title} {selectedClass.start}
+                  </h3>
+                  <span className="text-xs font-mono text-slate-400">{new Date().getFullYear()}-{selectedClass.displayDate.split('/').reverse().join('-')}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+                    isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-sky-100 text-sky-900 border-sky-200'
+                  }`}>
+                    {zapisaniWszyscy.length}/{limitZajec}
+                  </span>
+                  <button 
+                    onClick={() => setSelectedClass(null)} 
+                    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full flex items-center justify-center font-bold transition-colors cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {/* LISTA GŁÓWNA */}
+              <div className="space-y-3">
+                <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {listaGlowna.map((osobaZapisana) => {
+                    const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
+                    const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
+
+                    const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
+                    const stanPortfela = parseFloat(stanPortfelaStr) || 0;
+                    let portfelColorClass = 'text-slate-500';
+                    if (stanPortfela > 0) {
+                      portfelColorClass = 'text-emerald-600 font-bold';
+                    } else if (stanPortfela < 0) {
+                      portfelColorClass = 'text-rose-600 font-bold';
+                    }
+
+                    return (
+                      <div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
+                        
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
+                            <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
+                              <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
+                              <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+                              <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
+                              <div>
+                                <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
+                                <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
+                              </div>
+                              {osoba.blokadaDo && (
+                                <div className="text-rose-600 font-bold mt-1 bg-rose-50 p-1.5 rounded border border-rose-100">
+                                  ⚠️ {osoba.powodBlokady || `Blokada zapisów do ${osoba.blokadaDo}`}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* WYŚWIETLANIE ZDJĘCIA / AVATARA KLIENTA */}
+                          <div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
+                            {osoba.avatarUrl ? (
+                              <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                            ) : (
+                              '👤'
+                            )}
+                          </div>
+                        </div>
+
+                        {appRole === 'admin' && (
+                          <div className="flex items-center justify-between border-t border-sky-100 pt-3 text-xs">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="checkbox" 
+                                checked={osobaZapisana.obecny ?? false} 
+                                onChange={() => toggleObecny(osoba.id)}
+                                className="w-4 h-4 accent-amber-600 rounded cursor-pointer" 
+                              />
+                              <span className="font-black text-amber-700 tracking-wider">OBECNY</span>
+                            </label>
+                            <button 
+                              onClick={() => setClientToUnregister(osoba)}
+                              className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+                            >
+                              WYPISZ
+                            </button>
+                          </div>
+                        )}
+
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {listaGlowna.length === 0 && (
+                  <div className="bg-white border border-sky-200 rounded-2xl p-8 text-center text-slate-400 font-medium text-xs">
+                    Brak uczestników na głównej liście.
+                  </div>
+                )}
+              </div>
+
+              {/* SEKCJA: KRZESEŁKO (REZERWA) */}
+              {listaKrzesełko.length > 0 && (
+                <div className="space-y-3 pt-4 border-t border-sky-200">
+                  <h4 className="font-black text-xs text-blue-900 uppercase tracking-wider flex items-center gap-2">
+                    <span>🪑</span> Lista rezerwowa (Krzesełko) - {listaKrzesełko.length} osób
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {listaKrzesełko.map((osobaZapisana, idx) => {
+                      const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
+                      const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
+
+                      const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
+                      const stanPortfela = parseFloat(stanPortfelaStr) || 0;
+                      let portfelColorClass = 'text-slate-500';
+                      if (stanPortfela > 0) {
+                        portfelColorClass = 'text-emerald-600 font-bold';
+                      } else if (stanPortfela < 0) {
+                        portfelColorClass = 'text-rose-600 font-bold';
+                      }
+
+                      return (
+                        <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
+                          
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
+                                <span className="bg-blue-200 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded">
+                                  #{idx + 1}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
+                                <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
+                                <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+                                <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
+                                <div>
+                                  <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
+                                  <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* ZDJĘCIE / AVATAR NA LIŚCIE REZERWOWEJ */}
+                            <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-xs shrink-0 shadow-sm">
+                              {osoba.avatarUrl ? (
+                                <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                              ) : (
+                                '🪑'
+                              )}
+                            </div>
+                          </div>
+
+                          {appRole === 'admin' && (
+                            <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
+                              <span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
+                              <button 
+                                onClick={() => setClientToUnregister(osoba)}
+                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+                              >
+                                WYPISZ
+                              </button>
+                            </div>
+                          )}
+
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {appRole === 'admin' && (
+                <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
+                  {!isSearchingClient ? (
+                    <button 
+                      onClick={() => setIsSearchingClient(true)}
+                      className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
+                        isFull 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                      }`}
+                    >
+                      <span>{isFull ? '🪑' : '👤+'}</span> 
+                      {isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs text-sky-950 uppercase">
+                          {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
+                        </span>
+                        <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
+                      </div>
+                      <input 
+                        type="text"
+                        autoFocus
+                        placeholder="Wpisz imię, nazwisko lub email..."
+                        value={searchClientQuery}
+                        onChange={(e) => setSearchClientQuery(e.target.value)}
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
+                      />
+
+                      {searchClientQuery.trim().length > 0 && (
+                        <div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
+                          {filteredSuggestions.length > 0 ? (
+                            filteredSuggestions.map((klient) => (
+                              <div 
+                                key={klient.id}
+                                onClick={() => handleZapiszKlientaDoZajec(klient)}
+                                className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+                              >
+                                <div>
+                                  <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
+                                  <span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
+                                  {klient.blokadaDo && (
+                                    <span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
+                                  )}
+                                </div>
+                                <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                  {isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="p-4 text-center text-xs text-slate-400">
+                              Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
+                <button 
+                  onClick={() => setSelectedClass(null)}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Zamknij
+                </button>
+              </div>
+
             </div>
-            
-            <form onSubmit={handleBuyPassSubmit} className="space-y-5 text-xs">
-              <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
-                Wybierz karnet z poniższej listy, aby w pełni korzystać z funkcji klubu i zapisywać się na wybrane zajęcia.
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
-                <select 
-                  required
-                  value={selectedBuyPass} 
-                  onChange={(e) => setSelectedBuyPass(e.target.value)} 
-                  className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-amber-500 cursor-pointer text-slate-800"
-                >
-                  <option value="" disabled>-- Wybierz karnet --</option>
-                  {dostepneKarnety.map(k => (
-                    <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button 
-                  type="button" 
-                  onClick={() => setIsBuyPassModalOpen(false)} 
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit" 
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer"
-                >
-                  Kupuję
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
-
-      {/* REZERTA MODALI ADMINISTRATORA PONIŻEJ... */}
+        );
+      })()}
 
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM */}
       {tableActionClient && (
@@ -1272,48 +1728,81 @@ export default function DashboardPage() {
 
                 <div className="space-y-3">
                   {profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.length > 0 ? (
-                    profileClient.karnetyKlubowicza.map((karnet: any) => (
-                      <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 relative">
-                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
-                              {karnet.blokadaDo && (
-                                <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
-                                  ⚠️ Zablokowane do: {karnet.blokadaDo}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-rose-200">
-                                {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
-                              </span>
-                              <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
-                                Cena: {karnet.cena}
-                              </span>
-                            </div>
-                          </div>
+                    [...profileClient.karnetyKlubowicza]
+                      .sort((a: any, b: any) => (a.waznyDo || '9999-12-31').localeCompare(b.waznyDo || '9999-12-31'))
+                      .map((karnet: any) => {
+                      
+                      let isExpiring = false;
+                      let isPending = karnet.statusTekst?.includes('Oczekujący');
 
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer">⚙️ BLOKADA</button>
-                            <button 
-                              onClick={() => {
-                                setExtendPassTarget(karnet);
-                                setExtendSelectedNewPassName(karnet.nazwa);
-                                const curDate = new Date(karnet.waznyDo || Date.now());
-                                curDate.setMonth(curDate.getMonth() + 1);
-                                setExtendNewDate(curDate.toISOString().split('T')[0]);
-                                setIsExtendPassModalOpen(true);
-                              }}
-                              className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer"
-                            >
-                              🕒 Przedłuż
-                            </button>
-                            <button onClick={() => setEditingPassModal({ ...karnet })} className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer" title="Edytuj">✏️</button>
+                      if (!isPending) {
+                        if (karnet.waznyDo) {
+                          const todayDate = new Date();
+                          todayDate.setHours(0, 0, 0, 0);
+                          const expDate = new Date(karnet.waznyDo);
+                          expDate.setHours(0, 0, 0, 0);
+                          const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+                          if (diffDays <= 5) {
+                            isExpiring = true;
+                          }
+                        }
+                        if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
+                          if (karnet.pozostaloWejsc <= 2) {
+                            isExpiring = true;
+                          }
+                        }
+                      }
+
+                      let statusColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                      if (isPending) {
+                        statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
+                      } else if (isExpiring) {
+                        statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
+                      }
+
+                      return (
+                        <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 relative">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
+                                {karnet.blokadaDo && (
+                                  <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
+                                    ⚠️ Zablokowane do: {karnet.blokadaDo}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`${statusColorClass} text-[11px] font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap`}>
+                                  {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
+                                </span>
+                                <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
+                                  Cena: {karnet.cena}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer">⚙️ BLOKADA</button>
+                              <button 
+                                onClick={() => {
+                                  setExtendPassTarget(karnet);
+                                  setExtendSelectedNewPassName(karnet.nazwa);
+                                  const curDate = new Date(karnet.waznyDo || Date.now());
+                                  curDate.setMonth(curDate.getMonth() + 1);
+                                  setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                  setIsExtendPassModalOpen(true);
+                                }}
+                                className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer"
+                              >
+                                🕒 Przedłuż
+                              </button>
+                              <button onClick={() => setEditingPassModal({ ...karnet })} className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer" title="Edytuj">✏️</button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center text-slate-400 text-xs">
                       Brak przypisanych karnetów.
@@ -1326,7 +1815,19 @@ export default function DashboardPage() {
               <div className="space-y-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Portfel</h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
-                  <span className="font-black px-3 py-1 rounded-xl text-sm border bg-emerald-100 text-emerald-800 border-emerald-200">{profileClient.wallet}</span>
+                  
+                  {(() => {
+                    const walletVal = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+                    let walletClass = 'bg-slate-100 text-slate-800 border-slate-200';
+                    if (walletVal < 0) walletClass = 'bg-rose-100 text-rose-800 border-rose-200';
+                    else if (walletVal > 0) walletClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                    return (
+                      <span className={`font-black px-3 py-1 rounded-xl text-sm border ${walletClass}`}>
+                        {profileClient.wallet}
+                      </span>
+                    );
+                  })()}
+
                   <div className="flex gap-3">
                     <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer">🕒 HISTORIA</button>
                     <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer">+ UZUPEŁNIJ PORTFEL</button>
@@ -1398,6 +1899,10 @@ export default function DashboardPage() {
                 <label className="font-bold">Kwota (+/-)</label>
                 <input type="number" step="0.01" required value={walletAmountInput} onChange={(e) => setWalletAmountInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
+              <div className="space-y-1">
+                <label className="font-bold whitespace-nowrap">Tytuł operacji (opcjonalnie)</label>
+                <input type="text" value={walletReasonInput} placeholder="np. Gotówka w recepcji" onChange={(e) => setWalletReasonInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+              </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl">Anuluj</button>
                 <button type="submit" className="bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl">Zatwierdź</button>
@@ -1467,6 +1972,52 @@ export default function DashboardPage() {
                 <button type="submit" className="bg-amber-600 text-white font-black px-6 py-2.5 rounded-xl">Przypisz</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 🌟 MODAL POTWIERDZENIA WYPISANIA */}
+      {clientToUnregister && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚠️ Wypisz uczestnika</h3>
+              <button onClick={() => setClientToUnregister(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+            
+            <div className="space-y-3 text-xs text-slate-700">
+              <p>Czy na pewno chcesz wypisać użytkownika <strong>{clientToUnregister.firstName} {clientToUnregister.lastName}</strong> z zajęć?</p>
+              
+              <div className="bg-sky-50 p-3 rounded-xl border border-sky-200 space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer font-bold text-sky-950">
+                  <input 
+                    type="checkbox"
+                    checked={blokadaZapisow}
+                    onChange={(e) => setBlokadaZapisow(e.target.checked)}
+                    className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
+                  />
+                  <span>Nałóż blokadę zapisów za niestawienie się</span>
+                </label>
+
+                {blokadaZapisow && (
+                  <div className="pl-6 pt-1 space-y-1">
+                    <label className="text-slate-600 block">Długość blokady (w dniach):</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={dlugoscBlokady}
+                      onChange={(e) => setDlugoscBlokady(e.target.value)}
+                      className="w-20 bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold text-slate-800"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+              <button onClick={() => setClientToUnregister(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+              <button onClick={handlePotwierdzWypisanie} className="bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Potwierdź wypisanie</button>
+            </div>
           </div>
         </div>
       )}
