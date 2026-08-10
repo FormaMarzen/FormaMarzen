@@ -644,7 +644,8 @@ export default function DashboardPage() {
     const limitZajec = selectedClass.limit || 12;
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
 
-    const { error } = await supabase.from('zapisy_zajec'].insert([
+    const { error } = await supabase.from('zapisy_zajec').insert([
+
       {
         class_key: classKey,
         klient_id: currentUser.id,
