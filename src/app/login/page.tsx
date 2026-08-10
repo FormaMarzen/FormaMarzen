@@ -158,12 +158,15 @@ export default function LoginPage() {
           <ul className="space-y-1 pl-1">
             <li 
               onClick={() => router.push('/rejestracja')} 
-              className="flex items-center gap-2 text-sky-600 hover:underline cursor-pointer"
+              className="flex items-center gap-2 text-sky-600 hover:underline cursor-pointer transition-colors"
             >
               <span className="w-1.5 h-1.5 bg-sky-600 rounded-full"></span> Zapisz się na pierwsze zajęcia bez kupna karnetu
             </li>
-            <li className="flex items-center gap-2 text-slate-400">
-              <span className="w-1.5 h-1.5 bg-slate-400 rounded-full"></span> Zarejestruj konto klubowicza i kup karnet
+            <li 
+              onClick={() => router.push('/rejestracja-karnet')} 
+              className="flex items-center gap-2 text-blue-600 font-bold hover:underline cursor-pointer transition-colors"
+            >
+              <span className="w-1.5 h-1.5 bg-blue-600 rounded-full"></span> Zarejestruj konto klubowicza i kup karnet
             </li>
           </ul>
         </div>
@@ -171,20 +174,20 @@ export default function LoginPage() {
 
       {/* MODAL RESETOWANIA HASŁA */}
       {isResetModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white p-6 rounded-3xl max-w-sm w-full shadow-2xl space-y-4">
-            <h3 className="font-bold text-lg">Zresetuj hasło</h3>
-            <p className="text-xs text-slate-500">Wpisz swój e-mail, a wyślemy Ci instrukcje.</p>
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white p-6 rounded-3xl max-w-sm w-full shadow-2xl space-y-4 border border-sky-200">
+            <h3 className="font-black text-lg text-slate-900">Zresetuj hasło</h3>
+            <p className="text-xs text-slate-500 font-medium">Wpisz swój e-mail, a wyślemy Ci instrukcje.</p>
             <input 
               type="email" 
               placeholder="Twój adres e-mail" 
               value={resetEmail} 
               onChange={(e) => setResetEmail(e.target.value)} 
-              className="w-full p-3 border rounded-xl text-sm border-slate-300 focus:outline-none focus:border-sky-500" 
+              className="w-full p-3 border rounded-xl text-sm border-slate-300 focus:outline-none focus:border-sky-500 font-medium" 
             />
             <div className="flex gap-2">
-              <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-2 bg-slate-200 rounded-lg font-bold cursor-pointer">Anuluj</button>
-              <button onClick={handleResetPassword} disabled={isResetLoading} className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50">
+              <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer transition-colors">Anuluj</button>
+              <button onClick={handleResetPassword} disabled={isResetLoading} className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black cursor-pointer transition-colors disabled:opacity-50">
                 {isResetLoading ? 'Wysyłanie...' : 'Wyślij link'}
               </button>
             </div>

@@ -10,7 +10,7 @@ export default function DashboardPage() {
   const [klienciList, setKlienciList] = useState<any[]>([]);
   
   // Stany dla Grafiku
-  const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]); // Szablony
+  const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]); 
   const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
   const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
   const [wydarzeniaKilkudniowe, setWydarzeniaKilkudniowe] = useState<any[]>([]);
@@ -92,6 +92,7 @@ export default function DashboardPage() {
 
         return {
           ...c,
+          _rawKarnety: c.karnetyKlubowicza, // Zachowujemy oryginalny format dla funkcji update
           id: c.id,
           firstName: c.Imię || '',
           lastName: c.Nazwisko || '',
@@ -103,7 +104,6 @@ export default function DashboardPage() {
           discount: c.discount || '',
           wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
           avatarUrl: c.avatarUrl || c.avatar || null,
-          avatar: c.avatarUrl || c.avatar || null,
           gender: c.płeć || c.gender || '',
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
@@ -200,6 +200,25 @@ export default function DashboardPage() {
   }, []);
 
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
+    const safePayload = { ...payload };
+
+    if (safePayload.karnetyKlubowicza !== undefined) {
+       const isTextColumn = klienciList.some(c => typeof c._rawKarnety === 'string');
+       if (isTextColumn || (typeof updatedClient._rawKarnety !== 'object' && !Array.isArray(updatedClient._rawKarnety))) {
+           if (typeof safePayload.karnetyKlubowicza !== 'string') {
+               safePayload.karnetyKlubowicza = JSON.stringify(safePayload.karnetyKlubowicza);
+           }
+       }
+    }
+
+    const { error } = await supabase.from('klienci').update(safePayload).eq('id', updatedClient.id);
+    
+    if (error) {
+      alert(`BŁĄD ZAPISU DO BAZY SUPABASE:\n${error.message}\nSprawdź konsolę (F12) dla szczegółów.`);
+      console.error("Szczegóły błędu Supabase:", error, "Wysyłany payload:", safePayload);
+      return false;
+    }
+
     setKlienciList(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
     if (profileClient && profileClient.id === updatedClient.id) {
       setProfileClient(updatedClient);
@@ -207,8 +226,9 @@ export default function DashboardPage() {
     if (currentUser && currentUser.id === updatedClient.id) {
       setCurrentUser(updatedClient);
     }
-    await supabase.from('klienci').update(payload).eq('id', updatedClient.id);
+    
     loadData(); 
+    return true;
   };
 
   const handleConfirmExtendPass = async (e: React.FormEvent) => {
@@ -239,13 +259,16 @@ export default function DashboardPage() {
       expiresDate: extendNewDate
     };
 
-    await updateSupabaseClient(updatedClient, { 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Cena: nowaCena
-    });
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    if (profileClient.Cena !== undefined) dbPayload.Cena = nowaCena;
+    else if (profileClient.cena !== undefined) dbPayload.cena = nowaCena;
+
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
     
-    alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`);
-    setIsExtendPassModalOpen(false);
+    if (success) {
+      alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`);
+      setIsExtendPassModalOpen(false);
+    }
   };
 
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
@@ -265,16 +288,18 @@ export default function DashboardPage() {
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
 
-    let karnetyList = [...(currentUser.karnetyKlubowicza || [])];
+    let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
+    
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
 
     let updatedKarnety = [];
+    let nowaDataWygasnieciaStr = '';
 
     if (karnetyList.length > 0 && activationMode === 'after') {
       updatedKarnety = karnetyList.map((k, index) => {
-        if (index === 0) {
+        if (index === karnetyList.length - 1) {
           let baseDate = new Date();
           if (k.waznyDo) {
             const parts = k.waznyDo.split('-');
@@ -283,7 +308,7 @@ export default function DashboardPage() {
             }
           }
           baseDate.setDate(baseDate.getDate() + dniWażności);
-          const newExpStr = baseDate.toISOString().split('T')[0];
+          nowaDataWygasnieciaStr = baseDate.toISOString().split('T')[0];
 
           const addedEntries = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 0;
           const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
@@ -291,10 +316,10 @@ export default function DashboardPage() {
           return {
             ...k,
             nazwa: selectedBuyPass,
-            waznyDo: newExpStr,
+            waznyDo: nowaDataWygasnieciaStr,
             pozostaloWejsc: limitWejscBaza !== null ? currentEntries + addedEntries : null,
             cena: cenaStr,
-            statusTekst: `Ważny do: ${newExpStr}`
+            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
         return k;
@@ -302,17 +327,17 @@ export default function DashboardPage() {
     } else {
       const dataWygasniecia = new Date();
       dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-      const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+      nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
 
       const nowyKarnetObj = {
         id: Date.now(),
         nazwa: selectedBuyPass,
-        waznyDo: dataWygasnieciaStr,
+        waznyDo: nowaDataWygasnieciaStr,
         pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
         cena: cenaStr,
         znizkaProcentowa: '',
         rata: '1 / 1',
-        statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
+        statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
@@ -320,7 +345,7 @@ export default function DashboardPage() {
         historiaZawieszen: []
       };
 
-      updatedKarnety = [nowyKarnetObj];
+      updatedKarnety = [...karnetyList, nowyKarnetObj];
     }
 
     const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
@@ -330,44 +355,46 @@ export default function DashboardPage() {
     const nowaHistoriaEntry = {
       id: Date.now(),
       date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      type: `Zakup/Przedłużenie (Panel): ${selectedBuyPass}`,
+      type: `Zakup (Panel klienta): ${selectedBuyPass}`,
       amount: `-${cenaWartosc.toFixed(2)} PLN`,
       balance: nowyStanPortfelaStr
     };
 
     const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
-    const ostatecznaDataWygasniecia = updatedKarnety[0]?.waznyDo || '';
+    const ostatecznaDataWygasniecia = updatedKarnety[updatedKarnety.length - 1]?.waznyDo || '';
 
     const updatedClient = {
       ...currentUser,
       karnetyKlubowicza: updatedKarnety,
-      pass: selectedBuyPass,
+      pass: updatedKarnety.map((k: any) => k.nazwa).join(', '),
       price: cenaStr,
       expiresDate: ostatecznaDataWygasniecia,
       wallet: nowyStanPortfelaStr,
       walletHistory: updatedWalletHistory
     };
 
-    await updateSupabaseClient(updatedClient, {
-      karnetyKlubowicza: updatedKarnety,
-      Cena: cenaStr,
-      Portfel: nowyStanPortfelaStr,
-      walletHistory: updatedWalletHistory
-    });
+    const dbPayload: any = { karnetyKlubowicza: updatedKarnety };
+    if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
+    else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
+    
+    if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
+    else if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
 
-    if (cenaWartosc > 0) {
-      await supabase.from('transakcje').insert([{
-        klient_id: currentUser.id,
-        typ_operacji: 'zakup_karnetu',
-        kwota: -cenaWartosc,
-        opis: `Zakup (Panel klienta): ${selectedBuyPass}`
-      }]);
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+
+    if (success) {
+      if (cenaWartosc > 0) {
+        await supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: 'zakup_karnetu',
+          kwota: -cenaWartosc,
+          opis: `Zakup (Panel klienta): ${selectedBuyPass}`
+        }]);
+      }
+      alert(`Gratulacje! Twój karnet został pomyślnie zaktualizowany (Ważny do: ${nowaDataWygasnieciaStr}).`);
+      setSelectedBuyPass('');
+      setIsBuyPassModalOpen(false);
     }
-
-    alert(`Gratulacje! Karnet został zaktualizowany do dnia ${ostatecznaDataWygasniecia}.`);
-    setSelectedBuyPass('');
-    setIsBuyPassModalOpen(false);
-    window.location.reload();
   };
 
   const handleDeleteClient = async (id: number) => {
@@ -424,7 +451,12 @@ export default function DashboardPage() {
         const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
         const updatedClient = { ...profileClient, avatarUrl: compressedDataUrl };
         
-        await updateSupabaseClient(updatedClient, { avatarUrl: compressedDataUrl });
+        const dbPayload: any = {};
+        if (profileClient.avatarUrl !== undefined) dbPayload.avatarUrl = compressedDataUrl;
+        else if (profileClient.avatar !== undefined) dbPayload.avatar = compressedDataUrl;
+        else dbPayload.avatarUrl = compressedDataUrl;
+
+        await updateSupabaseClient(updatedClient, dbPayload);
       };
       img.src = event.target?.result as string;
     };
@@ -469,7 +501,9 @@ export default function DashboardPage() {
       historiaZawieszen: []
     };
 
-    const uaktualnioneKarnety = [...(profileClient.karnetyKlubowicza || []), nowyKarnetObj];
+    let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
+    const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
+    
     const updatedClient = {
       ...profileClient,
       karnetyKlubowicza: uaktualnioneKarnety,
@@ -478,13 +512,35 @@ export default function DashboardPage() {
       expiresDate: uaktualnioneKarnety[0]?.waznyDo || ''
     };
 
-    await updateSupabaseClient(updatedClient, { 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Cena: nowyKarnetObj.cena
-    });
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    if (profileClient.Cena !== undefined) dbPayload.Cena = nowyKarnetObj.cena;
+    else if (profileClient.cena !== undefined) dbPayload.cena = nowyKarnetObj.cena;
+
+    await updateSupabaseClient(updatedClient, dbPayload);
 
     setSelectedPassToAdd('');
     setIsAddSecondPassModalOpen(false);
+  };
+
+  const handleConfirmSuspendPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !suspendPassTarget) return;
+
+    let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
+    const uaktualnioneKarnety = karnetyList.map((k: any) => {
+      if (k.id === suspendPassTarget.id) {
+        return { ...k, zawieszonyOd: suspendStartDate, zawieszonyDo: suspendEndDate };
+      }
+      return k;
+    });
+
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+
+    await updateSupabaseClient(updatedClient, dbPayload);
+    
+    alert(`Karnet został zawieszony od ${suspendStartDate} do ${suspendEndDate}.`);
+    setIsSuspendModalOpen(false);
   };
 
   const handleSaveBlockModification = async (e: React.FormEvent) => {
@@ -492,28 +548,29 @@ export default function DashboardPage() {
     if (!profileClient) return;
 
     let nowaDataStr = '';
+    const dni = parseInt(blockDaysInput, 10);
+    
+    if (!blockDateInput && dni <= 0) {
+      const updatedClient = {
+        ...profileClient,
+        blokadaDo: null,
+        powodBlokady: null,
+        karnetyKlubowicza: (profileClient.karnetyKlubowicza || []).map((k: any) => ({ ...k, blokadaDo: null, powodBlokady: null }))
+      };
+      
+      const dbPayload: any = { karnetyKlubowicza: updatedClient.karnetyKlubowicza };
+      if (profileClient.blokadaDo !== undefined) dbPayload.blokadaDo = null;
+      if (profileClient.powodBlokady !== undefined) dbPayload.powodBlokady = null;
+      
+      await updateSupabaseClient(updatedClient, dbPayload);
+      alert("Blokada została pomyślnie odwołana!");
+      setIsBlockModalOpen(false);
+      return;
+    }
+
     if (blockDateInput) {
       nowaDataStr = blockDateInput;
     } else {
-      const dni = parseInt(blockDaysInput, 10);
-      if (dni <= 0) {
-        const updatedClient = {
-          ...profileClient,
-          blokadaDo: null,
-          powodBlokady: null,
-          karnetyKlubowicza: (profileClient.karnetyKlubowicza || []).map((k: any) => ({ ...k, blokadaDo: null, powodBlokady: null }))
-        };
-        
-        await updateSupabaseClient(updatedClient, { 
-          blokadaDo: null, 
-          powodBlokady: null, 
-          karnetyKlubowicza: updatedClient.karnetyKlubowicza 
-        });
-
-        alert("Blokada została pomyślnie odwołana!");
-        setIsBlockModalOpen(false);
-        return;
-      }
       const now = new Date();
       now.setDate(now.getDate() + dni);
       nowaDataStr = now.toISOString().split('T')[0];
@@ -526,12 +583,11 @@ export default function DashboardPage() {
       karnetyKlubowicza: (profileClient.karnetyKlubowicza || []).map((k: any) => ({ ...k, blokadaDo: nowaDataStr }))
     };
 
-    await updateSupabaseClient(updatedClient, { 
-      blokadaDo: nowaDataStr, 
-      powodBlokady: updatedClient.powodBlokady, 
-      karnetyKlubowicza: updatedClient.karnetyKlubowicza 
-    });
+    const dbPayload: any = { karnetyKlubowicza: updatedClient.karnetyKlubowicza };
+    if (profileClient.blokadaDo !== undefined) dbPayload.blokadaDo = nowaDataStr;
+    if (profileClient.powodBlokady !== undefined) dbPayload.powodBlokady = updatedClient.powodBlokady;
 
+    await updateSupabaseClient(updatedClient, dbPayload);
     alert(`Blokada została ustawiona do dnia: ${nowaDataStr}!`);
     setIsBlockModalOpen(false);
   };
@@ -558,10 +614,11 @@ export default function DashboardPage() {
     const updatedWalletHistory = [nowaHistoriaEntry, ...(profileClient.walletHistory || [])];
     const updatedClient = { ...profileClient, wallet: nowyStanStr, walletHistory: updatedWalletHistory };
     
-    await updateSupabaseClient(updatedClient, { 
-      Portfel: nowyStanStr, 
-      walletHistory: updatedWalletHistory 
-    });
+    const dbPayload: any = {};
+    if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr;
+    else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
+
+    await updateSupabaseClient(updatedClient, dbPayload);
 
     setWalletAmountInput('');
     setWalletReasonInput('');
@@ -572,14 +629,17 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!profileClient) return;
     
-    await updateSupabaseClient(profileClient, { 
-      Imię: profileClient.firstName, 
-      Nazwisko: profileClient.lastName, 
-      telefon: profileClient.phone, 
-      email: profileClient.email, 
-      płeć: profileClient.gender 
-    });
+    const dbPayload: any = {};
+    if (profileClient.Imię !== undefined) dbPayload['Imię'] = profileClient.firstName;
+    if (profileClient.Nazwisko !== undefined) dbPayload['Nazwisko'] = profileClient.lastName;
+    if (profileClient.telefon !== undefined) dbPayload.telefon = profileClient.phone;
+    if (profileClient['Numer tel.'] !== undefined) dbPayload['Numer tel.'] = profileClient.phone;
+    if (profileClient.email !== undefined) dbPayload.email = profileClient.email;
+    if (profileClient['E-mail'] !== undefined) dbPayload['E-mail'] = profileClient.email;
+    if (profileClient['płeć'] !== undefined) dbPayload['płeć'] = profileClient.gender;
+    if (profileClient.gender !== undefined) dbPayload.gender = profileClient.gender;
     
+    await updateSupabaseClient(profileClient, dbPayload);
     setIsEditProfileInfoOpen(false);
   };
 
@@ -627,6 +687,12 @@ export default function DashboardPage() {
     if (!currentUser || !selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
       alert("Nie można zapisać się na odwołane lub usunięte zajęcia!");
+      return;
+    }
+
+    const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    if (walletVal < 0) {
+      alert("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać na zajęcia.");
       return;
     }
 
@@ -972,6 +1038,32 @@ export default function DashboardPage() {
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
       
+      {appRole === 'klubowicz' && currentUser && (() => {
+        const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+        if (walletVal < 0) {
+          return (
+            <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
+                  <span className="text-2xl">💸</span>
+                </div>
+                <div>
+                  <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Zadłużenie na koncie!</h3>
+                  <p className="text-xs text-rose-800 font-medium mt-0.5">Twój portfel wykazuje saldo ujemne ({currentUser.wallet || currentUser.Portfel}). Masz zablokowaną możliwość zapisów na zajęcia do czasu uregulowania należności.</p>
+                </div>
+              </div>
+              <Link 
+                href="/portfel" 
+                className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0 text-center"
+              >
+                Przejdź do portfela
+              </Link>
+            </div>
+          );
+        }
+        return null;
+      })()}
+
       {appRole === 'klubowicz' && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -1620,16 +1712,28 @@ export default function DashboardPage() {
               {appRole === 'klubowicz' ? (
                 <div className="pt-2">
                   {!isUserSignedUp ? (
-                    <button 
-                      onClick={handleKlubowiczZapiszSie}
-                      className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
-                        isFull 
-                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                      }`}
-                    >
-                      {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
-                    </button>
+                    (() => {
+                      const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+                      if (wVal < 0) {
+                        return (
+                          <div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
+                            💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
+                          </div>
+                        );
+                      }
+                      return (
+                        <button 
+                          onClick={handleKlubowiczZapiszSie}
+                          className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                            isFull 
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          }`}
+                        >
+                          {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
+                        </button>
+                      );
+                    })()
                   ) : (
                     <button 
                       onClick={handleKlubowiczWypiszSie}
@@ -2188,7 +2292,10 @@ export default function DashboardPage() {
                     k.id === editingPassModal.id ? editingPassModal : k
                   );
                   const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-                  await updateSupabaseClient(updatedClient, { karnetyKlubowicza: uaktualnioneKarnety });
+                  
+                  const dbPayload: any = { karnetyKlubowicza: typeof profileClient._rawKarnety === 'string' ? JSON.stringify(uaktualnioneKarnety) : uaktualnioneKarnety };
+                  await updateSupabaseClient(updatedClient, dbPayload);
+                  
                   setEditingPassModal(null);
                   alert("Karnet został zaktualizowany!");
                 }} 
