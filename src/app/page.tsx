@@ -60,7 +60,7 @@ export default function DashboardPage() {
   const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
   const [selectedBuyPass, setSelectedBuyPass] = useState('');
 
-  // 🌟 STANY MODALU ZAJĘĆ (IDENTYCZNE JAK W ZAKŁADCE GRAFIK)
+  // 🌟 STANY MODALU ZAJĘĆ
   const [selectedClass, setSelectedClass] = useState<any | null>(null);
   const [isSearchingClient, setIsSearchingClient] = useState(false);
   const [searchClientQuery, setSearchClientQuery] = useState('');
@@ -614,6 +614,93 @@ export default function DashboardPage() {
       .eq('klient_id', klientId);
 
     loadData();
+  };
+
+  // 🌟 SAMODZIELNY ZAPIS KLUBOWICZA NA ZAJĘCIA (ZE STREFA KLIENTA / MODALU)
+  const handleKlubowiczZapiszSie = async () => {
+    if (!currentUser || !selectedClass) return;
+    if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
+      alert("Nie można zapisać się na odwołane lub usunięte zajęcia!");
+      return;
+    }
+
+    if (currentUser.blokadaDo) {
+      const dataBlokady = new Date(currentUser.blokadaDo);
+      const teraz = new Date();
+      if (teraz <= dataBlokady) {
+        alert(`Nie możesz się zapisać! ${currentUser.powodBlokady || 'Posiadasz aktywną blokadę zapisów.'}`);
+        return;
+      }
+    }
+
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+
+    if (aktualni.some(k => k.id === currentUser.id)) {
+      alert("Jesteś już zapisany na te zajęcia!");
+      return;
+    }
+
+    const limitZajec = selectedClass.limit || 12;
+    const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
+
+    const { error } = await supabase.from('zapisy_zajec'].insert([
+      {
+        class_key: classKey,
+        klient_id: currentUser.id,
+        status: statusZpisu,
+        obecny: false
+      }
+    ]);
+
+    if (error) {
+      alert(`Nie udało się zapisać na zajęcia: ${error.message}`);
+      return;
+    }
+
+    const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
+    const typWydarzenia = statusZpisu === 'krzesełko' 
+      ? `Zapisano na listę rezerwową (krzesełko)` 
+      : `Zapisano na zajęcia`;
+
+    await supabase.from('transakcje').insert([{
+      klient_id: currentUser.id,
+      typ_operacji: 'zajecia_zapis',
+      class_key: classKey,
+      opis: `${currentUser.firstName || 'Klubowicz'} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}`
+    }]);
+
+    alert(statusZpisu === 'krzesełko' ? "Zostałeś dopisany do listy rezerwowej (krzesełko)!" : "Zostałeś pomyślnie zapisany na zajęcia!");
+    loadData();
+    setSelectedClass(null);
+  };
+
+  // 🌟 SAMODZIELNE WYPISANIE KLUBOWICZA Z ZAJĘĆ (ZE STREFA KLIENTA / MODALU)
+  const handleKlubowiczWypiszSie = async () => {
+    if (!currentUser || !selectedClass) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+
+    const { error } = await supabase
+      .from('zapisy_zajec')
+      .delete()
+      .eq('class_key', classKey)
+      .eq('klient_id', currentUser.id);
+
+    if (error) {
+      alert(`Nie udało się wypisać z zajęć: ${error.message}`);
+      return;
+    }
+
+    await supabase.from('transakcje').insert([{
+      klient_id: currentUser.id,
+      typ_operacji: 'zajecia_wypis',
+      class_key: classKey,
+      opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć.`
+    }]);
+
+    alert("Zostałeś pomyślnie wypisany z zajęć.");
+    loadData();
+    setSelectedClass(null);
   };
 
   const handleZapiszKlientaDoZajec = async (klient: any) => {
@@ -1264,7 +1351,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 🌟 MODAL ZARZĄDZANIA UCZESTNIKAMI ZAJĘĆ */}
+      {/* 🌟 MODAL ZARZĄDZANIA UCZESTNIKAMI ZAJĘĆ / ZAPISÓW KLUBOWICZA */}
       {selectedClass && (() => {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
         const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
@@ -1279,6 +1366,9 @@ export default function DashboardPage() {
         const listaGlowna = [...zapisaniWszyscy.slice(0, limitZajec)].sort(sortAlfabet);
         const listaKrzesełko = zapisaniWszyscy.slice(limitZajec);
         const isFull = zapisaniWszyscy.length >= limitZajec;
+
+        // Czy zalogowany klubowicz jest już zapisany na te zajęcia?
+        const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.id) === String(currentUser.id));
 
         const filteredSuggestions = klienciList
           .filter(c => 
@@ -1352,7 +1442,6 @@ export default function DashboardPage() {
                             </div>
                           </div>
 
-                          {/* WYŚWIETLANIE ZDJĘCIA / AVATARA KLIENTA */}
                           <div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
                             {osoba.avatarUrl ? (
                               <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
@@ -1436,7 +1525,6 @@ export default function DashboardPage() {
                               </div>
                             </div>
 
-                            {/* ZDJĘCIE / AVATAR NA LIŚCIE REZERWOWEJ */}
                             <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-xs shrink-0 shadow-sm">
                               {osoba.avatarUrl ? (
                                 <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
@@ -1465,7 +1553,30 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {appRole === 'admin' && (
+              {/* 🌟 PRZYCISKI ZAPISU DLA KLUBOWICZA / ADMINA */}
+              {appRole === 'klubowicz' ? (
+                <div className="pt-2">
+                  {!isUserSignedUp ? (
+                    <button 
+                      onClick={handleKlubowiczZapiszSie}
+                      className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                        isFull 
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      }`}
+                    >
+                      {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={handleKlubowiczWypiszSie}
+                      className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                    >
+                      ❌ Wypisz się z zajęć
+                    </button>
+                  )}
+                </div>
+              ) : (
                 <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
                   {!isSearchingClient ? (
                     <button 
@@ -1976,7 +2087,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 🌟 MODAL POTWIERDZENIA WYPISANIA */}
+      {/* MODAL POTWIERDZENIA WYPISANIA */}
       {clientToUnregister && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
