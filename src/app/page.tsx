@@ -927,9 +927,6 @@ export default function DashboardPage() {
   if (salesPeriod === 'Dziś') salesPeriodTitle = todayStr;
   if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
 
-  // ==========================================
-  // INTELIGENTNY SYSTEM BANERÓW DLA KLUBOWICZA
-  // ==========================================
   let needsNewPass = false;
   let isPassExpiringSoon = false;
   let expiringMessage = "";
@@ -990,7 +987,6 @@ export default function DashboardPage() {
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
       
-      {/* BANER 1: BRAK KARNETU LUB WSZYSTKIE WYGASŁY */}
       {appRole === 'klubowicz' && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -1011,7 +1007,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* BANER 2: KOŃCZY SIĘ KARNET LUB WEJŚCIA */}
       {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
         <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -1032,7 +1027,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 1. GRAFIK NA CAŁĄ SZEROKOŚĆ (5 DNI) */}
       <section className="space-y-4">
         <div className="flex items-center justify-between bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
           <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950">
@@ -1077,7 +1071,6 @@ export default function DashboardPage() {
                   <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
                 </div>
 
-                {/* WYŚWIETLANIE WYDARZEŃ KILKUDNIOWYCH (OBOZY) */}
                 {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
                   <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm">
                     <div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
@@ -1171,11 +1164,9 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* 2. DOLNY PANEL: SPRZEDAŻ (LEWA) ORAZ KLIENCI (PRAWA) - ZAWSZE WIDOCZNE DLA ADMINA */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
           
-          {/* SPRZEDAŻ (LEWA STRONA) */}
           <section className="lg:col-span-6 space-y-3">
             <div className="flex items-center justify-between">
               <Link 
@@ -1247,7 +1238,6 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* KLIENCI (PRAWA STRONA) - POSORTOWANI OD NAJSZYBCIEJ KOŃCZĄCYCH SIĘ */}
           <section className="lg:col-span-6 space-y-3">
             <div className="flex items-center justify-between">
               <Link 
@@ -1367,7 +1357,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 🌟 MODAL ZAKUPU / PRZEDŁUŻENIA KARNETU DLA KLUBOWICZA */}
       {isBuyPassModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -1445,7 +1434,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 🌟 MODAL ZARZĄDZANIA UCZESTNIKAMI ZAJĘĆ / ZAPISÓW KLUBOWICZA */}
       {selectedClass && (() => {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
         const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
@@ -1496,7 +1484,6 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* LISTA GŁÓWNA */}
               <div className="space-y-3">
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1576,7 +1563,6 @@ export default function DashboardPage() {
                 )}
               </div>
 
-              {/* SEKCJA: KRZESEŁKO (REZERWA) */}
               {listaKrzesełko.length > 0 && (
                 <div className="space-y-3 pt-4 border-t border-sky-200">
                   <h4 className="font-black text-xs text-blue-900 uppercase tracking-wider flex items-center gap-2">
@@ -1646,7 +1632,6 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {/* 🌟 PRZYCISKI ZAPISU DLA KLUBOWICZA / ADMINA */}
               {appRole === 'klubowicz' ? (
                 <div className="pt-2">
                   {!isUserSignedUp ? (
@@ -1744,10 +1729,9 @@ export default function DashboardPage() {
 
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
-      {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
@@ -1858,7 +1842,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL PEŁNEGO PROFILU KLIENTA (Z W PEŁNI DZIAŁAJĄCYMI PRZYCISKAMI) */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto">
@@ -2044,7 +2027,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: PRZEDŁUŻ KARNET */}
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
@@ -2066,7 +2048,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: EDYCJA DANYCH KONTA */}
       {isEditProfileInfoOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2090,7 +2071,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: UZUPEŁNIJ PORTFEL */}
       {isTopUpWalletOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2116,7 +2096,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: HISTORIA PORTFELA */}
       {isWalletHistoryOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2153,7 +2132,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: DODAWANIE DRUGIEGO KARNETU (DLA ADMINA) */}
       {isAddSecondPassModalOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2180,7 +2158,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: EDYCJA / ZARZĄDZANIE KARNETEM (DLA ADMINA) */}
       {editingPassModal && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2239,7 +2216,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: BLOKADA ZAPISÓW */}
       {isBlockModalOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2275,7 +2251,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: ZAWIESZENIE KARNETU */}
       {isSuspendModalOpen && profileClient && suspendPassTarget && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2301,7 +2276,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: HISTORIA ZAWIESZEŃ */}
       {isSuspendHistoryModalOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2319,7 +2293,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL POTWIERDZENIA WYPISANIA */}
       {clientToUnregister && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
