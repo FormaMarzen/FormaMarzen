@@ -5,10 +5,9 @@ import { supabase } from '../raporty/klienci/supabase';
 
 export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [transakcjePortfela, setTransakcjePortfela] = useState<any[]>([]);
+  const [transakcjeFinansowe, setTransakcjeFinansowe] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
-  // Stany modalów doładowania / spłaty
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('');
   const [topUpReason, setTopUpReason] = useState('');
@@ -22,7 +21,6 @@ export default function PortfelPage() {
     const userEmail = session?.user?.email;
 
     if (userEmail) {
-      // 1. Pobieramy dane klienta
       const { data: klientData } = await supabase
         .from('klienci')
         .select('*')
@@ -35,7 +33,7 @@ export default function PortfelPage() {
           wallet: klientData.Portfel || klientData.portfel || '0.00 PLN'
         });
 
-        // 2. Pobieramy historię transakcji dla tego klienta z tabeli 'transakcje'
+        // Pobieramy transakcje klienta, odfiltrowując wpisy dotyczące samej obecności/zapisów na zajęcia (gdzie kwota to 0 lub brak finansów)
         const { data: tData } = await supabase
           .from('transakcje')
           .select('*')
@@ -43,7 +41,13 @@ export default function PortfelPage() {
           .order('created_at', { ascending: false });
 
         if (tData) {
-          setTransakcjePortfela(tData);
+          // Zostawiamy tylko transakcje finansowe (zakupy, doładowania, spłaty, gdzie kwota != 0 lub typ to zakup/uzupełnienie/spłata)
+          const finansowe = tData.filter((t: any) => {
+            const kwota = Number(t.kwota) || 0;
+            const typ = (t.typ_operacji || '').toLowerCase();
+            return kwota !== 0 || typ.includes('zakup') || typ.includes('uzupelnienie') || typ.includes('splata');
+          });
+          setTransakcjeFinansowe(finansowe);
         }
       }
     }
@@ -61,12 +65,9 @@ export default function PortfelPage() {
     const nowyStan = currentWalletNum + kwotaZmiany;
     const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
 
-    // 1. Aktualizacja samego portfela w tabeli 'klienci'
     const { error } = await supabase
       .from('klienci')
-      .update({ 
-        Portfel: nowyStanStr
-      })
+      .update({ Portfel: nowyStanStr })
       .eq('id', currentUser.id);
 
     if (error) {
@@ -74,7 +75,6 @@ export default function PortfelPage() {
       return;
     }
 
-    // 2. Dodanie rekordu do tabeli 'transakcje'
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'uzupelnienie_portfela',
@@ -99,9 +99,7 @@ export default function PortfelPage() {
 
     const { error } = await supabase
       .from('klienci')
-      .update({ 
-        Portfel: nowyStanStr
-      })
+      .update({ Portfel: nowyStanStr })
       .eq('id', currentUser.id);
 
     if (error) {
@@ -166,9 +164,9 @@ export default function PortfelPage() {
         </div>
       </div>
 
-      {/* SEKCJA 2: HISTORIA PORTFELA / TRANSAKCJI */}
+      {/* SEKCJA 2: HISTORIA TRANSAKCJI FINANSOWYCH */}
       <div className="space-y-4">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA PORTFELA</h2>
+        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA TRANSAKCJI FINANSOWYCH</h2>
         
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
           <div className="overflow-x-auto">
@@ -177,16 +175,16 @@ export default function PortfelPage() {
                 <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                   <th className="py-4 px-5">DATA</th>
                   <th className="py-4 px-5">KWOTA</th>
-                  <th className="py-4 px-5">PRODUKT / OPERACJA</th>
+                  <th className="py-4 px-5">OPIS OPERACJI</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {transakcjePortfela.length === 0 ? (
+                {transakcjeFinansowe.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="py-8 text-center text-slate-400">Brak historii operacji w portfelu.</td>
+                    <td colSpan={3} className="py-8 text-center text-slate-400">Brak historii transakcji finansowych.</td>
                   </tr>
                 ) : (
-                  transakcjePortfela.map((t: any) => {
+                  transakcjeFinansowe.map((t: any) => {
                     const kwotaNum = Number(t.kwota) || 0;
                     const isPositive = kwotaNum >= 0;
                     const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';

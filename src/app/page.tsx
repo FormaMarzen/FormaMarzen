@@ -59,6 +59,7 @@ export default function DashboardPage() {
   // ZMIENNE DLA MODALA ZAKUPU (KLIENT)
   const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
   const [selectedBuyPass, setSelectedBuyPass] = useState('');
+  const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
 
   // 🌟 STANY MODALU ZAJĘĆ
   const [selectedClass, setSelectedClass] = useState<any | null>(null);
@@ -126,7 +127,7 @@ export default function DashboardPage() {
     if (karnetyData) {
       setDostepneKarnety(karnetyData.map((k: any) => ({
         ...k,
-        cena: k.cena_brutto || '0.00' 
+        cena: k.cena_brutto || k.cena || '0.00' 
       })));
     }
 
@@ -216,7 +217,7 @@ export default function DashboardPage() {
     loadData(); 
   };
 
-  // OBSŁUGA ZAKUPU KARNETU PRZEZ KLIENTA Z POZIOMU BANERA
+  // OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ KLIENTA Z POZIOMU BANERA
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -234,13 +235,42 @@ export default function DashboardPage() {
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
 
-    const dataWygasniecia = new Date();
+    const karnetyList = currentUser.karnetyKlubowicza || [];
+    let maxDateStr = '';
+    if (karnetyList.length > 0) {
+      let maxTime = 0;
+      karnetyList.forEach((k: any) => {
+        if (k.waznyDo) {
+          const parts = k.waznyDo.split('-');
+          if (parts.length === 3) {
+            const t = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])).getTime();
+            if (t > maxTime) { maxTime = t; maxDateStr = k.waznyDo; }
+          }
+        }
+      });
+    }
+
+    let baseStartDate = new Date();
+    if (activationMode === 'after' && maxDateStr) {
+      const parts = maxDateStr.split('-');
+      baseStartDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    }
+
+    const dataWygasniecia = new Date(baseStartDate);
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-    const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+    
+    const year = dataWygasniecia.getFullYear();
+    const month = String(dataWygasniecia.getMonth() + 1).padStart(2, '0');
+    const day = String(dataWygasniecia.getDate()).padStart(2, '0');
+    const dataWygasnieciaStr = `${year}-${month}-${day}`;
+
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
-
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+
+    const statusTekst = activationMode === 'after' 
+      ? `Oczekujący (Ważny od: ${maxDateStr} do: ${dataWygasnieciaStr})`
+      : `Ważny do: ${dataWygasnieciaStr}`;
 
     const nowyKarnetObj = {
       id: Date.now(),
@@ -250,7 +280,7 @@ export default function DashboardPage() {
       cena: cenaStr,
       znizkaProcentowa: '',
       rata: '1 / 1',
-      statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
+      statusTekst: statusTekst,
       blokadaDo: null,
       powodBlokady: null,
       zawieszonyOd: null,
@@ -258,7 +288,7 @@ export default function DashboardPage() {
       historiaZawieszen: []
     };
 
-    const uaktualnioneKarnety = [...(currentUser.karnetyKlubowicza || []), nowyKarnetObj];
+    const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
 
     const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
@@ -277,7 +307,7 @@ export default function DashboardPage() {
     const updatedClient = {
       ...currentUser,
       karnetyKlubowicza: uaktualnioneKarnety,
-      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '),
+      pass: selectedBuyPass,
       price: cenaStr,
       expiresDate: dataWygasnieciaStr,
       wallet: nowyStanPortfelaStr,
@@ -645,7 +675,6 @@ export default function DashboardPage() {
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
 
     const { error } = await supabase.from('zapisy_zajec').insert([
-
       {
         class_key: classKey,
         klient_id: currentUser.id,
@@ -913,7 +942,7 @@ export default function DashboardPage() {
   if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
 
   // ==========================================
-  // INTELIGENTNY SYSTEM BANERÓW DLA KLUBOWICZA
+  // INTELIGENTNY SYSTEM BANERÓW DLA KLUBOWICZA (ODLICZANIE OD 5 DNI W DÓŁ)
   // ==========================================
   let needsNewPass = false;
   let isPassExpiringSoon = false;
@@ -996,7 +1025,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* BANER 2: KOŃCZY SIĘ KARNET LUB WEJŚCIA */}
+      {/* BANER 2: KOŃCZY SIĘ KARNET LUB WEJŚCIA (OD 5 DNI W DÓŁ) */}
       {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
         <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -1352,6 +1381,84 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* 🌟 MODAL ZAKUPU / PRZEDŁUŻENIA KARNETU DLA KLUBOWICZA */}
+      {isBuyPassModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Przedłuż karnet</h3>
+              <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+            
+            <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
+              <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
+                Wybierz karnet, aby opłacić go ze środków w portfelu lub przypisać do konta.
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
+                <select 
+                  required
+                  value={selectedBuyPass} 
+                  onChange={(e) => setSelectedBuyPass(e.target.value)} 
+                  className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
+                >
+                  <option value="" disabled>-- Wybierz karnet --</option>
+                  {dostepneKarnety.map(k => (
+                    <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
+                  ))}
+                </select>
+              </div>
+
+              {currentUser?.karnetyKlubowicza?.length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-sky-100">
+                  <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
+                  <div className="space-y-2">
+                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                      <input 
+                        type="radio" 
+                        name="activationMode" 
+                        value="today" 
+                        checked={activationMode === 'today'} 
+                        onChange={() => setActivationMode('today')}
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                      <div className="flex flex-col">
+                        <span className="font-bold text-slate-800">Od dzisiaj</span>
+                        <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
+                      </div>
+                    </label>
+                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                      <input 
+                        type="radio" 
+                        name="activationMode" 
+                        value="after" 
+                        checked={activationMode === 'after'} 
+                        onChange={() => setActivationMode('after')}
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                      <div className="flex flex-col">
+                        <span className="font-bold text-slate-800">Przedłużenie (Oczekujący)</span>
+                        <span className="text-[10px] text-slate-500">Zacznie obowiązywać po wygaśnięciu obecnego</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                  Anuluj
+                </button>
+                <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                  Kupuję i zatwierdzam
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* 🌟 MODAL ZARZĄDZANIA UCZESTNIKAMI ZAJĘĆ / ZAPISÓW KLUBOWICZA */}
       {selectedClass && (() => {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -1652,8 +1759,8 @@ export default function DashboardPage() {
 
             </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM */}
       {tableActionClient && (
