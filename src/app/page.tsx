@@ -74,14 +74,12 @@ export default function DashboardPage() {
     const { data: { session } } = await supabase.auth.getSession();
     const userEmail = session?.user?.email;
 
-    // Rozpoznawanie roli na podstawie sesji
     if (userEmail === 'maciejklaput@gmail.com') {
       setAppRole('admin');
     } else {
       setAppRole('klubowicz');
     }
 
-    // A. Klienci
     const { data: klienciData } = await supabase.from('klienci').select('*');
     if (klienciData) {
       const enriched = klienciData.map((c: any) => {
@@ -122,7 +120,6 @@ export default function DashboardPage() {
       }
     }
 
-    // B. Karnety do list rozwijanych
     const { data: karnetyData } = await supabase.from('karnety').select('*');
     if (karnetyData) {
       setDostepneKarnety(karnetyData.map((k: any) => ({
@@ -131,13 +128,11 @@ export default function DashboardPage() {
       })));
     }
 
-    // C. Transakcje (Finanse)
     const { data: tData } = await supabase.from('transakcje').select('*').order('created_at', { ascending: false });
     if (tData) {
       setWszystkieTransakcje(tData);
     }
 
-    // D. Grafik z chmury (Szablony, Jednorazowe, Nadpisania, Zapisy)
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) setRodzajeZajec(rodzajeData);
 
@@ -204,7 +199,6 @@ export default function DashboardPage() {
     return () => window.removeEventListener('storage', loadData);
   }, []);
 
-  // 2. UNIWERSALNA FUNKCJA AKTUALIZUJĄCA KLIENTA W BAZIE
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
     setKlienciList(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
     if (profileClient && profileClient.id === updatedClient.id) {
@@ -217,7 +211,6 @@ export default function DashboardPage() {
     loadData(); 
   };
 
-  // OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ KLIENTA Z POZIOMU BANERA
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -605,7 +598,6 @@ export default function DashboardPage() {
     setIsEditProfileInfoOpen(false);
   };
 
-  // 🌟 FUNKCJE ZARZĄDZANIA ZAJĘCIAMI I OBECNOŚCIĄ (MODAL)
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -646,7 +638,6 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // 🌟 SAMODZIELNY ZAPIS KLUBOWICZA NA ZAJĘCIA (ZE STREFA KLIENTA / MODALU)
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
@@ -705,7 +696,6 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
-  // 🌟 SAMODZIELNE WYPISANIE KLUBOWICZA Z ZAJĘĆ (ZE STREFA KLIENTA / MODALU)
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -837,7 +827,6 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // POMOCNICZE FUNKCJE GRAFIKU
   const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
     if (isOdwolane || isUsuniete) return '#fda4af';
     if (!title) return '#0284c7';
@@ -862,7 +851,6 @@ export default function DashboardPage() {
     return "60 min";
   };
 
-  // 🌟 SORTOWANIE KLIENTÓW: OD NAJSZYBCIEJ KOŃCZĄCYCH SIĘ KARNETÓW
   const filteredClients = klienciList.filter(client => {
     const fullName = `${client.firstName || ''} ${client.lastName || ''}`.toLowerCase();
     const email = (client.email || '').toLowerCase();
@@ -887,7 +875,6 @@ export default function DashboardPage() {
     return dateA.localeCompare(dateB); 
   });
 
-  // WYLICZANIE DYNAMICZNEGO KALENDARZA
   const getMonday = (d: Date) => {
     const dCopy = new Date(d);
     const day = dCopy.getDay();
@@ -925,7 +912,6 @@ export default function DashboardPage() {
     };
   });
 
-  // WYLICZANIE TRANSAKCJI I SPRZEDAŻY
   const todayStr = today.toISOString().split('T')[0];
   const currentMonthStr = todayStr.substring(0, 7);
   
@@ -942,7 +928,7 @@ export default function DashboardPage() {
   if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
 
   // ==========================================
-  // INTELIGENTNY SYSTEM BANERÓW DLA KLUBOWICZA (ODLICZANIE OD 5 DNI W DÓŁ)
+  // INTELIGENTNY SYSTEM BANERÓW DLA KLUBOWICZA
   // ==========================================
   let needsNewPass = false;
   let isPassExpiringSoon = false;
@@ -1025,7 +1011,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* BANER 2: KOŃCZY SIĘ KARNET LUB WEJŚCIA (OD 5 DNI W DÓŁ) */}
+      {/* BANER 2: KOŃCZY SIĘ KARNET LUB WEJŚCIA */}
       {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
         <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -1475,7 +1461,6 @@ export default function DashboardPage() {
         const listaKrzesełko = zapisaniWszyscy.slice(limitZajec);
         const isFull = zapisaniWszyscy.length >= limitZajec;
 
-        // Czy zalogowany klubowicz jest już zapisany na te zajęcia?
         const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.id) === String(currentUser.id));
 
         const filteredSuggestions = klienciList
@@ -2191,6 +2176,145 @@ export default function DashboardPage() {
                 <button type="submit" className="bg-amber-600 text-white font-black px-6 py-2.5 rounded-xl">Przypisz</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDYCJA / ZARZĄDZANIE KARNETEM (DLA ADMINA) */}
+      {editingPassModal && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">✏️ Edytuj karnet</h3>
+              <button onClick={() => setEditingPassModal(null)} className="text-slate-400 font-bold">✕</button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold">Nazwa karnetu</label>
+                <input 
+                  type="text" 
+                  value={editingPassModal.nazwa || ''} 
+                  onChange={(e) => setEditingPassModal({...editingPassModal, nazwa: e.target.value})} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-bold">Ważny do</label>
+                <input 
+                  type="date" 
+                  value={editingPassModal.waznyDo || ''} 
+                  onChange={(e) => setEditingPassModal({...editingPassModal, waznyDo: e.target.value})} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-bold">Pozostało wejść</label>
+                <input 
+                  type="number" 
+                  value={editingPassModal.pozostaloWejsc ?? ''} 
+                  onChange={(e) => setEditingPassModal({...editingPassModal, pozostaloWejsc: e.target.value === '' ? null : parseInt(e.target.value, 10)})} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                />
+              </div>
+            </div>
+            <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+              <button onClick={() => setEditingPassModal(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl">Anuluj</button>
+              <button 
+                onClick={async () => {
+                  if (!profileClient) return;
+                  const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => 
+                    k.id === editingPassModal.id ? editingPassModal : k
+                  );
+                  const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
+                  await updateSupabaseClient(updatedClient, { karnetyKlubowicza: uaktualnioneKarnety });
+                  setEditingPassModal(null);
+                  alert("Karnet został zaktualizowany!");
+                }} 
+                className="bg-amber-600 text-white font-black px-6 py-2.5 rounded-xl"
+              >
+                Zapisz
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BLOKADA ZAPISÓW */}
+      {isBlockModalOpen && profileClient && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚙️ Zarządzaj blokadą zapisów</h3>
+              <button onClick={() => setIsBlockModalOpen(false)} className="text-slate-400 font-bold">✕</button>
+            </div>
+            <form onSubmit={handleSaveBlockModification} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold">Liczba dni blokady (wpisz 0, aby zdjąć blokadę)</label>
+                <input 
+                  type="number" 
+                  value={blockDaysInput} 
+                  onChange={(e) => setBlockDaysInput(e.target.value)} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-bold">Lub wybierz dokładną datę końca blokady</label>
+                <input 
+                  type="date" 
+                  value={blockDateInput} 
+                  onChange={(e) => setBlockDateInput(e.target.value)} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                />
+              </div>
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setIsBlockModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl">Anuluj</button>
+                <button type="submit" className="bg-rose-600 text-white font-black px-6 py-2.5 rounded-xl">Zatwierdź blokadę</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ZAWIESZENIE KARNETU */}
+      {isSuspendModalOpen && profileClient && suspendPassTarget && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⏸️ Zawieś karnet</h3>
+              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold">✕</button>
+            </div>
+            <form onSubmit={handleConfirmSuspendPass} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold">Zawieszony od</label>
+                <input type="date" value={suspendStartDate} onChange={(e) => setSuspendStartDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="font-bold">Zawieszony do</label>
+                <input type="date" value={suspendEndDate} onChange={(e) => setSuspendEndDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+              </div>
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl">Anuluj</button>
+                <button type="submit" className="bg-amber-600 text-white font-black px-6 py-2.5 rounded-xl">Zatwierdź zawieszenie</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: HISTORIA ZAWIESZEŃ */}
+      {isSuspendHistoryModalOpen && profileClient && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📜 Historia zawieszeń</h3>
+              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="text-slate-400 font-bold">✕</button>
+            </div>
+            <div className="text-xs text-slate-600 py-4 text-center">
+              Brak zarejestrowanych historii zawieszeń dla tego klienta.
+            </div>
+            <div className="pt-3 flex justify-end border-t border-sky-100">
+              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs">Zamknij</button>
+            </div>
           </div>
         </div>
       )}
