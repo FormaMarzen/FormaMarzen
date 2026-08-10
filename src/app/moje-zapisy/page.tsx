@@ -20,7 +20,7 @@ export default function MojeZapisyPage() {
     const userEmail = session?.user?.email;
 
     if (userEmail) {
-      // 1. Pobieramy klienta
+      // 1. Pobieramy dane klienta
       const { data: klientData } = await supabase
         .from('klienci')
         .select('*')
@@ -30,11 +30,12 @@ export default function MojeZapisyPage() {
       if (klientData) {
         setCurrentUser(klientData);
 
-        // 2. Pobieramy realne zapisy z tabeli 'zapisy_zajec' dla tego klienta
-        const { data: zData } = await supabase
-          .from('zapisy_zajec')
-          .select('*')
-          .eq('klient_id', klientData.id);
+        // 2. Pobieramy grafiki i zajęcia jednorazowe, by dopasować nazwy
+        const [{ data: szablonyData }, { data: jednorazoweData }, { data: zData }] = await Promise.all([
+          supabase.from('grafik_zajec').select('*'),
+          supabase.from('zajecia_jednorazowe').select('*'),
+          supabase.from('zapisy_zajec').select('*').eq('klient_id', klientData.id)
+        ]);
 
         if (zData) {
           const nadchodzace: any[] = [];
@@ -43,10 +44,25 @@ export default function MojeZapisyPage() {
           dzis.setHours(0, 0, 0, 0);
 
           zData.forEach((z: any) => {
-            // z.class_key ma format np. "1_10/08" lub "1_2026-08-10"
+            // class_key np. "1_10/08" lub "15_2026-08-10"
             const parts = z.class_key ? z.class_key.split('_') : [];
-            let dataZajecStr = parts[1] || ''; // np. "10/08" lub "2026-08-10"
+            const classId = parts[0];
+            let dataZajecStr = parts[1] || ''; 
             
+            // Szukamy nazwy w szablonach lub jednorazowych
+            let znalezionaNazwa = z.tytul || z.zajecia || null;
+            if (!znalezionaNazwa && classId) {
+              const szablon = szablonyData?.find((s: any) => String(s.id) === String(classId));
+              if (szablon) {
+                znalezionaNazwa = szablon.title || szablon.nazwa;
+              } else {
+                const jednorazowe = jednorazoweData?.find((j: any) => String(j.id) === String(classId));
+                if (jednorazowe) {
+                  znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
+                }
+              }
+            }
+
             let dataObj = new Date();
             if (dataZajecStr.includes('/')) {
               const [d, m] = dataZajecStr.split('/');
@@ -62,7 +78,7 @@ export default function MojeZapisyPage() {
               classKey: z.class_key,
               data: formatDataPL,
               rawDate: dataObj,
-              zajecia: z.tytul || z.zajecia || 'Zajęcia klubowe',
+              zajecia: znalezionaNazwa || 'Trening klubowy',
               karnet: klientData.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
               obecnosc: z.obecny ? 'Obecny' : 'Nieobecny / Oczekujący'
             };
@@ -107,7 +123,7 @@ export default function MojeZapisyPage() {
       klient_id: currentUser.id,
       typ_operacji: 'zajecia_wypis',
       class_key: itemToUnregister.classKey,
-      opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć (${itemToUnregister.data})`
+      opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${itemToUnregister.zajecia} (${itemToUnregister.data})`
     }]);
 
     setItemToUnregister(null);
