@@ -400,6 +400,42 @@ export default function SchedulePage() {
       return;
     }
 
+    // --- WERYFIKACJA LIMITU DZIENNEGO ---
+    let dailyLimit = Infinity; 
+    if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0) {
+      const activePass = klient.karnetyKlubowicza[0];
+      let meta: any = {};
+      
+      try {
+        meta = typeof activePass.inne_ustawienia === 'string' 
+          ? JSON.parse(activePass.inne_ustawienia) 
+          : (activePass.inne_ustawienia || {});
+      } catch(e) {}
+      
+      const typLimitu = meta.dziennyLimit || activePass.dziennyLimit;
+      const iloscLimitu = meta.niestandardowyDziennyIlosc || activePass.niestandardowyDziennyIlosc;
+      
+      if (typLimitu === 'Niestandardowy') {
+        dailyLimit = parseInt(iloscLimitu, 10) || Infinity;
+      }
+    }
+
+    // Zliczanie zapisów klienta w danym dniu
+    let userSignupsOnThisDate = 0;
+    Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
+      if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
+        if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => u.id === klient.id)) {
+          userSignupsOnThisDate++;
+        }
+      }
+    });
+
+    if (userSignupsOnThisDate >= dailyLimit) {
+      alert(`Nie można zapisać! Klubowicz wykorzystał już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`);
+      return;
+    }
+    // --- KONIEC WERYFIKACJI LIMITU DZIENNEGO ---
+
     const limitZajec = selectedClass.limit || 12;
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
 

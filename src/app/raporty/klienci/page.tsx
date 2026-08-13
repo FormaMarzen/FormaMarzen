@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabase';
 
 export default function ClientsReportPage() {
+  const todayStr = new Date().toISOString().split('T')[0];
+
   const [searchQuery, setSearchQuery] = useState('');
   const [clients, setClients] = useState<any[]>([]);
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
@@ -33,20 +35,35 @@ export default function ClientsReportPage() {
   const [walletAmountInput, setWalletAmountInput] = useState('');
   const [walletReasonInput, setWalletReasonInput] = useState('');
 
-  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
-  const [blockDaysInput, setBlockDaysInput] = useState('3');
-  const [blockDateInput, setBlockDateInput] = useState('');
-
+  // STANY DLA ZAWIESZEŃ I BLOKAD (WSPÓLNY MODAL)
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
-  const [suspendStartDate, setSuspendStartDate] = useState('2026-08-06');
-  const [suspendEndDate, setSuspendEndDate] = useState('2026-08-13');
+  const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
+  const [suspendEndDate, setSuspendEndDate] = useState(todayStr);
+  const [suspendMode, setSuspendMode] = useState<'days' | 'dates'>('days');
+  const [suspendPassDays, setSuspendPassDays] = useState('3');
+
+  const [blockMode, setBlockMode] = useState<'days' | 'dates'>('days');
+  const [blockPassDays, setBlockPassDays] = useState('3');
+  const [blockPassStartDate, setBlockPassStartDate] = useState(todayStr);
+  const [blockPassEndDate, setBlockPassEndDate] = useState(todayStr);
+
   const [isSuspendHistoryModalOpen, setIsSuspendHistoryModalOpen] = useState(false);
 
   const [isGlobalPassMenuOpen, setIsGlobalPassMenuOpen] = useState(false);
   const [editingPassModal, setEditingPassModal] = useState<any | null>(null);
   const [isAddSecondPassModalOpen, setIsAddSecondPassModalOpen] = useState(false);
   const [selectedPassToAdd, setSelectedPassToAdd] = useState('');
+
+  // STANY RABATÓW
+  const [isEditingDiscount, setIsEditingDiscount] = useState(false);
+  const [discountInput, setDiscountInput] = useState('');
+
+  const [isEditingSystemDiscount, setIsEditingSystemDiscount] = useState(false);
+  const [systemDiscountInput, setSystemDiscountInput] = useState('');
+
+  // STAN DLA HISTORII ZAKUPIONYCH KARNETÓW W PROFILU
+  const [isPassHistoryOpen, setIsPassHistoryOpen] = useState(false);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newClient, setNewClient] = useState({
@@ -56,9 +73,60 @@ export default function ClientsReportPage() {
     email: '',
     price: '0.00 PLN',
     wallet: '0.00 PLN',
-    registered: new Date().toISOString().split('T')[0],
+    registered: todayStr,
     selectedPass: '', 
   });
+
+  // --- FUNKCJE POMOCNICZE I RABATOWE ---
+  const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
+
+  const calculateStandardSystemDiscount = (client: any) => {
+    if (!client) return 0;
+    const transakcjeKarnetow = (client.transakcje || []).filter(
+      (t: any) => 
+        (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) &&
+        (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))
+    );
+    const count = transakcjeKarnetow.length;
+    if (count <= 0) return 0;
+    if (count === 1) return 2;
+    if (count === 2) return 4;
+    return Math.min(25, 4 + (count - 2)); 
+  };
+
+  const calculateSystemDiscount = (client: any) => {
+    if (!client) return 0;
+    const std = calculateStandardSystemDiscount(client);
+    const offset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
+    return Math.max(0, Math.min(25, std + offset));
+  };
+
+  const getEffectiveDiscount = (client: any) => {
+    if (!client) return 0;
+    const staly = parseFloat(client.discount || '0');
+    if (staly > 0) return staly;
+    return calculateSystemDiscount(client);
+  };
+
+  // FUNKCJA WYPISUJĄCA Z ZAJĘĆ (Naprawia błąd ts(2304) w wierszu 1575)
+  const handleWypiszZajecia = async (zajecieItem: any) => {
+    if (!profileClient) return;
+
+    const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
+    const nowyWypis = { ...zajecieItem, wypisujacy: 'Wypisany przez zarządcę z poziomu profilu' };
+    const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
+
+    await supabase.from('klienci').update({ zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
+
+    await supabase.from('transakcje').insert([{
+      klient_id: profileClient.id,
+      typ_operacji: 'zajecia_wypis',
+      kwota: null,
+      opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})`
+    }]);
+
+    loadData();
+  };
 
   const loadData = async () => {
     const [
@@ -78,10 +146,13 @@ export default function ClientsReportPage() {
     }
 
     if (klienciData) {
+      const todayDate = new Date();
+      const yesterday = new Date(todayDate);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
       const enriched = klienciData.map((c: any) => {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => t.klient_id === c.id) : [];
-
-        // Sprawdzamy czy klient jest powiązany z trenerem
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
         
         let parsedKarnety = [];
@@ -93,15 +164,46 @@ export default function ClientsReportPage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
+        // LAZY EVALUATION RABATU
+        let currentRabat = c.rabat || 0;
+        if (currentRabat > 0) {
+          let hasValidPass = false;
+          let latestWaznyDo = '';
+          for (const k of parsedKarnety) {
+            if (!latestWaznyDo || (k.waznyDo && k.waznyDo > latestWaznyDo)) {
+              latestWaznyDo = k.waznyDo;
+            }
+            if (k.waznyDo && k.waznyDo >= yesterdayStr) {
+              hasValidPass = true;
+            }
+          }
+          if (parsedKarnety.length === 0 || (!hasValidPass && latestWaznyDo && latestWaznyDo < yesterdayStr)) {
+            currentRabat = 0;
+            supabase.from('klienci').update({ rabat: 0 }).eq('id', c.id).then();
+          }
+        }
+
+        let cenaAktywnegoKarnetu = '0.00 PLN';
+        if (parsedKarnety.length > 0) {
+          const najblizszyKarnet = parsedKarnety.reduce((prev: any, curr: any) => {
+            return (!prev || (curr.waznyDo && curr.waznyDo > prev.waznyDo)) ? curr : prev;
+          }, null);
+          if (najblizszyKarnet && najblizszyKarnet.cena) {
+            cenaAktywnegoKarnetu = najblizszyKarnet.cena;
+          }
+        }
+
         return {
           ...c,
           id: c.id,
+          rabat: currentRabat,
+          systemDiscountOffset: c.systemDiscountOffset || c.system_discount_offset || 0,
           firstName: c.Imię || '',
           lastName: c.Nazwisko || '',
           registered: c.Zarejestrowany || c.registered || '2026-06-01',
           activated: c.activated || '2026-06-01',
           expiresDate: c.expiresDate || '',
-          price: c.Cena || c.cena || c.price || '0.00 PLN',
+          price: cenaAktywnegoKarnetu,
           discount: c.discount || '',
           wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
           avatarUrl: c.avatarUrl || null,
@@ -140,6 +242,38 @@ export default function ClientsReportPage() {
     loadData();
   }, []);
 
+  const openProfile = async (clientToOpen: any) => {
+    let maxWaznyDo = '';
+    
+    if (clientToOpen.karnetyKlubowicza && clientToOpen.karnetyKlubowicza.length > 0) {
+      for (const k of clientToOpen.karnetyKlubowicza) {
+        if (!maxWaznyDo || k.waznyDo > maxWaznyDo) {
+          maxWaznyDo = k.waznyDo;
+        }
+      }
+    }
+
+    const wczoraj = new Date(todayStr);
+    wczoraj.setDate(wczoraj.getDate() - 1);
+    const wczorajStr = wczoraj.toISOString().split('T')[0];
+
+    let finalClient = { ...clientToOpen };
+
+    if (maxWaznyDo && maxWaznyDo < wczorajStr && clientToOpen.discount && clientToOpen.discount !== '0' && clientToOpen.discount !== '') {
+      finalClient.discount = '';
+      const { error } = await supabase.from('klienci').update({ discount: '' }).eq('id', clientToOpen.id);
+      
+      if (error) {
+        console.error("Błąd podczas zerowania rabatu:", error.message);
+      } else {
+        setClients(prev => prev.map(c => c.id === clientToOpen.id ? finalClient : c));
+        alert(`Klubowicz ${clientToOpen.firstName} ${clientToOpen.lastName} stracił ciągłość karnetu (ostatni karnet wygasł ${maxWaznyDo}). Rabat został automatycznie wyzerowany.`);
+      }
+    }
+
+    setProfileClient(finalClient);
+  };
+
   const handleToggleClientTrainer = async (client: any) => {
     if (!client.isTrainer) {
       const { error } = await supabase.from('trenerzy').insert([{
@@ -157,6 +291,42 @@ export default function ClientsReportPage() {
       }
     }
     loadData();
+  };
+
+  const handleSaveDiscount = async () => {
+    if (!profileClient) return;
+    
+    const updatedClient = { ...profileClient, discount: discountInput };
+    
+    const { error } = await supabase.from('klienci').update({ discount: discountInput }).eq('id', profileClient.id);
+    
+    if (error) {
+      alert(`Błąd zapisu rabatu w bazie: ${error.message}`);
+      return;
+    }
+    
+    setProfileClient(updatedClient);
+    setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
+    setIsEditingDiscount(false);
+  };
+
+  const handleSaveSystemDiscount = async () => {
+    if (!profileClient) return;
+    const targetVal = parseFloat(systemDiscountInput) || 0;
+    const std = calculateStandardSystemDiscount(profileClient);
+    const newOffset = targetVal - std;
+
+    const updatedClient = { ...profileClient, systemDiscountOffset: newOffset };
+    const { error } = await supabase.from('klienci').update({ systemDiscountOffset: newOffset }).eq('id', profileClient.id);
+    
+    if (error) {
+      alert(`Błąd zapisu rabatu za ciągłość: ${error.message}`);
+      return;
+    }
+    
+    setProfileClient(updatedClient);
+    setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
+    setIsEditingSystemDiscount(false);
   };
 
   const handleAddClientSubmit = async (e: React.FormEvent) => {
@@ -232,12 +402,12 @@ export default function ClientsReportPage() {
     }
 
     if (error) {
-      alert("Wystąpił błąd podczas dodawania klienta.");
+      alert("Wystąpił błąd podczas dodawania klienta: " + error.message);
     } else {
       setIsAddModalOpen(false);
       setNewClient({
         firstName: '', lastName: '', phone: '', email: '', price: '0.00 PLN', wallet: '0.00 PLN',
-        registered: new Date().toISOString().split('T')[0], selectedPass: ''
+        registered: todayStr, selectedPass: ''
       });
       loadData();
     }
@@ -322,14 +492,11 @@ export default function ClientsReportPage() {
         ctx?.drawImage(img, 0, 0, width, height);
         const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
 
-        // Zmiana natychmiastowa na ekranie, by zdjęcie nie znikało
         setProfileClient((prev: any) => ({ ...prev, avatarUrl: compressedDataUrl }));
         setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, avatarUrl: compressedDataUrl } : c));
 
-        // Zapis do Supabase w tle
         const { error } = await supabase.from('klienci').update({ avatarUrl: compressedDataUrl }).eq('id', profileClient.id);
         
-        // Ludzki komunikat zamiast błędu w konsoli
         if (error) {
             alert(`Błąd zapisu w bazie Supabase: ${error.message}`);
         }
@@ -344,12 +511,20 @@ export default function ClientsReportPage() {
     if (!profileClient || !extendPassTarget) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-    const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
-    const kwotaKarnetu = parseFloat(nowaCena.replace(/[^0-9.]/g, '')) || 0;
+    const activeDiscount = getEffectiveDiscount(profileClient);
+    const bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, ''));
+    const cenaPoRabacie = bazowaCena * (1 - activeDiscount / 100);
+    const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
+    const kwotaKarnetu = cenaPoRabacie;
 
     const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
     const nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+
+    let znizkaTekst = '';
+    if (activeDiscount > 0) {
+      znizkaTekst = `(-${activeDiscount}%)`;
+    }
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === extendPassTarget.id) {
@@ -358,6 +533,7 @@ export default function ClientsReportPage() {
           nazwa: extendSelectedNewPassName,
           waznyDo: extendNewDate,
           cena: nowaCena,
+          znizkaProcentowa: znizkaTekst,
           statusTekst: `Ważny do: ${extendNewDate}`
         };
       }
@@ -374,10 +550,10 @@ export default function ClientsReportPage() {
       klient_id: profileClient.id,
       typ_operacji: 'zakup_karnetu',
       kwota: -kwotaKarnetu,
-      opis: `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Obciążenie portfela)`
+      opis: `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} ${znizkaTekst} (Obciążenie portfela)`
     }]);
 
-    alert(`Karnet został przedłużony! Pobrano ${kwotaKarnetu} PLN z portfela.`);
+    alert(`Karnet został przedłużony! Pobrano ${kwotaKarnetu.toFixed(2)} PLN z portfela.`);
     setIsExtendPassModalOpen(false);
     loadData();
   };
@@ -402,22 +578,29 @@ export default function ClientsReportPage() {
     const dataWygasniecia = new Date();
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
-    const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
-    const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
+    
+    const activeDiscount = getEffectiveDiscount(profileClient);
+    const bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : 150.00;
+    const kwotaKarnetu = bazowaCena * (1 - activeDiscount / 100);
+    const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
+
+    let znizkaTekst = '';
+    if (activeDiscount > 0) {
+      znizkaTekst = `(-${activeDiscount}%)`;
+    }
 
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
 
-    let nowyStanStr = profileClient.wallet; // Domyślnie brak zmiany w portfelu
+    let nowyStanStr = profileClient.wallet;
     let logKwota = 0;
-    let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
+    let logOpis = `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Zapłacono z góry)`;
 
-    // Jeśli zapłaci później -> obciążamy portfel
     if (paymentMethod === 'later') {
       const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
       const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
       nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       logKwota = -kwotaKarnetu;
-      logOpis = `Dodano karnet: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`;
+      logOpis = `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Obciążenie portfela - do zapłaty)`;
     }
 
     const nowyKarnetObj = {
@@ -426,7 +609,7 @@ export default function ClientsReportPage() {
       waznyDo: dataWygasnieciaStr,
       pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
       cena: cenaObjKarnetu,
-      znizkaProcentowa: '',
+      znizkaProcentowa: znizkaTekst,
       rata: '1 / 1',
       statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
       blokadaDo: null,
@@ -465,78 +648,169 @@ export default function ClientsReportPage() {
     e.preventDefault();
     if (!profileClient || !suspendPassTarget) return;
 
-    const start = new Date(suspendStartDate);
-    const end = new Date(suspendEndDate);
-    const diffTime = end.getTime() - start.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    let sOd = suspendStartDate;
+    let sDo = suspendEndDate;
 
-    if (diffDays <= 0) {
-      alert("Data końcowa zawieszenia musi być późniejsza niż data początkowa!");
+    if (suspendMode === 'days') {
+      sOd = todayStr;
+      const dni = parseInt(suspendPassDays || '0', 10);
+      if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + dni);
+      sDo = endDate.toISOString().split('T')[0];
+    }
+
+    if (new Date(sDo) < new Date(sOd)) {
+      alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
       return;
     }
 
+    if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? Rzeczywista liczba dni doliczona do ważności karnetu zostanie i tak wyliczona dokładnie w momencie ręcznego odwieszenia.`)) return;
+
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === suspendPassTarget.id) {
-        return { ...k, zawieszonyOd: suspendStartDate, zawieszonyDo: suspendEndDate };
-      }
-      return k;
-    });
-
-    await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
-
-    alert(`Karnet został zawieszony od ${suspendStartDate} do ${suspendEndDate}.`);
-    setIsSuspendModalOpen(false);
-    loadData();
-  };
-
-  const handleCancelSuspension = async (karnetTarget: any) => {
-    if (!confirm("Czy na pewno chcesz zakończyć/odwołać zawieszenie karnetu?")) return;
-    if (!profileClient) return;
-
-    const start = new Date(karnetTarget.zawieszonyOd);
-    const end = new Date(karnetTarget.zawieszonyDo || new Date());
-    const diffTime = end.getTime() - start.getTime();
-    let dniZawieszenia = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    if (dniZawieszenia < 1) dniZawieszenia = 1;
-
-    const obecnaDataWaznosci = new Date(karnetTarget.waznyDo);
-    obecnaDataWaznosci.setDate(obecnaDataWaznosci.getDate() + dniZawieszenia);
-    const nowaDataWaznosciStr = obecnaDataWaznosci.toISOString().split('T')[0];
-
-    const nowyWpisHistorii = {
-      id: Date.now(),
-      dataZawieszenia: karnetTarget.zawieszonyOd,
-      dataAtywacji: karnetTarget.zawieszonyDo,
-      okres: `${dniZawieszenia} dni`,
-      przezKogo: 'Zarządca systemu'
-    };
-
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === karnetTarget.id) {
         return {
-          ...k, waznyDo: nowaDataWaznosciStr, statusTekst: `Ważny do: ${nowaDataWaznosciStr}`,
-          zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: [nowyWpisHistorii, ...(k.historiaZawieszen || [])]
+          ...k,
+          zawieszonyOd: sOd,
+          zawieszonyDo: sDo
         };
       }
       return k;
     });
 
-    await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    
+    if (!error) {
+      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony (planowo do ${sDo}). Przedłużenie jego ważności zostanie dokładnie przeliczone w momencie kliknięcia "Odwieś karnet".`);
+      setIsSuspendModalOpen(false);
+      loadData();
+    } else {
+      alert(`Błąd: ${error.message}`);
+    }
+  };
 
-    alert(`Zawieszenie zakończone. Karnet wydłużony o ${dniZawieszenia} dni!`);
+  const handleOdwiesKarnet = async (karnetTarget: any) => {
+    if (!profileClient || !karnetTarget.zawieszonyOd) return;
+
+    const dzisiaj = new Date();
+    const start = new Date(karnetTarget.zawieszonyOd);
+    dzisiaj.setHours(0, 0, 0, 0);
+    start.setHours(0, 0, 0, 0);
+    let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) diffDays = 0;
+
+    if (!confirm(`Karnet był zawieszony od ${karnetTarget.zawieszonyOd} (łącznie ${diffDays} dni). \nCzy na pewno chcesz go odwiesić i przedłużyć jego ważność o ${diffDays} dni?`)) return;
+
+    let currentExpDate = new Date(karnetTarget.waznyDo || new Date());
+    currentExpDate.setDate(currentExpDate.getDate() + diffDays);
+    const newExpDateStr = currentExpDate.toISOString().split('T')[0];
+
+    const historiaEntry = {
+      id: Date.now(),
+      od: karnetTarget.zawieszonyOd,
+      do: todayStr,
+      dni: diffDays
+    };
+
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === karnetTarget.id) {
+        return {
+          ...k,
+          waznyDo: newExpDateStr,
+          statusTekst: `Ważny do: ${newExpDateStr}`,
+          zawieszonyOd: null,
+          zawieszonyDo: null,
+          historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])]
+        };
+      }
+      return k;
+    });
+
+    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    if (!error) {
+      alert(`Karnet został odwieszony! Ważność została przedłużona o ${diffDays} dni. Nowa data to ${newExpDateStr}.`);
+      setIsSuspendModalOpen(false);
+      loadData();
+    } else {
+      alert(`Błąd: ${error.message}`);
+    }
+  };
+
+  const handleConfirmBlockPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !suspendPassTarget) return;
+
+    let bOd = blockPassStartDate;
+    let bDo = blockPassEndDate;
+
+    if (blockMode === 'days') {
+      bOd = todayStr;
+      const dni = parseInt(blockPassDays || '0', 10);
+      if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + dni);
+      bDo = endDate.toISOString().split('T')[0];
+    }
+
+    if (new Date(bDo) < new Date(bOd)) {
+      alert("Data końcowa blokady musi być późniejsza lub równa dacie początkowej!");
+      return;
+    }
+
+    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? (Nie przedłuża to ważności karnetu)`)) return;
+
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === suspendPassTarget.id) {
+        return { 
+          ...k, 
+          blokadaOd: bOd,
+          blokadaDo: bDo,
+          powodBlokady: `Zablokowano w okresie ${bOd} - ${bDo}`
+        };
+      }
+      return k;
+    });
+
+    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    
+    if (!error) {
+      alert(`Karnet został zablokowany do ${bDo}.`);
+      setIsSuspendModalOpen(false);
+      loadData();
+    } else {
+      alert(`Błąd: ${error.message}`);
+    }
+  };
+
+  const handleCancelBlock = async (karnetTarget: any) => {
+    if (!profileClient) return;
+    if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
+
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === karnetTarget.id) {
+        return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null };
+      }
+      return k;
+    });
+
+    await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    alert("Blokada została odwołana.");
+    setIsSuspendModalOpen(false);
     loadData();
   };
 
-  const handleSavePassEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSavePassEditSubmit = async () => {
     if (!profileClient || !editingPassModal) return;
 
+    if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
+
     const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
-    const cenaRegularna = bazowyKarnet ? parseFloat(bazowyKarnet.cena) : null;
+    const activeRabat = getEffectiveDiscount(profileClient);
+    const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
     const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
 
-    let znizkaTekst = '';
-    if (cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
+    let znizkaTekst = profileClient.discount ? `(-${profileClient.discount}%)` : '';
+    if (!profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
       const roznica = cenaRegularna - nowaCenaWartosc;
       const procent = Math.round((roznica / cenaRegularna) * 100);
       znizkaTekst = `(-${procent}%)`;
@@ -545,7 +819,7 @@ export default function ClientsReportPage() {
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === editingPassModal.id) {
         return {
-          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo,
+          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, pozostaloWejsc: editingPassModal.pozostaloWejsc,
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
           znizkaProcentowa: znizkaTekst, rata: editingPassModal.rata, statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
         };
@@ -563,6 +837,7 @@ export default function ClientsReportPage() {
     }]);
 
     setEditingPassModal(null);
+    alert("Karnet został zaktualizowany!");
     loadData();
   };
 
@@ -582,62 +857,9 @@ export default function ClientsReportPage() {
 
       setEditingPassModal(null);
       setIsGlobalPassMenuOpen(false);
+      alert("Karnet został usunięty!");
       loadData();
     }
-  };
-
-  const handleWypiszZajecia = async (zajecieItem: any) => {
-    if (!profileClient) return;
-
-    const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
-    const nowyWypis = { ...zajecieItem, wypisujacy: 'Wypisany przez klubowicza' };
-    const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
-
-    await supabase.from('klienci').update({ zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
-
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: 'zajecia_wypis',
-      kwota: null,
-      opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})`
-    }]);
-
-    loadData();
-  };
-
-  const handleSaveBlockModification = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profileClient) return;
-
-    let nowaDataStr = '';
-    if (blockDateInput) {
-      nowaDataStr = blockDateInput;
-    } else {
-      const dni = parseInt(blockDaysInput, 10);
-      if (dni <= 0) {
-        await supabase.from('klienci').update({
-          blokadaDo: null, powodBlokady: null,
-          karnetyKlubowicza: (profileClient.karnetyKlubowicza || []).map((k: any) => ({ ...k, blokadaDo: null, powodBlokady: null }))
-        }).eq('id', profileClient.id);
-
-        alert("Blokada została pomyślnie odwołana!");
-        setIsBlockModalOpen(false);
-        loadData();
-        return;
-      }
-      const now = new Date();
-      now.setDate(now.getDate() + dni);
-      nowaDataStr = now.toISOString().split('T')[0];
-    }
-
-    const powod = `Zaktualizowana blokada zapisów do dnia ${nowaDataStr}.`;
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => ({ ...k, blokadaDo: nowaDataStr, powodBlokady: powod }));
-
-    await supabase.from('klienci').update({ blokadaDo: nowaDataStr, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
-
-    alert(`Blokada ustawiona do dnia: ${nowaDataStr}!`);
-    setIsBlockModalOpen(false);
-    loadData();
   };
 
   const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
@@ -709,8 +931,6 @@ export default function ClientsReportPage() {
     return 0;
   });
 
-  const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
-
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
 
   return (
@@ -730,7 +950,7 @@ export default function ClientsReportPage() {
         </div>
       </div>
 
-      {/* 🌟 NOWY PANEL (OKIENKO) NAD TABELĄ: KLIENT = TRENER */}
+      {/* PANEL NAD TABELĄ: KLIENT = TRENER */}
       <div className="bg-gradient-to-r from-sky-900 to-slate-900 border border-sky-700/40 rounded-2xl p-5 shadow-lg text-white space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -750,7 +970,7 @@ export default function ClientsReportPage() {
             klienciTrenerzyList.map(t => (
               <div 
                 key={t.id} 
-                onClick={() => setProfileClient(t)}
+                onClick={() => openProfile(t)}
                 className="bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl px-4 py-2.5 flex items-center gap-3 cursor-pointer transition-all shadow-sm"
               >
                 <div className="w-7 h-7 rounded-full bg-amber-500 text-slate-950 font-black flex items-center justify-center text-xs">
@@ -812,7 +1032,8 @@ export default function ClientsReportPage() {
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {sortedClients.map((client) => {
                 const negativeW = isWalletNegative(client.wallet);
-                const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd && k.zawieszonyDo);
+                const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo >= todayStr);
+                const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
                 const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
                 const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : '';
                 const dataWygasnieciaKarnetu = maKarnet ? client.karnetyKlubowicza[0].waznyDo : '-';
@@ -828,7 +1049,7 @@ export default function ClientsReportPage() {
                     </td>
                     <td className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap">{client.lastName}</td>
                     <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.registered}</td>
-                    <td onClick={() => setProfileClient(client)} className="py-3.5 px-3 text-sky-700 font-medium hover:underline cursor-pointer whitespace-nowrap">{client.email || '-'}</td>
+                    <td onClick={() => openProfile(client)} className="py-3.5 px-3 text-sky-700 font-medium hover:underline cursor-pointer whitespace-nowrap">{client.email || '-'}</td>
                     <td className="py-3.5 px-3 font-mono text-slate-600 whitespace-nowrap">{client.phone || '-'}</td>
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col gap-1">
@@ -836,6 +1057,11 @@ export default function ClientsReportPage() {
                         {aktywnyKarnetZawieszony && (
                           <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-200 inline-block w-fit whitespace-nowrap">
                             ⏸️ Zawieszony: od {aktywnyKarnetZawieszony.zawieszonyOd} do {aktywnyKarnetZawieszony.zawieszonyDo}
+                          </span>
+                        )}
+                        {aktywnaBlokada && (
+                          <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-2 py-0.5 rounded border border-rose-200 inline-block w-fit whitespace-nowrap">
+                            ⚠️ Zablokowane: {aktywnaBlokada.blokadaOd ? `od ${aktywnaBlokada.blokadaOd} ` : ''}do {aktywnaBlokada.blokadaDo}
                           </span>
                         )}
                       </div>
@@ -850,9 +1076,9 @@ export default function ClientsReportPage() {
                     <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.birthDate || 'Nie podano'}</td>
                     <td className="py-3.5 px-3 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => setProfileClient(client)} className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer" title="Otwórz profil">👤</button>
+                        <button onClick={() => openProfile(client)} className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer" title="Otwórz profil">👤</button>
                         <button onClick={() => setTableActionClient(client)} className="p-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg border border-amber-200 cursor-pointer" title="Zarządzaj klubowiczem">✏️</button>
-                        <button onClick={() => handleDeleteClient(client.id)} className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg border border-rose-200 cursor-pointer" title="Usuń">🗑️</button>
+                        <button onClick={() => handleDeleteClient(client.id)} className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg border border-sky-200 cursor-pointer" title="Usuń">🗑️</button>
                       </div>
                     </td>
                   </tr>
@@ -865,7 +1091,7 @@ export default function ClientsReportPage() {
 
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM Z TABELI */}
       {tableActionClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
             
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
@@ -885,7 +1111,7 @@ export default function ClientsReportPage() {
             <div className="space-y-2">
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Klubowicz</div>
               <div className="grid grid-cols-4 gap-2 text-xs font-bold text-slate-700 text-center">
-                <button onClick={() => { setProfileClient(tableActionClient); setTableActionClient(null); }} className="p-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-900 rounded-2xl border border-slate-200 flex flex-col items-center gap-1.5 transition-colors cursor-pointer">
+                <button onClick={() => { openProfile(tableActionClient); setTableActionClient(null); }} className="p-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-900 rounded-2xl border border-slate-200 flex flex-col items-center gap-1.5 transition-colors cursor-pointer">
                   <span className="text-base">✏️</span> Edytuj
                 </button>
                 <button onClick={() => { alert("Sprzedaj produkt"); }} className="p-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-900 rounded-2xl border border-slate-200 flex flex-col items-center gap-1.5 transition-colors cursor-pointer">
@@ -908,7 +1134,6 @@ export default function ClientsReportPage() {
                 </button>
               </div>
             </div>
-
             <div className="space-y-2">
               <div className="flex justify-between items-center text-xs">
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{tableActionClient.karnetyKlubowicza && tableActionClient.karnetyKlubowicza.length > 0 ? tableActionClient.karnetyKlubowicza.map((k:any)=>k.nazwa).join(', ') : 'Brak karnetu'}</div>
@@ -920,7 +1145,7 @@ export default function ClientsReportPage() {
               
               <div className="grid grid-cols-3 gap-2 text-xs font-bold text-slate-700 text-center">
                 <button onClick={() => { 
-                  setProfileClient(tableActionClient); 
+                  openProfile(tableActionClient); 
                   if(tableActionClient.karnetyKlubowicza?.length > 0) {
                     setExtendPassTarget(tableActionClient.karnetyKlubowicza[0]);
                     setExtendSelectedNewPassName(tableActionClient.karnetyKlubowicza[0].nazwa);
@@ -934,18 +1159,21 @@ export default function ClientsReportPage() {
                   <span className="text-base">🕒</span> Przedłuż karnet
                 </button>
                 <button onClick={() => { 
-                  setProfileClient(tableActionClient); 
+                  openProfile(tableActionClient); 
                   if(tableActionClient.karnetyKlubowicza?.length > 0) {
                     setSuspendPassTarget(tableActionClient.karnetyKlubowicza[0]);
-                    setSuspendStartDate(tableActionClient.karnetyKlubowicza[0].zawieszonyOd || '2026-08-06');
-                    setSuspendEndDate(tableActionClient.karnetyKlubowicza[0].zawieszonyDo || '2026-08-13');
+                    setSuspendStartDate(tableActionClient.karnetyKlubowicza[0].zawieszonyOd || todayStr);
+                    setSuspendEndDate(tableActionClient.karnetyKlubowicza[0].zawieszonyDo || todayStr);
+                    setBlockPassStartDate(tableActionClient.karnetyKlubowicza[0].blokadaOd || todayStr);
+                    setBlockPassEndDate(tableActionClient.karnetyKlubowicza[0].blokadaDo || todayStr);
+                    setBlockMode('days');
                   }
                   setIsSuspendModalOpen(true); 
                   setTableActionClient(null); 
                 }} className="p-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-900 rounded-2xl border border-slate-200 flex flex-col items-center gap-1.5 transition-colors cursor-pointer">
-                  <span className="text-base">⏸️</span> Zawieś karnet
+                  <span className="text-base">⏸️</span> Status karnetu
                 </button>
-                <button onClick={() => { setProfileClient(tableActionClient); setIsSuspendHistoryModalOpen(true); setTableActionClient(null); }} className="p-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-900 rounded-2xl border border-slate-200 flex flex-col items-center gap-1.5 transition-colors cursor-pointer">
+                <button onClick={() => { openProfile(tableActionClient); setIsSuspendHistoryModalOpen(true); setTableActionClient(null); }} className="p-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-900 rounded-2xl border border-slate-200 flex flex-col items-center gap-1.5 transition-colors cursor-pointer">
                   <span className="text-base">📜</span> Historia zawieszeń
                 </button>
               </div>
@@ -970,7 +1198,7 @@ export default function ClientsReportPage() {
         </div>
       )}
 
-      {/* MODAL PROFILU KLIENTA Z OPCJĄ OZNACZANIA TRENERA */}
+      {/* MODAL PROFILU KLIENTA Z RABATAMI I HISTORIĄ KARNETÓW */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto">
@@ -1047,10 +1275,61 @@ export default function ClientsReportPage() {
                 </div>
               </div>
 
-              {/* SEKCJA KARNETÓW */}
+              {/* SEKCJA KARNETÓW & RABATÓW */}
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
+                    
+                    {/* STAŁY RABAT (PRIORYTETOWY) */}
+                    <div className="flex items-center gap-2 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200">
+                       <span className="text-[10px] font-bold text-emerald-800 uppercase">Stały rabat:</span>
+                       {isEditingDiscount ? (
+                         <div className="flex items-center gap-1">
+                           <input 
+                             type="number" 
+                             className="w-14 bg-white border border-emerald-300 rounded px-1 text-xs font-bold text-slate-800 outline-none focus:border-emerald-500"
+                             value={discountInput}
+                             onChange={e => setDiscountInput(e.target.value)}
+                             placeholder="%"
+                           />
+                           <span className="text-[10px] font-bold text-emerald-800">%</span>
+                           <button onClick={handleSaveDiscount} className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ml-1">Zapisz</button>
+                           <button onClick={() => setIsEditingDiscount(false)} className="text-emerald-700 hover:text-emerald-900 text-[10px] font-bold cursor-pointer px-1">✕</button>
+                         </div>
+                       ) : (
+                         <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => { setDiscountInput(profileClient.discount || ''); setIsEditingDiscount(true); }}>
+                           <span className="font-black text-emerald-700 text-xs">{profileClient.discount && profileClient.discount !== '0' ? `${profileClient.discount}% (Priorytet)` : 'Brak'}</span>
+                           <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
+                         </div>
+                       )}
+                    </div>
+
+                    {/* RABAT SYSTEMOWY ZA CIĄGŁOŚĆ Z IKONĄ OŁÓWKA */}
+                    <div className="flex items-center gap-2 bg-sky-50 px-3 py-1 rounded-lg border border-sky-200" title="Naliczany automatycznie, z możliwością ręcznej modyfikacji i dalszego ciągłego naliczania">
+                       <span className="text-[10px] font-bold text-sky-800 uppercase">Rabat za ciągłość:</span>
+                       {isEditingSystemDiscount ? (
+                         <div className="flex items-center gap-1">
+                           <input 
+                             type="number" 
+                             className="w-14 bg-white border border-sky-300 rounded px-1 text-xs font-bold text-slate-800 outline-none focus:border-sky-500"
+                             value={systemDiscountInput}
+                             onChange={e => setSystemDiscountInput(e.target.value)}
+                             placeholder="%"
+                           />
+                           <span className="text-[10px] font-bold text-sky-800">%</span>
+                           <button onClick={handleSaveSystemDiscount} className="bg-sky-600 hover:bg-sky-700 text-white text-[10px] px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ml-1">Zapisz</button>
+                           <button onClick={() => setIsEditingSystemDiscount(false)} className="text-sky-700 hover:text-sky-900 text-[10px] font-bold cursor-pointer px-1">✕</button>
+                         </div>
+                       ) : (
+                         <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => { setSystemDiscountInput(calculateSystemDiscount(profileClient).toString()); setIsEditingSystemDiscount(true); }}>
+                           <span className="font-black text-sky-700 text-xs">{calculateSystemDiscount(profileClient)}%</span>
+                           <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
+                         </div>
+                       )}
+                    </div>
+                  </div>
                   
                   <div className="flex items-center gap-2">
                     <button 
@@ -1070,7 +1349,7 @@ export default function ClientsReportPage() {
                       </button>
 
                       {isGlobalPassMenuOpen && (
-                        <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50 text-xs">
+                        <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[70] text-xs">
                           <button onClick={() => { 
                             if(profileClient.karnetyKlubowicza?.length > 0) {
                               setExtendPassTarget(profileClient.karnetyKlubowicza[0]);
@@ -1085,7 +1364,20 @@ export default function ClientsReportPage() {
                             setIsGlobalPassMenuOpen(false); 
                           }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🕒 Przedłuż karnet</button>
                           <button onClick={() => { alert("Umowa wypowiedziana"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📄 Wypowiedz umowę</button>
-                          <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) { setSuspendPassTarget(profileClient.karnetyKlubowicza[0]); setSuspendStartDate(profileClient.karnetyKlubowicza[0].zawieszonyOd || '2026-08-06'); setSuspendEndDate(profileClient.karnetyKlubowicza[0].zawieszonyDo || '2026-08-08'); setIsSuspendModalOpen(true); } setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">⏸️ Zawieś karnet</button>
+                          <button onClick={() => { 
+                            if(profileClient.karnetyKlubowicza?.length > 0) { 
+                              setSuspendPassTarget(profileClient.karnetyKlubowicza[0]); 
+                              setSuspendStartDate(profileClient.karnetyKlubowicza[0].zawieszonyOd || todayStr); 
+                              setSuspendEndDate(profileClient.karnetyKlubowicza[0].zawieszonyDo || todayStr); 
+                              setSuspendPassDays('3');
+                              setSuspendMode('days');
+                              setBlockPassStartDate(profileClient.karnetyKlubowicza[0].blokadaOd || todayStr);
+                              setBlockPassEndDate(profileClient.karnetyKlubowicza[0].blokadaDo || todayStr);
+                              setBlockMode('days');
+                              setIsSuspendModalOpen(true); 
+                            } 
+                            setIsGlobalPassMenuOpen(false); 
+                          }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">⚙️ Status karnetu</button>
                           <button onClick={() => { setIsSuspendHistoryModalOpen(true); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📜 Historia zawieszeń</button>
                           <button onClick={() => { alert("Wygenerowano link do płatności"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">💳 Wygeneruj link do płatności</button>
                           <div className="border-t border-slate-100 my-1"></div>
@@ -1104,6 +1396,7 @@ export default function ClientsReportPage() {
                       
                       let isExpiring = false;
                       let isPending = karnet.statusTekst?.includes('Oczekujący');
+                      const czyZawieszony = !!karnet.zawieszonyOd;
 
                       if (!isPending) {
                         if (karnet.waznyDo) {
@@ -1136,9 +1429,9 @@ export default function ClientsReportPage() {
                             <div className="space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
                                 <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
-                                {karnet.blokadaDo && (
+                                {karnet.blokadaDo && karnet.blokadaDo >= todayStr && (
                                   <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
-                                    ⚠️ Zablokowane do: {karnet.blokadaDo}
+                                    ⚠️ Zablokowane: {karnet.blokadaOd ? `od ${karnet.blokadaOd} ` : ''}do {karnet.blokadaDo}
                                   </span>
                                 )}
                               </div>
@@ -1147,13 +1440,37 @@ export default function ClientsReportPage() {
                                   {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                                 </span>
                                 <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
-                                  Cena: {karnet.cena}
+                                  Cena: {karnet.cena} {karnet.znizkaProcentowa ? ` ${karnet.znizkaProcentowa}` : ''}
                                 </span>
                               </div>
                             </div>
 
                             <div className="flex items-center gap-2">
-                              <button onClick={() => { setBlockDaysInput('3'); setBlockDateInput(karnet.blokadaDo || ''); setIsBlockModalOpen(true); }} className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer">⚙️ BLOKADA</button>
+                              {czyZawieszony ? (
+                                <button 
+                                  onClick={() => handleOdwiesKarnet(karnet)}
+                                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-emerald-200 cursor-pointer shadow-sm whitespace-nowrap"
+                                >
+                                  ▶️ ODWIEŚ KARNET
+                                </button>
+                              ) : (
+                                <button 
+                                  onClick={() => { 
+                                    setSuspendPassTarget(karnet);
+                                    setSuspendStartDate(todayStr);
+                                    setSuspendEndDate(todayStr);
+                                    setSuspendPassDays('3');
+                                    setSuspendMode('days');
+                                    setBlockPassStartDate(karnet.blokadaOd || todayStr);
+                                    setBlockPassEndDate(karnet.blokadaDo || todayStr);
+                                    setBlockMode('days');
+                                    setIsSuspendModalOpen(true); 
+                                  }} 
+                                  className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer shadow-sm"
+                                >
+                                  ⚙️ STATUS
+                                </button>
+                              )}
                               <button 
                                 onClick={() => {
                                   setExtendPassTarget(karnet);
@@ -1163,11 +1480,17 @@ export default function ClientsReportPage() {
                                   setExtendNewDate(curDate.toISOString().split('T')[0]);
                                   setIsExtendPassModalOpen(true);
                                 }}
-                                className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer"
+                                className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
                               >
                                 🕒 Przedłuż
                               </button>
-                              <button onClick={() => setEditingPassModal({ ...karnet })} className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer" title="Edytuj">✏️</button>
+                              <button 
+                                onClick={() => setEditingPassModal({ ...karnet })} 
+                                className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm" 
+                                title="Edytuj"
+                              >
+                                ✏️
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -1179,6 +1502,37 @@ export default function ClientsReportPage() {
                     </div>
                   )}
                 </div>
+
+                {/* ROZWIJANE MENU: HISTORIA TYLKO ZAKUPÓW I PRZEDŁUŻENIÓW */}
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 mt-4">
+                  <button 
+                    onClick={() => setIsPassHistoryOpen(!isPassHistoryOpen)} 
+                    className="w-full flex justify-between items-center text-xs font-black text-slate-700 uppercase tracking-wider cursor-pointer"
+                  >
+                    <span>📜 HISTORIA WSZYSTKICH KUPIONYCH KARNETÓW ({ (profileClient.transakcje || []).filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))).length })</span>
+                    <span>{isPassHistoryOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {isPassHistoryOpen && (
+                    <div className="space-y-2 pt-2 border-t border-slate-200 max-h-48 overflow-y-auto text-xs">
+                      {(profileClient.transakcje || []).filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))).length > 0 ? (
+                        (profileClient.transakcje || [])
+                          .filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie')))
+                          .map((t: any) => (
+                            <div key={t.id} className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200">
+                              <div>
+                                <div className="font-bold text-slate-900">{t.opis || 'Zakup karnetu'}</div>
+                                <div className="text-[10px] font-mono text-slate-500">{new Date(t.created_at).toLocaleString('pl-PL')}</div>
+                              </div>
+                              <div className="font-black text-slate-800">{t.kwota !== null ? `${t.kwota} PLN` : ''}</div>
+                            </div>
+                          ))
+                      ) : (
+                        <div className="text-slate-400 italic text-center py-3">Brak historii zakupów karnetów w bazie transakcji.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
               </div>
 
               {/* Sekcja Portfel */}
@@ -1305,7 +1659,7 @@ export default function ClientsReportPage() {
 
       {/* MODAL: PRZEDŁUŻ KARNET */}
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
@@ -1339,12 +1693,39 @@ export default function ClientsReportPage() {
                         onChange={(e) => setExtendSelectedNewPassName(e.target.value)}
                         className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
                       >
-                        {dostepneKarnety.map(k => (
-                          <option key={k.id} value={k.nazwa}>{k.nazwa}</option>
-                        ))}
+                        {dostepneKarnety.map(k => {
+                          const baseCena = parseFloat(k.cena) || 0;
+                          let finalCena = baseCena;
+                          let hasDiscount = false;
+                          const activeDiscount = getEffectiveDiscount(profileClient);
+                          
+                          if (activeDiscount > 0) {
+                            finalCena = baseCena * (1 - activeDiscount / 100);
+                            hasDiscount = true;
+                          }
+                          
+                          return (
+                            <option key={k.id} value={k.nazwa}>
+                              {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
+                            </option>
+                          );
+                        })}
                       </select>
                     ) : (
-                      <span className="font-black text-slate-900 whitespace-nowrap">{extendSelectedNewPassName}</span>
+                      <span className="font-black text-slate-900 whitespace-nowrap">
+                        {(() => {
+                          const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
+                          const baseCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget?.cena?.replace(/[^0-9.]/g, '') || '0');
+                          let finalCena = baseCena;
+                          let hasDiscount = false;
+                          const activeDiscount = getEffectiveDiscount(profileClient);
+                          if (activeDiscount > 0) {
+                            finalCena = baseCena * (1 - activeDiscount / 100);
+                            hasDiscount = true;
+                          }
+                          return `${extendSelectedNewPassName} (${finalCena.toFixed(2)} PLN${hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})`;
+                        })()}
+                      </span>
                     )}
                   </div>
                   <button 
@@ -1395,7 +1776,7 @@ export default function ClientsReportPage() {
 
       {/* MODAL: EDYCJA DANYCH KONTA Z POZIOMU PROFILU */}
       {isEditProfileInfoOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane konta</h3>
@@ -1470,7 +1851,7 @@ export default function ClientsReportPage() {
 
       {/* MODAL: UZUPEŁNIJ PORTFEL */}
       {isTopUpWalletOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">💰 Uzupełnij portfel</h3>
@@ -1496,7 +1877,7 @@ export default function ClientsReportPage() {
 
       {/* MODAL HISTORII OPERACJI */}
       {isWalletHistoryOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">🕒 Historia operacji i portfela</h3>
@@ -1546,9 +1927,283 @@ export default function ClientsReportPage() {
         </div>
       )}
 
+      {/* MODAL DODAWANIA KOLEJNEGO KARNETU */}
+      {isAddSecondPassModalOpen && profileClient && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Przypisz karnet z bazy</h3>
+              <button onClick={() => setIsAddSecondPassModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+            <div className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
+                <select value={selectedPassToAdd} onChange={(e) => setSelectedPassToAdd(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer">
+                  <option value="">-- Wybierz karnet --</option>
+                  {dostepneKarnety.map(k => {
+                    const baseCena = parseFloat(k.cena) || 0;
+                    let finalCena = baseCena;
+                    let hasDiscount = false;
+                    const activeDiscount = getEffectiveDiscount(profileClient);
+                    
+                    if (activeDiscount > 0) {
+                      finalCena = baseCena * (1 - activeDiscount / 100);
+                      hasDiscount = true;
+                    }
+                    
+                    return (
+                      <option key={k.id} value={k.nazwa}>
+                        {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="pt-4 flex justify-between gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setIsAddSecondPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => handleAddSecondPass('later')} className="bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Dopisz do rachunku</button>
+                  <button type="button" onClick={() => handleAddSecondPass('paid')} className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zapłacono</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OKNO EDYCJI KARNETU */}
+      {editingPassModal && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">✏️ Edytuj karnet</h3>
+              <button onClick={() => setEditingPassModal(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold">Wybierz nowy karnet z bazy</label>
+                <select 
+                  value={editingPassModal.nazwa || ''} 
+                  onChange={(e) => {
+                    const wybranyNazwa = e.target.value;
+                    const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
+                    const actRab = getEffectiveDiscount(profileClient);
+                    const baseCena = def ? parseFloat(def.cena) : 0;
+                    const finalCena = actRab > 0 ? baseCena * (1 - actRab / 100) : baseCena;
+                    
+                    setEditingPassModal({
+                      ...editingPassModal, 
+                      nazwa: wybranyNazwa,
+                      cena: def ? `${finalCena.toFixed(2)} PLN` : editingPassModal.cena
+                    });
+                  }} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer"
+                >
+                  <option value="">-- Wybierz karnet z bazy --</option>
+                  {dostepneKarnety.map(k => {
+                    const baseCena = parseFloat(k.cena) || 0;
+                    let finalCena = baseCena;
+                    let hasDiscount = false;
+                    const activeDiscount = getEffectiveDiscount(profileClient);
+                    if (activeDiscount > 0) {
+                      finalCena = baseCena * (1 - activeDiscount / 100);
+                      hasDiscount = true;
+                    }
+                    return (
+                      <option key={k.id} value={k.nazwa}>
+                        {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="font-bold">Ważny do</label>
+                <input 
+                  type="date" 
+                  value={editingPassModal.waznyDo || ''} 
+                  onChange={(e) => setEditingPassModal({...editingPassModal, waznyDo: e.target.value})} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" 
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-bold">Pozostało wejść</label>
+                <input 
+                  type="number" 
+                  value={editingPassModal.pozostaloWejsc ?? ''} 
+                  onChange={(e) => setEditingPassModal({...editingPassModal, pozostaloWejsc: e.target.value === '' ? null : parseInt(e.target.value, 10)})} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 flex justify-between items-center border-t border-sky-100">
+              <button 
+                onClick={() => handleConfirmDeletePass(editingPassModal.id)} 
+                className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-black px-4 py-2.5 rounded-xl border border-rose-200 cursor-pointer"
+              >
+                🗑️ Usuń karnet
+              </button>
+
+              <div className="flex gap-2">
+                <button onClick={() => setEditingPassModal(null)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <button 
+                  onClick={handleSavePassEditSubmit} 
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Zapisz
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ZARZĄDZANIA STATUSEM KARNETU */}
+      {isSuspendModalOpen && profileClient && suspendPassTarget && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚙️ Status karnetu: {suspendPassTarget.nazwa}</h3>
+              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold text-lg hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              <div className="space-y-4 border border-amber-200 bg-amber-50/50 p-5 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <h4 className="font-black text-amber-900 text-xs uppercase flex items-center gap-2"><span>⏸️</span> Zawieś karnet</h4>
+                  <p className="text-[10px] text-amber-800 leading-tight mt-1">
+                    Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopiero w momencie odwieszenia</strong> i dopiero wtedy doliczona do ważności karnetu.
+                  </p>
+                </div>
+                
+                {suspendPassTarget.zawieszonyOd ? (
+                  <div className="space-y-3 text-xs mt-4">
+                    <div className="flex bg-white rounded-lg border border-amber-200 overflow-hidden font-bold">
+                      <div className="flex-1 py-1.5 text-center bg-amber-200 text-amber-900">Karnet zawieszony</div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-900">Zawieszony od dnia</label>
+                      <div className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold font-mono">{suspendPassTarget.zawieszonyOd}</div>
+                    </div>
+                    <button type="button" onClick={() => { handleOdwiesKarnet(suspendPassTarget); }} className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Odwieś karnet teraz i dolicz dni</button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleConfirmSuspendPass} className="space-y-3 text-xs mt-4">
+                    <div className="flex bg-white rounded-lg border border-amber-200 overflow-hidden font-bold">
+                      <button type="button" onClick={() => setSuspendMode('days')} className={`flex-1 py-1.5 cursor-pointer transition-colors ${suspendMode === 'days' ? 'bg-amber-200 text-amber-900' : 'text-amber-700 hover:bg-amber-50'}`}>Liczba dni</button>
+                      <button type="button" onClick={() => setSuspendMode('dates')} className={`flex-1 py-1.5 border-l border-amber-200 cursor-pointer transition-colors ${suspendMode === 'dates' ? 'bg-amber-200 text-amber-900' : 'text-amber-700 hover:bg-amber-50'}`}>Od-Do</button>
+                    </div>
+
+                    {suspendMode === 'days' ? (
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">Liczba dni zawieszenia od dzisiaj</label>
+                        <input type="number" min="1" required value={suspendPassDays} onChange={(e) => setSuspendPassDays(e.target.value)} className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold" />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="space-y-1">
+                          <label className="font-bold text-amber-900">Zawieś od</label>
+                          <input type="date" required value={suspendStartDate} onChange={(e) => setSuspendStartDate(e.target.value)} className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold cursor-pointer" />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="font-bold text-amber-900">Zawieś do (planowo)</label>
+                          <input type="date" required value={suspendEndDate} onChange={(e) => setSuspendEndDate(e.target.value)} className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold cursor-pointer" />
+                        </div>
+                      </>
+                    )}
+                    
+                    <button type="submit" className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Zatwierdź zawieszenie</button>
+                  </form>
+                )}
+              </div>
+
+              <div className="space-y-4 border border-rose-200 bg-rose-50/50 p-5 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <h4 className="font-black text-rose-900 text-xs uppercase flex items-center gap-2"><span>🔒</span> Zablokuj karnet</h4>
+                  <p className="text-[10px] text-rose-800 leading-tight mt-1">
+                    Blokuje możliwość wejścia do klubu. <strong>NIE przedłuża</strong> ważności karnetu.
+                  </p>
+                </div>
+                
+                <form onSubmit={handleConfirmBlockPass} className="space-y-3 text-xs mt-4">
+                  <div className="flex bg-white rounded-lg border border-rose-200 overflow-hidden font-bold">
+                    <button type="button" onClick={() => setBlockMode('days')} className={`flex-1 py-1.5 cursor-pointer transition-colors ${blockMode === 'days' ? 'bg-rose-200 text-rose-900' : 'text-rose-600 hover:bg-rose-50'}`}>Liczba dni</button>
+                    <button type="button" onClick={() => setBlockMode('dates')} className={`flex-1 py-1.5 border-l border-rose-200 cursor-pointer transition-colors ${blockMode === 'dates' ? 'bg-rose-200 text-rose-900' : 'text-rose-600 hover:bg-rose-50'}`}>Od-Do</button>
+                  </div>
+
+                  {blockMode === 'days' ? (
+                    <div className="space-y-1">
+                      <label className="font-bold text-rose-900">Liczba dni blokady od dzisiaj</label>
+                      <input type="number" min="1" required value={blockPassDays} onChange={(e) => setBlockPassDays(e.target.value)} className="w-full bg-white border border-rose-200 rounded-xl px-3 py-2 font-bold" />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-1">
+                        <label className="font-bold text-rose-900">Zablokowany od</label>
+                        <input type="date" required value={blockPassStartDate} onChange={(e) => setBlockPassStartDate(e.target.value)} className="w-full bg-white border border-rose-200 rounded-xl px-3 py-2 font-bold cursor-pointer" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-rose-900">Zablokowany do</label>
+                        <input type="date" required value={blockPassEndDate} onChange={(e) => setBlockPassEndDate(e.target.value)} className="w-full bg-white border border-rose-200 rounded-xl px-3 py-2 font-bold cursor-pointer" />
+                      </div>
+                    </>
+                  )}
+                  
+                  <button type="submit" className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Nałóż blokadę</button>
+                </form>
+
+                {suspendPassTarget.blokadaDo && suspendPassTarget.blokadaDo >= todayStr && (
+                   <button type="button" onClick={() => handleCancelBlock(suspendPassTarget)} className="w-full bg-white border border-rose-300 text-rose-700 font-bold py-2 rounded-xl hover:bg-rose-100 transition-colors cursor-pointer mt-3">Odwołaj aktywną blokadę</button>
+                )}
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL HISTORII ZAWIESZEŃ */}
+      {isSuspendHistoryModalOpen && profileClient && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📜 Historia zawieszeń</h3>
+              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+            
+            <div className="space-y-4 max-h-64 overflow-y-auto pr-2">
+              {(profileClient.karnetyKlubowicza || []).map((karnet: any) => (
+                <div key={karnet.id} className="bg-sky-50/50 border border-sky-100 p-3 rounded-xl text-xs">
+                  <div className="font-bold text-sky-900 mb-2">Karnet: {karnet.nazwa}</div>
+                  {karnet.historiaZawieszen && karnet.historiaZawieszen.length > 0 ? (
+                    <div className="space-y-2">
+                      {karnet.historiaZawieszen.map((hz: any) => (
+                        <div key={hz.id} className="flex justify-between bg-white border border-sky-200 p-2 rounded-lg">
+                          <span className="font-mono text-slate-600">{hz.od} do {hz.do}</span>
+                          <span className="font-bold text-slate-800">{hz.dni} dni</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-slate-400 italic">Brak zawieszeń dla tego karnetu.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 flex justify-end border-t border-sky-100">
+              <button onClick={() => setIsSuspendHistoryModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer">Zamknij</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL EDYCJI KLIENTA */}
       {editingClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane</h3>
@@ -1560,7 +2215,7 @@ export default function ClientsReportPage() {
                 <div className="space-y-1"><label className="font-bold whitespace-nowrap">Nazwisko</label><input type="text" value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setEditingClient(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                <button type="button" onClick={() => setEditingClient(null)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
                 <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2 rounded-xl cursor-pointer whitespace-nowrap">Zaktualizuj</button>
               </div>
             </form>
@@ -1568,9 +2223,9 @@ export default function ClientsReportPage() {
         </div>
       )}
 
-      {/* MODAL DODAWANIA NOWEGO KLIENTA DO BAZY */}
+      {/* MODAL DODAWANIA NOWEGO KLIENTA */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">👤 Dodaj nowego klubowicza</h3>
