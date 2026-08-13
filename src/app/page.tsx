@@ -2,1938 +2,1681 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { supabase } from './raporty/klienci/supabase';
+
 export default function DashboardPage() {
-const nowLocal = new Date();
-const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
-const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
-const [salesPeriod, setSalesPeriod] = useState('Dziś');
-const [clientSearch, setClientSearch] = useState('');
-const [klienciList, setKlienciList] = useState<any[]>([]);
-const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
-const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
-const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
-const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
-const [wydarzeniaKilkudniowe, setWydarzeniaKilkudniowe] = useState<any[]>([]);
-const [zapisyNaZajecia, setZapisyNaZajecia] = useState<{ [key: string]: any[] }>({});
-const [rodzajeZajec, setRodzajeZajec] = useState<any[]>([]);
-const [wszystkieTransakcje, setWszystkieTransakcje] = useState<any[]>([]);
-const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('klubowicz');
-const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
-const [currentUser, setCurrentUser] = useState<any>(null);
-const [tableActionClient, setTableActionClient] = useState<any | null>(null);
-const [profileClient, setProfileClient] = useState<any | null>(null);
-const [isExtendPassModalOpen, setIsExtendPassModalOpen] = useState(false);
-const [extendPassTarget, setExtendPassTarget] = useState<any | null>(null);
-const [extendSelectedNewPassName, setExtendSelectedNewPassName] = useState('');
-const [extendNewDate, setExtendNewDate] = useState('');
-const [isEditingNewPassType, setIsEditingNewPassType] = useState(false);
-const [isEditingNewDate, setIsEditingNewDate] = useState(false);
-const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
-const fileInputRef = useRef<HTMLInputElement | null>(null);
-const [isWalletHistoryOpen, setIsWalletHistoryOpen] = useState(false);
-const [isTopUpWalletOpen, setIsTopUpWalletOpen] = useState(false);
-const [walletAmountInput, setWalletAmountInput] = useState('');
-const [walletReasonInput, setWalletReasonInput] = useState('');
-// ZMIENNE DLA ZAWIESZEŃ I BLOKAD
-const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
-const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
-const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
-const [suspendEndDate, setSuspendEndDate] = useState(todayStr);
-const [suspendMode, setSuspendMode] = useState<'days' | 'dates'>('days');
-const [suspendPassDays, setSuspendPassDays] = useState('3');
-const [blockMode, setBlockMode] = useState<'days' | 'dates'>('days');
-const [blockPassDays, setBlockPassDays] = useState('3');
-const [blockPassStartDate, setBlockPassStartDate] = useState(todayStr);
-const [blockPassEndDate, setBlockPassEndDate] = useState(todayStr);
-const [isSuspendHistoryModalOpen, setIsSuspendHistoryModalOpen] = useState(false);
-// ZMIENNE DO PROFILU (Zakładki, Menu)
-const [isGlobalPassMenuOpen, setIsGlobalPassMenuOpen] = useState(false);
-const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'przeszle' | 'wypisy' | 'automatyczne'>('nadchodzace');
-const [editingPassModal, setEditingPassModal] = useState<any | null>(null);
-const [isAddSecondPassModalOpen, setIsAddSecondPassModalOpen] = useState(false);
-const [selectedPassToAdd, setSelectedPassToAdd] = useState('');
-const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
-const [selectedBuyPass, setSelectedBuyPass] = useState('');
-const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
-const [selectedClass, setSelectedClass] = useState<any | null>(null);
-const [isSearchingClient, setIsSearchingClient] = useState(false);
-const [searchClientQuery, setSearchClientQuery] = useState('');
-const [clientToUnregister, setClientToUnregister] = useState<any | null>(null);
-const [blokadaZapisow, setBlokadaZapisow] = useState(false);
-const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
-const loadData = async () => {
-const { data: { session } } = await supabase.auth.getSession();
-const userEmail = session?.user?.email;
-if (userEmail === 'maciejklaput@gmail.com') {
-setAppRole('admin');
-} else {
-setAppRole('klubowicz');
-}
-const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
-if (trenerzyData) setZespolTrenerzy(trenerzyData);
-const { data: klienciData } = await supabase.from('klienci').select('*');
-if (klienciData) {
-const enriched = klienciData.map((c: any) => {
-let parsedKarnety = [];
-if (Array.isArray(c.karnetyKlubowicza)) {
-parsedKarnety = c.karnetyKlubowicza;
-} else if (typeof c.karnetyKlubowicza === 'string') {
-try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
-}
-const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
-return {
-...c,
-_rawKarnety: c.karnetyKlubowicza,
-id: c.id,
-firstName: c.Imię || '',
-lastName: c.Nazwisko || '',
-registered: c.Zarejestrowany || c.registered || '2026-08-07',
-status: c.status || 'Aktywny',
-expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
-pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
-price: c.Cena || c.cena || c.price || '0.00 PLN',
-discount: c.discount || '',
-wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
-avatarUrl: c.avatarUrl || c.avatar || null,
-gender: c.płeć || c.gender || '',
-phone: c['Numer tel.'] || c.telefon || c.phone || '',
-email: c['E-mail'] || c.email || '',
-birthDate: c.birthDate || '',
-karnetyKlubowicza: parsedKarnety,
-walletHistory: c.walletHistory || [],
-isTrainer: !!powiazanyTrener,
-zapisyNadchodzace: c.zapisyNadchodzace || [],
-zapisyPrzeszle: c.zapisyPrzeszle || [],
-zapisyWypisy: c.zapisyWypisy || []
-};
-});
-setKlienciList(enriched);
-if (userEmail && userEmail !== 'maciejklaput@gmail.com') {
-const myUser = enriched.find((c: any) => c.email === userEmail);
-if (myUser) setCurrentUser(myUser);
-}
-if (profileClient) {
-const currentActive = enriched.find((c: any) => c.id === profileClient.id);
-if (currentActive) setProfileClient(currentActive);
-}
-}
-const { data: karnetyData } = await supabase.from('karnety').select('*');
-if (karnetyData) {
-setDostepneKarnety(karnetyData.map((k: any) => ({
-...k,
-cena: k.cena_brutto || k.cena || '0.00'
-})));
-}
-const { data: tData } = await supabase.from('transakcje').select('*').order('created_at', { ascending: false });
-if (tData) {
-setWszystkieTransakcje(tData);
-}
-const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
-if (rodzajeData) setRodzajeZajec(rodzajeData);
-const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
-if (szablonyData) {
-setZapisaneZajecia(szablonyData.map((s: any) => ({
-...s,
-title: s.title || s.nazwa,
-start: s.start || s.start_time,
-end: s.end || s.end_time,
-limit: s.limit || s.limit_miejsc,
-trainer: s.trainer || s.prowadzacy,
-days: s.days || {}
-})));
-}
-const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
-if (jednorazoweData) {
-setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
-...j,
-title: j.title || j.nazwa,
-start: j.start_time || j.start,
-end: j.end_time || j.end,
-limit: j.limit_miejsc || j.limit,
-trainer: j.trainer || j.prowadzacy,
-displayDate: j.display_date,
-fullDateStr: j.full_date_str
-})));
-}
-const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
-if (nadpisaniaData) {
-const nadpisaniaMap: { [key: string]: any } = {};
-nadpisaniaData.forEach((n: any) => {
-nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
-});
-setNadpisaneZajeciaDni(nadpisaniaMap);
-}
-const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
-if (zapisyData) {
-const grouped: { [key: string]: any[] } = {};
-zapisyData.forEach((z: any) => {
-if (!grouped[z.class_key]) grouped[z.class_key] = [];
-grouped[z.class_key].push({
-...z,
-id: z.klient_id,
-status: z.status,
-obecny: z.obecny
-});
-});
-setZapisyNaZajecia(grouped);
-}
-const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
-if (wydarzeniaData) {
-setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
-}
-};
-useEffect(() => {
-loadData();
-window.addEventListener('storage', loadData);
-return () => window.removeEventListener('storage', loadData);
-}, []);
-const updateSupabaseClient = async (updatedClient: any, payload: any) => {
-const safePayload = { ...payload };
-if (safePayload.karnetyKlubowicza !== undefined) {
-const isTextColumn = klienciList.some(c => typeof c._rawKarnety === 'string');
-if (isTextColumn || (typeof updatedClient._rawKarnety !== 'object' && !Array.isArray(updatedClient._rawKarnety))) {
-if (typeof safePayload.karnetyKlubowicza !== 'string') {
-safePayload.karnetyKlubowicza = JSON.stringify(safePayload.karnetyKlubowicza);
-}
-}
-}
-const { error } = await supabase.from('klienci').update(safePayload).eq('id', updatedClient.id);
-if (error) {
-alert(`BŁĄD ZAPISU DO BAZY SUPABASE:\n${error.message}\nSprawdź konsolę (F12) dla szczegółów.`);
-return false;
-}
-setKlienciList(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
-if (profileClient && profileClient.id === updatedClient.id) {
-setProfileClient(updatedClient);
-}
-if (currentUser && currentUser.id === updatedClient.id) {
-setCurrentUser(updatedClient);
-}
-loadData();
-return true;
-};
-const handleToggleClientTrainer = async (client: any) => {
-if (!client.isTrainer) {
-const { error } = await supabase.from('trenerzy').insert([{
-imie_nazwisko: `${client.firstName} ${client.lastName}`,
-email: client.email,
-telefon: client.phone
-}]);
-if (error) {
-alert("Błąd przypisywania do zespołu: " + error.message);
-return;
-}
-} else {
-if (client.email) {
-await supabase.from('trenerzy').delete().eq('email', client.email);
-}
-}
-loadData();
-};
-const handleWypiszZajecia = async (zajecieItem: any) => {
-if (!profileClient) return;
-const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
-const nowyWypis = { ...zajecieItem, wypisujacy: 'Wypisany przez zarządcę z poziomu profilu' };
-const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
-await supabase.from('klienci').update({ zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
-await supabase.from('transakcje').insert([{
-klient_id: profileClient.id,
-typ_operacji: 'zajecia_wypis',
-kwota: null,
-opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})`
-}]);
-loadData();
-};
-const handleConfirmExtendPass = async (e: React.FormEvent) => {
-e.preventDefault();
-if (!profileClient || !extendPassTarget) return;
-if (!confirm(`Czy na pewno chcesz przedłużyć ten karnet do dnia ${extendNewDate}?`)) return;
-const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
-const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-if (k.id === extendPassTarget.id) {
-return {
-...k,
-nazwa: extendSelectedNewPassName || k.nazwa,
-waznyDo: extendNewDate,
-cena: nowaCena,
-statusTekst: `Ważny do: ${extendNewDate}`
-};
-}
-return k;
-});
-const updatedClient = {
-...profileClient,
-karnetyKlubowicza: uaktualnioneKarnety,
-pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '),
-price: nowaCena,
-expiresDate: extendNewDate
-};
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-if (profileClient.Cena !== undefined) dbPayload.Cena = nowaCena;
-else if (profileClient.cena !== undefined) dbPayload.cena = nowaCena;
-const success = await updateSupabaseClient(updatedClient, dbPayload);
-if (success) {
-alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`);
-setIsExtendPassModalOpen(false);
-}
-};
-const handleBuyPassSubmit = async (e: React.FormEvent) => {
-e.preventDefault();
-if (!currentUser || !selectedBuyPass) return;
-if (!confirm(`Czy na pewno chcesz kupić karnet: ${selectedBuyPass}?`)) return;
-const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
-let dniWażności = 30;
-if (defKarnetu && defKarnetu.dlugosc) {
-const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
-if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
-else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
-else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
-else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
-else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
-else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
-}
-let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
-const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
-const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
-const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
-let updatedKarnety = [];
-let nowaDataWygasnieciaStr = '';
-if (karnetyList.length > 0 && activationMode === 'after') {
-updatedKarnety = karnetyList.map((k, index) => {
-if (index === karnetyList.length - 1) {
-let baseDate = new Date();
-if (k.waznyDo) {
-const parts = k.waznyDo.split('-');
-if (parts.length === 3) {
-baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-}
-}
-baseDate.setDate(baseDate.getDate() + dniWażności);
-nowaDataWygasnieciaStr = baseDate.toISOString().split('T')[0];
-const addedEntries = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 0;
-const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
-return {
-...k,
-nazwa: selectedBuyPass,
-waznyDo: nowaDataWygasnieciaStr,
-pozostaloWejsc: limitWejscBaza !== null ? currentEntries + addedEntries : null,
-cena: cenaStr,
-statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
-};
-}
-return k;
-});
-} else {
-const dataWygasniecia = new Date();
-dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
-const nowyKarnetObj = {
-id: Date.now(),
-nazwa: selectedBuyPass,
-waznyDo: nowaDataWygasnieciaStr,
-pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
-cena: cenaStr,
-znizkaProcentowa: '',
-rata: '1 / 1',
-statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
-blokadaDo: null,
-powodBlokady: null,
-zawieszonyOd: null,
-zawieszonyDo: null,
-historiaZawieszen: []
-};
-updatedKarnety = [...karnetyList, nowyKarnetObj];
-}
-const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
-const nowyStanPortfela = currentWalletNum - cenaWartosc;
-const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-const nowaHistoriaEntry = {
-id: Date.now(),
-date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-type: `Zakup (Panel klienta): ${selectedBuyPass}`,
-amount: `-${cenaWartosc.toFixed(2)} PLN`,
-balance: nowyStanPortfelaStr
-};
-const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
-const ostatecznaDataWygasniecia = updatedKarnety[updatedKarnety.length - 1]?.waznyDo || '';
-const updatedClient = {
-...currentUser,
-karnetyKlubowicza: updatedKarnety,
-pass: updatedKarnety.map((k: any) => k.nazwa).join(', '),
-price: cenaStr,
-expiresDate: ostatecznaDataWygasniecia,
-wallet: nowyStanPortfelaStr,
-walletHistory: updatedWalletHistory
-};
-const dbPayload: any = { karnetyKlubowicza: updatedKarnety };
-if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
-else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
-if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
-else if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
-const success = await updateSupabaseClient(updatedClient, dbPayload);
-if (success) {
-if (cenaWartosc > 0) {
-await supabase.from('transakcje').insert([{
-klient_id: currentUser.id,
-typ_operacji: 'zakup_karnetu',
-kwota: -cenaWartosc,
-opis: `Zakup (Panel klienta): ${selectedBuyPass}`
-}]);
-}
-alert(`Gratulacje! Twój karnet został pomyślnie zaktualizowany (Ważny do: ${nowaDataWygasnieciaStr}).`);
-setSelectedBuyPass('');
-setIsBuyPassModalOpen(false);
-}
-};
-const handleDeleteClient = async (id: number) => {
-if (confirm("Czy na pewno chcesz całkowicie usunąć to konto?")) {
-await supabase.from('klienci').delete().eq('id', id);
-setTableActionClient(null);
-if (profileClient && profileClient.id === id) setProfileClient(null);
-loadData();
-}
-};
-const handleDeactivateClient = () => {
-if (confirm("Czy na pewno chcesz dezaktywować tego użytkownika?")) {
-alert("Konto zostało dezaktywowane.");
-setTableActionClient(null);
-}
-};
-const handleDeactivateClientOnDate = () => {
-const dataWyb = prompt("Podaj datę, w której konto ma zostać dezaktywowane (YYYY-MM-DD):", "2026-08-31");
-if (dataWyb) {
-if (confirm(`Czy na pewno chcesz zaplanować dezaktywację konta na dzień ${dataWyb}?`)) {
-alert(`Zaplanowano dezaktywację konta na dzień ${dataWyb}.`);
-setTableActionClient(null);
-}
-}
-};
-const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-const file = e.target.files?.[0];
-if (!file || !profileClient) return;
-const reader = new FileReader();
-reader.onload = (event) => {
-const img = new Image();
-img.onload = async () => {
-const canvas = document.createElement('canvas');
-const MAX_WIDTH = 250;
-const MAX_HEIGHT = 250;
-let width = img.width;
-let height = img.height;
-if (width > height) {
-if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-} else {
-if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-}
-canvas.width = width;
-canvas.height = height;
-const ctx = canvas.getContext('2d');
-ctx?.drawImage(img, 0, 0, width, height);
-const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-const updatedClient = { ...profileClient, avatarUrl: compressedDataUrl };
-const dbPayload: any = {};
-if (profileClient.avatarUrl !== undefined) dbPayload.avatarUrl = compressedDataUrl;
-else if (profileClient.avatar !== undefined) dbPayload.avatar = compressedDataUrl;
-else dbPayload.avatarUrl = compressedDataUrl;
-await updateSupabaseClient(updatedClient, dbPayload);
-};
-img.src = event.target?.result as string;
-};
-reader.readAsDataURL(file);
-};
-const handleAddSecondPass = async (paymentMethod: 'paid' | 'later') => {
-if (!profileClient || !selectedPassToAdd) return;
-const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
-let dniWażności = 30;
-if (defKarnetu && defKarnetu.dlugosc) {
-const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
-if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
-else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
-else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
-else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
-else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
-else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
-}
-const dataWygasniecia = new Date();
-dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
-const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
-const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
-const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
-let nowyStanStr = profileClient.wallet;
-let logKwota = 0;
-let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
-if (paymentMethod === 'later') {
-const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
-nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-logKwota = -kwotaKarnetu;
-logOpis = `Dodano karnet: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`;
-}
-const nowyKarnetObj = {
-id: Date.now(),
-nazwa: selectedPassToAdd,
-waznyDo: dataWygasnieciaStr,
-pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
-cena: cenaObjKarnetu,
-znizkaProcentowa: '',
-rata: '1 / 1',
-statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
-blokadaDo: null,
-powodBlokady: null,
-zawieszonyOd: null,
-zawieszonyDo: null,
-historiaZawieszen: []
-};
-let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
-const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
-const updatedClient = {
-...profileClient,
-karnetyKlubowicza: uaktualnioneKarnety,
-pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '),
-price: nowyKarnetObj.cena,
-expiresDate: uaktualnioneKarnety[0]?.waznyDo || '',
-wallet: nowyStanStr
-};
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-if (profileClient.Cena !== undefined) dbPayload.Cena = nowyKarnetObj.cena;
-else if (profileClient.cena !== undefined) dbPayload.cena = nowyKarnetObj.cena;
-if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr;
-else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
-await updateSupabaseClient(updatedClient, dbPayload);
-await supabase.from('transakcje').insert([{
-klient_id: profileClient.id,
-typ_operacji: 'zakup_karnetu',
-kwota: logKwota,
-opis: logOpis
-}]);
-setSelectedPassToAdd('');
-setIsAddSecondPassModalOpen(false);
-};
-const handleSavePassEditSubmit = async () => {
-if (!profileClient || !editingPassModal) return;
-if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
-const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
-const cenaRegularna = bazowyKarnet ? parseFloat(bazowyKarnet.cena) : null;
-const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
-let znizkaTekst = '';
-if (cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
-const roznica = cenaRegularna - nowaCenaWartosc;
-const procent = Math.round((roznica / cenaRegularna) * 100);
-znizkaTekst = `(-${procent}%)`;
-}
-const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-if (k.id === editingPassModal.id) {
-return {
-...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, pozostaloWejsc: editingPassModal.pozostaloWejsc,
-cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
-znizkaProcentowa: znizkaTekst, rata: editingPassModal.rata, statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
-};
-}
-return k;
-});
-const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') };
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-await updateSupabaseClient(updatedClient, dbPayload);
-setEditingPassModal(null);
-alert("Karnet został zaktualizowany!");
-};
-const handleConfirmDeletePass = async (passId: number) => {
-if (confirm("Czy na pewno chcesz usunąć ten karnet?")) {
-if (!profileClient) return;
-const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
-const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') || 'Brak karnetu' };
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-await updateSupabaseClient(updatedClient, dbPayload);
-setEditingPassModal(null);
-setIsGlobalPassMenuOpen(false);
-alert("Karnet został usunięty!");
-}
-};
-const handleConfirmSuspendPass = async (e: React.FormEvent) => {
-e.preventDefault();
-if (!profileClient || !suspendPassTarget) return;
-let sOd = suspendStartDate;
-let sDo = suspendEndDate;
-if (suspendMode === 'days') {
-sOd = todayStr;
-const dni = parseInt(suspendPassDays || '0', 10);
-if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
-const endDate = new Date();
-endDate.setDate(endDate.getDate() + dni);
-sDo = endDate.toISOString().split('T')[0];
-}
-if (new Date(sDo) < new Date(sOd)) {
-alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
-return;
-}
-if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? Rzeczywista liczba dni doliczona do ważności karnetu zostanie i tak wyliczona dokładnie w momencie ręcznego odwieszenia.`)) return;
-let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
-const uaktualnioneKarnety = karnetyList.map((k: any) => {
-if (k.id === suspendPassTarget.id) {
-return {
-...k,
-zawieszonyOd: sOd,
-zawieszonyDo: sDo
-};
-}
-return k;
-});
-const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-const success = await updateSupabaseClient(updatedClient, dbPayload);
-if (success) {
-alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony (planowo do ${sDo}). Przedłużenie jego ważności zostanie dokładnie przeliczone w momencie kliknięcia "Odwieś karnet".`);
-setIsSuspendModalOpen(false);
-}
-};
-const handleOdwiesKarnet = async (karnetTarget: any) => {
-if (!profileClient || !karnetTarget.zawieszonyOd) return;
-const dzisiaj = new Date();
-const start = new Date(karnetTarget.zawieszonyOd);
-dzisiaj.setHours(0, 0, 0, 0);
-start.setHours(0, 0, 0, 0);
-let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-if (diffDays < 0) diffDays = 0;
-if (!confirm(`Karnet był zawieszony od ${karnetTarget.zawieszonyOd} (łącznie ${diffDays} dni). \nCzy na pewno chcesz go odwiesić i przedłużyć jego ważność o ${diffDays} dni?`)) return;
-let currentExpDate = new Date(karnetTarget.waznyDo);
-currentExpDate.setDate(currentExpDate.getDate() + diffDays);
-const newExpDateStr = currentExpDate.toISOString().split('T')[0];
-const historiaEntry = {
-id: Date.now(),
-od: karnetTarget.zawieszonyOd,
-do: todayStr,
-dni: diffDays
-};
-const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-if (k.id === karnetTarget.id) {
-return {
-...k,
-waznyDo: newExpDateStr,
-statusTekst: `Ważny do: ${newExpDateStr}`,
-zawieszonyOd: null,
-zawieszonyDo: null,
-historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])]
-};
-}
-return k;
-});
-const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-const success = await updateSupabaseClient(updatedClient, dbPayload);
-if (success) {
-alert(`Karnet został odwieszony! Ważność została przedłużona o ${diffDays} dni. Nowa data to ${newExpDateStr}.`);
-}
-};
-const handleConfirmBlockPass = async (e: React.FormEvent) => {
-e.preventDefault();
-if (!profileClient || !suspendPassTarget) return;
-let bOd = blockPassStartDate;
-let bDo = blockPassEndDate;
-if (blockMode === 'days') {
-bOd = todayStr;
-const dni = parseInt(blockPassDays || '0', 10);
-if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
-const endDate = new Date();
-endDate.setDate(endDate.getDate() + dni);
-bDo = endDate.toISOString().split('T')[0];
-}
-if (new Date(bDo) < new Date(bOd)) {
-alert("Data końcowa blokady musi być późniejsza lub równa dacie początkowej!");
-return;
-}
-if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? (Nie przedłuża to ważności karnetu)`)) return;
-const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-if (k.id === suspendPassTarget.id) {
-return {
-...k,
-blokadaOd: bOd,
-blokadaDo: bDo,
-powodBlokady: `Zablokowano w okresie ${bOd} - ${bDo}`
-};
-}
-return k;
-});
-const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-const success = await updateSupabaseClient(updatedClient, dbPayload);
-if (success) {
-alert(`Karnet został zablokowany do ${bDo}.`);
-setIsSuspendModalOpen(false);
-}
-};
-const handleCancelBlock = async (karnetTarget: any) => {
-if (!profileClient) return;
-if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
-const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-if (k.id === karnetTarget.id) {
-return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null };
-}
-return k;
-});
-const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-await updateSupabaseClient(updatedClient, dbPayload);
-alert("Blokada została odwołana.");
-setIsSuspendModalOpen(false);
-};
-const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
-e.preventDefault();
-if (!profileClient || !walletAmountInput) return;
-const kwotaZmiany = parseFloat(walletAmountInput);
-if (isNaN(kwotaZmiany)) return;
-if (!confirm(`Czy na pewno chcesz zmienić saldo portfela o kwotę ${kwotaZmiany > 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN?`)) return;
-const currentWalletNum = parseFloat(profileClient.wallet.replace(/[^0-9.-]+/g, "")) || 0;
-const nowyStan = currentWalletNum + kwotaZmiany;
-const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
-const nowaHistoriaEntry = {
-id: Date.now(),
-date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-type: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta portfela'),
-amount: `${kwotaZmiany >= 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN`,
-balance: nowyStanStr
-};
-const updatedWalletHistory = [nowaHistoriaEntry, ...(profileClient.walletHistory || [])];
-const updatedClient = { ...profileClient, wallet: nowyStanStr, walletHistory: updatedWalletHistory };
-const dbPayload: any = {};
-if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr;
-else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
-await updateSupabaseClient(updatedClient, dbPayload);
-setWalletAmountInput('');
-setWalletReasonInput('');
-setIsTopUpWalletOpen(false);
-};
-const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
-e.preventDefault();
-if (!profileClient) return;
-if (!confirm("Czy na pewno chcesz zapisać zmiany w danych profilu?")) return;
-const dbPayload: any = {};
-if (profileClient.Imię !== undefined) dbPayload['Imię'] = profileClient.firstName;
-if (profileClient.Nazwisko !== undefined) dbPayload['Nazwisko'] = profileClient.lastName;
-if (profileClient.telefon !== undefined) dbPayload.telefon = profileClient.phone;
-if (profileClient['Numer tel.'] !== undefined) dbPayload['Numer tel.'] = profileClient.phone;
-if (profileClient.email !== undefined) dbPayload.email = profileClient.email;
-if (profileClient['E-mail'] !== undefined) dbPayload['E-mail'] = profileClient.email;
-if (profileClient['płeć'] !== undefined) dbPayload['płeć'] = profileClient.gender;
-if (profileClient.gender !== undefined) dbPayload.gender = profileClient.gender;
-await updateSupabaseClient(profileClient, dbPayload);
-setIsEditProfileInfoOpen(false);
-};
-const getPrawdziweAktywneZapisy = (klientId: number) => {
-let count = 0;
-const now = new Date();
-Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
-const parts = classKey.split('_');
-const dateStr = parts[1];
-if (dateStr) {
-const [d, m] = dateStr.split('/').map(Number);
-const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
-if (classDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
-if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => u.id === klientId)) {
-count++;
-}
-}
-}
-});
-return count;
-};
-const toggleObecny = async (klientId: number) => {
-if (!selectedClass) return;
-const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-const aktualni = zapisyNaZajecia[classKey] || [];
-const szukany = aktualni.find(k => k.id === klientId);
-if (!szukany) return;
-const nowyStanObecny = !szukany.obecny;
-await supabase
-.from('zapisy_zajec')
-.update({ obecny: nowyStanObecny })
-.eq('class_key', classKey)
-.eq('klient_id', klientId);
-loadData();
-};
-const handleKlubowiczZapiszSie = async () => {
-if (!currentUser || !selectedClass) return;
-if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
-alert("Nie można zapisać się na odwołane lub usunięte zajęcia!");
-return;
-}
-const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-if (walletVal < 0) {
-alert("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać na zajęcia.");
-return;
-}
-const dzisiajData = new Date().toISOString().split('T')[0];
-if (currentUser.blokadaDo && currentUser.blokadaDo >= dzisiajData) {
-alert(`Nie możesz się zapisać! ${currentUser.powodBlokady || 'Posiadasz aktywną blokadę zapisów.'}`);
-return;
-}
-if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
-const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-const aktualni = zapisyNaZajecia[classKey] || [];
-if (aktualni.some(k => k.id === currentUser.id)) {
-alert("Jesteś już zapisany na te zajęcia!");
-return;
-}
-// --- WERYFIKACJA LIMITU DZIENNEGO ---
-let dailyLimit = Infinity;
-if (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0) {
-const activePass = currentUser.karnetyKlubowicza[0];
-const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
-if (passDef) {
-let meta: any = {};
-try {
-meta = typeof passDef.inne_ustawienia === 'string'
-? JSON.parse(passDef.inne_ustawienia)
-: (passDef.inne_ustawienia || {});
-} catch(e) {}
-const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
-const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
-if (typLimitu === 'Niestandardowy') {
-dailyLimit = parseInt(iloscLimitu, 10) || Infinity;
-}
-}
-}
-let userSignupsOnThisDate = 0;
-Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
-if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
-if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
-userSignupsOnThisDate++;
-}
-}
-});
-if (userSignupsOnThisDate >= dailyLimit) {
-alert(`Nie możesz się zapisać! Wykorzystałeś już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`);
-return;
-}
-// --- KONIEC WERYFIKACJI LIMITU DZIENNEGO ---
-const limitZajec = selectedClass.limit || 12;
-const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
-const { error } = await supabase.from('zapisy_zajec').insert([
-{
-class_key: classKey,
-klient_id: currentUser.id,
-status: statusZpisu,
-obecny: false
-}
-]);
-if (error) {
-alert(`Nie udało się zapisać na zajęcia: ${error.message}`);
-return;
-}
-const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
-const typWydarzenia = statusZpisu === 'krzesełko'
-? `Zapisano na listę rezerwową (krzesełko)`
-: `Zapisano na zajęcia`;
-await supabase.from('transakcje').insert([{
-klient_id: currentUser.id,
-typ_operacji: 'zajecia_zapis',
-class_key: classKey,
-opis: `${currentUser.firstName || 'Klubowicz'} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}`
-}]);
-alert(statusZpisu === 'krzesełko' ? "Zostałeś dopisany do listy rezerwowej (krzesełko)!" : "Zostałeś pomyślnie zapisany na zajęcia!");
-loadData();
-setSelectedClass(null);
-};
-const handleKlubowiczWypiszSie = async () => {
-if (!currentUser || !selectedClass) return;
-if (!confirm("Czy na pewno chcesz wypisać się z tych zajęć?")) return;
-const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-const { error } = await supabase
-.from('zapisy_zajec')
-.delete()
-.eq('class_key', classKey)
-.eq('klient_id', currentUser.id);
-if (error) {
-alert(`Nie udało się wypisać z zajęć: ${error.message}`);
-return;
-}
-await supabase.from('transakcje').insert([{
-klient_id: currentUser.id,
-typ_operacji: 'zajecia_wypis',
-class_key: classKey,
-opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć.`
-}]);
-alert("Zostałeś pomyślnie wypisany z zajęć.");
-loadData();
-setSelectedClass(null);
-};
-const handleZapiszKlientaDoZajec = async (klient: any) => {
+  const nowLocal = new Date();
+  const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
+  const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
+  
+  const [salesPeriod, setSalesPeriod] = useState('Dziś');
+  const [clientSearch, setClientSearch] = useState('');
+  const [klienciList, setKlienciList] = useState<any[]>([]);
+  const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
+  const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
+  const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
+  const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
+  const [wydarzeniaKilkudniowe, setWydarzeniaKilkudniowe] = useState<any[]>([]);
+  const [zapisyNaZajecia, setZapisyNaZajecia] = useState<{ [key: string]: any[] }>({});
+  const [rodzajeZajec, setRodzajeZajec] = useState<any[]>([]);
+  const [wszystkieTransakcje, setWszystkieTransakcje] = useState<any[]>([]);
+  const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('klubowicz');
+  const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  
+  const [tableActionClient, setTableActionClient] = useState<any | null>(null);
+  const [profileClient, setProfileClient] = useState<any | null>(null);
+  
+  const [isExtendPassModalOpen, setIsExtendPassModalOpen] = useState(false);
+  const [extendPassTarget, setExtendPassTarget] = useState<any | null>(null);
+  const [extendSelectedNewPassName, setExtendSelectedNewPassName] = useState('');
+  const [extendNewDate, setExtendNewDate] = useState('');
+  const [isEditingNewPassType, setIsEditingNewPassType] = useState(false);
+  const [isEditingNewDate, setIsEditingNewDate] = useState(false);
+  const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isWalletHistoryOpen, setIsWalletHistoryOpen] = useState(false);
+  const [isTopUpWalletOpen, setIsTopUpWalletOpen] = useState(false);
+  const [walletAmountInput, setWalletAmountInput] = useState('');
+  const [walletReasonInput, setWalletReasonInput] = useState('');
+  
+  // ZMIENNE DLA ZAWIESZEŃ I BLOKAD
+  const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
+  const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
+  const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
+  const [suspendEndDate, setSuspendEndDate] = useState(todayStr);
+  const [suspendMode, setSuspendMode] = useState<'days' | 'dates'>('days');
+  const [suspendPassDays, setSuspendPassDays] = useState('3');
+  const [blockMode, setBlockMode] = useState<'days' | 'dates'>('days');
+  const [blockPassDays, setBlockPassDays] = useState('3');
+  const [blockPassStartDate, setBlockPassStartDate] = useState(todayStr);
+  const [blockPassEndDate, setBlockPassEndDate] = useState(todayStr);
+  const [isSuspendHistoryModalOpen, setIsSuspendHistoryModalOpen] = useState(false);
+  
+  // ZMIENNE DO PROFILU (Zakładki, Menu)
+  const [isGlobalPassMenuOpen, setIsGlobalPassMenuOpen] = useState(false);
+  const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'przeszle' | 'wypisy' | 'automatyczne'>('nadchodzace');
+  const [editingPassModal, setEditingPassModal] = useState<any | null>(null);
+  const [isAddSecondPassModalOpen, setIsAddSecondPassModalOpen] = useState(false);
+  const [selectedPassToAdd, setSelectedPassToAdd] = useState('');
+  const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
+  const [selectedBuyPass, setSelectedBuyPass] = useState('');
+  const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
+  const [selectedClass, setSelectedClass] = useState<any | null>(null);
+  const [isSearchingClient, setIsSearchingClient] = useState(false);
+  const [searchClientQuery, setSearchClientQuery] = useState('');
+  const [clientToUnregister, setClientToUnregister] = useState<any | null>(null);
+  const [blokadaZapisow, setBlokadaZapisow] = useState(false);
+  const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
+
+  // Funkcje pomocnicze
+  const isWalletNegative = (walletStr: string) => {
+    if (!walletStr) return false;
+    return walletStr.includes('-');
+  };
+
+  const openProfile = (client: any) => {
+    setProfileClient(client);
+  };
+
+  const loadData = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userEmail = session?.user?.email;
+    if (userEmail === 'maciejklaput@gmail.com') {
+      setAppRole('admin');
+    } else {
+      setAppRole('klubowicz');
+    }
+    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+    if (trenerzyData) setZespolTrenerzy(trenerzyData);
+    
+    const { data: tData } = await supabase.from('transakcje').select('*').order('created_at', { ascending: false });
+    if (tData) {
+      setWszystkieTransakcje(tData);
+    }
+
+    const { data: klienciData } = await supabase.from('klienci').select('*');
+    if (klienciData) {
+      const enriched = klienciData.map((c: any) => {
+        let parsedKarnety = [];
+        if (Array.isArray(c.karnetyKlubowicza)) {
+          parsedKarnety = c.karnetyKlubowicza;
+        } else if (typeof c.karnetyKlubowicza === 'string') {
+          try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+        }
+        const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
+        const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
+
+        return {
+          ...c,
+          _rawKarnety: c.karnetyKlubowicza,
+          id: c.id,
+          firstName: c.Imię || '',
+          lastName: c.Nazwisko || '',
+          registered: c.Zarejestrowany || c.registered || '2026-08-07',
+          status: c.status || 'Aktywny',
+          expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
+          pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
+          price: c.Cena || c.cena || c.price || '0.00 PLN',
+          discount: c.discount || '',
+          wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+          avatarUrl: c.avatarUrl || c.avatar || null,
+          gender: c.płeć || c.gender || '',
+          phone: c['Numer tel.'] || c.telefon || c.phone || '',
+          email: c['E-mail'] || c.email || '',
+          birthDate: c.birthDate || '',
+          karnetyKlubowicza: parsedKarnety,
+          walletHistory: c.walletHistory || [],
+          transakcje: clientTransakcje,
+          isTrainer: !!powiazanyTrener,
+          zapisyNadchodzace: c.zapisyNadchodzace || [],
+          zapisyPrzeszle: c.zapisyPrzeszle || [],
+          zapisyWypisy: c.zapisyWypisy || []
+        };
+      });
+      setKlienciList(enriched);
+      if (userEmail && userEmail !== 'maciejklaput@gmail.com') {
+        const myUser = enriched.find((c: any) => c.email === userEmail);
+        if (myUser) setCurrentUser(myUser);
+      }
+      if (profileClient) {
+        const currentActive = enriched.find((c: any) => c.id === profileClient.id);
+        if (currentActive) setProfileClient(currentActive);
+      }
+    }
+    const { data: karnetyData } = await supabase.from('karnety').select('*');
+    if (karnetyData) {
+      setDostepneKarnety(karnetyData.map((k: any) => ({
+        ...k,
+        cena: k.cena_brutto || k.cena || '0.00'
+      })));
+    }
+    const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
+    if (rodzajeData) setRodzajeZajec(rodzajeData);
+    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
+    if (szablonyData) {
+      setZapisaneZajecia(szablonyData.map((s: any) => ({
+        ...s,
+        title: s.title || s.nazwa,
+        start: s.start || s.start_time,
+        end: s.end || s.end_time,
+        limit: s.limit || s.limit_miejsc,
+        trainer: s.trainer || s.prowadzacy,
+        days: s.days || {}
+      })));
+    }
+    const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
+    if (jednorazoweData) {
+      setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
+        ...j,
+        title: j.title || j.nazwa,
+        start: j.start_time || j.start,
+        end: j.end_time || j.end,
+        limit: j.limit_miejsc || j.limit,
+        trainer: j.trainer || j.prowadzacy,
+        displayDate: j.display_date,
+        fullDateStr: j.full_date_str
+      })));
+    }
+    const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
+    if (nadpisaniaData) {
+      const nadpisaniaMap: { [key: string]: any } = {};
+      nadpisaniaData.forEach((n: any) => {
+        nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
+      });
+      setNadpisaneZajeciaDni(nadpisaniaMap);
+    }
+    const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
+    if (zapisyData) {
+      const grouped: { [key: string]: any[] } = {};
+      zapisyData.forEach((z: any) => {
+        if (!grouped[z.class_key]) grouped[z.class_key] = [];
+        grouped[z.class_key].push({
+          ...z,
+          id: z.klient_id,
+          status: z.status,
+          obecny: z.obecny
+        });
+      });
+      setZapisyNaZajecia(grouped);
+    }
+    const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
+    if (wydarzeniaData) {
+      setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+    window.addEventListener('storage', loadData);
+    return () => window.removeEventListener('storage', loadData);
+  }, []);
+
+  const updateSupabaseClient = async (updatedClient: any, payload: any) => {
+    const safePayload = { ...payload };
+    if (safePayload.karnetyKlubowicza !== undefined) {
+      const isTextColumn = klienciList.some(c => typeof c._rawKarnety === 'string');
+      if (isTextColumn || (typeof updatedClient._rawKarnety !== 'object' && !Array.isArray(updatedClient._rawKarnety))) {
+        if (typeof safePayload.karnetyKlubowicza !== 'string') {
+          safePayload.karnetyKlubowicza = JSON.stringify(safePayload.karnetyKlubowicza);
+        }
+      }
+    }
+    const { error } = await supabase.from('klienci').update(safePayload).eq('id', updatedClient.id);
+    if (error) {
+      alert(`BŁĄD ZAPISU DO BAZY SUPABASE:\n${error.message}\nSprawdź konsolę (F12) dla szczegółów.`);
+      return false;
+    }
+    setKlienciList(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
+    if (profileClient && profileClient.id === updatedClient.id) {
+      setProfileClient(updatedClient);
+    }
+    if (currentUser && currentUser.id === updatedClient.id) {
+      setCurrentUser(updatedClient);
+    }
+    loadData();
+    return true;
+  };
+
+  const handleToggleClientTrainer = async (client: any) => {
+    if (!client.isTrainer) {
+      const { error } = await supabase.from('trenerzy').insert([{
+        imie_nazwisko: `${client.firstName} ${client.lastName}`,
+        email: client.email,
+        telefon: client.phone
+      }]);
+      if (error) { alert("Błąd przypisywania do zespołu: " + error.message); return; }
+    } else {
+      if (client.email) {
+        await supabase.from('trenerzy').delete().eq('email', client.email);
+      }
+    }
+    loadData();
+  };
+
+  const handleWypiszZajecia = async (zajecieItem: any) => {
+    if (!profileClient) return;
+    const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
+    const nowyWypis = { ...zajecieItem, wypisujacy: 'Wypisany przez zarządcę z poziomu profilu' };
+    const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
+    await supabase.from('klienci').update({ zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
+    await supabase.from('transakcje').insert([{ klient_id: profileClient.id, typ_operacji: 'zajecia_wypis', kwota: null, opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})` }]);
+    loadData();
+  };
+
+  const handleConfirmExtendPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !extendPassTarget) return;
+    if (!confirm(`Czy na pewno chcesz przedłużyć ten karnet do dnia ${extendNewDate}?`)) return;
+    const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
+    const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === extendPassTarget.id) {
+        return { ...k, nazwa: extendSelectedNewPassName || k.nazwa, waznyDo: extendNewDate, cena: nowaCena, statusTekst: `Ważny do: ${extendNewDate}` };
+      }
+      return k;
+    });
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), price: nowaCena, expiresDate: extendNewDate };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    if (profileClient.Cena !== undefined) dbPayload.Cena = nowaCena;
+    else if (profileClient.cena !== undefined) dbPayload.cena = nowaCena;
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+    if (success) { alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`); setIsExtendPassModalOpen(false); }
+  };
+
+  const handleBuyPassSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !selectedBuyPass) return;
+    if (!confirm(`Czy na pewno chcesz kupić karnet: ${selectedBuyPass}?`)) return;
+    const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
+    let dniWażności = 30;
+    if (defKarnetu && defKarnetu.dlugosc) {
+      const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
+      if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
+      else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
+      else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
+      else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
+      else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
+      else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
+    }
+    let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
+    const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+    const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
+    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+    let updatedKarnety = [];
+    let nowaDataWygasnieciaStr = '';
+    
+    if (karnetyList.length > 0 && activationMode === 'after') {
+      updatedKarnety = karnetyList.map((k, index) => {
+        if (index === karnetyList.length - 1) {
+          let baseDate = new Date();
+          if (k.waznyDo) {
+            const parts = k.waznyDo.split('-');
+            if (parts.length === 3) baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          }
+          baseDate.setDate(baseDate.getDate() + dniWażności);
+          nowaDataWygasnieciaStr = baseDate.toISOString().split('T')[0];
+          const addedEntries = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 0;
+          const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
+          return {
+            ...k, nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, pozostaloWejsc: limitWejscBaza !== null ? currentEntries + addedEntries : null,
+            cena: cenaStr, statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
+          };
+        }
+        return k;
+      });
+    } else {
+      const dataWygasniecia = new Date();
+      dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
+      nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+      const nowyKarnetObj = {
+        id: Date.now(), nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+        cena: cenaStr, znizkaProcentowa: '', rata: '1 / 1', statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, blokadaDo: null, powodBlokady: null,
+        zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: []
+      };
+      updatedKarnety = [...karnetyList, nowyKarnetObj];
+    }
+    
+    const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
+    const nowyStanPortfela = currentWalletNum - cenaWartosc;
+    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+    const nowaHistoriaEntry = {
+      id: Date.now(), date: new Date().toISOString().replace('T', ' ').substring(0, 16), type: `Zakup (Panel klienta): ${selectedBuyPass}`,
+      amount: `-${cenaWartosc.toFixed(2)} PLN`, balance: nowyStanPortfelaStr
+    };
+    const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
+    const ostatecznaDataWygasniecia = updatedKarnety[updatedKarnety.length - 1]?.waznyDo || '';
+    const updatedClient = {
+      ...currentUser, karnetyKlubowicza: updatedKarnety, pass: updatedKarnety.map((k: any) => k.nazwa).join(', '),
+      price: cenaStr, expiresDate: ostatecznaDataWygasniecia, wallet: nowyStanPortfelaStr, walletHistory: updatedWalletHistory
+    };
+    const dbPayload: any = { karnetyKlubowicza: updatedKarnety };
+    if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr; else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
+    if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr; else if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
+    
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+    if (success) {
+      if (cenaWartosc > 0) {
+        await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zakup_karnetu', kwota: -cenaWartosc, opis: `Zakup (Panel klienta): ${selectedBuyPass}` }]);
+      }
+      alert(`Gratulacje! Twój karnet został pomyślnie zaktualizowany (Ważny do: ${nowaDataWygasnieciaStr}).`);
+      setSelectedBuyPass('');
+      setIsBuyPassModalOpen(false);
+    }
+  };
+
+  const handleDeleteClient = async (id: number) => {
+    if (confirm("Czy na pewno chcesz całkowicie usunąć to konto?")) {
+      await supabase.from('klienci').delete().eq('id', id);
+      setTableActionClient(null);
+      if (profileClient && profileClient.id === id) setProfileClient(null);
+      loadData();
+    }
+  };
+
+  const handleDeactivateClient = () => {
+    if (confirm("Czy na pewno chcesz dezaktywować tego użytkownika?")) {
+      alert("Konto zostało dezaktywowane.");
+      setTableActionClient(null);
+    }
+  };
+
+  const handleDeactivateClientOnDate = () => {
+    const dataWyb = prompt("Podaj datę, w której konto ma zostać dezaktywowane (YYYY-MM-DD):", "2026-08-31");
+    if (dataWyb) {
+      if (confirm(`Czy na pewno chcesz zaplanować dezaktywację konta na dzień ${dataWyb}?`)) {
+        alert(`Zaplanowano dezaktywację konta na dzień ${dataWyb}.`);
+        setTableActionClient(null);
+      }
+    }
+  };
+
+  // LOGIKA TRWAŁEGO ZAPISU AVATARA
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !profileClient) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = async () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 250; const MAX_HEIGHT = 250;
+        let width = img.width; let height = img.height;
+        if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } 
+        else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d'); ctx?.drawImage(img, 0, 0, width, height);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        
+        const updatedClient = { ...profileClient, avatarUrl: compressedDataUrl };
+        setProfileClient(updatedClient);
+        
+        const dbPayload: any = {};
+        if (profileClient.avatarUrl !== undefined) dbPayload.avatarUrl = compressedDataUrl;
+        else if (profileClient.avatar !== undefined) dbPayload.avatar = compressedDataUrl;
+        else dbPayload.avatarUrl = compressedDataUrl;
+        
+        await updateSupabaseClient(updatedClient, dbPayload);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddSecondPass = async (paymentMethod: 'paid' | 'later') => {
+    if (!profileClient || !selectedPassToAdd) return;
+    const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
+    let dniWażności = 30;
+    if (defKarnetu && defKarnetu.dlugosc) {
+      const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
+      if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
+      else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
+      else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
+      else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
+      else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
+      else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
+    }
+    const dataWygasniecia = new Date();
+    dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
+    const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+    const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
+    const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
+    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+    let nowyStanStr = profileClient.wallet;
+    let logKwota = 0;
+    let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
+    if (paymentMethod === 'later') {
+      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+      const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
+      nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+      logKwota = -kwotaKarnetu;
+      logOpis = `Dodano karnet: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`;
+    }
+    const nowyKarnetObj = {
+      id: Date.now(), nazwa: selectedPassToAdd, waznyDo: dataWygasnieciaStr, pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+      cena: cenaObjKarnetu, znizkaProcentowa: '', rata: '1 / 1', statusTekst: `Ważny do: ${dataWygasnieciaStr}`, blokadaDo: null, powodBlokady: null,
+      zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: []
+    };
+    let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
+    const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), price: nowyKarnetObj.cena, expiresDate: uaktualnioneKarnety[0]?.waznyDo || '', wallet: nowyStanStr };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    if (profileClient.Cena !== undefined) dbPayload.Cena = nowyKarnetObj.cena; else if (profileClient.cena !== undefined) dbPayload.cena = nowyKarnetObj.cena;
+    if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr; else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
+    await updateSupabaseClient(updatedClient, dbPayload);
+    await supabase.from('transakcje').insert([{ klient_id: profileClient.id, typ_operacji: 'zakup_karnetu', kwota: logKwota, opis: logOpis }]);
+    setSelectedPassToAdd('');
+    setIsAddSecondPassModalOpen(false);
+  };
+
+  const handleSavePassEditSubmit = async () => {
+    if (!profileClient || !editingPassModal) return;
+    if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
+    const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
+    const cenaRegularna = bazowyKarnet ? parseFloat(bazowyKarnet.cena) : null;
+    const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
+    let znizkaTekst = '';
+    if (cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
+      const roznica = cenaRegularna - nowaCenaWartosc;
+      const procent = Math.round((roznica / cenaRegularna) * 100);
+      znizkaTekst = `(-${procent}%)`;
+    }
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === editingPassModal.id) {
+        return {
+          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, pozostaloWejsc: editingPassModal.pozostaloWejsc,
+          cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
+          znizkaProcentowa: znizkaTekst, rata: editingPassModal.rata, statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
+        };
+      }
+      return k;
+    });
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    await updateSupabaseClient(updatedClient, dbPayload);
+    setEditingPassModal(null);
+    alert("Karnet został zaktualizowany!");
+  };
+
+  const handleConfirmDeletePass = async (passId: number) => {
+    if (confirm("Czy na pewno chcesz usunąć ten karnet?")) {
+      if (!profileClient) return;
+      const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
+      const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') || 'Brak karnetu' };
+      const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+      await updateSupabaseClient(updatedClient, dbPayload);
+      setEditingPassModal(null);
+      setIsGlobalPassMenuOpen(false);
+      alert("Karnet został usunięty!");
+    }
+  };
+
+  const handleConfirmSuspendPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !suspendPassTarget) return;
+    let sOd = suspendStartDate;
+    let sDo = suspendEndDate;
+    if (suspendMode === 'days') {
+      sOd = todayStr;
+      const dni = parseInt(suspendPassDays || '0', 10);
+      if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + dni);
+      sDo = endDate.toISOString().split('T')[0];
+    }
+    if (new Date(sDo) < new Date(sOd)) {
+      alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
+      return;
+    }
+    if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? Rzeczywista liczba dni doliczona do ważności karnetu zostanie i tak wyliczona dokładnie w momencie ręcznego odwieszenia.`)) return;
+    let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
+    const uaktualnioneKarnety = karnetyList.map((k: any) => {
+      if (k.id === suspendPassTarget.id) { return { ...k, zawieszonyOd: sOd, zawieszonyDo: sDo }; }
+      return k;
+    });
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+    if (success) {
+      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony (planowo do ${sDo}). Przedłużenie jego ważności zostanie dokładnie przeliczone w momencie kliknięcia "Odwieś karnet".`);
+      setIsSuspendModalOpen(false);
+    }
+  };
+
+  const handleOdwiesKarnet = async (karnetTarget: any) => {
+    if (!profileClient || !karnetTarget.zawieszonyOd) return;
+    const dzisiaj = new Date();
+    const start = new Date(karnetTarget.zawieszonyOd);
+    dzisiaj.setHours(0, 0, 0, 0); start.setHours(0, 0, 0, 0);
+    let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) diffDays = 0;
+    if (!confirm(`Karnet był zawieszony od ${karnetTarget.zawieszonyOd} (łącznie ${diffDays} dni). \nCzy na pewno chcesz go odwiesić i przedłużyć jego ważność o ${diffDays} dni?`)) return;
+    let currentExpDate = new Date(karnetTarget.waznyDo);
+    currentExpDate.setDate(currentExpDate.getDate() + diffDays);
+    const newExpDateStr = currentExpDate.toISOString().split('T')[0];
+    const historiaEntry = { id: Date.now(), od: karnetTarget.zawieszonyOd, do: todayStr, dni: diffDays };
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === karnetTarget.id) {
+        return { ...k, waznyDo: newExpDateStr, statusTekst: `Ważny do: ${newExpDateStr}`, zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])] };
+      }
+      return k;
+    });
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+    if (success) alert(`Karnet został odwieszony! Ważność została przedłużona o ${diffDays} dni. Nowa data to ${newExpDateStr}.`);
+  };
+
+  const handleConfirmBlockPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !suspendPassTarget) return;
+    let bOd = blockPassStartDate;
+    let bDo = blockPassEndDate;
+    if (blockMode === 'days') {
+      bOd = todayStr;
+      const dni = parseInt(blockPassDays || '0', 10);
+      if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      const endDate = new Date(); endDate.setDate(endDate.getDate() + dni);
+      bDo = endDate.toISOString().split('T')[0];
+    }
+    if (new Date(bDo) < new Date(bOd)) { alert("Data końcowa blokady musi być późniejsza lub równa dacie początkowej!"); return; }
+    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? (Nie przedłuża to ważności karnetu)`)) return;
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === suspendPassTarget.id) { return { ...k, blokadaOd: bOd, blokadaDo: bDo, powodBlokady: `Zablokowano w okresie ${bOd} - ${bDo}` }; }
+      return k;
+    });
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+    if (success) { alert(`Karnet został zablokowany do ${bDo}.`); setIsSuspendModalOpen(false); }
+  };
+
+  const handleCancelBlock = async (karnetTarget: any) => {
+    if (!profileClient) return;
+    if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+      if (k.id === karnetTarget.id) { return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; }
+      return k;
+    });
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    await updateSupabaseClient(updatedClient, dbPayload);
+    alert("Blokada została odwołana.");
+    setIsSuspendModalOpen(false);
+  };
+
+  const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient || !walletAmountInput) return;
+    const kwotaZmiany = parseFloat(walletAmountInput);
+    if (isNaN(kwotaZmiany)) return;
+    if (!confirm(`Czy na pewno chcesz zmienić saldo portfela o kwotę ${kwotaZmiany > 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN?`)) return;
+    const currentWalletNum = parseFloat(profileClient.wallet.replace(/[^0-9.-]+/g, "")) || 0;
+    const nowyStan = currentWalletNum + kwotaZmiany;
+    const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
+    const nowaHistoriaEntry = {
+      id: Date.now(), date: new Date().toISOString().replace('T', ' ').substring(0, 16), type: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta portfela'),
+      amount: `${kwotaZmiany >= 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN`, balance: nowyStanStr
+    };
+    const updatedWalletHistory = [nowaHistoriaEntry, ...(profileClient.walletHistory || [])];
+    const updatedClient = { ...profileClient, wallet: nowyStanStr, walletHistory: updatedWalletHistory };
+    const dbPayload: any = {};
+    if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr;
+    else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
+    await updateSupabaseClient(updatedClient, dbPayload);
+    setWalletAmountInput(''); setWalletReasonInput(''); setIsTopUpWalletOpen(false);
+  };
+
+  const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileClient) return;
+    if (!confirm("Czy na pewno chcesz zapisać zmiany w danych profilu?")) return;
+    const dbPayload: any = {};
+    if (profileClient.Imię !== undefined) dbPayload['Imię'] = profileClient.firstName;
+    if (profileClient.Nazwisko !== undefined) dbPayload['Nazwisko'] = profileClient.lastName;
+    if (profileClient.telefon !== undefined) dbPayload.telefon = profileClient.phone;
+    if (profileClient['Numer tel.'] !== undefined) dbPayload['Numer tel.'] = profileClient.phone;
+    if (profileClient.email !== undefined) dbPayload.email = profileClient.email;
+    if (profileClient['E-mail'] !== undefined) dbPayload['E-mail'] = profileClient.email;
+    if (profileClient['płeć'] !== undefined) dbPayload['płeć'] = profileClient.gender;
+    if (profileClient.gender !== undefined) dbPayload.gender = profileClient.gender;
+    await updateSupabaseClient(profileClient, dbPayload);
+    setIsEditProfileInfoOpen(false);
+  };
+
+  const getPrawdziweAktywneZapisy = (klientId: number) => {
+    let count = 0;
+    const now = new Date();
+    Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
+      const parts = classKey.split('_');
+      const dateStr = parts[1];
+      if (dateStr) {
+        const [d, m] = dateStr.split('/').map(Number);
+        const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+        if (classDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => u.id === klientId)) count++;
+        }
+      }
+    });
+    return count;
+  };
+
+  const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    const szukany = aktualni.find(k => k.id === klientId);
+    if (!szukany) return;
+    const nowyStanObecny = !szukany.obecny;
+    await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny }).eq('class_key', classKey).eq('klient_id', klientId);
+    loadData();
+  };
 
-    if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
-      alert("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!");
-      return;
-    }
-
+  const handleKlubowiczZapiszSie = async () => {
+    if (!currentUser || !selectedClass) return;
+    if (selectedClass.isOdwołane || selectedClass.isUsunięte) { alert("Nie można zapisać się na odwołane lub usunięte zajęcia!"); return; }
+    const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    if (walletVal < 0) { alert("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać na zajęcia."); return; }
     const dzisiajData = new Date().toISOString().split('T')[0];
-    if (klient.blokadaDo && klient.blokadaDo >= dzisiajData) {
-      alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`);
-      return;
+    if (currentUser.blokadaDo && currentUser.blokadaDo >= dzisiajData) { alert(`Nie możesz się zapisać! ${currentUser.powodBlokady || 'Posiadasz aktywną blokadę zapisów.'}`); return; }
+    if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    if (aktualni.some(k => k.id === currentUser.id)) { alert("Jesteś już zapisany na te zajęcia!"); return; }
+    
+    let dailyLimit = Infinity;
+    if (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0) {
+      const activePass = currentUser.karnetyKlubowicza[0];
+      const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
+      if (passDef) {
+        let meta: any = {};
+        try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
+        const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
+        const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
+        if (typLimitu === 'Niestandardowy') dailyLimit = parseInt(iloscLimitu, 10) || Infinity;
+      }
     }
+    let userSignupsOnThisDate = 0;
+    Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
+      if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
+        if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) userSignupsOnThisDate++;
+      }
+    });
+    if (userSignupsOnThisDate >= dailyLimit) { alert(`Nie możesz się zapisać! Wykorzystałeś już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`); return; }
+    
+    const limitZajec = selectedClass.limit || 12;
+    const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
+    const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: currentUser.id, status: statusZpisu, obecny: false }]);
+    if (error) { alert(`Nie udało się zapisać na zajęcia: ${error.message}`); return; }
+    const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
+    const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
+    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
+    alert(statusZpisu === 'krzesełko' ? "Zostałeś dopisany do listy rezerwowej (krzesełko)!" : "Zostałeś pomyślnie zapisany na zajęcia!");
+    loadData();
+    setSelectedClass(null);
+  };
+  const handleKlubowiczWypiszSie = async () => {
+    if (!currentUser || !selectedClass) return;
+    if (!confirm("Czy na pewno chcesz wypisać się z tych zajęć?")) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', currentUser.id);
+    if (error) { alert(`Nie udało się wypisać z zajęć: ${error.message}`); return; }
+    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć.` }]);
+    alert("Zostałeś pomyślnie wypisany z zajęć.");
+    loadData();
+    setSelectedClass(null);
+  };
 
-    // NOWY WARUNEK: Weryfikacja salda portfela przez administratora
+  const handleZapiszKlientaDoZajec = async (klient: any) => {
+    if (!selectedClass) return;
+    if (selectedClass.isOdwołane || selectedClass.isUsunięte) { alert("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!"); return; }
+    const dzisiajData = new Date().toISOString().split('T')[0];
+    if (klient.blokadaDo && klient.blokadaDo >= dzisiajData) { alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`); return; }
     const walletVal = parseFloat(String(klient.wallet || klient.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
     if (walletVal < 0) {
-      if (!confirm(`UWAGA: Klubowicz ${klient.firstName} ${klient.lastName} posiada zadłużenie na koncie (${klient.wallet || klient.Portfel}). Czy na pewno chcesz zapisać tę osobę na zajęcia?`)) {
-        return;
-      }
+      if (!confirm(`UWAGA: Klubowicz ${klient.firstName} ${klient.lastName} posiada zadłużenie na koncie (${klient.wallet || klient.Portfel}). Czy na pewno chcesz zapisać tę osobę na zajęcia?`)) return;
     } else {
       if (!confirm(`Czy na pewno chcesz zapisać klienta ${klient.firstName} ${klient.lastName} na zajęcia?`)) return;
     }
-
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const aktualni = zapisyNaZajecia[classKey] || [];
-
-    if (aktualni.some(k => k.id === klient.id)) {
-      alert("Ten klient jest już zapisany na te zajęcia!");
-      return;
-    }
-
-    // --- WERYFIKACJA LIMITU DZIENNEGO ---
+    if (aktualni.some(k => k.id === klient.id)) { alert("Ten klient jest już zapisany na te zajęcia!"); return; }
     let dailyLimit = Infinity;
     if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0) {
       const activePass = klient.karnetyKlubowicza[0];
       const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
       if (passDef) {
         let meta: any = {};
-        try {
-          meta = typeof passDef.inne_ustawienia === 'string'
-            ? JSON.parse(passDef.inne_ustawienia)
-            : (passDef.inne_ustawienia || {});
-        } catch(e) {}
-
+        try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
         const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
         const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
-
-        if (typLimitu === 'Niestandardowy') {
-          dailyLimit = parseInt(iloscLimitu, 10) || Infinity;
-        }
+        if (typLimitu === 'Niestandardowy') dailyLimit = parseInt(iloscLimitu, 10) || Infinity;
       }
     }
-
     let userSignupsOnThisDate = 0;
     Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
       if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
-        if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) {
-          userSignupsOnThisDate++;
-        }
+        if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) userSignupsOnThisDate++;
       }
     });
-
-    if (userSignupsOnThisDate >= dailyLimit) {
-      alert(`Nie można zapisać! Klubowicz wykorzystał już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`);
-      return;
-    }
-    // --- KONIEC WERYFIKACJI LIMITU DZIENNEGO ---
-
+    if (userSignupsOnThisDate >= dailyLimit) { alert(`Nie można zapisać! Klubowicz wykorzystał już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`); return; }
     const limitZajec = selectedClass.limit || 12;
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
-
-    const { error } = await supabase.from('zapisy_zajec').insert([
-      {
-        class_key: classKey,
-        klient_id: klient.id,
-        status: statusZpisu,
-        obecny: false
-      }
-    ]);
-
-    if (error) {
-      console.error("Błąd zapisu na zajęcia:", error);
-      alert(`Nie udało się zapisać: ${error.message}`);
-      return;
-    }
-
+    const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: klient.id, status: statusZpisu, obecny: false }]);
+    if (error) { console.error("Błąd zapisu na zajęcia:", error); alert(`Nie udało się zapisać: ${error.message}`); return; }
     const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
-    const typWydarzenia = statusZpisu === 'krzesełko'
-      ? `Zapisano na listę rezerwową (krzesełko)`
-      : `Zapisano na zajęcia`;
-
-    await supabase.from('transakcje').insert([{
-      klient_id: klient.id,
-      typ_operacji: 'zajecia_zapis',
-      class_key: classKey,
-      opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}`
-    }]);
-
-    setIsSearchingClient(false);
-    setSearchClientQuery('');
-    loadData();
+    const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
+    await supabase.from('transakcje').insert([{ klient_id: klient.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
+    setIsSearchingClient(false); setSearchClientQuery(''); loadData();
   };
-const handlePotwierdzWypisanie = async () => {
-if (!selectedClass || !clientToUnregister) return;
-const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-const limitZajec = selectedClass.limit || 12;
-const aktualni = zapisyNaZajecia[classKey] || [];
-const { error } = await supabase
-.from('zapisy_zajec')
-.delete()
-.eq('class_key', classKey)
-.eq('klient_id', clientToUnregister.id);
-if (error) {
-console.error("Błąd wypisywania z zajęć:", error);
-alert(`Nie udało się wypisać: ${error.message}`);
-return;
-}
-await supabase.from('transakcje').insert([{
-klient_id: clientToUnregister.id,
-typ_operacji: 'zajecia_wypis',
-class_key: classKey,
-opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub. Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}`
-}]);
-if (blokadaZapisow) {
-const dni = parseInt(dlugoscBlokady) || 3;
-const dataWypisania = new Date();
-const dataWygaśnięcia = new Date(dataWypisania);
-dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
-const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
-const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
-await supabase
-.from('klienci')
-.update({ blokadaDo: dataStr, powodBlokady: powod })
-.eq('id', clientToUnregister.id);
-}
-setClientToUnregister(null);
-setBlokadaZapisow(false);
-loadData();
-};
-const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
-if (isOdwolane || isUsuniete) return '#fda4af';
-if (!title) return '#0284c7';
-const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
-if (found && found.kolor) return found.kolor;
-const colorPalette = ['#2563eb', '#9333ea', '#16a34a', '#dc2626', '#d97706', '#0d9488', '#c026d3'];
-let hash = 0;
-for (let i = 0; i < title.length; i++) {
-hash = title.charCodeAt(i) + ((hash << 5) - hash);
-}
-return colorPalette[Math.abs(hash) % colorPalette.length];
-};
-const calculateDuration = (start: string, end: string) => {
-if (!start || !end) return "60 min";
-try {
-const [sh, sm] = start.split(":").map(Number);
-const [eh, em] = end.split(":").map(Number);
-const diffMins = (eh * 60 + em) - (sh * 60 + sm);
-if (diffMins > 0) return `${diffMins} min`;
-} catch (e) {}
-return "60 min";
-};
-const filteredClients = klienciList.filter(client => {
-const fullName = `${client.firstName || ''} ${client.lastName || ''}`.toLowerCase();
-const email = (client.email || '').toLowerCase();
-const query = clientSearch.toLowerCase();
-return fullName.includes(query) || email.includes(query);
-}).sort((a, b) => {
-const getEarliestExpirationDate = (client: any) => {
-let karnety = client.karnetyKlubowicza || [];
-if (karnety.length === 0) return '9999-12-31';
-let earliest = '9999-12-31';
-for (const k of karnety) {
-if (k.waznyDo && k.waznyDo < earliest) {
-earliest = k.waznyDo;
-}
-}
-return earliest;
-};
-const dateA = getEarliestExpirationDate(a);
-const dateB = getEarliestExpirationDate(b);
-return dateA.localeCompare(dateB);
-});
-const getMonday = (d: Date) => {
-const dCopy = new Date(d);
-const day = dCopy.getDay();
-if (day === 6) {
-dCopy.setDate(dCopy.getDate() + 2);
-} else if (day === 0) {
-dCopy.setDate(dCopy.getDate() + 1);
-}
-const currentDayOfWeek = dCopy.getDay();
-const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
-return new Date(dCopy.setDate(diff));
-};
-const today = new Date();
-const currentMonday = getMonday(new Date());
-const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
-const dayDate = new Date(currentMonday);
-dayDate.setDate(currentMonday.getDate() + index);
-const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
-const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
-const dayStr = String(dayDate.getDate()).padStart(2, '0');
-const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-const isoDateStr = `${dayDate.getFullYear()}-${monthStr}-${dayStr}`;
-return {
-day: dayNames[index],
-key: keys[index],
-date: `${dayStr}/${monthStr}`,
-isoDate: isoDateStr,
-fullDate: dayDate
-};
-});
-const currentMonthStr = todayStr.substring(0, 7);
-const filteredTransakcje = wszystkieTransakcje.filter(t => {
-const tDate = t.created_at ? t.created_at.split('T')[0] : '';
-if (salesPeriod === 'Dziś') return tDate === todayStr;
-if (salesPeriod === 'Miesiąc') return tDate.startsWith(currentMonthStr);
-return true;
-});
-// NOWA LOGIKA: Grupowanie karnetów i obliczanie zysku na plus
-const karnetySales: { [key: string]: { count: number, total: number } } = {};
-let totalEarnings = 0;
 
-filteredTransakcje.forEach(t => {
-  if (t.typ_operacji === 'zakup_karnetu' || (t.opis && t.opis.toLowerCase().includes('karnet'))) {
-    let amount = Math.abs(Number(t.kwota) || 0);
+  const handlePotwierdzWypisanie = async () => {
+    if (!selectedClass || !clientToUnregister) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const limitZajec = selectedClass.limit || 12;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', clientToUnregister.id);
+    if (error) { console.error("Błąd wypisywania z zajęć:", error); alert(`Nie udało się wypisać: ${error.message}`); return; }
+    await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub. Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}` }]);
+    if (blokadaZapisow) {
+      const dni = parseInt(dlugoscBlokady) || 3;
+      const dataWypisania = new Date(); const dataWygaśnięcia = new Date(dataWypisania);
+      dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
+      const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
+      const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+      await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod }).eq('id', clientToUnregister.id);
+    }
+    setClientToUnregister(null); setBlokadaZapisow(false); loadData();
+  };
 
-    let passName = 'Inny karnet';
-    let matchedPass = null;
+  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
+    if (isOdwolane || isUsuniete) return '#fda4af';
+    if (!title) return '#0284c7';
+    const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
+    if (found && found.kolor) return found.kolor;
+    const colorPalette = ['#2563eb', '#9333ea', '#16a34a', '#dc2626', '#d97706', '#0d9488', '#c026d3'];
+    let hash = 0;
+    for (let i = 0; i < title.length; i++) hash = title.charCodeAt(i) + ((hash << 5) - hash);
+    return colorPalette[Math.abs(hash) % colorPalette.length];
+  };
 
-    for (const k of dostepneKarnety) {
-      if (t.opis && t.opis.includes(k.nazwa)) {
-        passName = k.nazwa;
-        matchedPass = k;
-        break;
+  const calculateDuration = (start: string, end: string) => {
+    if (!start || !end) return "60 min";
+    try {
+      const [sh, sm] = start.split(":").map(Number);
+      const [eh, em] = end.split(":").map(Number);
+      const diffMins = (eh * 60 + em) - (sh * 60 + sm);
+      if (diffMins > 0) return `${diffMins} min`;
+    } catch (e) {}
+    return "60 min";
+  };
+
+  const filteredClients = klienciList.filter(client => {
+    const fullName = `${client.firstName || ''} ${client.lastName || ''}`.toLowerCase();
+    const email = (client.email || '').toLowerCase();
+    const query = clientSearch.toLowerCase();
+    return fullName.includes(query) || email.includes(query);
+  }).sort((a, b) => {
+    const getEarliestExpirationDate = (client: any) => {
+      let karnety = client.karnetyKlubowicza || [];
+      if (karnety.length === 0) return '9999-12-31';
+      let earliest = '9999-12-31';
+      for (const k of karnety) { if (k.waznyDo && k.waznyDo < earliest) { earliest = k.waznyDo; } }
+      return earliest;
+    };
+    return getEarliestExpirationDate(a).localeCompare(getEarliestExpirationDate(b));
+  });
+
+  const getMonday = (d: Date) => {
+    const dCopy = new Date(d);
+    const day = dCopy.getDay();
+    if (day === 6) { dCopy.setDate(dCopy.getDate() + 2); } else if (day === 0) { dCopy.setDate(dCopy.getDate() + 1); }
+    const currentDayOfWeek = dCopy.getDay();
+    const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
+    return new Date(dCopy.setDate(diff));
+  };
+
+  const today = new Date();
+  const currentMonday = getMonday(new Date());
+  const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
+    const dayDate = new Date(currentMonday);
+    dayDate.setDate(currentMonday.getDate() + index);
+    const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
+    const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+    const dayStr = String(dayDate.getDate()).padStart(2, '0');
+    const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
+    return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
+  });
+
+  const currentMonthStr = todayStr.substring(0, 7);
+  const filteredTransakcje = wszystkieTransakcje.filter(t => {
+    const tDate = t.created_at ? t.created_at.split('T')[0] : '';
+    if (salesPeriod === 'Dziś') return tDate === todayStr;
+    if (salesPeriod === 'Miesiąc') return tDate.startsWith(currentMonthStr);
+    return true;
+  });
+
+  const karnetySales: { [key: string]: { count: number, total: number } } = {};
+  let totalEarnings = 0;
+  filteredTransakcje.forEach(t => {
+    if (t.typ_operacji === 'zakup_karnetu' || (t.opis && t.opis.toLowerCase().includes('karnet'))) {
+      let amount = Math.abs(Number(t.kwota) || 0);
+      let passName = 'Inny karnet';
+      let matchedPass = null;
+      for (const k of dostepneKarnety) {
+        if (t.opis && t.opis.includes(k.nazwa)) { passName = k.nazwa; matchedPass = k; break; }
+      }
+      if (amount === 0 && matchedPass) {
+        const basePrice = parseFloat(matchedPass.cena) || 0;
+        const client = klienciList.find(c => c.id === t.klient_id);
+        const discountPercent = client?.discount ? parseFloat(client.discount) : 0;
+        if (discountPercent > 0) { amount = basePrice * (1 - discountPercent / 100); } else { amount = basePrice; }
+      }
+      if (amount > 0) {
+        if (!karnetySales[passName]) { karnetySales[passName] = { count: 0, total: 0 }; }
+        karnetySales[passName].count += 1;
+        karnetySales[passName].total += amount;
+        totalEarnings += amount;
       }
     }
+  });
 
-    // Jeśli transakcja była opłacona z góry (kwota 0 PLN w logu transakcji)
-    if (amount === 0 && matchedPass) {
-      const basePrice = parseFloat(matchedPass.cena) || 0;
+  const groupedSalesArray = Object.entries(karnetySales).map(([name, data]) => ({ name, count: data.count, total: data.total }));
 
-      // Odnajdujemy klienta przypisanego do transakcji, aby sprawdzić jego rabat
-      const client = klienciList.find(c => c.id === t.klient_id);
-      const discountPercent = client?.discount ? parseFloat(client.discount) : 0;
-
-      if (discountPercent > 0) {
-        amount = basePrice * (1 - discountPercent / 100);
-      } else {
-        amount = basePrice;
+  let salesPeriodTitle = '';
+  if (salesPeriod === 'Dziś') salesPeriodTitle = todayStr;
+  if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
+  let needsNewPass = false; let isPassExpiringSoon = false; let expiringMessage = "";
+  if (appRole === 'klubowicz' && currentUser) {
+    const karnety = currentUser.karnetyKlubowicza || [];
+    if (karnety.length === 0) { needsNewPass = true; } else {
+      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
+      let hasAnyValid = false;
+      for (const k of karnety) {
+        let isValid = true; let isExpiring = false; let msg = "";
+        if (k.waznyDo) {
+          const expDate = new Date(k.waznyDo); expDate.setHours(0, 0, 0, 0);
+          const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays < 0) { isValid = false; } else if (diffDays <= 5) { isExpiring = true; msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`; }
+        }
+        if (k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
+          if (k.pozostaloWejsc <= 0) { isValid = false; } else if (k.pozostaloWejsc <= 2) { isExpiring = true; msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`; }
+        }
+        if (isValid) { hasAnyValid = true; if (isExpiring) { isPassExpiringSoon = true; expiringMessage = msg; } }
       }
-    }
-
-    if (amount > 0) {
-      if (!karnetySales[passName]) {
-        karnetySales[passName] = { count: 0, total: 0 };
-      }
-      karnetySales[passName].count += 1;
-      karnetySales[passName].total += amount;
-      totalEarnings += amount;
+      if (!hasAnyValid) { needsNewPass = true; }
     }
   }
-});
 
-const groupedSalesArray = Object.entries(karnetySales).map(([name, data]) => ({
-  name,
-  count: data.count,
-  total: data.total
-}));
-
-let salesPeriodTitle = '';
-if (salesPeriod === 'Dziś') salesPeriodTitle = todayStr;
-if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
-let needsNewPass = false;
-let isPassExpiringSoon = false;
-let expiringMessage = "";
-if (appRole === 'klubowicz' && currentUser) {
-const karnety = currentUser.karnetyKlubowicza || [];
-if (karnety.length === 0) {
-needsNewPass = true;
-} else {
-const todayDate = new Date();
-todayDate.setHours(0, 0, 0, 0);
-let hasAnyValid = false;
-for (const k of karnety) {
-let isValid = true;
-let isExpiring = false;
-let msg = "";
-if (k.waznyDo) {
-const expDate = new Date(k.waznyDo);
-expDate.setHours(0, 0, 0, 0);
-const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-if (diffDays < 0) {
-isValid = false;
-} else if (diffDays <= 5) {
-isExpiring = true;
-msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`;
-}
-}
-if (k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
-if (k.pozostaloWejsc <= 0) {
-isValid = false;
-} else if (k.pozostaloWejsc <= 2) {
-isExpiring = true;
-msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`;
-}
-}
-if (isValid) {
-hasAnyValid = true;
-if (isExpiring) {
-isPassExpiringSoon = true;
-expiringMessage = msg;
-}
-}
-}
-if (!hasAnyValid) {
-needsNewPass = true;
-}
-}
-}
-return (
-<div className="max-w-[1700px] mx-auto space-y-6 pb-24">
-{appRole === 'klubowicz' && currentUser && (() => {
-const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-if (walletVal < 0) {
-return (
-<div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
-<div className="flex items-center gap-4">
-<div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
-<span className="text-2xl">💸</span>
-</div>
-<div>
-<h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Zadłużenie na koncie!</h3>
-<p className="text-xs text-rose-800 font-medium mt-0.5">Twój portfel wykazuje saldo ujemne ({currentUser.wallet || currentUser.Portfel}). Masz zablokowaną możliwość zapisów na zajęcia do czasu uregulowania należności.</p>
-</div>
-</div>
-<Link
-href="/portfel"
-className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0 text-center"
->
-Przejdź do portfela
-</Link>
-</div>
-);
-}
-return null;
-})()}
-{appRole === 'klubowicz' && needsNewPass && (
-<div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
-<div className="flex items-center gap-4">
-<div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center shrink-0 border border-amber-200">
-<span className="text-2xl">🎟️</span>
-</div>
-<div>
-<h3 className="font-black text-amber-950 text-sm sm:text-base uppercase tracking-wider">Nie masz aktywnego karnetu!</h3>
-<p className="text-xs text-amber-800 font-medium mt-0.5">Aby w pełni korzystać z klubu i zapisywać się na zajęcia, wybierz swój karnet.</p>
-</div>
-</div>
-<button
-onClick={() => setIsBuyPassModalOpen(true)}
-className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
->
-Kup karnet
-</button>
-</div>
-)}
-{appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
-<div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
-<div className="flex items-center gap-4">
-<div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
-<span className="text-2xl">⚠️</span>
-</div>
-<div>
-<h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Kończy się twój karnet!</h3>
-<p className="text-xs text-rose-800 font-medium mt-0.5">{expiringMessage}</p>
-</div>
-</div>
-<button
-onClick={() => setIsBuyPassModalOpen(true)}
-className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
->
-Kup nowy / Przedłuż
-</button>
-</div>
-)}
-<section className="space-y-4">
-<div className="flex items-center justify-between bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
-<h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950">
-GRAFIK ZAJĘĆ (BIEŻĄCY TYDZIEŃ)
-</h1>
-</div>
-<div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
-{dashboardDays.map((col, idx) => {
-const isToday =
-col.fullDate.getDate() === today.getDate() &&
-col.fullDate.getMonth() === today.getMonth() &&
-col.fullDate.getFullYear() === today.getFullYear();
-const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
-const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
-const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
-.filter((item: any) => item.days && item.days[col.key])
-.map((item: any) => {
-const classKey = `${item.id}_${col.date}`;
-const override = nadpisaneZajeciaDni[classKey];
-return override ? { ...item, ...override } : item;
-});
-const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
-const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
-// BLOKADA CZASOWA - tylko dla klubowicza
-const isPastDay = col.isoDate < todayStr;
-return (
-<div
-key={idx}
-className={`space-y-3 p-3 rounded-2xl border transition-all ${
-isToday
-? 'bg-white border-rose-500 shadow-md border-t-4 border-t-rose-600'
-: 'bg-sky-50/40 border-sky-100'
-}`}
->
-<div className={`text-xs font-black uppercase tracking-wider border-b pb-2 mb-2 text-center ${
-isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
-}`}>
-<span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
-<span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
-</div>
-{aktywneWydarzeniaDnia.map((wydarzenie: any) => (
-<div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm">
-<div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
-{wydarzenie.title}
-</div>
-<div className="text-[11px] text-rose-900 font-bold">
-Odwołano zajęcia z powodu wydarzenia
-</div>
-</div>
-))}
-<div className="space-y-3">
-{zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
-<div className="py-12 text-center text-xs text-slate-400 font-medium">
-Brak zajęć w tym dniu.
-</div>
-) : (
-zajeciaDnia.map((item: any, classIdx: number) => {
-const durationText = calculateDuration(item.start, item.end);
-const classKey = `${item.id}_${col.date}`;
-const zapisani = zapisyNaZajecia[classKey] || [];
-const limitZajec = item.limit || 12;
-const liczbaGlowna = Math.min(zapisani.length, limitZajec);
-const liczbaKrzesełko = Math.max(0, zapisani.length - limitZajec);
-const isFull = zapisani.length >= limitZajec;
-const topColor = getTopBorderColor(item.title, item.isOdwołane, item.isUsunięte);
-// Sprawdzanie czy zajęcia są w przeszłości
-const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
-const isPastEvent = isPastDay || isPastTime;
-const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
-return (
-<div
-key={classIdx}
-onClick={() => {
-if (item.isOdwołane || item.isUsunięte) return;
-if (isLockedForClient) {
-alert("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.");
-return;
-}
-setSelectedClass({
-...item,
-displayDate: col.date,
-durationText
-});
-setIsSearchingClient(false);
-setSearchClientQuery('');
-}}
-style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
-className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all relative ${
-item.isOdwołane || item.isUsunięte
-? 'border-rose-200 opacity-80 cursor-default'
-: isLockedForClient
-? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
-: 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
-}`}
->
-<div className="flex justify-between items-start">
-<div>
-<span className="text-base font-black text-slate-900">{item.start}</span>
-<h3 className="text-xs font-bold text-slate-800 mt-0.5">{item.title}</h3>
-</div>
-{/* Wyświetlanie kłódki jeśli trening minął dla klienta */}
-{isLockedForClient && !item.isOdwołane && !item.isUsunięte && (
-<div className="text-slate-400 text-sm" title="Zajęcia zablokowane (minęły)">
-🔒
-</div>
-)}
-</div>
-{item.isOdwołane ? (
-<div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
-ODWOŁANE
-</div>
-) : item.isUsunięte ? (
-<div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
-USUNIĘTE
-</div>
-) : (
-<div className="flex items-center gap-2 flex-wrap">
-<span className={`font-bold px-2 py-0.5 rounded text-[11px] border ${
-isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-}`}>
-👥 {liczbaGlowna}/{limitZajec}
-</span>
-{liczbaKrzesełko > 0 && (
-<span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200 flex items-center gap-1">
-🪑 {liczbaKrzesełko}
-</span>
-)}
-</div>
-)}
-<div className="text-[11px] text-slate-500 font-medium">
-⏱ {durationText}
-</div>
-<div className="text-[11px] text-slate-600 font-medium border-t border-slate-100 pt-2 flex items-center gap-1.5">
-<span>👤</span> {item.trainer || 'Brak trenera'}
-</div>
-</div>
-);
-})
-)}
-</div>
-</div>
-);
-})}
-</div>
-</section>
-{appRole === 'admin' && (
-<div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
-<section className="lg:col-span-6 space-y-3">
-<div className="flex items-center justify-between">
-<Link
-href="/raporty/transakcje"
-className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
->
-SPRZEDAŻ Z BAZY <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
-</Link>
-</div>
-<div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
-<div className="flex justify-between items-center">
-<div className="flex items-center gap-3">
-<div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center font-bold text-sky-700 text-sm">
-$
-</div>
-<div>
-<div className="text-xs font-bold text-slate-800 uppercase">RAPORT FINANSOWY</div>
-<div className="text-[10px] text-slate-500">{salesPeriodTitle}</div>
-</div>
-</div>
-<select
-value={salesPeriod}
-onChange={(e) => setSalesPeriod(e.target.value)}
-className="bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
->
-<option value="Dziś">Dziś</option>
-<option value="Miesiąc">Ten miesiąc</option>
-</select>
-</div>
-<div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 flex justify-between items-center text-xs">
-      <span className="text-emerald-900 font-bold uppercase tracking-wider text-[10px]">Łączny przychód:</span>
-      <span className="font-black text-sm text-emerald-700">
-        +{totalEarnings.toFixed(2)} PLN
-      </span>
+  return (
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
+    {appRole === 'klubowicz' && currentUser && (() => {
+    const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    if (walletVal < 0) {
+    return (
+    <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+    <div className="flex items-center gap-4">
+    <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
+    <span className="text-2xl">💸</span>
     </div>
-
-    <div className="text-[11px] max-h-60 overflow-y-auto pr-2">
-      <div className="flex justify-between text-slate-500 pb-2 border-b border-sky-100 font-bold sticky top-0 bg-white z-10 uppercase tracking-wider text-[9px]">
-        <span className="w-1/2">Karnet</span>
-        <span className="w-1/4 text-center">Ilość</span>
-        <span className="w-1/4 text-right">Zysk brutto</span>
-      </div>
-
-      {groupedSalesArray.length === 0 ? (
-        <div className="flex justify-between text-slate-400 py-6 border-b border-slate-100 text-center">
-          <span className="w-full">Brak sprzedanych karnetów w tym okresie.</span>
+    <div>
+    <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Zadłużenie na koncie!</h3>
+    <p className="text-xs text-rose-800 font-medium mt-0.5">Twój portfel wykazuje saldo ujemne ({currentUser.wallet || currentUser.Portfel}). Masz zablokowaną możliwość zapisów na zajęcia do czasu uregulowania należności.</p>
+    </div>
+    </div>
+    <Link
+    href="/portfel"
+    className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0 text-center"
+    >
+    Przejdź do portfela
+    </Link>
+    </div>
+    );
+    }
+    return null;
+    })()}
+    {appRole === 'klubowicz' && needsNewPass && (
+    <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+    <div className="flex items-center gap-4">
+    <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center shrink-0 border border-amber-200">
+    <span className="text-2xl">🎟️</span>
+    </div>
+    <div>
+    <h3 className="font-black text-amber-950 text-sm sm:text-base uppercase tracking-wider">Nie masz aktywnego karnetu!</h3>
+    <p className="text-xs text-amber-800 font-medium mt-0.5">Aby w pełni korzystać z klubu i zapisywać się na zajęcia, wybierz swój karnet.</p>
+    </div>
+    </div>
+    <button
+    onClick={() => setIsBuyPassModalOpen(true)}
+    className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+    >
+    Kup karnet
+    </button>
+    </div>
+    )}
+    {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
+    <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+    <div className="flex items-center gap-4">
+    <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
+    <span className="text-2xl">⚠️</span>
+    </div>
+    <div>
+    <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Kończy się twój karnet!</h3>
+    <p className="text-xs text-rose-800 font-medium mt-0.5">{expiringMessage}</p>
+    </div>
+    </div>
+    <button
+    onClick={() => setIsBuyPassModalOpen(true)}
+    className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+    >
+    Kup nowy / Przedłuż
+    </button>
+    </div>
+    )}
+    <section className="space-y-4">
+    <div className="flex items-center justify-between bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
+    <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950">
+    GRAFIK ZAJĘĆ (BIEŻĄCY TYDZIEŃ)
+    </h1>
+    </div>
+    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
+    {dashboardDays.map((col, idx) => {
+    const isToday =
+    col.fullDate.getDate() === today.getDate() &&
+    col.fullDate.getMonth() === today.getMonth() &&
+    col.fullDate.getFullYear() === today.getFullYear();
+    const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
+    const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
+    const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
+    .filter((item: any) => item.days && item.days[col.key])
+    .map((item: any) => {
+    const classKey = `${item.id}_${col.date}`;
+    const override = nadpisaneZajeciaDni[classKey];
+    return override ? { ...item, ...override } : item;
+    });
+    const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
+    const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+    const isPastDay = col.isoDate < todayStr;
+    return (
+    <div
+    key={idx}
+    className={`space-y-3 p-3 rounded-2xl border transition-all ${
+    isToday
+    ? 'bg-white border-rose-500 shadow-md border-t-4 border-t-rose-600'
+    : 'bg-sky-50/40 border-sky-100'
+    }`}
+    >
+    <div className={`text-xs font-black uppercase tracking-wider border-b pb-2 mb-2 text-center ${
+    isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
+    }`}>
+    <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
+    <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
+    </div>
+    {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
+    <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm">
+    <div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
+    {wydarzenie.title}
+    </div>
+    <div className="text-[11px] text-rose-900 font-bold">
+    Odwołano zajęcia z powodu wydarzenia
+    </div>
+    </div>
+    ))}
+    <div className="space-y-3">
+    {zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
+    <div className="py-12 text-center text-xs text-slate-400 font-medium">
+    Brak zajęć w tym dniu.
+    </div>
+    ) : (
+    zajeciaDnia.map((item: any, classIdx: number) => {
+    const durationText = calculateDuration(item.start, item.end);
+    const classKey = `${item.id}_${col.date}`;
+    const zapisani = zapisyNaZajecia[classKey] || [];
+    const limitZajec = item.limit || 12;
+    const liczbaGlowna = Math.min(zapisani.length, limitZajec);
+    const liczbaKrzesełko = Math.max(0, zapisani.length - limitZajec);
+    const isFull = zapisani.length >= limitZajec;
+    const topColor = getTopBorderColor(item.title, item.isOdwołane, item.isUsunięte);
+    const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
+    const isPastEvent = isPastDay || isPastTime;
+    const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
+    return (
+    <div
+    key={classIdx}
+    onClick={() => {
+    if (item.isOdwołane || item.isUsunięte) return;
+    if (isLockedForClient) {
+    alert("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.");
+    return;
+    }
+    setSelectedClass({
+    ...item,
+    displayDate: col.date,
+    durationText
+    });
+    setIsSearchingClient(false);
+    setSearchClientQuery('');
+    }}
+    style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
+    className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all relative ${
+    item.isOdwołane || item.isUsunięte
+    ? 'border-rose-200 opacity-80 cursor-default'
+    : isLockedForClient
+    ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
+    : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
+    }`}
+    >
+    <div className="flex justify-between items-start">
+    <div>
+    <span className="text-base font-black text-slate-900">{item.start}</span>
+    <h3 className="text-xs font-bold text-slate-800 mt-0.5">{item.title}</h3>
+    </div>
+    {isLockedForClient && !item.isOdwołane && !item.isUsunięte && (
+    <div className="text-slate-400 text-sm" title="Zajęcia zablokowane (minęły)">
+    🔒
+    </div>
+    )}
+    </div>
+    {item.isOdwołane ? (
+    <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
+    ODWOŁANE
+    </div>
+    ) : item.isUsunięte ? (
+    <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
+    USUNIĘTE
+    </div>
+    ) : (
+    <div className="flex items-center gap-2 flex-wrap">
+    <span className={`font-bold px-2 py-0.5 rounded text-[11px] border ${
+    isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    }`}>
+    👥 {liczbaGlowna}/{limitZajec}
+    </span>
+    {liczbaKrzesełko > 0 && (
+    <span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200 flex items-center gap-1">
+    🪑 {liczbaKrzesełko}
+    </span>
+    )}
+    </div>
+    )}
+    <div className="text-[11px] text-slate-500 font-medium">
+    ⏱ {durationText}
+    </div>
+    <div className="text-[11px] text-slate-600 font-medium border-t border-slate-100 pt-2 flex items-center gap-1.5">
+    <span>👤</span> {item.trainer || 'Brak trenera'}
+    </div>
+    </div>
+    );
+    })
+    )}
+    </div>
+    </div>
+    );
+    })}
+    </div>
+    </section>
+    {appRole === 'admin' && (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
+    <section className="lg:col-span-6 space-y-3">
+    <div className="flex items-center justify-between">
+    <Link
+    href="/raporty/transakcje"
+    className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
+    >
+    SPRZEDAŻ Z BAZY <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
+    </Link>
+    </div>
+    <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
+    <div className="flex justify-between items-center">
+    <div className="flex items-center gap-3">
+    <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center font-bold text-sky-700 text-sm">
+    $
+    </div>
+    <div>
+    <div className="text-xs font-bold text-slate-800 uppercase">RAPORT FINANSOWY</div>
+    <div className="text-[10px] text-slate-500">{salesPeriodTitle}</div>
+    </div>
+    </div>
+    <select
+    value={salesPeriod}
+    onChange={(e) => setSalesPeriod(e.target.value)}
+    className="bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
+    >
+    <option value="Dziś">Dziś</option>
+    <option value="Miesiąc">Ten miesiąc</option>
+    </select>
+    </div>
+    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 flex justify-between items-center text-xs">
+          <span className="text-emerald-900 font-bold uppercase tracking-wider text-[10px]">Łączny przychód:</span>
+          <span className="font-black text-sm text-emerald-700">
+            +{totalEarnings.toFixed(2)} PLN
+          </span>
         </div>
-      ) : (
-        groupedSalesArray.map((sale, idx) => (
-          <div key={idx} className="flex justify-between items-center text-slate-700 py-3 border-b border-slate-100">
-            <span className="w-1/2 font-bold truncate pr-2 text-sky-950" title={sale.name}>{sale.name}</span>
-            <span className="w-1/4 text-center font-black bg-slate-100 text-slate-600 rounded-md py-0.5">{sale.count} szt.</span>
-            <span className="w-1/4 text-right font-black text-emerald-600">
-              +{sale.total.toFixed(2)} PLN
+        <div className="text-[11px] max-h-60 overflow-y-auto pr-2">
+          <div className="flex justify-between text-slate-500 pb-2 border-b border-sky-100 font-bold sticky top-0 bg-white z-10 uppercase tracking-wider text-[9px]">
+            <span className="w-1/2">Karnet</span>
+            <span className="w-1/4 text-center">Ilość</span>
+            <span className="w-1/4 text-right">Zysk brutto</span>
+          </div>
+          {groupedSalesArray.length === 0 ? (
+            <div className="flex justify-between text-slate-400 py-6 border-b border-slate-100 text-center">
+              <span className="w-full">Brak sprzedanych karnetów w tym okresie.</span>
+            </div>
+          ) : (
+            groupedSalesArray.map((sale, idx) => (
+              <div key={idx} className="flex justify-between items-center text-slate-700 py-3 border-b border-slate-100">
+                <span className="w-1/2 font-bold truncate pr-2 text-sky-950" title={sale.name}>{sale.name}</span>
+                <span className="w-1/4 text-center font-black bg-slate-100 text-slate-600 rounded-md py-0.5">{sale.count} szt.</span>
+                <span className="w-1/4 text-right font-black text-emerald-600">
+                  +{sale.total.toFixed(2)} PLN
+                </span>
+              </div>
+            ))
+          )}
+          <div className="flex justify-between items-center text-slate-900 pt-4 font-black text-xs sticky bottom-0 bg-white">
+            <span className="uppercase tracking-wider">Suma zysków:</span>
+            <span className="text-emerald-700 text-sm">
+              +{totalEarnings.toFixed(2)} PLN
             </span>
           </div>
-        ))
-      )}
-
-      <div className="flex justify-between items-center text-slate-900 pt-4 font-black text-xs sticky bottom-0 bg-white">
-        <span className="uppercase tracking-wider">Suma zysków:</span>
-        <span className="text-emerald-700 text-sm">
-          +{totalEarnings.toFixed(2)} PLN
-        </span>
-      </div>
+        </div>
     </div>
-</div>
-</section>
-<section className="lg:col-span-6 space-y-3">
-<div className="flex items-center justify-between">
-<Link
-href="/raporty/klienci"
-className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
->
-KLIENCI ({klienciList.length}) <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
-</Link>
-</div>
-<div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
-<div className="flex gap-2">
-<input
-type="text"
-placeholder="Szukaj klienta po imieniu, nazwisku lub e-mail..."
-value={clientSearch}
-onChange={(e) => setClientSearch(e.target.value)}
-className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
-/>
-</div>
-<div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
-{filteredClients.length === 0 ? (
-<div className="text-center py-10 text-slate-400 text-xs font-medium">
-Brak klientów pasujących do wyszukiwania.
-</div>
-) : (
-filteredClients.map((client) => {
-const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
-const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
-const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
-const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
-let ostatecznaData = 'Brak';
-let badgeColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-if (maKarnet) {
-const earliestPass = client.karnetyKlubowicza.reduce((earliest: any, k: any) => {
-if (!earliest) return k;
-return (k.waznyDo < earliest.waznyDo) ? k : earliest;
-}, null);
-if (earliestPass) {
-ostatecznaData = earliestPass.waznyDo;
-let isPending = earliestPass.statusTekst?.includes('Oczekujący');
-let isExpiring = false;
-if (!isPending) {
-const todayDate = new Date();
-todayDate.setHours(0, 0, 0, 0);
-const expDate = new Date(earliestPass.waznyDo);
-expDate.setHours(0, 0, 0, 0);
-const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-if (diffDays <= 5) isExpiring = true;
-if (earliestPass.pozostaloWejsc !== null && earliestPass.pozostaloWejsc !== undefined) {
-if (earliestPass.pozostaloWejsc <= 2) isExpiring = true;
-}
-}
-if (isPending) {
-badgeColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
-} else if (isExpiring) {
-badgeColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
-}
-}
-}
-return (
-<div
-key={client.id}
-className="bg-sky-50/50 border border-sky-100 rounded-xl p-4 space-y-3 hover:border-sky-300 transition-all shadow-sm"
->
-<div className="flex justify-between items-start">
-<div className="flex items-center gap-3">
-<div className="w-10 h-10 bg-sky-100 border-2 border-amber-500 rounded-full overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
-{client.avatarUrl ? (
-<img src={client.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-) : (
-'👤'
-)}
-</div>
-<div>
-<h4 className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</h4>
-<span className="text-[10px] text-slate-500 block mt-0.5">✉ {client.email}</span>
-</div>
-</div>
-<div className="flex items-center gap-1.5 text-slate-400 text-xs">
-<button onClick={() => setTableActionClient(client)} className="hover:text-slate-700 cursor-pointer p-1.5 bg-white border border-slate-200 rounded-md shadow-sm" title="Zarządzaj klubowiczem">✏️</button>
-</div>
-</div>
-<div className="text-[11px] font-bold text-sky-900 pl-1 flex flex-col gap-1 items-start">
-<div className="flex flex-wrap gap-2 items-center">
-<span>Karnet: {nazwaKarnetu}</span>
-{maKarnet && (
-<span className={`px-2 py-0.5 rounded-md border text-[9px] uppercase tracking-wider ${badgeColorClass}`}>
-Wygasa: {ostatecznaData}
-</span>
-)}
-</div>
-{aktywnyKarnetZawieszony && (
-<span className="bg-amber-100 text-amber-900 text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded border border-amber-200">
-⏸️ Zawieszony od: {aktywnyKarnetZawieszony.zawieszonyOd}
-</span>
-)}
-{aktywnaBlokada && (
-<span className="bg-rose-100 text-rose-800 text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded border border-rose-200">
-⚠️ Zablokowane: {aktywnaBlokada.blokadaOd ? `od ${aktywnaBlokada.blokadaOd} ` : ''}do {aktywnaBlokada.blokadaDo}
-</span>
-)}
-</div>
-<div className="flex flex-wrap items-center gap-2">
-<span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-amber-100 text-amber-800 border border-amber-200 uppercase">
-{client.status || 'Aktywny'}
-</span>
-<span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-Rejestracja: {client.registered}
-</span>
-</div>
-</div>
-);
-})
-)}
-</div>
-</div>
-</section>
-</div>
-)}
-{isBuyPassModalOpen && (
-<div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-<div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-<div className="flex items-center justify-between border-b border-sky-100 pb-3">
-<h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Przedłuż karnet</h3>
-<button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
-</div>
-<form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
-<div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
-Wybierz karnet, aby opłacić go ze środków w portfelu lub przypisać do konta.
-</div>
-<div className="space-y-1">
-<label className="font-bold text-slate-700 block">Wybierz karnet *</label>
-<select
-required
-value={selectedBuyPass}
-onChange={(e) => setSelectedBuyPass(e.target.value)}
-className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
->
-<option value="" disabled>-- Wybierz karnet --</option>
-{dostepneKarnety.map(k => (
-<option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
-))}
-</select>
-</div>
-{currentUser?.karnetyKlubowicza?.length > 0 && (
-<div className="space-y-2 pt-2 border-t border-sky-100">
-<label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
-<div className="space-y-2">
-<label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
-<input
-type="radio"
-name="activationMode"
-value="today"
-checked={activationMode === 'today'}
-onChange={() => setActivationMode('today')}
-className="w-4 h-4 accent-blue-600 cursor-pointer"
-/>
-<div className="flex flex-col">
-<span className="font-bold text-slate-800">Od dzisiaj</span>
-<span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
-</div>
-</label>
-<label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
-<input
-type="radio"
-name="activationMode"
-value="after"
-checked={activationMode === 'after'}
-onChange={() => setActivationMode('after')}
-className="w-4 h-4 accent-blue-600 cursor-pointer"
-/>
-<div className="flex flex-col">
-<span className="font-bold text-slate-800">Przedłużenie (Oczekujący)</span>
-<span className="text-[10px] text-slate-500">Zacznie obowiązywać po wygaśnięciu obecnego</span>
-</div>
-</label>
-</div>
-</div>
-)}
-<div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-<button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-Anuluj
-</button>
-<button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-Kupuję i zatwierdzam
-</button>
-</div>
-</form>
-</div>
-</div>
-)}
-{selectedClass && (() => {
-const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
-const limitZajec = selectedClass.limit || 12;
-const sortAlfabet = (a: any, b: any) => {
-const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
-const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
-return nameA.localeCompare(nameB);
-};
-const listaGlowna = [...zapisaniWszyscy.slice(0, limitZajec)].sort(sortAlfabet);
-const listaKrzesełko = zapisaniWszyscy.slice(limitZajec);
-const isFull = zapisaniWszyscy.length >= limitZajec;
-const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.id) === String(currentUser.id));
-const filteredSuggestions = klienciList
-.filter(c =>
-`${c.firstName || ''} ${c.lastName || ''}`.toLowerCase().includes(searchClientQuery.toLowerCase()) ||
-(c.email || '').toLowerCase().includes(searchClientQuery.toLowerCase())
-)
-.sort(sortAlfabet);
-return (
-<div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
-<div className="bg-slate-100 border border-sky-200 rounded-3xl max-w-5xl w-full p-6 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto relative">
-<div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-sky-200 shadow-sm">
-<div className="flex items-center gap-3">
-<h3 className="font-black text-sm text-sky-950 uppercase tracking-wide">
-{selectedClass.title} {selectedClass.start}
-</h3>
-<span className="text-xs font-mono text-slate-400">{new Date().getFullYear()}-{selectedClass.displayDate.split('/').reverse().join('-')}</span>
-</div>
-<div className="flex items-center gap-3">
-<span className={`px-3 py-1 rounded-lg text-xs font-bold border ${
-isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-sky-100 text-sky-900 border-sky-200'
-}`}>
-{zapisaniWszyscy.length}/{limitZajec}
-</span>
-<button
-onClick={() => setSelectedClass(null)}
-className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full flex items-center justify-center font-bold transition-colors cursor-pointer"
->
-✕
-</button>
-</div>
-</div>
-<div className="space-y-3">
-<h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
-<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-{listaGlowna.map((osobaZapisana) => {
-const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
-const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
-const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
-const stanPortfela = parseFloat(stanPortfelaStr) || 0;
-let portfelColorClass = 'text-slate-500';
-if (stanPortfela > 0) {
-portfelColorClass = 'text-emerald-600 font-bold';
-} else if (stanPortfela < 0) {
-portfelColorClass = 'text-rose-600 font-bold';
-}
-return (
-<div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
-<div className="flex items-start justify-between">
-<div>
-<h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
-<div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
-<div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
-<div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
-<div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
-<div>
-<span className="font-bold text-slate-700">PORTFEL:</span>{' '}
-<span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
-</div>
-{osoba.blokadaDo && osoba.blokadaDo >= todayStr && (
-<div className="text-rose-600 font-bold mt-1 bg-rose-50 p-1.5 rounded border border-rose-100">
-⚠️ {osoba.powodBlokady || `Blokada zapisów do ${osoba.blokadaDo}`}
-</div>
-)}
-</div>
-</div>
-<div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
-{osoba.avatarUrl ? (
-<img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-) : (
-'👤'
-)}
-</div>
-</div>
-{appRole === 'admin' && (
-<div className="flex items-center justify-between border-t border-sky-100 pt-3 text-xs">
-<label className="flex items-center gap-2 cursor-pointer">
-<input
-type="checkbox"
-checked={osobaZapisana.obecny ?? false}
-onChange={() => toggleObecny(osoba.id)}
-className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
-/>
-<span className="font-black text-amber-700 tracking-wider">OBECNY</span>
-</label>
-<button
-onClick={() => setClientToUnregister(osoba)}
-className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
->
-WYPISZ
-</button>
-</div>
-)}
-</div>
-);
-})}
-</div>
-{listaGlowna.length === 0 && (
-<div className="bg-white border border-sky-200 rounded-2xl p-8 text-center text-slate-400 font-medium text-xs">
-Brak uczestników na głównej liście.
-</div>
-)}
-</div>
-{listaKrzesełko.length > 0 && (
-<div className="space-y-3 pt-4 border-t border-sky-200">
-<h4 className="font-black text-xs text-blue-900 uppercase tracking-wider flex items-center gap-2">
-<span>🪑</span> Lista rezerwowa (Krzesełko) - {listaKrzesełko.length} osób
-</h4>
-<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-{listaKrzesełko.map((osobaZapisana, idx) => {
-const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
-const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
-const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
-const stanPortfela = parseFloat(stanPortfelaStr) || 0;
-let portfelColorClass = 'text-slate-500';
-if (stanPortfela > 0) {
-portfelColorClass = 'text-emerald-600 font-bold';
-} else if (stanPortfela < 0) {
-portfelColorClass = 'text-rose-600 font-bold';
-}
-return (
-<div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
-<div className="flex items-start justify-between">
-<div>
-<div className="flex items-center gap-2">
-<h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
-<span className="bg-blue-200 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded">
-#{idx + 1}
-</span>
-</div>
-<div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
-<div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
-<div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
-<div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
-<div>
-<span className="font-bold text-slate-700">PORTFEL:</span>{' '}
-<span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
-</div>
-</div>
-</div>
-<div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-xs shrink-0 shadow-sm">
-{osoba.avatarUrl ? (
-<img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-) : (
-'🪑'
-)}
-</div>
-</div>
-{appRole === 'admin' && (
-<div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
-<span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
-<button
-onClick={() => setClientToUnregister(osoba)}
-className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
->
-WYPISZ
-</button>
-</div>
-)}
-</div>
-);
-})}
-</div>
-</div>
-)}
-{appRole === 'klubowicz' ? (
-<div className="pt-2">
-{!isUserSignedUp ? (
-(() => {
-const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-if (wVal < 0) {
-return (
-<div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
-💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
-</div>
-);
-}
-return (
-<button
-onClick={handleKlubowiczZapiszSie}
-className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
-isFull
-? 'bg-blue-600 hover:bg-blue-700 text-white'
-: 'bg-emerald-600 hover:bg-emerald-700 text-white'
-}`}
->
-{isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
-</button>
-);
-})()
-) : (
-<button
-onClick={handleKlubowiczWypiszSie}
-className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
->
-❌ Wypisz się z zajęć
-</button>
-)}
-</div>
-) : (
-<div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
-{!isSearchingClient ? (
-<button
-onClick={() => setIsSearchingClient(true)}
-className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
-isFull
-? 'bg-blue-600 hover:bg-blue-700 text-white'
-: 'bg-slate-100 hover:bg-slate-200 text-slate-800'
-}`}
->
-<span>{isFull ? '🪑' : '👤+'}</span>
-{isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
-</button>
-) : (
-<div className="space-y-2">
-<div className="flex items-center justify-between">
-<span className="font-bold text-xs text-sky-950 uppercase">
-{isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
-</span>
-<button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
-</div>
-<input
-type="text"
-autoFocus
-placeholder="Wpisz imię, nazwisko lub email..."
-value={searchClientQuery}
-onChange={(e) => setSearchClientQuery(e.target.value)}
-className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
-/>
-{searchClientQuery.trim().length > 0 && (
-<div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
-{filteredSuggestions.length > 0 ? (
-filteredSuggestions.map((klient) => (
-<div
-key={klient.id}
-onClick={() => handleZapiszKlientaDoZajec(klient)}
-className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
->
-<div>
-<span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
-<span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
-{klient.blokadaDo && klient.blokadaDo >= todayStr && (
-<span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
-)}
-</div>
-<span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
-{isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
-</span>
-</div>
-))
-) : (
-<div className="p-4 text-center text-xs text-slate-400">
-Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
-</div>
-)}
-</div>
-)}
-</div>
-)}
-</div>
-)}
-<div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
-<button
-onClick={() => setSelectedClass(null)}
-className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
->
-Zamknij
-</button>
-</div>
-</div>
-</div>
-);
-})()}
+    </section>
+    <section className="lg:col-span-6 space-y-3">
+    <div className="flex items-center justify-between">
+    <Link
+    href="/raporty/klienci"
+    className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
+    >
+    KLIENCI ({klienciList.length}) <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
+    </Link>
+    </div>
+    <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
+    <div className="flex gap-2">
+    <input
+    type="text"
+    placeholder="Szukaj klienta po imieniu, nazwisku lub e-mail..."
+    value={clientSearch}
+    onChange={(e) => setClientSearch(e.target.value)}
+    className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
+    />
+    </div>
+    <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+    {filteredClients.length === 0 ? (
+    <div className="text-center py-10 text-slate-400 text-xs font-medium">
+    Brak klientów pasujących do wyszukiwania.
+    </div>
+    ) : (
+    filteredClients.map((client) => {
+    const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
+    const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
+    const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+    const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
+    let ostatecznaData = 'Brak';
+    let badgeColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+    if (maKarnet) {
+    const earliestPass = client.karnetyKlubowicza.reduce((earliest: any, k: any) => {
+    if (!earliest) return k;
+    return (k.waznyDo < earliest.waznyDo) ? k : earliest;
+    }, null);
+    if (earliestPass) {
+    ostatecznaData = earliestPass.waznyDo;
+    let isPending = earliestPass.statusTekst?.includes('Oczekujący');
+    let isExpiring = false;
+    if (!isPending) {
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const expDate = new Date(earliestPass.waznyDo);
+    expDate.setHours(0, 0, 0, 0);
+    const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays <= 5) isExpiring = true;
+    if (earliestPass.pozostaloWejsc !== null && earliestPass.pozostaloWejsc !== undefined) {
+    if (earliestPass.pozostaloWejsc <= 2) isExpiring = true;
+    }
+    }
+    if (isPending) {
+    badgeColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
+    } else if (isExpiring) {
+    badgeColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
+    }
+    }
+    }
+    return (
+    <div
+    key={client.id}
+    className="bg-sky-50/50 border border-sky-100 rounded-xl p-4 space-y-3 hover:border-sky-300 transition-all shadow-sm"
+    >
+    <div className="flex justify-between items-start">
+    <div className="flex items-center gap-3">
+    <div className="w-10 h-10 bg-sky-100 border-2 border-amber-500 rounded-full overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
+    {client.avatarUrl ? (
+    <img src={client.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+    ) : (
+    '👤'
+    )}
+    </div>
+    <div>
+    <h4 className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</h4>
+    <span className="text-[10px] text-slate-500 block mt-0.5">✉ {client.email}</span>
+    </div>
+    </div>
+    <div className="flex items-center gap-1.5 text-slate-400 text-xs">
+    <button onClick={() => setTableActionClient(client)} className="hover:text-slate-700 cursor-pointer p-1.5 bg-white border border-slate-200 rounded-md shadow-sm" title="Zarządzaj klubowiczem">✏️</button>
+    </div>
+    </div>
+    <div className="text-[11px] font-bold text-sky-900 pl-1 flex flex-col gap-1 items-start">
+    <div className="flex flex-wrap gap-2 items-center">
+    <span>Karnet: {nazwaKarnetu}</span>
+    {maKarnet && (
+    <span className={`px-2 py-0.5 rounded-md border text-[9px] uppercase tracking-wider ${badgeColorClass}`}>
+    Wygasa: {ostatecznaData}
+    </span>
+    )}
+    </div>
+    {aktywnyKarnetZawieszony && (
+    <span className="bg-amber-100 text-amber-900 text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded border border-amber-200">
+    ⏸️ Zawieszony od: {aktywnyKarnetZawieszony.zawieszonyOd}
+    </span>
+    )}
+    {aktywnaBlokada && (
+    <span className="bg-rose-100 text-rose-800 text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded border border-rose-200">
+    ⚠️ Zablokowane: {aktywnaBlokada.blokadaOd ? `od ${aktywnaBlokada.blokadaOd} ` : ''}do {aktywnaBlokada.blokadaDo}
+    </span>
+    )}
+    </div>
+    <div className="flex flex-wrap items-center gap-2">
+    <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-amber-100 text-amber-800 border border-amber-200 uppercase">
+    {client.status || 'Aktywny'}
+    </span>
+    <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+    Rejestracja: {client.registered}
+    </span>
+    </div>
+    </div>
+    );
+    })
+    )}
+    </div>
+    </div>
+    </section>
+    </div>
+    )}
+    {isBuyPassModalOpen && (
+    <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+    <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+    <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+    <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Przedłuż karnet</h3>
+    <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+    </div>
+    <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
+    <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
+    Wybierz karnet, aby opłacić go ze środków w portfelu lub przypisać do konta.
+    </div>
+    <div className="space-y-1">
+    <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
+    <select
+    required
+    value={selectedBuyPass}
+    onChange={(e) => setSelectedBuyPass(e.target.value)}
+    className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
+    >
+    <option value="" disabled>-- Wybierz karnet --</option>
+    {dostepneKarnety.map(k => {
+    const activeRabat = currentUser?.rabat || 0;
+    const dPrice = (parseFloat(k.cena) * (1 - activeRabat/100)).toFixed(2);
+    return <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {dPrice} PLN)</option>;
+    })}
+    </select>
+    </div>
+    {currentUser?.karnetyKlubowicza?.length > 0 && (
+    <div className="space-y-2 pt-2 border-t border-sky-100">
+    <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
+    <div className="space-y-2">
+    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+    <input
+    type="radio"
+    name="activationMode"
+    value="today"
+    checked={activationMode === 'today'}
+    onChange={() => setActivationMode('today')}
+    className="w-4 h-4 accent-blue-600 cursor-pointer"
+    />
+    <div className="flex flex-col">
+    <span className="font-bold text-slate-800">Od dzisiaj</span>
+    <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
+    </div>
+    </label>
+    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+    <input
+    type="radio"
+    name="activationMode"
+    value="after"
+    checked={activationMode === 'after'}
+    onChange={() => setActivationMode('after')}
+    className="w-4 h-4 accent-blue-600 cursor-pointer"
+    />
+    <div className="flex flex-col">
+    <span className="font-bold text-slate-800">Przedłużenie (Oczekujący)</span>
+    <span className="text-[10px] text-slate-500">Zacznie obowiązywać po wygaśnięciu obecnego</span>
+    </div>
+    </label>
+    </div>
+    </div>
+    )}
+    <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+    <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+    Anuluj
+    </button>
+    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+    Kupuję i zatwierdzam
+    </button>
+    </div>
+    </form>
+    </div>
+    </div>
+    )}
+    {selectedClass && (() => {
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
+    const limitZajec = selectedClass.limit || 12;
+    const sortAlfabet = (a: any, b: any) => {
+    const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
+    const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
+    return nameA.localeCompare(nameB);
+    };
+    const listaGlowna = [...zapisaniWszyscy.slice(0, limitZajec)].sort(sortAlfabet);
+    const listaKrzesełko = zapisaniWszyscy.slice(limitZajec);
+    const isFull = zapisaniWszyscy.length >= limitZajec;
+    const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.id) === String(currentUser.id));
+    const filteredSuggestions = klienciList
+    .filter(c =>
+    `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase().includes(searchClientQuery.toLowerCase()) ||
+    (c.email || '').toLowerCase().includes(searchClientQuery.toLowerCase())
+    )
+    .sort(sortAlfabet);
+    return (
+    <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+    <div className="bg-slate-100 border border-sky-200 rounded-3xl max-w-5xl w-full p-6 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto relative">
+    <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-sky-200 shadow-sm">
+    <div className="flex items-center gap-3">
+    <h3 className="font-black text-sm text-sky-950 uppercase tracking-wide">
+    {selectedClass.title} {selectedClass.start}
+    </h3>
+    <span className="text-xs font-mono text-slate-400">{new Date().getFullYear()}-{selectedClass.displayDate.split('/').reverse().join('-')}</span>
+    </div>
+    <div className="flex items-center gap-3">
+    <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+    isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-sky-100 text-sky-900 border-sky-200'
+    }`}>
+    {zapisaniWszyscy.length}/{limitZajec}
+    </span>
+    <button
+    onClick={() => setSelectedClass(null)}
+    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full flex items-center justify-center font-bold transition-colors cursor-pointer"
+    >
+    ✕
+    </button>
+    </div>
+    </div>
+    <div className="space-y-3">
+    <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    {listaGlowna.map((osobaZapisana) => {
+    const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
+    const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
+    const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
+    const stanPortfela = parseFloat(stanPortfelaStr) || 0;
+    let portfelColorClass = 'text-slate-500';
+    if (stanPortfela > 0) {
+    portfelColorClass = 'text-emerald-600 font-bold';
+    } else if (stanPortfela < 0) {
+    portfelColorClass = 'text-rose-600 font-bold';
+    }
+    const isMe = currentUser && String(osoba.id) === String(currentUser.id);
+    const canSeeDetails = appRole === 'admin' || isMe;
+    const displayName = canSeeDetails
+    ? `${osoba.firstName} ${osoba.lastName}`
+    : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
+    return (
+    <div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
+    <div className="flex items-start justify-between">
+    <div>
+    <h4 className="font-black text-slate-900 text-sm">{displayName}</h4>
+    {canSeeDetails && (
+    <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
+    <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
+    <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+    <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
+    <div>
+    <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
+    <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
+    </div>
+    {osoba.blokadaDo && osoba.blokadaDo >= todayStr && (
+    <div className="text-rose-600 font-bold mt-1 bg-rose-50 p-1.5 rounded border border-rose-100">
+    ⚠️ {osoba.powodBlokady || `Blokada zapisów do ${osoba.blokadaDo}`}
+    </div>
+    )}
+    </div>
+    )}
+    </div>
+    <div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
+    {osoba.avatarUrl ? (
+    <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+    ) : (
+    '👤'
+    )}
+    </div>
+    </div>
+    {appRole === 'admin' && (
+    <div className="flex items-center justify-between border-t border-sky-100 pt-3 text-xs">
+    <label className="flex items-center gap-2 cursor-pointer">
+    <input
+    type="checkbox"
+    checked={osobaZapisana.obecny ?? false}
+    onChange={() => toggleObecny(osoba.id)}
+    className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
+    />
+    <span className="font-black text-amber-700 tracking-wider">OBECNY</span>
+    </label>
+    <button
+    onClick={() => setClientToUnregister(osoba)}
+    className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+    >
+    WYPISZ
+    </button>
+    </div>
+    )}
+    </div>
+    );
+    })}
+    </div>
+    {listaGlowna.length === 0 && (
+    <div className="bg-white border border-sky-200 rounded-2xl p-8 text-center text-slate-400 font-medium text-xs">
+    Brak uczestników na głównej liście.
+    </div>
+    )}
+    </div>
+    {listaKrzesełko.length > 0 && (
+    <div className="space-y-3 pt-4 border-t border-sky-200">
+    <h4 className="font-black text-xs text-blue-900 uppercase tracking-wider flex items-center gap-2">
+    <span>🪑</span> Lista rezerwowa (Krzesełko) - {listaKrzesełko.length} osób
+    </h4>
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    {listaKrzesełko.map((osobaZapisana, idx) => {
+    const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
+    const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
+    const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
+    const stanPortfela = parseFloat(stanPortfelaStr) || 0;
+    let portfelColorClass = 'text-slate-500';
+    if (stanPortfela > 0) {
+    portfelColorClass = 'text-emerald-600 font-bold';
+    } else if (stanPortfela < 0) {
+    portfelColorClass = 'text-rose-600 font-bold';
+    }
+    const isMe = currentUser && String(osoba.id) === String(currentUser.id);
+    const canSeeDetails = appRole === 'admin' || isMe;
+    const displayName = canSeeDetails
+    ? `${osoba.firstName} ${osoba.lastName}`
+    : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
+    return (
+    <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
+    <div className="flex items-start justify-between">
+    <div>
+    <div className="flex items-center gap-2">
+    <h4 className="font-black text-slate-900 text-sm">{displayName}</h4>
+    <span className="bg-blue-200 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded">
+    #{idx + 1}
+    </span>
+    </div>
+    {canSeeDetails && (
+    <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
+    <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
+    <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+    <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
+    <div>
+    <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
+    <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
+    </div>
+    </div>
+    )}
+    </div>
+    <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-xs shrink-0 shadow-sm">
+    {osoba.avatarUrl ? (
+    <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+    ) : (
+    '🪑'
+    )}
+    </div>
+    </div>
+    {appRole === 'admin' && (
+    <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
+    <span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
+    <button
+    onClick={() => setClientToUnregister(osoba)}
+    className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+    >
+    WYPISZ
+    </button>
+    </div>
+    )}
+    </div>
+    );
+    })}
+    </div>
+    </div>
+    )}
+    {appRole === 'klubowicz' ? (
+    <div className="pt-2">
+    {selectedClass.isLockedForClient ? (
+    <div className="w-full bg-slate-100 border border-slate-200 text-slate-500 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
+    🔒 Czas na zapisy/wypisy minął (Zajęcia historyczne)
+    </div>
+    ) : !isUserSignedUp ? (
+    (() => {
+    const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    if (wVal < 0) {
+    return (
+    <div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
+    💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
+    </div>
+    );
+    }
+    return (
+    <button
+    onClick={handleKlubowiczZapiszSie}
+    className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+    isFull
+    ? 'bg-blue-600 hover:bg-blue-700 text-white'
+    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+    }`}
+    >
+    {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
+    </button>
+    );
+    })()
+    ) : (
+    <button
+    onClick={handleKlubowiczWypiszSie}
+    className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+    >
+    ❌ Wypisz się z zajęć
+    </button>
+    )}
+    </div>
+    ) : (
+    <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
+    {!isSearchingClient ? (
+    <button
+    onClick={() => setIsSearchingClient(true)}
+    className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
+    isFull
+    ? 'bg-blue-600 hover:bg-blue-700 text-white'
+    : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+    }`}
+    >
+    <span>{isFull ? '🪑' : '👤+'}</span>
+    {isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
+    </button>
+    ) : (
+    <div className="space-y-2">
+    <div className="flex items-center justify-between">
+    <span className="font-bold text-xs text-sky-950 uppercase">
+    {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
+    </span>
+    <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
+    </div>
+    <input
+    type="text"
+    autoFocus
+    placeholder="Wpisz imię, nazwisko lub email..."
+    value={searchClientQuery}
+    onChange={(e) => setSearchClientQuery(e.target.value)}
+    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
+    />
+    {searchClientQuery.trim().length > 0 && (
+    <div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
+    {filteredSuggestions.length > 0 ? (
+    filteredSuggestions.map((klient) => (
+    <div
+    key={klient.id}
+    onClick={() => handleZapiszKlientaDoZajec(klient)}
+    className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+    >
+    <div>
+    <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
+    <span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
+    {klient.blokadaDo && klient.blokadaDo >= todayStr && (
+    <span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
+    )}
+    </div>
+    <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
+    {isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
+    </span>
+    </div>
+    ))
+    ) : (
+    <div className="p-4 text-center text-xs text-slate-400">
+    Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
+    </div>
+    )}
+    </div>
+    )}
+    </div>
+    )}
+    </div>
+    )}
+    <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
+    <button
+    onClick={() => setSelectedClass(null)}
+    className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+    >
+    Zamknij
+    </button>
+    </div>
+    </div>
+    </div>
+    );
+    })()}
+{/* TUTAJ WZNAWIAMY MODAL PROFILU KLIENTA Z ADMINA */}
 {tableActionClient && (
 <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
 <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
@@ -2892,5 +2635,3 @@ className="w-20 bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold te
 </div>
 );
 }
-
-
