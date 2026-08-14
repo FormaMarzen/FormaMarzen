@@ -413,10 +413,8 @@ export default function DashboardPage() {
         const updatedClient = { ...profileClient, avatarUrl: compressedDataUrl };
         setProfileClient(updatedClient);
         
-        const dbPayload: any = {};
-        if (profileClient.avatarUrl !== undefined) dbPayload.avatarUrl = compressedDataUrl;
-        else if (profileClient.avatar !== undefined) dbPayload.avatar = compressedDataUrl;
-        else dbPayload.avatarUrl = compressedDataUrl;
+        // ZMIANA: Jawny zapis do kolumny avatarUrl widocznej w bazie
+        const dbPayload = { avatarUrl: compressedDataUrl };
         
         await updateSupabaseClient(updatedClient, dbPayload);
       };
