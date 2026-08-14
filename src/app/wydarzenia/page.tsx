@@ -9,6 +9,7 @@ interface Wydarzenie {
   data_od: string;
   data_do: string;
   cena: string;
+  zadatek: string;
   opis: string;
   grafika_url: string | null;
 }
@@ -30,6 +31,7 @@ export default function WydarzeniaPage() {
     data_od: new Date().toISOString().split('T')[0],
     data_do: new Date().toISOString().split('T')[0],
     cena: "",
+    zadatek: "",
     opis: "",
     grafika_url: "" as string | null
   });
@@ -96,6 +98,7 @@ export default function WydarzeniaPage() {
       data_od: dzisiajStr, 
       data_do: dzisiajStr, 
       cena: "", 
+      zadatek: "", 
       opis: "", 
       grafika_url: null 
     });
@@ -110,6 +113,7 @@ export default function WydarzeniaPage() {
       data_od: w.data_od,
       data_do: w.data_do || w.data_od,
       cena: w.cena || "",
+      zadatek: w.zadatek || "",
       opis: w.opis || "",
       grafika_url: w.grafika_url
     });
@@ -204,10 +208,16 @@ export default function WydarzeniaPage() {
         
         <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cena wejściówki</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cena wydarzenia</span>
             <span className="font-black text-sky-900 text-base">{w.cena || "Darmowe"}</span>
           </div>
-          {!isPast && (
+          {w.zadatek && (
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Zadatek</span>
+              <span className="font-black text-amber-700 text-sm">{w.zadatek}</span>
+            </div>
+          )}
+          {!isPast && !w.zadatek && (
             <div className="w-10 h-10 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-900 transition-colors">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
             </div>
@@ -311,21 +321,30 @@ export default function WydarzeniaPage() {
             </div>
 
             <div className="p-6 sm:p-8 space-y-6">
-              <div className="flex flex-wrap gap-4 border-b border-slate-100 pb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-slate-100 pb-6">
                 <div className="flex items-center gap-3 bg-sky-50 px-4 py-2.5 rounded-2xl">
                   <span className="text-2xl">📅</span>
                   <div>
                     <div className="text-[10px] font-bold text-sky-600 uppercase tracking-wider">Termin</div>
-                    <div className="font-black text-sky-950">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
+                    <div className="font-black text-sky-950 text-xs sm:text-sm">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 bg-amber-50 px-4 py-2.5 rounded-2xl">
                   <span className="text-2xl">💳</span>
                   <div>
-                    <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Koszt udziału</div>
-                    <div className="font-black text-amber-950">{selectedEvent.cena || "Wstęp darmowy"}</div>
+                    <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Cena wydarzenia</div>
+                    <div className="font-black text-amber-950 text-xs sm:text-sm">{selectedEvent.cena || "Darmowe"}</div>
                   </div>
                 </div>
+                {selectedEvent.zadatek && (
+                  <div className="flex items-center gap-3 bg-orange-50 px-4 py-2.5 rounded-2xl">
+                    <span className="text-2xl">💰</span>
+                    <div>
+                      <div className="text-[10px] font-bold text-orange-700 uppercase tracking-wider">Zadatek</div>
+                      <div className="font-black text-orange-950 text-xs sm:text-sm">{selectedEvent.zadatek}</div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -402,13 +421,23 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 text-xs block uppercase">Cena (np. 50 PLN)</label>
-                <input 
-                  type="text" value={form.cena} onChange={(e) => setForm({...form, cena: e.target.value})}
-                  placeholder="np. Darmowe, 100 PLN"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Cena wydarzenia</label>
+                  <input 
+                    type="text" value={form.cena} onChange={(e) => setForm({...form, cena: e.target.value})}
+                    placeholder="np. 1080 PLN"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Zadatek (opcjonalnie)</label>
+                  <input 
+                    type="text" value={form.zadatek} onChange={(e) => setForm({...form, zadatek: e.target.value})}
+                    placeholder="np. 300 PLN"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
               </div>
 
               <div className="space-y-1">
