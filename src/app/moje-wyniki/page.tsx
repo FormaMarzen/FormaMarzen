@@ -145,7 +145,10 @@ export default function MojeWynikiPage() {
 
   const handleSaveZapis = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!wybraneCwiczenie || !nowyWynikWartosc || !userEmail) return;
+    if (!wybraneCwiczenie || !nowyWynikWartosc || !userEmail) {
+      alert("Błąd: Upewnij się, że jesteś zalogowany i uzupełniłeś wynik.");
+      return;
+    }
 
     const istniejacyWynik = wynikiUzytkownika.find(w => w.cwiczenie_id === wybraneCwiczenie.id);
 
@@ -157,14 +160,24 @@ export default function MojeWynikiPage() {
     };
 
     if (istniejacyWynik) {
-      await supabase
+      const { error } = await supabase
         .from('wyniki_klubowiczow')
         .update(payload)
         .eq('id', istniejacyWynik.id);
+
+      if (error) {
+        alert("Błąd bazy danych podczas aktualizacji: " + error.message);
+        return;
+      }
     } else {
-      await supabase
+      const { error } = await supabase
         .from('wyniki_klubowiczow')
         .insert([payload]);
+        
+      if (error) {
+        alert("Błąd bazy danych podczas zapisu: " + error.message);
+        return;
+      }
     }
 
     await fetchData(); 
