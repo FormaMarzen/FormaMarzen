@@ -12,7 +12,7 @@ interface Wydarzenie {
   zadatek: string;
   opis: string;
   grafika_url: string | null;
-  status: string; // Nowa kolumna z bazy Supabase
+  status: string;
 }
 
 export default function WydarzeniaPage() {
@@ -35,7 +35,7 @@ export default function WydarzeniaPage() {
     zadatek: "",
     opis: "",
     grafika_url: "" as string | null,
-    status: "wkrotce" // Domyślny status przy tworzeniu
+    status: "wkrotce"
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -66,33 +66,27 @@ export default function WydarzeniaPage() {
     setIsLoading(false);
   };
 
-  // Logika sortowania wydarzeń na sekcje
   const dzisiajStr = new Date().toISOString().split('T')[0];
 
-  // 1. Przeszłe (jeśli data zakończenia minęła)
   const przeszle = wydarzenia.filter(w => {
     const dataKoniec = w.data_do || w.data_od;
     return dataKoniec < dzisiajStr;
   }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
 
-  // Przyszłe (trwające lub w przyszłości)
   const przyszle = wydarzenia.filter(w => {
     const dataKoniec = w.data_do || w.data_od;
     return dataKoniec >= dzisiajStr;
   });
 
-  // 2. Wkrótce (te, które mają status 'wkrotce' lub brak statusu dla zachowania kompatybilności wstecz)
   const wkrotce = przyszle
     .filter(w => w.status !== 'planowane')
     .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
 
-  // 3. Planowane (ręcznie wybrane jako planowane)
   const planowane = przyszle
     .filter(w => w.status === 'planowane')
     .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
 
 
-  // --- FUNKCJE ADMINA ---
   const handleOpenAdd = () => {
     setEditingId(null);
     setForm({ 
@@ -174,24 +168,23 @@ export default function WydarzeniaPage() {
     fetchData();
   };
 
-  // Formatowanie wyświetlania terminu
   const formatTermin = (od: string, doDnia: string) => {
     if (!doDnia || od === doDnia) return od;
     return `${od} — ${doDnia}`;
   };
 
-  // --- WIDOK KARTY WYDARZENIA ---
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => (
     <div 
       onClick={() => !isPast && (setSelectedEvent(w), setIsViewModalOpen(true))}
       className={`relative bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
-        isPast ? "opacity-50 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
+        isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
       }`}
     >
+      {/* Przyciski admina zawsze widoczne dla zalogowanego administratora */}
       {isAdmin && (
-        <div className="absolute top-3 right-3 flex gap-1.5 z-10 bg-white/90 p-1.5 rounded-xl backdrop-blur-md shadow-sm opacity-0 group-hover:opacity-100 transition-opacity">
-          <button onClick={(e) => handleOpenEdit(w, e)} className="w-8 h-8 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors">✏️</button>
-          <button onClick={(e) => handleDelete(w.id, e)} className="w-8 h-8 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors">🗑️</button>
+        <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
+          <button onClick={(e) => handleOpenEdit(w, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm">✏️</button>
+          <button onClick={(e) => handleDelete(w.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm">🗑️</button>
         </div>
       )}
 
@@ -201,7 +194,7 @@ export default function WydarzeniaPage() {
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎟️</div>
         )}
-        <div className="absolute bottom-3 left-3 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5">
+        <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
           <span>📅</span> {formatTermin(w.data_od, w.data_do)}
         </div>
       </div>
@@ -292,7 +285,7 @@ export default function WydarzeniaPage() {
       )}
 
       {przeszle.length > 0 && (
-        <div className="space-y-6 opacity-80">
+        <div className="space-y-6 opacity-90">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-black text-slate-400 uppercase tracking-tight">🕰️ Przeszłe wydarzenia</h2>
             <div className="h-px bg-slate-200 flex-grow"></div>
@@ -303,57 +296,90 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* MODAL PODGLĄDU KLUBOWICZA */}
+      {/* NOWY, PIĘKNY MODAL PODGLĄDU KLUBOWICZA */}
       {isViewModalOpen && selectedEvent && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-200 my-8">
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
+          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
+            
+            {/* Przycisk zamykania */}
             <button 
               onClick={() => setIsViewModalOpen(false)} 
-              className="absolute top-4 right-4 z-20 bg-slate-900/50 hover:bg-slate-900 text-white w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer"
+              className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
             >✕</button>
             
-            <div className="w-full h-64 sm:h-80 bg-slate-100 relative">
+            {/* Sekcja pełnego plakatu z ładnym, kinowym tłem */}
+            <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: '300px', maxHeight: '65vh' }}>
               {selectedEvent.grafika_url ? (
-                <img src={selectedEvent.grafika_url} alt="Cover" className="w-full h-full object-cover" />
+                <>
+                  <div 
+                    className="absolute inset-0 opacity-40 blur-2xl bg-cover bg-center scale-110" 
+                    style={{ backgroundImage: `url(${selectedEvent.grafika_url})` }}
+                  ></div>
+                  <img 
+                    src={selectedEvent.grafika_url} 
+                    alt="Plakat wydarzenia" 
+                    className="relative z-10 w-full h-full object-contain max-h-[65vh] drop-shadow-2xl" 
+                  />
+                </>
               ) : (
-                <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-100 flex items-center justify-center text-6xl">🎉</div>
+                <div className="w-full h-full min-h-[300px] bg-gradient-to-br from-sky-900 to-slate-800 flex flex-col items-center justify-center text-sky-100">
+                  <span className="text-7xl mb-4 drop-shadow-lg">🎉</span>
+                  <span className="font-black text-xl tracking-widest uppercase opacity-50">Brak plakatu</span>
+                </div>
               )}
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 to-transparent"></div>
-              <div className="absolute bottom-6 left-6 right-6">
-                <h2 className="text-2xl sm:text-3xl font-black text-white leading-tight">{selectedEvent.tytul}</h2>
-              </div>
             </div>
 
-            <div className="p-6 sm:p-8 space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-slate-100 pb-6">
-                <div className="flex items-center gap-3 bg-sky-50 px-4 py-2.5 rounded-2xl">
-                  <span className="text-2xl">📅</span>
+            {/* Treść wydarzenia */}
+            <div className="p-6 sm:p-10 space-y-8">
+              
+              {/* Tytuł centralny */}
+              <div className="text-center">
+                <h2 className="text-3xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter">{selectedEvent.tytul}</h2>
+                <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-5 rounded-full"></div>
+              </div>
+
+              {/* Kafelki z kluczowymi informacjami */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-sky-100">
+                  <span className="text-3xl">📅</span>
                   <div>
-                    <div className="text-[10px] font-bold text-sky-600 uppercase tracking-wider">Termin</div>
-                    <div className="font-black text-sky-950 text-xs sm:text-sm">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
+                    <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest">Termin</div>
+                    <div className="font-black text-sky-950 text-sm mt-0.5">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 bg-amber-50 px-4 py-2.5 rounded-2xl">
-                  <span className="text-2xl">💳</span>
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-amber-100">
+                  <span className="text-3xl">💳</span>
                   <div>
-                    <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Cena wydarzenia</div>
-                    <div className="font-black text-amber-950 text-xs sm:text-sm">{selectedEvent.cena || "Darmowe"}</div>
+                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Koszt udziału</div>
+                    <div className="font-black text-amber-950 text-sm mt-0.5">{selectedEvent.cena || "Darmowe"}</div>
                   </div>
                 </div>
-                {selectedEvent.zadatek && (
-                  <div className="flex items-center gap-3 bg-orange-50 px-4 py-2.5 rounded-2xl">
-                    <span className="text-2xl">💰</span>
+                
+                {selectedEvent.zadatek ? (
+                  <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-orange-100">
+                    <span className="text-3xl">💰</span>
                     <div>
-                      <div className="text-[10px] font-bold text-orange-700 uppercase tracking-wider">Zadatek</div>
-                      <div className="font-black text-orange-950 text-xs sm:text-sm">{selectedEvent.zadatek}</div>
+                      <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">Zadatek</div>
+                      <div className="font-black text-orange-950 text-sm mt-0.5">{selectedEvent.zadatek}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-emerald-100">
+                    <span className="text-3xl">✅</span>
+                    <div>
+                      <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Rezerwacja</div>
+                      <div className="font-black text-emerald-950 text-sm mt-0.5">Brak zadatku</div>
                     </div>
                   </div>
                 )}
               </div>
 
-              <div>
-                <h3 className="font-black text-sm text-slate-400 uppercase tracking-wider mb-3">Opis wydarzenia</h3>
-                <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
+              {/* Sekcja opisu ze sformatowanym układem */}
+              <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
+                <h3 className="font-black text-sm text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-3">
+                  <span className="text-xl">📝</span> Szczegóły wydarzenia
+                </h3>
+                <div className="text-slate-700 text-base leading-loose whitespace-pre-wrap font-medium">
                   {selectedEvent.opis || "Organizator nie podał jeszcze szczegółowego opisu tego wydarzenia."}
                 </div>
               </div>
