@@ -161,6 +161,7 @@ export default function RootLayout({
         { href: '/', label: 'Panel główny', icon: '📊' },
         { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/kreator-treningow', label: 'Kreator treningów', icon: '🛠️' },
+        { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
       ]
     },
     {
