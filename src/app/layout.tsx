@@ -160,6 +160,7 @@ export default function RootLayout({
         { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/kreator-treningow', label: 'Kreator treningów', icon: '🛠️' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
+        { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
       ]
     },
     {
