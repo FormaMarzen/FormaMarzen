@@ -37,7 +37,6 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Zabezpieczenie ścieżek - publiczne to login i rejestracja
   const isPublicPage = pathname === '/login' || pathname?.startsWith('/rejestracja');
 
   useEffect(() => {
@@ -131,7 +130,6 @@ export default function RootLayout({
           
           setProfileAvatar(compressedDataUrl);
           
-          // Trwały zapis do bazy danych
           const { error } = await supabase
             .from('klienci')
             .update({ avatarUrl: compressedDataUrl })
@@ -216,7 +214,7 @@ export default function RootLayout({
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
-        { href: '/ambasador', label: 'Program Ambasador', icon: '👥' },
+        { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
