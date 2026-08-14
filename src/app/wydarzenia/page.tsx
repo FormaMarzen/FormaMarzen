@@ -12,6 +12,7 @@ interface Wydarzenie {
   zadatek: string;
   opis: string;
   grafika_url: string | null;
+  status: string; // Nowa kolumna z bazy Supabase
 }
 
 export default function WydarzeniaPage() {
@@ -33,7 +34,8 @@ export default function WydarzeniaPage() {
     cena: "",
     zadatek: "",
     opis: "",
-    grafika_url: "" as string | null
+    grafika_url: "" as string | null,
+    status: "wkrotce" // Domyślny status przy tworzeniu
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -64,31 +66,31 @@ export default function WydarzeniaPage() {
     setIsLoading(false);
   };
 
-  // Logika sortowania wydarzeń na sekcje na podstawie daty zakończenia/rozpoczęcia
+  // Logika sortowania wydarzeń na sekcje
   const dzisiajStr = new Date().toISOString().split('T')[0];
-  const dzisiajTime = new Date(dzisiajStr).getTime();
 
+  // 1. Przeszłe (jeśli data zakończenia minęła)
   const przeszle = wydarzenia.filter(w => {
     const dataKoniec = w.data_do || w.data_od;
     return dataKoniec < dzisiajStr;
   }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
 
+  // Przyszłe (trwające lub w przyszłości)
   const przyszle = wydarzenia.filter(w => {
     const dataKoniec = w.data_do || w.data_od;
     return dataKoniec >= dzisiajStr;
   });
 
-  const najblizsze = przyszle.filter(w => {
-    const czasWydarzenia = new Date(w.data_od).getTime();
-    const roznicaDni = (czasWydarzenia - dzisiajTime) / (1000 * 3600 * 24);
-    return roznicaDni <= 14;
-  });
+  // 2. Wkrótce (te, które mają status 'wkrotce' lub brak statusu dla zachowania kompatybilności wstecz)
+  const wkrotce = przyszle
+    .filter(w => w.status !== 'planowane')
+    .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
 
-  const wkrotce = przyszle.filter(w => {
-    const czasWydarzenia = new Date(w.data_od).getTime();
-    const roznicaDni = (czasWydarzenia - dzisiajTime) / (1000 * 3600 * 24);
-    return roznicaDni > 14;
-  });
+  // 3. Planowane (ręcznie wybrane jako planowane)
+  const planowane = przyszle
+    .filter(w => w.status === 'planowane')
+    .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+
 
   // --- FUNKCJE ADMINA ---
   const handleOpenAdd = () => {
@@ -100,7 +102,8 @@ export default function WydarzeniaPage() {
       cena: "", 
       zadatek: "", 
       opis: "", 
-      grafika_url: null 
+      grafika_url: null,
+      status: "wkrotce"
     });
     setIsAdminModalOpen(true);
   };
@@ -115,7 +118,8 @@ export default function WydarzeniaPage() {
       cena: w.cena || "",
       zadatek: w.zadatek || "",
       opis: w.opis || "",
-      grafika_url: w.grafika_url
+      grafika_url: w.grafika_url,
+      status: w.status || "wkrotce"
     });
     setIsAdminModalOpen(true);
   };
@@ -263,18 +267,6 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {najblizsze.length > 0 && (
-        <div className="space-y-6">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-black text-sky-950 uppercase tracking-tight">🔥 Najbliższe</h2>
-            <div className="h-px bg-sky-200 flex-grow"></div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {najblizsze.map(w => <EventCard key={w.id} w={w} />)}
-          </div>
-        </div>
-      )}
-
       {wkrotce.length > 0 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3">
@@ -283,6 +275,18 @@ export default function WydarzeniaPage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {wkrotce.map(w => <EventCard key={w.id} w={w} />)}
+          </div>
+        </div>
+      )}
+
+      {planowane.length > 0 && (
+        <div className="space-y-6">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-black text-sky-950 uppercase tracking-tight">📅 Planowane</h2>
+            <div className="h-px bg-sky-200 flex-grow"></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {planowane.map(w => <EventCard key={w.id} w={w} />)}
           </div>
         </div>
       )}
@@ -395,8 +399,23 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
+              {/* SEKACJA WYBORU STATUSU WYDARZENIA */}
+              <div className="space-y-2 pt-2 pb-2">
+                <label className="font-bold text-slate-700 text-xs block uppercase">Gdzie wyświetlić wydarzenie?</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'wkrotce' ? 'border-sky-500 bg-sky-50 text-sky-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    <input type="radio" name="status" value="wkrotce" checked={form.status === 'wkrotce'} onChange={() => setForm({...form, status: 'wkrotce'})} className="hidden" />
+                    <span className="font-black text-sm">⏳ Wkrótce</span>
+                  </label>
+                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'planowane' ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    <input type="radio" name="status" value="planowane" checked={form.status === 'planowane'} onChange={() => setForm({...form, status: 'planowane'})} className="hidden" />
+                    <span className="font-black text-sm">📅 Planowane</span>
+                  </label>
+                </div>
+              </div>
+
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 text-xs block uppercase mt-4">Tytuł wydarzenia</label>
+                <label className="font-bold text-slate-700 text-xs block uppercase">Tytuł wydarzenia</label>
                 <input 
                   type="text" required value={form.tytul} onChange={(e) => setForm({...form, tytul: e.target.value})}
                   placeholder="np. Obóz sportowy WAŁCZ"
