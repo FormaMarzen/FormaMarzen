@@ -210,7 +210,8 @@ export default function DashboardPage() {
           ...z,
           id: z.klient_id,
           status: z.status,
-          obecny: z.obecny
+          obecny: z.obecny,
+          nieobecny: z.nieobecny
         });
       });
       setZapisyNaZajecia(grouped);
@@ -678,8 +679,21 @@ export default function DashboardPage() {
     const szukany = aktualni.find(k => k.id === klientId);
     if (!szukany) return;
     const nowyStanObecny = !szukany.obecny;
-    await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny }).eq('class_key', classKey).eq('klient_id', klientId);
+    await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny, nieobecny: false }).eq('class_key', classKey).eq('klient_id', klientId);
     loadData();
+  };
+
+  const toggleNieobecnyAction = async (osobaZapisana: any, klient: any) => {
+    if (!selectedClass) return;
+    if (osobaZapisana.nieobecny) {
+      const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+      await supabase.from('zapisy_zajec').update({ nieobecny: false, obecny: false }).eq('class_key', classKey).eq('klient_id', klient.id);
+      loadData();
+    } else {
+      setBlokadaZapisow(true);
+      setDlugoscBlokady('3');
+      setClientToMarkAbsent(klient);
+    }
   };
 
   const handleKlubowiczZapiszSie = async () => {
@@ -819,7 +833,7 @@ export default function DashboardPage() {
   const handlePotwierdzNieobecnosc = async () => {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const { error } = await supabase.from('zapisy_zajec').update({ obecny: false }).eq('class_key', classKey).eq('klient_id', clientToMarkAbsent.id);
+    const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).eq('class_key', classKey).eq('klient_id', clientToMarkAbsent.id);
     if (error) { console.error("Błąd oznaczania nieobecności:", error); alert(`Nie udało się oznaczyć: ${error.message}`); return; }
     await supabase.from('transakcje').insert([{ klient_id: clientToMarkAbsent.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Został oznaczony jako NIEOBECNY na zajęciach ${selectedClass.title}.` }]);
     if (blokadaZapisow) {
@@ -1718,30 +1732,43 @@ export default function DashboardPage() {
                           </div>
                         </div>
                         {appRole === 'admin' && (
-                          <div className="flex items-center justify-between border-t border-sky-100 pt-3 text-xs">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={osobaZapisana.obecny ?? false}
-                                onChange={() => toggleObecny(osoba.id)}
-                                className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
-                              />
-                              <span className="font-black text-amber-700 tracking-wider">OBECNY</span>
-                            </label>
-                            <div className="flex gap-3">
-                              <button
-                                onClick={() => { setBlokadaZapisow(true); setClientToMarkAbsent(osoba); }}
-                                className="text-amber-600 hover:text-amber-800 font-bold uppercase tracking-wider text-[11px]"
-                              >
-                                NIEOBECNY
-                              </button>
+                          <div className="flex items-center justify-end gap-2 border-t border-sky-100 pt-3 text-xs w-full">
+                            {(!osobaZapisana.nieobecny) && (
+                              <label className={`flex items-center gap-2 px-3 py-2 rounded-xl border font-black uppercase tracking-wider text-[10px] cursor-pointer transition-all shadow-sm ${
+                                osobaZapisana.obecny ? 'bg-emerald-100 border-emerald-400 text-emerald-800 ring-2 ring-emerald-200' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-white hover:border-emerald-300 hover:text-emerald-600'
+                              }`}>
+                                <input
+                                  type="checkbox"
+                                  checked={osobaZapisana.obecny ?? false}
+                                  onChange={() => toggleObecny(osoba.id)}
+                                  className="hidden"
+                                />
+                                {osobaZapisana.obecny ? '✅ OBECNY' : 'OBECNY'}
+                              </label>
+                            )}
+
+                            {(!osobaZapisana.obecny) && (
+                              <label className={`flex items-center gap-2 px-3 py-2 rounded-xl border font-black uppercase tracking-wider text-[10px] cursor-pointer transition-all shadow-sm ${
+                                osobaZapisana.nieobecny ? 'bg-amber-100 border-amber-400 text-amber-800 ring-2 ring-amber-200' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-white hover:border-amber-300 hover:text-amber-600'
+                              }`}>
+                                <input
+                                  type="checkbox"
+                                  checked={osobaZapisana.nieobecny ?? false}
+                                  onChange={() => toggleNieobecnyAction(osobaZapisana, osoba)}
+                                  className="hidden"
+                                />
+                                {osobaZapisana.nieobecny ? '🚫 NIEOBECNY' : 'NIEOBECNY'}
+                              </label>
+                            )}
+
+                            {(!osobaZapisana.obecny && !osobaZapisana.nieobecny) && (
                               <button
                                 onClick={() => { setBlokadaZapisow(false); setClientToUnregister(osoba); }}
-                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+                                className="px-3 py-2 text-rose-500 hover:text-rose-700 bg-slate-50 hover:bg-rose-50 font-black uppercase tracking-wider text-[10px] rounded-xl border border-slate-200 hover:border-rose-200 transition-all shadow-sm"
                               >
                                 WYPISZ
                               </button>
-                            </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -2394,7 +2421,7 @@ export default function DashboardPage() {
       )}
 
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
-        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
