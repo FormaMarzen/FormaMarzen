@@ -67,8 +67,11 @@ export default function DashboardPage() {
   const [clientToUnregister, setClientToUnregister] = useState<any | null>(null);
   const [blokadaZapisow, setBlokadaZapisow] = useState(false);
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
   // Funkcje pomocnicze
+  const toggleDay = (dateStr: string) => setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
+
   const isWalletNegative = (walletStr: string) => {
     if (!walletStr) return false;
     return walletStr.includes('-');
@@ -834,7 +837,6 @@ export default function DashboardPage() {
     const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
     return new Date(dCopy.setDate(diff));
   };
-
   const today = new Date();
   const currentMonday = getMonday(new Date());
   const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
@@ -996,6 +998,112 @@ export default function DashboardPage() {
     const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
     const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
     const isPastDay = col.isoDate < todayStr;
+    const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
+    const isExpanded = expandedDays[col.isoDate] || false;
+
+    const renderEventsAndClasses = () => (
+      <>
+        {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
+        <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm">
+        <div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
+        {wydarzenie.title}
+        </div>
+        <div className="text-[11px] text-rose-900 font-bold">
+        Odwołano zajęcia z powodu wydarzenia
+        </div>
+        </div>
+        ))}
+        <div className="space-y-3">
+        {zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
+        <div className="py-12 text-center text-xs text-slate-400 font-medium">
+        Brak zajęć w tym dniu.
+        </div>
+        ) : (
+        zajeciaDnia.map((item: any, classIdx: number) => {
+        const durationText = calculateDuration(item.start, item.end);
+        const classKey = `${item.id}_${col.date}`;
+        const zapisani = zapisyNaZajecia[classKey] || [];
+        const limitZajec = item.limit || 12;
+        const liczbaGlowna = Math.min(zapisani.length, limitZajec);
+        const liczbaKrzesełko = Math.max(0, zapisani.length - limitZajec);
+        const isFull = zapisani.length >= limitZajec;
+        const topColor = getTopBorderColor(item.title, item.isOdwołane, item.isUsunięte);
+        const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
+        const isPastEvent = isPastDay || isPastTime;
+        const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
+        return (
+        <div
+        key={classIdx}
+        onClick={() => {
+        if (item.isOdwołane || item.isUsunięte) return;
+        if (isLockedForClient) {
+        alert("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.");
+        return;
+        }
+        setSelectedClass({
+        ...item,
+        displayDate: col.date,
+        durationText
+        });
+        setIsSearchingClient(false);
+        setSearchClientQuery('');
+        }}
+        style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
+        className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all relative ${
+        item.isOdwołane || item.isUsunięte
+        ? 'border-rose-200 opacity-80 cursor-default'
+        : isLockedForClient
+        ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
+        : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
+        }`}
+        >
+        <div className="flex justify-between items-start">
+        <div>
+        <span className="text-base font-black text-slate-900">{item.start}</span>
+        <h3 className="text-xs font-bold text-slate-800 mt-0.5">{item.title}</h3>
+        </div>
+        {isLockedForClient && !item.isOdwołane && !item.isUsunięte && (
+        <div className="text-slate-400 text-sm" title="Zajęcia zablokowane (minęły)">
+        🔒
+        </div>
+        )}
+        </div>
+        {item.isOdwołane ? (
+        <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
+        ODWOŁANE
+        </div>
+        ) : item.isUsunięte ? (
+        <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
+        USUNIĘTE
+        </div>
+        ) : (
+        <div className="flex items-center gap-2 flex-wrap">
+        <span className={`font-bold px-2 py-0.5 rounded text-[11px] border ${
+        isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+        }`}>
+        👥 {liczbaGlowna}/{limitZajec}
+        </span>
+        {liczbaKrzesełko > 0 && (
+        <span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200 flex items-center gap-1">
+        🪑 {liczbaKrzesełko}
+        </span>
+        )}
+        </div>
+        )}
+        <div className="text-[11px] text-slate-500 font-medium">
+        ⏱ {durationText}
+        </div>
+        <div className="text-[11px] text-slate-600 font-medium border-t border-slate-100 pt-2 flex items-center gap-1.5">
+        <span>👤</span> {item.trainer || 'Brak trenera'}
+        </div>
+        </div>
+        );
+        })
+        )}
+        </div>
+      </>
+    );
+
     return (
     <div
     key={idx}
@@ -1008,107 +1116,24 @@ export default function DashboardPage() {
     <div className={`text-xs font-black uppercase tracking-wider border-b pb-2 mb-2 text-center ${
     isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
     }`}>
-      <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
+    <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
     <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
     </div>
-    {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
-    <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm">
-    <div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
-    {wydarzenie.title}
-    </div>
-    <div className="text-[11px] text-rose-900 font-bold">
-    Odwołano zajęcia z powodu wydarzenia
-    </div>
-    </div>
-    ))}
-    <div className="space-y-3">
-    {zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
-    <div className="py-12 text-center text-xs text-slate-400 font-medium">
-    Brak zajęć w tym dniu.
-    </div>
+    
+    {isPastDay && hasAnyItems ? (
+      <div className="space-y-3">
+        <button onClick={() => toggleDay(col.isoDate)} className="w-full bg-slate-200/60 hover:bg-slate-300/80 text-slate-600 font-bold text-[10px] uppercase tracking-wider py-2 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-200">
+          {isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`}
+        </button>
+        {isExpanded && (
+          <div className="space-y-3 mt-3 animate-in fade-in slide-in-from-top-2 duration-200">
+            {renderEventsAndClasses()}
+          </div>
+        )}
+      </div>
     ) : (
-    zajeciaDnia.map((item: any, classIdx: number) => {
-    const durationText = calculateDuration(item.start, item.end);
-    const classKey = `${item.id}_${col.date}`;
-    const zapisani = zapisyNaZajecia[classKey] || [];
-    const limitZajec = item.limit || 12;
-    const liczbaGlowna = Math.min(zapisani.length, limitZajec);
-    const liczbaKrzesełko = Math.max(0, zapisani.length - limitZajec);
-    const isFull = zapisani.length >= limitZajec;
-    const topColor = getTopBorderColor(item.title, item.isOdwołane, item.isUsunięte);
-    const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
-    const isPastEvent = isPastDay || isPastTime;
-    const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
-    return (
-    <div
-    key={classIdx}
-    onClick={() => {
-    if (item.isOdwołane || item.isUsunięte) return;
-    if (isLockedForClient) {
-    alert("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.");
-    return;
-    }
-    setSelectedClass({
-    ...item,
-    displayDate: col.date,
-    durationText
-    });
-    setIsSearchingClient(false);
-    setSearchClientQuery('');
-    }}
-    style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
-    className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all relative ${
-    item.isOdwołane || item.isUsunięte
-    ? 'border-rose-200 opacity-80 cursor-default'
-    : isLockedForClient
-    ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
-    : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
-    }`}
-    >
-    <div className="flex justify-between items-start">
-    <div>
-    <span className="text-base font-black text-slate-900">{item.start}</span>
-    <h3 className="text-xs font-bold text-slate-800 mt-0.5">{item.title}</h3>
-    </div>
-    {isLockedForClient && !item.isOdwołane && !item.isUsunięte && (
-    <div className="text-slate-400 text-sm" title="Zajęcia zablokowane (minęły)">
-    🔒
-    </div>
+      renderEventsAndClasses()
     )}
-    </div>
-    {item.isOdwołane ? (
-    <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
-    ODWOŁANE
-    </div>
-    ) : item.isUsunięte ? (
-    <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
-    USUNIĘTE
-    </div>
-    ) : (
-    <div className="flex items-center gap-2 flex-wrap">
-    <span className={`font-bold px-2 py-0.5 rounded text-[11px] border ${
-    isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-    }`}>
-    👥 {liczbaGlowna}/{limitZajec}
-    </span>
-    {liczbaKrzesełko > 0 && (
-    <span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200 flex items-center gap-1">
-    🪑 {liczbaKrzesełko}
-    </span>
-    )}
-    </div>
-    )}
-    <div className="text-[11px] text-slate-500 font-medium">
-    ⏱ {durationText}
-    </div>
-    <div className="text-[11px] text-slate-600 font-medium border-t border-slate-100 pt-2 flex items-center gap-1.5">
-    <span>👤</span> {item.trainer || 'Brak trenera'}
-    </div>
-    </div>
-    );
-    })
-    )}
-    </div>
     </div>
     );
     })}
