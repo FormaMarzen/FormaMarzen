@@ -138,7 +138,7 @@ export default function MojeWynikiPage() {
     alert("Wynik został pomyślnie zaktualizowany!");
   };
 
-  // --- OBSŁUGA ADMINA (DODAWANIE / EDYCJA / USUWANIE) ---
+  // --- OBSŁUGA ADMINA (DODAWANIE / EDYCJA / USUWANIE KAFELKÓW) ---
   
   // Otwarcie modala w trybie DODAWANIA
   const handleOpenAdminAddModal = () => {
@@ -164,7 +164,7 @@ export default function MojeWynikiPage() {
     e.preventDefault();
     
     if (editingCwiczenieId) {
-      // AKTUALIZACJA ISTNIEJĄCEGO
+      // AKTUALIZACJA ISTNIEJĄCEGO KAFELKA
       const { error } = await supabase
         .from('cwiczenia_slownik')
         .update({
@@ -182,7 +182,7 @@ export default function MojeWynikiPage() {
       alert("Kafelek został pomyślnie zaktualizowany!");
 
     } else {
-      // DODANIE NOWEGO
+      // DODANIE NOWEGO KAFELKA
       const { error } = await supabase
         .from('cwiczenia_slownik')
         .insert([{
@@ -203,9 +203,9 @@ export default function MojeWynikiPage() {
     await fetchData();
   };
 
-  // Usuwanie ćwiczenia (kafelka)
+  // Usuwanie ćwiczenia (kafelka) z bazy
   const handleDeleteCwiczenie = async (id: number) => {
-    const isConfirmed = window.confirm("Czy na pewno chcesz usunąć to ćwiczenie? Ta operacja jest nieodwracalna.");
+    const isConfirmed = window.confirm("Czy na pewno chcesz usunąć ten kafelek z ćwiczeniem? Ta operacja usunie go wszystkim klubowiczom.");
     
     if (isConfirmed) {
       const { error } = await supabase
@@ -216,7 +216,7 @@ export default function MojeWynikiPage() {
       if (error) {
         alert("Błąd podczas usuwania: " + error.message);
       } else {
-        alert("Ćwiczenie zostało usunięte!");
+        alert("Ćwiczenie zostało usunięte z bazy!");
         await fetchData(); // Odświeżenie widoku
       }
     }
@@ -248,7 +248,7 @@ export default function MojeWynikiPage() {
             className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
           >
             <span>+</span>
-            DODAJ ĆWICZENIE (ADMIN)
+            DODAJ ĆWICZENIE
           </button>
         )}
       </div>
@@ -279,21 +279,21 @@ export default function MojeWynikiPage() {
           return (
             <div 
               key={cwiczenie.id} 
-              className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm hover:shadow-md hover:border-sky-300 transition-all duration-300 group flex flex-col justify-between relative"
+              className="relative bg-white rounded-3xl p-6 border border-sky-100 shadow-sm hover:shadow-md hover:border-sky-300 transition-all duration-300 flex flex-col justify-between"
             >
-              {/* Opcje edycji/usuwania dla Admina w rogu kafelka */}
+              {/* ZAWSZE WIDOCZNE KLAWISZE EDYCJI/USUWANIA DLA ADMINA (przystosowane do iPada) */}
               {isAdmin && (
-                <div className="absolute top-4 right-4 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-4 right-4 flex gap-1.5 z-10 bg-white/80 p-1 rounded-xl backdrop-blur-sm">
                   <button 
-                    onClick={() => handleOpenAdminEditModal(cwiczenie)}
-                    className="p-2 bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 cursor-pointer transition-colors"
+                    onClick={(e) => { e.preventDefault(); handleOpenAdminEditModal(cwiczenie); }}
+                    className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm border border-sky-200 cursor-pointer"
                     title="Edytuj kafelek"
                   >
                     ✏️
                   </button>
                   <button 
-                    onClick={() => handleDeleteCwiczenie(cwiczenie.id)}
-                    className="p-2 bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 cursor-pointer transition-colors"
+                    onClick={(e) => { e.preventDefault(); handleDeleteCwiczenie(cwiczenie.id); }}
+                    className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm border border-rose-200 cursor-pointer"
                     title="Usuń kafelek"
                   >
                     🗑️
@@ -306,17 +306,10 @@ export default function MojeWynikiPage() {
                   <span className="text-[10px] font-bold uppercase tracking-wider text-sky-600 bg-sky-50 px-2.5 py-1 rounded-lg">
                     {cwiczenie.kategoria}
                   </span>
-                  {/* Ikona w rogu dla zwykłego usera */}
-                  {!isAdmin && (
-                    <span className="text-slate-300 group-hover:text-amber-500 transition-colors">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                      </svg>
-                    </span>
-                  )}
                 </div>
                 
-                <h3 className="font-black text-lg text-sky-950 leading-tight mb-6 pr-12">
+                {/* Margines po prawej (pr-20), żeby nazwa ćwiczenia nie wchodziła pod przyciski edycji */}
+                <h3 className="font-black text-lg text-sky-950 leading-tight mb-6 pr-20">
                   {cwiczenie.nazwa}
                 </h3>
 
@@ -341,7 +334,7 @@ export default function MojeWynikiPage() {
 
               <button 
                 onClick={() => handleOpenModal(cwiczenie)}
-                className="w-full py-3 rounded-xl bg-sky-50 text-sky-900 font-bold text-xs uppercase tracking-wider group-hover:bg-sky-900 group-hover:text-white transition-colors duration-300 border border-sky-100 flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-3 rounded-xl bg-sky-50 text-sky-900 font-bold text-xs uppercase tracking-wider hover:bg-sky-900 hover:text-white transition-colors duration-300 border border-sky-100 flex items-center justify-center gap-2 cursor-pointer"
               >
                 <span>+</span> Aktualizuj wynik
               </button>
@@ -417,7 +410,7 @@ export default function MojeWynikiPage() {
         </div>
       )}
 
-      {/* MODAL ADMINA: DODAWANIE / EDYCJA ĆWICZENIA W BAZIE */}
+      {/* MODAL ADMINA: DODAWANIE / EDYCJA KAFELKA Z BAZY */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200 border-2 border-sky-900">
@@ -432,7 +425,7 @@ export default function MojeWynikiPage() {
                 {editingCwiczenieId ? "Edytuj Kafelek" : "Dodaj Kafelek"}
               </h3>
               <p className="text-sm font-bold text-slate-500 mt-1">
-                {editingCwiczenieId ? "Zmień dane istniejącego ćwiczenia" : "Kreator nowego ćwiczenia w bazie"}
+                {editingCwiczenieId ? "Zmień dane tego ćwiczenia dla całego klubu" : "Kreator nowego ćwiczenia w bazie"}
               </p>
             </div>
             <form onSubmit={handleAdminSave} className="space-y-4">
