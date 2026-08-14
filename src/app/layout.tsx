@@ -218,6 +218,7 @@ export default function RootLayout({
       title: "Aktywność",
       items: [
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
+        { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
       ]
     },
     {
