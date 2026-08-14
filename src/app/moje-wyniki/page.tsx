@@ -38,8 +38,9 @@ export default function MojeWynikiPage() {
   const [nowyWynikWartosc, setNowyWynikWartosc] = useState<string>("");
   const [nowyWynikData, setNowyWynikData] = useState<string>(new Date().toISOString().split('T')[0]);
 
-  // Modal Admina (dodawanie nowego kafelka ćwiczenia)
+  // Modal Admina (dodawanie / edycja kafelka ćwiczenia)
   const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
+  const [editingCwiczenieId, setEditingCwiczenieId] = useState<number | null>(null); // null = tryb dodawania, liczba = tryb edycji
   const [adminForm, setAdminForm] = useState({
     nazwa: "",
     kategoria: "Siła",
@@ -137,28 +138,88 @@ export default function MojeWynikiPage() {
     alert("Wynik został pomyślnie zaktualizowany!");
   };
 
-  // --- OBSŁUGA ADMINA ---
+  // --- OBSŁUGA ADMINA (DODAWANIE / EDYCJA / USUWANIE) ---
+  
+  // Otwarcie modala w trybie DODAWANIA
+  const handleOpenAdminAddModal = () => {
+    setEditingCwiczenieId(null);
+    setAdminForm({ nazwa: "", kategoria: "Siła", jednostka: "kg", typ: "waga" });
+    setIsAdminModalOpen(true);
+  };
+
+  // Otwarcie modala w trybie EDYCJI
+  const handleOpenAdminEditModal = (cwiczenie: CwiczenieDefinicja) => {
+    setEditingCwiczenieId(cwiczenie.id);
+    setAdminForm({
+      nazwa: cwiczenie.nazwa,
+      kategoria: cwiczenie.kategoria,
+      jednostka: cwiczenie.jednostka,
+      typ: cwiczenie.typ
+    });
+    setIsAdminModalOpen(true);
+  };
+
+  // Zapis modala (obsługuje i nowy wpis, i aktualizację)
   const handleAdminSave = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const { error } = await supabase
-      .from('cwiczenia_slownik')
-      .insert([{
-        nazwa: adminForm.nazwa,
-        kategoria: adminForm.kategoria,
-        jednostka: adminForm.jednostka,
-        typ: adminForm.typ
-      }]);
+    if (editingCwiczenieId) {
+      // AKTUALIZACJA ISTNIEJĄCEGO
+      const { error } = await supabase
+        .from('cwiczenia_slownik')
+        .update({
+          nazwa: adminForm.nazwa,
+          kategoria: adminForm.kategoria,
+          jednostka: adminForm.jednostka,
+          typ: adminForm.typ
+        })
+        .eq('id', editingCwiczenieId);
 
-    if (error) {
-      alert("Błąd podczas dodawania ćwiczenia: " + error.message);
-      return;
+      if (error) {
+        alert("Błąd podczas edycji ćwiczenia: " + error.message);
+        return;
+      }
+      alert("Kafelek został pomyślnie zaktualizowany!");
+
+    } else {
+      // DODANIE NOWEGO
+      const { error } = await supabase
+        .from('cwiczenia_slownik')
+        .insert([{
+          nazwa: adminForm.nazwa,
+          kategoria: adminForm.kategoria,
+          jednostka: adminForm.jednostka,
+          typ: adminForm.typ
+        }]);
+
+      if (error) {
+        alert("Błąd podczas dodawania ćwiczenia: " + error.message);
+        return;
+      }
+      alert("Nowy kafelek ćwiczenia został dodany do bazy!");
     }
 
-    setAdminForm({ nazwa: "", kategoria: "Siła", jednostka: "kg", typ: "waga" });
     setIsAdminModalOpen(false);
     await fetchData();
-    alert("Nowy kafelek ćwiczenia został dodany do bazy!");
+  };
+
+  // Usuwanie ćwiczenia (kafelka)
+  const handleDeleteCwiczenie = async (id: number) => {
+    const isConfirmed = window.confirm("Czy na pewno chcesz usunąć to ćwiczenie? Ta operacja jest nieodwracalna.");
+    
+    if (isConfirmed) {
+      const { error } = await supabase
+        .from('cwiczenia_slownik')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        alert("Błąd podczas usuwania: " + error.message);
+      } else {
+        alert("Ćwiczenie zostało usunięte!");
+        await fetchData(); // Odświeżenie widoku
+      }
+    }
   };
 
   if (isLoading) {
@@ -183,8 +244,8 @@ export default function MojeWynikiPage() {
         {/* PANEL ADMINA - Widoczny tylko dla Ciebie */}
         {isAdmin && (
           <button 
-            onClick={() => setIsAdminModalOpen(true)}
-            className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
+            onClick={handleOpenAdminAddModal}
+            className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
           >
             <span>+</span>
             DODAJ ĆWICZENIE (ADMIN)
@@ -218,21 +279,44 @@ export default function MojeWynikiPage() {
           return (
             <div 
               key={cwiczenie.id} 
-              className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm hover:shadow-md hover:border-sky-300 transition-all duration-300 group flex flex-col justify-between"
+              className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm hover:shadow-md hover:border-sky-300 transition-all duration-300 group flex flex-col justify-between relative"
             >
+              {/* Opcje edycji/usuwania dla Admina w rogu kafelka */}
+              {isAdmin && (
+                <div className="absolute top-4 right-4 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button 
+                    onClick={() => handleOpenAdminEditModal(cwiczenie)}
+                    className="p-2 bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 cursor-pointer transition-colors"
+                    title="Edytuj kafelek"
+                  >
+                    ✏️
+                  </button>
+                  <button 
+                    onClick={() => handleDeleteCwiczenie(cwiczenie.id)}
+                    className="p-2 bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 cursor-pointer transition-colors"
+                    title="Usuń kafelek"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              )}
+
               <div>
                 <div className="flex justify-between items-start mb-4">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-sky-600 bg-sky-50 px-2.5 py-1 rounded-lg">
                     {cwiczenie.kategoria}
                   </span>
-                  <span className="text-slate-300 group-hover:text-amber-500 transition-colors">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                    </svg>
-                  </span>
+                  {/* Ikona w rogu dla zwykłego usera */}
+                  {!isAdmin && (
+                    <span className="text-slate-300 group-hover:text-amber-500 transition-colors">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                      </svg>
+                    </span>
+                  )}
                 </div>
                 
-                <h3 className="font-black text-lg text-sky-950 leading-tight mb-6">
+                <h3 className="font-black text-lg text-sky-950 leading-tight mb-6 pr-12">
                   {cwiczenie.nazwa}
                 </h3>
 
@@ -333,7 +417,7 @@ export default function MojeWynikiPage() {
         </div>
       )}
 
-      {/* MODAL ADMINA: DODAWANIE ĆWICZENIA DO BAZY */}
+      {/* MODAL ADMINA: DODAWANIE / EDYCJA ĆWICZENIA W BAZIE */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200 border-2 border-sky-900">
@@ -344,8 +428,12 @@ export default function MojeWynikiPage() {
               ✕
             </button>
             <div className="mb-6 pr-8">
-              <h3 className="font-black text-xl text-sky-950 leading-tight">Dodaj Kafelek</h3>
-              <p className="text-sm font-bold text-slate-500 mt-1">Kreator nowego ćwiczenia w bazie</p>
+              <h3 className="font-black text-xl text-sky-950 leading-tight">
+                {editingCwiczenieId ? "Edytuj Kafelek" : "Dodaj Kafelek"}
+              </h3>
+              <p className="text-sm font-bold text-slate-500 mt-1">
+                {editingCwiczenieId ? "Zmień dane istniejącego ćwiczenia" : "Kreator nowego ćwiczenia w bazie"}
+              </p>
             </div>
             <form onSubmit={handleAdminSave} className="space-y-4">
               <div className="space-y-1">

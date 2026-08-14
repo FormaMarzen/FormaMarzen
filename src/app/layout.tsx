@@ -214,7 +214,7 @@ export default function RootLayout({
         { href: '/', label: 'Strona główna', icon: '🏠' },
         { href: '/karnet', label: 'Karnet', icon: '🎟️' },
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
-        { href: '/moje-wyniki', label: 'Moje wyniki', icon: '⏱️' },
+        { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Program Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
