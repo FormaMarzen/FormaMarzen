@@ -39,7 +39,6 @@ export default function DashboardPage() {
   const [walletAmountInput, setWalletAmountInput] = useState('');
   const [walletReasonInput, setWalletReasonInput] = useState('');
   
-  // ZMIENNE DLA ZAWIESZEŃ I BLOKAD
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
   const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
@@ -52,7 +51,6 @@ export default function DashboardPage() {
   const [blockPassEndDate, setBlockPassEndDate] = useState(todayStr);
   const [isSuspendHistoryModalOpen, setIsSuspendHistoryModalOpen] = useState(false);
   
-  // ZMIENNE DO PROFILU (Zakładki, Menu)
   const [isGlobalPassMenuOpen, setIsGlobalPassMenuOpen] = useState(false);
   const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'przeszle' | 'wypisy' | 'automatyczne'>('nadchodzace');
   const [editingPassModal, setEditingPassModal] = useState<any | null>(null);
@@ -69,10 +67,7 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
-  // STAN DO ROZWIJANIA LISTY AKTYWNYCH ZAPISÓW
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
-
-  // 🌟 STAN DO STEROWANIA TYGODNIAMI W GRAFIKU 🌟
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
 
   const shiftWeek = (direction: number) => {
@@ -272,6 +267,7 @@ export default function DashboardPage() {
     }
     loadData();
   };
+
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
     const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
@@ -281,7 +277,6 @@ export default function DashboardPage() {
     await supabase.from('transakcje').insert([{ klient_id: profileClient.id, typ_operacji: 'zajecia_wypis', kwota: null, opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})` }]);
     loadData();
   };
-
   const handleConfirmExtendPass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !extendPassTarget) return;
@@ -603,7 +598,6 @@ export default function DashboardPage() {
     const success = await updateSupabaseClient(updatedClient, dbPayload);
     if (success) { alert(`Karnet został zablokowany do ${bDo}.`); setIsSuspendModalOpen(false); }
   };
-
   const handleCancelBlock = async (karnetTarget: any) => {
     if (!profileClient) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
@@ -974,7 +968,6 @@ export default function DashboardPage() {
        return (a.start || "").localeCompare(b.start || "");
     });
   }
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
     {appRole === 'klubowicz' && currentUser && (() => {
@@ -1049,7 +1042,7 @@ export default function DashboardPage() {
           <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
             
             {myUpcomingClasses.length > 0 && (
-              <div className="hidden md:flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50">
+              <div className="flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
                 <div className="w-[45%]">Data</div>
                 <div className="w-[40%]">Zajęcia</div>
                 <div className="w-[15%] text-right pr-2">Wypisz</div>
@@ -1063,26 +1056,26 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 px-5 py-4 items-center hover:bg-slate-50 transition-colors bg-white">
-                    <div className="col-span-5 flex flex-col justify-center pr-2">
-                      <span className="text-[12px] sm:text-[13px] font-medium text-slate-900 first-letter:uppercase">
+                  <div key={idx} className="flex justify-between items-center px-5 py-4 hover:bg-slate-50 transition-colors bg-white">
+                    <div className="w-[45%] pr-2">
+                      <div className="text-[12px] sm:text-[13px] font-bold text-slate-800 lowercase first-letter:uppercase truncate">
                         {cls.fullDateObj.toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-                      </span>
-                      <span className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5">
+                      </div>
+                      <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5">
                         {cls.start} - {cls.end} ({calculateDuration(cls.start, cls.end)})
-                      </span>
+                      </div>
                     </div>
-                    <div className="col-span-5 flex flex-col justify-center pr-2">
-                      <span className="text-[12px] sm:text-[13px] font-medium text-slate-900 truncate">{cls.title}</span>
-                      <span className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</span>
+                    <div className="w-[40%] pr-2">
+                      <div className="text-[12px] sm:text-[13px] font-bold text-slate-900 truncate">{cls.title}</div>
+                      <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
                     </div>
-                    <div className="col-span-2 flex justify-end items-center pr-1">
+                    <div className="w-[15%] flex justify-end items-center pr-1">
                       <button 
                         onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
-                        className="w-9 h-9 sm:w-10 sm:h-10 bg-[#ff5a43] hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
+                        className="w-10 h-10 bg-[#ff2a43] hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
                         title="Wypisz się z zajęć"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l4 4m0-4l-4 4" />
                         </svg>
@@ -1905,7 +1898,7 @@ export default function DashboardPage() {
     </div>
     );
     })()}
-    {tableActionClient && (
+{tableActionClient && (
 <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
 <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
 <div className="flex items-center justify-between border-b border-slate-100 pb-4">
