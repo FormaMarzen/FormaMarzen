@@ -6,7 +6,8 @@ import { supabase } from "../raporty/klienci/supabase";
 interface Wydarzenie {
   id: number;
   tytul: string;
-  data_wydarzenia: string;
+  data_od: string;
+  data_do: string;
   cena: string;
   opis: string;
   grafika_url: string | null;
@@ -26,7 +27,8 @@ export default function WydarzeniaPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({
     tytul: "",
-    data_wydarzenia: "",
+    data_od: new Date().toISOString().split('T')[0],
+    data_do: new Date().toISOString().split('T')[0],
     cena: "",
     opis: "",
     grafika_url: "" as string | null
@@ -41,7 +43,6 @@ export default function WydarzeniaPage() {
   const fetchData = async () => {
     setIsLoading(true);
     
-    // Sprawdzenie sesji i roli
     const { data: { session } } = await supabase.auth.getSession();
     const email = session?.user?.email || "";
     
@@ -49,11 +50,10 @@ export default function WydarzeniaPage() {
       setIsAdmin(true);
     }
 
-    // Pobranie wydarzeń
     const { data, error } = await supabase
       .from('wydarzenia')
       .select('*')
-      .order('data_wydarzenia', { ascending: true });
+      .order('data_od', { ascending: true });
 
     if (!error && data) {
       setWydarzenia(data);
@@ -62,21 +62,28 @@ export default function WydarzeniaPage() {
     setIsLoading(false);
   };
 
-  // Logika sortowania wydarzeń na sekcje
+  // Logika sortowania wydarzeń na sekcje na podstawie daty zakończenia/rozpoczęcia
   const dzisiajStr = new Date().toISOString().split('T')[0];
   const dzisiajTime = new Date(dzisiajStr).getTime();
 
-  const przeszle = wydarzenia.filter(w => w.data_wydarzenia < dzisiajStr).sort((a, b) => new Date(b.data_wydarzenia).getTime() - new Date(a.data_wydarzenia).getTime());
-  const przyszle = wydarzenia.filter(w => w.data_wydarzenia >= dzisiajStr);
+  const przeszle = wydarzenia.filter(w => {
+    const dataKoniec = w.data_do || w.data_od;
+    return dataKoniec < dzisiajStr;
+  }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
+
+  const przyszle = wydarzenia.filter(w => {
+    const dataKoniec = w.data_do || w.data_od;
+    return dataKoniec >= dzisiajStr;
+  });
 
   const najblizsze = przyszle.filter(w => {
-    const czasWydarzenia = new Date(w.data_wydarzenia).getTime();
+    const czasWydarzenia = new Date(w.data_od).getTime();
     const roznicaDni = (czasWydarzenia - dzisiajTime) / (1000 * 3600 * 24);
     return roznicaDni <= 14;
   });
 
   const wkrotce = przyszle.filter(w => {
-    const czasWydarzenia = new Date(w.data_wydarzenia).getTime();
+    const czasWydarzenia = new Date(w.data_od).getTime();
     const roznicaDni = (czasWydarzenia - dzisiajTime) / (1000 * 3600 * 24);
     return roznicaDni > 14;
   });
@@ -84,16 +91,17 @@ export default function WydarzeniaPage() {
   // --- FUNKCJE ADMINA ---
   const handleOpenAdd = () => {
     setEditingId(null);
-    setForm({ tytul: "", data_wydarzenia: dzisiajStr, cena: "", opis: "", grafika_url: null });
+    setForm({ tytul: "", data_od: dzisiajStr, data_do: dzisiajStr, cena: "", opis: "", grafika_url: null });
     setIsAdminModalOpen(true);
   };
 
   const handleOpenEdit = (w: Wydarzenie, e: React.MouseEvent) => {
-    e.stopPropagation(); // Blokuje otwarcie modala podglądu
+    e.stopPropagation();
     setEditingId(w.id);
     setForm({
       tytul: w.tytul,
-      data_wydarzenia: w.data_wydarzenia,
+      data_od: w.data_od,
+      data_do: w.data_do || w.data_od,
       cena: w.cena || "",
       opis: w.opis || "",
       grafika_url: w.grafika_url
@@ -117,7 +125,7 @@ export default function WydarzeniaPage() {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800; // Dobra jakość na baner, mniejszy rozmiar bazy
+          const MAX_WIDTH = 800;
           const MAX_HEIGHT = 800;
           let width = img.width; let height = img.height;
           
@@ -151,6 +159,12 @@ export default function WydarzeniaPage() {
     fetchData();
   };
 
+  // Formatowanie wyświetlania terminu
+  const formatTermin = (od: string, doDnia: string) => {
+    if (!doDnia || od === doDnia) return od;
+    return `${od} — ${doDnia}`;
+  };
+
   // --- WIDOK KARTY WYDARZENIA ---
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => (
     <div 
@@ -159,7 +173,6 @@ export default function WydarzeniaPage() {
         isPast ? "opacity-50 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
       }`}
     >
-      {/* Opcje Admina */}
       {isAdmin && (
         <div className="absolute top-3 right-3 flex gap-1.5 z-10 bg-white/90 p-1.5 rounded-xl backdrop-blur-md shadow-sm opacity-0 group-hover:opacity-100 transition-opacity">
           <button onClick={(e) => handleOpenEdit(w, e)} className="w-8 h-8 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors">✏️</button>
@@ -167,7 +180,6 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* Grafika */}
       <div className="h-48 w-full bg-slate-100 relative overflow-hidden">
         {w.grafika_url ? (
           <img src={w.grafika_url} alt={w.tytul} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
@@ -175,11 +187,10 @@ export default function WydarzeniaPage() {
           <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎟️</div>
         )}
         <div className="absolute bottom-3 left-3 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5">
-          <span>📅</span> {w.data_wydarzenia}
+          <span>📅</span> {formatTermin(w.data_od, w.data_do)}
         </div>
       </div>
 
-      {/* Treść dolna */}
       <div className="p-5 flex flex-col flex-grow">
         <h3 className="font-black text-lg text-sky-950 leading-tight mb-2 line-clamp-2">{w.tytul}</h3>
         <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{w.opis || "Brak dodatkowego opisu."}</p>
@@ -206,7 +217,6 @@ export default function WydarzeniaPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500 pb-12">
       
-      {/* NAGŁÓWEK */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -214,7 +224,7 @@ export default function WydarzeniaPage() {
             Wydarzenia Klubowe
           </h1>
           <p className="text-slate-500 text-sm mt-2 font-medium max-w-2xl">
-            Sprawdź co planujemy w najbliższym czasie. Zapisz się na warsztaty, zawody lub wspólne integracje!
+            Sprawdź co planujemy w najbliższym czasie. Zapisz się na warsztaty, obozy lub wspólne treningi!
           </p>
         </div>
         
@@ -228,7 +238,6 @@ export default function WydarzeniaPage() {
         )}
       </div>
 
-      {/* PUSTY STAN GŁÓWNY */}
       {wydarzenia.length === 0 && (
         <div className="text-center py-20 bg-white rounded-3xl border border-sky-100 border-dashed">
           <div className="text-5xl mb-4">🏜️</div>
@@ -237,7 +246,6 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* SEKCJA: NAJBLIŻSZE (<= 14 dni) */}
       {najblizsze.length > 0 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3">
@@ -250,7 +258,6 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* SEKCJA: WKRÓTCE (> 14 dni) */}
       {wkrotce.length > 0 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3">
@@ -263,7 +270,6 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* SEKCJA: PRZESZŁE */}
       {przeszle.length > 0 && (
         <div className="space-y-6 opacity-80">
           <div className="flex items-center gap-3">
@@ -276,8 +282,7 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-
-      {/* --- MODAL KLUBOWICZA: SZCZEGÓŁY WYDARZENIA --- */}
+      {/* MODAL PODGLĄDU KLUBOWICZA */}
       {isViewModalOpen && selectedEvent && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-200 my-8">
@@ -304,7 +309,7 @@ export default function WydarzeniaPage() {
                   <span className="text-2xl">📅</span>
                   <div>
                     <div className="text-[10px] font-bold text-sky-600 uppercase tracking-wider">Termin</div>
-                    <div className="font-black text-sky-950">{selectedEvent.data_wydarzenia}</div>
+                    <div className="font-black text-sky-950">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 bg-amber-50 px-4 py-2.5 rounded-2xl">
@@ -327,8 +332,7 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-
-      {/* --- MODAL ADMINA: DODAJ/EDYTUJ --- */}
+      {/* MODAL ADMINA: DODAJ/EDYTUJ */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl relative border-2 border-sky-900 my-8">
@@ -343,7 +347,6 @@ export default function WydarzeniaPage() {
 
             <form onSubmit={handleSaveEvent} className="space-y-4">
               
-              {/* Sekcja grafiki */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Grafika główna</label>
                 <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
@@ -370,34 +373,43 @@ export default function WydarzeniaPage() {
                 <label className="font-bold text-slate-700 text-xs block uppercase mt-4">Tytuł wydarzenia</label>
                 <input 
                   type="text" required value={form.tytul} onChange={(e) => setForm({...form, tytul: e.target.value})}
-                  placeholder="np. Warsztaty Kettlebell dla początkujących"
+                  placeholder="np. Obóz sportowy WAŁCZ"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              {/* ZAKRES DAT OD - DO */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase">Data</label>
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Data od (Rozpoczęcie)</label>
                   <input 
-                    type="date" required value={form.data_wydarzenia} onChange={(e) => setForm({...form, data_wydarzenia: e.target.value})}
+                    type="date" required value={form.data_od} onChange={(e) => setForm({...form, data_od: e.target.value})}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase">Cena (np. 50 PLN)</label>
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Data do (Zakończenie)</label>
                   <input 
-                    type="text" value={form.cena} onChange={(e) => setForm({...form, cena: e.target.value})}
-                    placeholder="np. Darmowe, 100 PLN"
+                    type="date" required value={form.data_do} onChange={(e) => setForm({...form, data_do: e.target.value})}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 text-xs block uppercase">Opis szczegółowy</label>
+                <label className="font-bold text-slate-700 text-xs block uppercase">Cena (np. 900 PLN)</label>
+                <input 
+                  type="text" value={form.cena} onChange={(e) => setForm({...form, cena: e.target.value})}
+                  placeholder="np. 900 PLN"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 text-xs block uppercase">Opis szczegółowy / Link</label>
                 <textarea 
                   required value={form.opis} onChange={(e) => setForm({...form, opis: e.target.value})}
-                  placeholder="Wpisz szczegóły, harmonogram, co należy zabrać ze sobą..."
+                  placeholder="Wpisz szczegóły, harmonogram, link do zapisów..."
                   rows={4}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none"
                 />
