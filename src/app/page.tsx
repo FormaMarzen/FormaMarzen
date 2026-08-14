@@ -69,7 +69,7 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
-  // NOWY STAN DO ROZWIJANIA LISTY AKTYWNYCH ZAPISÓW
+  // STAN DO ROZWIJANIA LISTY AKTYWNYCH ZAPISÓW
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
 
   // 🌟 STAN DO STEROWANIA TYGODNIAMI W GRAFIKU 🌟
@@ -87,7 +87,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Funkcje pomocnicze
   const toggleDay = (dateStr: string) => setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
 
   const isWalletNegative = (walletStr: string) => {
@@ -273,7 +272,6 @@ export default function DashboardPage() {
     }
     loadData();
   };
-
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
     const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
@@ -327,7 +325,7 @@ export default function DashboardPage() {
     let nowaDataWygasnieciaStr = '';
     
     if (karnetyList.length > 0 && activationMode === 'after') {
-      updatedKarnety = karnetyList.map((k, index) => {
+      updatedKarnety = karnetyList.map((k: any, index: number) => {
         if (index === karnetyList.length - 1) {
           let baseDate = new Date();
           if (k.waznyDo) {
@@ -483,6 +481,7 @@ export default function DashboardPage() {
     setSelectedPassToAdd('');
     setIsAddSecondPassModalOpen(false);
   };
+
   const handleSavePassEditSubmit = async () => {
     if (!profileClient || !editingPassModal) return;
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
@@ -625,7 +624,7 @@ export default function DashboardPage() {
     const kwotaZmiany = parseFloat(walletAmountInput);
     if (isNaN(kwotaZmiany)) return;
     if (!confirm(`Czy na pewno chcesz zmienić saldo portfela o kwotę ${kwotaZmiany > 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN?`)) return;
-    const currentWalletNum = parseFloat(profileClient.wallet.replace(/[^0-9.-]+/g, "")) || 0;
+    const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStan = currentWalletNum + kwotaZmiany;
     const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
     const nowaHistoriaEntry = {
@@ -918,7 +917,6 @@ export default function DashboardPage() {
   if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
   let needsNewPass = false; let isPassExpiringSoon = false; let expiringMessage = "";
   
-  // WYZNACZANIE DANYCH DLA KLUBOWICZA DO NOWYCH SEKCJI
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
   
@@ -942,7 +940,6 @@ export default function DashboardPage() {
       if (!hasAnyValid) { needsNewPass = true; }
     }
 
-    // Wyciąganie listy zajęć dla sekcji "TWOJE AKTYWNE ZAPISY"
     prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
     const now = new Date();
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
@@ -972,7 +969,6 @@ export default function DashboardPage() {
         }
       }
     });
-    // Sortowanie chronologiczne po dacie i godzinie
     myUpcomingClasses.sort((a, b) => {
        if (a.fullDateObj.getTime() !== b.fullDateObj.getTime()) return a.fullDateObj.getTime() - b.fullDateObj.getTime();
        return (a.start || "").localeCompare(b.start || "");
@@ -1045,18 +1041,15 @@ export default function DashboardPage() {
     </div>
     )}
 
-    {/* NOWY DESIGN SEKCJI KLUBOWICZA: Lista zapisów zmodyfikowana na 3-kolumnową według screenów */}
     {appRole === 'klubowicz' && currentUser && (
       <div className="space-y-10 animate-in fade-in zoom-in-95">
         
-        {/* TWOJE AKTYWNE ZAPISY - NOWY, WĄSKI I ZWARTY WYGLĄD */}
         <section className="space-y-4">
           <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje aktywne zapisy</h2>
           <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
             
-            {/* Header: widoczny tylko jeśli są jakiekolwiek zajęcia */}
             {myUpcomingClasses.length > 0 && (
-              <div className="flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
+              <div className="hidden md:flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50">
                 <div className="w-[45%]">Data</div>
                 <div className="w-[40%]">Zajęcia</div>
                 <div className="w-[15%] text-right pr-2">Wypisz</div>
@@ -1070,29 +1063,26 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => (
-                  <div key={idx} className="flex justify-between items-center px-5 py-4 hover:bg-slate-50 transition-colors bg-white">
-                    {/* Kolumna 1: Data i czas */}
-                    <div className="w-[45%] pr-2">
-                      <div className="text-[12px] sm:text-[13px] font-bold text-slate-800 lowercase first-letter:uppercase truncate">
+                  <div key={idx} className="grid grid-cols-12 gap-2 px-5 py-4 items-center hover:bg-slate-50 transition-colors bg-white">
+                    <div className="col-span-5 flex flex-col justify-center pr-2">
+                      <span className="text-[12px] sm:text-[13px] font-medium text-slate-900 first-letter:uppercase">
                         {cls.fullDateObj.toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
+                      </span>
+                      <span className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5">
                         {cls.start} - {cls.end} ({calculateDuration(cls.start, cls.end)})
-                      </div>
+                      </span>
                     </div>
-                    {/* Kolumna 2: Nazwa i trener */}
-                    <div className="w-[40%] pr-2">
-                      <div className="text-[12px] sm:text-[13px] font-bold text-slate-900 truncate">{cls.title}</div>
-                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
+                    <div className="col-span-5 flex flex-col justify-center pr-2">
+                      <span className="text-[12px] sm:text-[13px] font-medium text-slate-900 truncate">{cls.title}</span>
+                      <span className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</span>
                     </div>
-                    {/* Kolumna 3: Przycisk Wypisz */}
-                    <div className="w-[15%] flex justify-end items-center pr-1">
+                    <div className="col-span-2 flex justify-end items-center pr-1">
                       <button 
                         onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
-                        className="w-8 h-8 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
+                        className="w-9 h-9 sm:w-10 sm:h-10 bg-[#ff5a43] hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
                         title="Wypisz się z zajęć"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l4 4m0-4l-4 4" />
                         </svg>
@@ -1103,7 +1093,6 @@ export default function DashboardPage() {
               )}
             </div>
             
-            {/* Przycisk rozwijania z owalnym designem */}
             {myUpcomingClasses.length > 3 && (
               <div className="p-4 flex justify-center bg-white border-t border-slate-100">
                 <button 
@@ -1118,7 +1107,6 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* TWOJE KARNETY */}
         <section className="space-y-4">
           <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje karnety</h2>
           <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
@@ -1152,7 +1140,7 @@ export default function DashboardPage() {
 
       </div>
     )}
-    {/* ZMODYFIKOWANY NAGŁÓWEK GRAFIKU DOPASOWANY DO ZDJĘCIA */}
+
     <section className="space-y-4">
     <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${appRole === 'admin' ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
       <h2 className={`font-medium uppercase tracking-wider ${appRole === 'klubowicz' ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
@@ -1564,9 +1552,7 @@ export default function DashboardPage() {
     >
     <option value="" disabled>-- Wybierz karnet --</option>
     {dostepneKarnety.map(k => {
-    const activeRabat = currentUser?.rabat || 0;
-    const dPrice = (parseFloat(k.cena) * (1 - activeRabat/100)).toFixed(2);
-    return <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {dPrice} PLN)</option>;
+    return <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>;
     })}
     </select>
     </div>
@@ -1919,7 +1905,7 @@ export default function DashboardPage() {
     </div>
     );
     })()}
-{tableActionClient && (
+    {tableActionClient && (
 <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
 <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
 <div className="flex items-center justify-between border-b border-slate-100 pb-4">
@@ -2090,54 +2076,8 @@ className="bg-white hover:bg-sky-50 text-sky-900 px-3 py-1.5 rounded-xl text-xs 
 </div>
 </div>
 <div className="space-y-4">
-<div className="flex items-center justify-between flex-wrap gap-4">
-<div className="flex items-center gap-4 flex-wrap">
+<div className="flex items-center justify-between">
 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
-<div className="flex items-center gap-2 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200">
-<span className="text-[10px] font-bold text-emerald-800 uppercase">Stały rabat:</span>
-{isEditingDiscount ? (
-<div className="flex items-center gap-1">
-<input
-type="number"
-className="w-14 bg-white border border-emerald-300 rounded px-1 text-xs font-bold text-slate-800 outline-none focus:border-emerald-500"
-value={discountInput}
-onChange={e => setDiscountInput(e.target.value)}
-placeholder="%"
-/>
-<span className="text-[10px] font-bold text-emerald-800">%</span>
-<button onClick={handleSaveDiscount} className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ml-1">Zapisz</button>
-<button onClick={() => setIsEditingDiscount(false)} className="text-emerald-700 hover:text-emerald-900 text-[10px] font-bold cursor-pointer px-1">✕</button>
-</div>
-) : (
-<div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => { setDiscountInput(profileClient.discount || ''); setIsEditingDiscount(true); }}>
-<span className="font-black text-emerald-700 text-xs">{profileClient.discount && profileClient.discount !== '0' ? `${profileClient.discount}% (Priorytet)` : 'Brak'}</span>
-<span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
-</div>
-)}
-</div>
-<div className="flex items-center gap-2 bg-sky-50 px-3 py-1 rounded-lg border border-sky-200" title="Naliczany automatycznie, z możliwością ręcznej modyfikacji i dalszego ciągłego naliczania">
-<span className="text-[10px] font-bold text-sky-800 uppercase">Rabat za ciągłość:</span>
-{isEditingSystemDiscount ? (
-<div className="flex items-center gap-1">
-<input
-type="number"
-className="w-14 bg-white border border-sky-300 rounded px-1 text-xs font-bold text-slate-800 outline-none focus:border-sky-500"
-value={systemDiscountInput}
-onChange={e => setSystemDiscountInput(e.target.value)}
-placeholder="%"
-/>
-<span className="text-[10px] font-bold text-sky-800">%</span>
-<button onClick={handleSaveSystemDiscount} className="bg-sky-600 hover:bg-sky-700 text-white text-[10px] px-2 py-0.5 rounded font-bold transition-colors cursor-pointer ml-1">Zapisz</button>
-<button onClick={() => setIsEditingSystemDiscount(false)} className="text-sky-700 hover:text-sky-900 text-[10px] font-bold cursor-pointer px-1">✕</button>
-</div>
-) : (
-<div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => { setSystemDiscountInput(calculateSystemDiscount(profileClient).toString()); setIsEditingSystemDiscount(true); }}>
-<span className="font-black text-sky-700 text-xs">{calculateSystemDiscount(profileClient)}%</span>
-<span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
-</div>
-)}
-</div>
-</div>
 <div className="flex items-center gap-2">
 <button
 onClick={() => { setSelectedPassToAdd(dostepneKarnety[0]?.nazwa || ''); setIsAddSecondPassModalOpen(true); }}
@@ -2240,7 +2180,7 @@ return (
 {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
 </span>
 <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
-Cena: {karnet.cena} {karnet.znizkaProcentowa ? ` ${karnet.znizkaProcentowa}` : ''}
+Cena: {karnet.cena}
 </span>
 </div>
 </div>
@@ -2301,36 +2241,8 @@ Brak przypisanych karnetów.
 </div>
 )}
 </div>
-<div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 mt-4">
-<button
-onClick={() => setIsPassHistoryOpen(!isPassHistoryOpen)}
-className="w-full flex justify-between items-center text-xs font-black text-slate-700 uppercase tracking-wider cursor-pointer"
->
-<span>📜 HISTORIA WSZYSTKICH KUPIONYCH KARNETÓW ({ (profileClient.transakcje || []).filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))).length })</span>
-<span>{isPassHistoryOpen ? '▲' : '▼'}</span>
-</button>
-{isPassHistoryOpen && (
-<div className="space-y-2 pt-2 border-t border-slate-200 max-h-48 overflow-y-auto text-xs">
-{(profileClient.transakcje || []).filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))).length > 0 ? (
-(profileClient.transakcje || [])
-.filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie')))
-.map((t: any) => (
-<div key={t.id} className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200">
-<div>
-<div className="font-bold text-slate-900">{t.opis || 'Zakup karnetu'}</div>
-<div className="text-[10px] font-mono text-slate-500">{new Date(t.created_at).toLocaleString('pl-PL')}</div>
 </div>
-<div className="font-black text-slate-800">{t.kwota !== null ? `${t.kwota} PLN` : ''}</div>
-</div>
-))
-) : (
-<div className="text-slate-400 italic text-center py-3">Brak historii zakupów karnetów w bazie transakcji.</div>
-)}
-</div>
-)}
-</div>
-</div>
-<div className="space-y-4">
+<div className="space-y-4 border-t border-slate-200 pt-4 mt-4">
 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
 {(() => {
@@ -2471,37 +2383,12 @@ value={extendSelectedNewPassName}
 onChange={(e) => setExtendSelectedNewPassName(e.target.value)}
 className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
 >
-{dostepneKarnety.map(k => {
-const baseCena = parseFloat(k.cena) || 0;
-let finalCena = baseCena;
-let hasDiscount = false;
-const activeDiscount = getEffectiveDiscount(profileClient);
-if (activeDiscount > 0) {
-finalCena = baseCena * (1 - activeDiscount / 100);
-hasDiscount = true;
-}
-return (
-<option key={k.id} value={k.nazwa}>
-{k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
-</option>
-);
-})}
+{dostepneKarnety.map(k => (
+<option key={k.id} value={k.nazwa}>{k.nazwa}</option>
+))}
 </select>
 ) : (
-<span className="font-black text-slate-900 whitespace-nowrap">
-{(() => {
-const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-const baseCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget?.cena?.replace(/[^0-9.]/g, '') || '0');
-let finalCena = baseCena;
-let hasDiscount = false;
-const activeDiscount = getEffectiveDiscount(profileClient);
-if (activeDiscount > 0) {
-finalCena = baseCena * (1 - activeDiscount / 100);
-hasDiscount = true;
-}
-return `${extendSelectedNewPassName} (${finalCena.toFixed(2)} PLN${hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})`;
-})()}
-</span>
+<span className="font-black text-slate-900 whitespace-nowrap">{extendSelectedNewPassName}</span>
 )}
 </div>
 <button
@@ -2698,21 +2585,9 @@ className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 fo
 <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
 <select value={selectedPassToAdd} onChange={(e) => setSelectedPassToAdd(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer">
 <option value="">-- Wybierz karnet --</option>
-{dostepneKarnety.map(k => {
-const baseCena = parseFloat(k.cena) || 0;
-let finalCena = baseCena;
-let hasDiscount = false;
-const activeDiscount = getEffectiveDiscount(profileClient);
-if (activeDiscount > 0) {
-finalCena = baseCena * (1 - activeDiscount / 100);
-hasDiscount = true;
-}
-return (
-<option key={k.id} value={k.nazwa}>
-{k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
-</option>
-);
-})}
+{dostepneKarnety.map(k => (
+<option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
+))}
 </select>
 </div>
 <div className="pt-4 flex justify-between gap-2 border-t border-sky-100">
@@ -2741,33 +2616,18 @@ value={editingPassModal.nazwa || ''}
 onChange={(e) => {
 const wybranyNazwa = e.target.value;
 const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
-const actRab = getEffectiveDiscount(profileClient);
-const baseCena = def ? parseFloat(def.cena) : 0;
-const finalCena = actRab > 0 ? baseCena * (1 - actRab / 100) : baseCena;
 setEditingPassModal({
 ...editingPassModal,
 nazwa: wybranyNazwa,
-cena: def ? `${finalCena.toFixed(2)} PLN` : editingPassModal.cena
+cena: def ? `${def.cena} PLN` : editingPassModal.cena
 });
 }}
 className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer"
 >
 <option value="">-- Wybierz karnet z bazy --</option>
-{dostepneKarnety.map(k => {
-const baseCena = parseFloat(k.cena) || 0;
-let finalCena = baseCena;
-let hasDiscount = false;
-const activeDiscount = getEffectiveDiscount(profileClient);
-if (activeDiscount > 0) {
-finalCena = baseCena * (1 - activeDiscount / 100);
-hasDiscount = true;
-}
-return (
-<option key={k.id} value={k.nazwa}>
-{k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
-</option>
-);
-})}
+{dostepneKarnety.map(k => (
+<option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
+))}
 </select>
 </div>
 <div className="space-y-1">
@@ -2833,7 +2693,17 @@ Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopie
 <label className="font-bold text-amber-900">Zawieszony od dnia</label>
 <div className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold font-mono">{suspendPassTarget.zawieszonyOd}</div>
 </div>
-<button type="button" onClick={() => { handleOdwiesKarnet(suspendPassTarget); }} className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Odwieś karnet teraz i dolicz dni</button>
+{suspendPassTarget.zawieszonyDo && (
+<div className="space-y-1">
+<label className="font-bold text-amber-900">Planowane zakończenie</label>
+<div className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold font-mono">{suspendPassTarget.zawieszonyDo}</div>
+</div>
+)}
+<div className="space-y-1">
+<label className="font-bold text-amber-900">Liczba dni zawieszenia (dotychczas)</label>
+<div className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold font-mono">{Math.max(0, Math.floor((new Date(todayStr).getTime() - new Date(suspendPassTarget.zawieszonyOd).getTime()) / (1000 * 60 * 60 * 24)))} dni</div>
+</div>
+<button type="button" onClick={() => { handleOdwiesKarnet(suspendPassTarget); setIsSuspendModalOpen(false); }} className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Odwieś karnet teraz i dolicz dni</button>
 </div>
 ) : (
 <form onSubmit={handleConfirmSuspendPass} className="space-y-3 text-xs mt-4">
@@ -2858,6 +2728,7 @@ Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopie
 </div>
 </>
 )}
+<p className="text-[9px] text-amber-700 leading-tight">Data zakończenia jest orientacyjna — realną liczbę dni system doliczy dopiero przy ręcznym odwieszeniu.</p>
 <button type="submit" className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Zatwierdź zawieszenie</button>
 </form>
 )}
@@ -2974,5 +2845,5 @@ className="w-20 bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold te
 </div>
 )}
 </div>
-);
+  );
 }
