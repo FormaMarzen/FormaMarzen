@@ -413,9 +413,7 @@ export default function DashboardPage() {
         const updatedClient = { ...profileClient, avatarUrl: compressedDataUrl };
         setProfileClient(updatedClient);
         
-        // ZMIANA: Jawny zapis do kolumny avatarUrl widocznej w bazie
         const dbPayload = { avatarUrl: compressedDataUrl };
-        
         await updateSupabaseClient(updatedClient, dbPayload);
       };
       img.src = event.target?.result as string;
@@ -1488,7 +1486,8 @@ export default function DashboardPage() {
     </div>
     )}
     </div>
-    <div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
+    {/* ZMIANA SZYEROKOŚCI ZDJĘCIA */}
+    <div className="w-16 h-16 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-2xl shrink-0 shadow-sm">
     {osoba.avatarUrl ? (
     <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
     ) : (
@@ -1569,7 +1568,8 @@ export default function DashboardPage() {
     </div>
     )}
     </div>
-    <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-xs shrink-0 shadow-sm">
+    {/* ZMIANA SZYEROKOŚCI ZDJĘCIA */}
+    <div className="w-16 h-16 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-2xl shrink-0 shadow-sm">
     {osoba.avatarUrl ? (
     <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
     ) : (
