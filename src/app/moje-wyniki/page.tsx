@@ -91,7 +91,8 @@ export default function MojeWynikiPage() {
   };
 
   // Dynamizowanie kategorii na podstawie pobranych ćwiczeń
-  const wygenerowaneKategorie = ["Wszystkie", ...Array.from(new Set(definicjeCwiczen.map(c => c.kategoria)))];
+  const dostepneKategorie = Array.from(new Set(definicjeCwiczen.map(c => c.kategoria)));
+  const wygenerowaneKategorie = ["Wszystkie", ...dostepneKategorie];
 
   const widoczneWyniki = aktywnaKategoria === "Wszystkie" 
     ? definicjeCwiczen 
@@ -441,11 +442,16 @@ export default function MojeWynikiPage() {
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block">Kategoria</label>
                 <input 
-                  type="text" required value={adminForm.kategoria}
+                  type="text" required list="kategorie-list" value={adminForm.kategoria}
                   onChange={(e) => setAdminForm({...adminForm, kategoria: e.target.value})}
                   placeholder="np. Siła, Kondycja, Cross"
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                 />
+                <datalist id="kategorie-list">
+                  {dostepneKategorie.map((kat) => (
+                    <option key={kat} value={kat} />
+                  ))}
+                </datalist>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
