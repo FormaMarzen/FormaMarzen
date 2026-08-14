@@ -1063,6 +1063,9 @@ export default function DashboardPage() {
                   (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => (
                     <div key={idx} className="flex justify-between items-center px-5 py-4 hover:bg-slate-50 transition-colors bg-white">
                       <div className="w-[45%] pr-2">
+                        <div className="text-[10px] font-black text-sky-700 uppercase tracking-wider mb-0.5">
+                          {['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'][cls.fullDateObj.getDay()]}
+                        </div>
                         <div className="text-[12px] sm:text-[13px] font-bold text-slate-800 font-mono">
                           {`${String(cls.fullDateObj.getDate()).padStart(2, '0')}.${String(cls.fullDateObj.getMonth() + 1).padStart(2, '0')}.${String(cls.fullDateObj.getFullYear()).slice(-2)}`}
                         </div>
@@ -1336,7 +1339,6 @@ export default function DashboardPage() {
           })}
         </div>
       </section>
-
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
           <section className="lg:col-span-6 space-y-3">
