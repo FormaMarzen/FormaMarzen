@@ -91,7 +91,14 @@ export default function WydarzeniaPage() {
   // --- FUNKCJE ADMINA ---
   const handleOpenAdd = () => {
     setEditingId(null);
-    setForm({ tytul: "", data_od: dzisiajStr, data_do: dzisiajStr, cena: "", opis: "", grafika_url: null });
+    setForm({ 
+      tytul: "", 
+      data_od: dzisiajStr, 
+      data_do: dzisiajStr, 
+      cena: "", 
+      opis: "", 
+      grafika_url: null 
+    });
     setIsAdminModalOpen(true);
   };
 
@@ -111,7 +118,7 @@ export default function WydarzeniaPage() {
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm("Czy na pewno chcesz usunąć to wydarzenie?")) return;
+    if (!window.confirm("Czy na pewno chcesz usunąć to wydarzenie? Tej operacji nie można cofnąć.")) return;
 
     await supabase.from('wydarzenia').delete().eq('id', id);
     fetchData();
@@ -378,7 +385,6 @@ export default function WydarzeniaPage() {
                 />
               </div>
 
-              {/* ZAKRES DAT OD - DO */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 text-xs block uppercase">Data od (Rozpoczęcie)</label>
@@ -397,10 +403,10 @@ export default function WydarzeniaPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 text-xs block uppercase">Cena (np. 900 PLN)</label>
+                <label className="font-bold text-slate-700 text-xs block uppercase">Cena (np. 50 PLN)</label>
                 <input 
                   type="text" value={form.cena} onChange={(e) => setForm({...form, cena: e.target.value})}
-                  placeholder="np. 900 PLN"
+                  placeholder="np. Darmowe, 100 PLN"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
@@ -409,7 +415,7 @@ export default function WydarzeniaPage() {
                 <label className="font-bold text-slate-700 text-xs block uppercase">Opis szczegółowy / Link</label>
                 <textarea 
                   required value={form.opis} onChange={(e) => setForm({...form, opis: e.target.value})}
-                  placeholder="Wpisz szczegóły, harmonogram, link do zapisów..."
+                  placeholder="Wpisz szczegóły, harmonogram, co należy zabrać ze sobą..."
                   rows={4}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none"
                 />
