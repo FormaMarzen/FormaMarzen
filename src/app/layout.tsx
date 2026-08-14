@@ -207,12 +207,22 @@ export default function RootLayout({
 
   const klientMenuSections = [
     {
-      title: "",
+      title: "Główne",
       items: [
         { href: '/', label: 'Strona główna', icon: '🏠' },
         { href: '/karnet', label: 'Karnet', icon: '🎟️' },
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
+      ]
+    },
+    {
+      title: "Aktywność",
+      items: [
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
+      ]
+    },
+    {
+      title: "Klub i Finanse",
+      items: [
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
@@ -344,9 +354,9 @@ export default function RootLayout({
 
                   <nav className="space-y-6">
                     {activeMenuSections.map((section, idx) => (
-                      <div key={idx}>
+                      <div key={idx} className="space-y-2">
                         {section.title && (
-                          <div className="text-[10px] font-bold text-sky-900/60 uppercase tracking-wider px-3 mb-2">
+                          <div className="text-[10px] font-bold text-sky-900/60 uppercase tracking-wider px-3 border-t border-sky-100 pt-3">
                             {section.title}
                           </div>
                         )}
