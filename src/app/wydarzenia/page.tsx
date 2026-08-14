@@ -168,9 +168,21 @@ export default function WydarzeniaPage() {
     fetchData();
   };
 
+  // Zmiana formatu daty z YYYY-MM-DD na DD.MM.RRRR
+  const formatDatePL = (dateString: string) => {
+    if (!dateString) return "";
+    const parts = dateString.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}.${parts[1]}.${parts[0]}`;
+    }
+    return dateString;
+  };
+
   const formatTermin = (od: string, doDnia: string) => {
-    if (!doDnia || od === doDnia) return od;
-    return `${od} — ${doDnia}`;
+    const sOd = formatDatePL(od);
+    const sDo = formatDatePL(doDnia);
+    if (!doDnia || od === doDnia) return sOd;
+    return `${sOd} — ${sDo}`;
   };
 
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => (
