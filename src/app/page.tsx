@@ -69,6 +69,9 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
+  // NOWY STAN DO ROZWIJANIA LISTY AKTYWNYCH ZAPISÓW
+  const [showAllMyClasses, setShowAllMyClasses] = useState(false);
+
   // Funkcje pomocnicze
   const toggleDay = (dateStr: string) => setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
 
@@ -713,6 +716,7 @@ export default function DashboardPage() {
     loadData();
     setSelectedClass(null);
   };
+
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     if (!confirm("Czy na pewno chcesz wypisać się z tych zajęć?")) return;
@@ -723,6 +727,23 @@ export default function DashboardPage() {
     alert("Zostałeś pomyślnie wypisany z zajęć.");
     loadData();
     setSelectedClass(null);
+  };
+
+  // NOWA FUNKCJA DO WYPISYWANIA SIĘ BEZPOŚREDNIO Z GŁÓWNEJ LISTY
+  const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
+    const todayDateOnly = new Date();
+    todayDateOnly.setHours(0,0,0,0);
+    if (fullDateObj.getTime() < todayDateOnly.getTime() || (fullDateObj.getTime() === todayDateOnly.getTime() && startStr < currentTimeStr)) {
+        alert("Czas na zapisy/wypisy minął (Zajęcia historyczne).");
+        return;
+    }
+    if (!currentUser) return;
+    if (!confirm(`Czy na pewno chcesz wypisać się z zajęć: ${title}?`)) return;
+    const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', currentUser.id);
+    if (error) { alert(`Nie udało się wypisać z zajęć: ${error.message}`); return; }
+    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć (z listy aktywnej): ${title}.` }]);
+    alert("Zostałeś pomyślnie wypisany z zajęć.");
+    loadData();
   };
 
   const handleZapiszKlientaDoZajec = async (klient: any) => {
@@ -884,6 +905,11 @@ export default function DashboardPage() {
   if (salesPeriod === 'Dziś') salesPeriodTitle = todayStr;
   if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
   let needsNewPass = false; let isPassExpiringSoon = false; let expiringMessage = "";
+  
+  // WYZNACZANIE DANYCH DLA KLUBOWICZA DO NOWYCH SEKCJI
+  let myUpcomingClasses: any[] = [];
+  let prawdziweZapisyKlubowicza = 0;
+  
   if (appRole === 'klubowicz' && currentUser) {
     const karnety = currentUser.karnetyKlubowicza || [];
     if (karnety.length === 0) { needsNewPass = true; } else {
@@ -903,6 +929,42 @@ export default function DashboardPage() {
       }
       if (!hasAnyValid) { needsNewPass = true; }
     }
+
+    // Wyciąganie listy zajęć dla sekcji "TWOJE AKTYWNE ZAPISY"
+    prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
+    const now = new Date();
+    Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
+      if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
+        const parts = classKey.split('_');
+        const classId = parts[0];
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          if (classDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+             const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+             const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+             let classInfo = stdClass || jednorazClass;
+             const override = nadpisaneZajeciaDni[classKey];
+             if (override) classInfo = { ...classInfo, ...override };
+
+             if (classInfo) {
+               myUpcomingClasses.push({
+                  ...classInfo,
+                  classKey,
+                  displayDate: dateStr,
+                  fullDateObj: new Date(now.getFullYear(), m - 1, d)
+               });
+             }
+          }
+        }
+      }
+    });
+    // Sortowanie chronologiczne po dacie i godzinie
+    myUpcomingClasses.sort((a, b) => {
+       if (a.fullDateObj.getTime() !== b.fullDateObj.getTime()) return a.fullDateObj.getTime() - b.fullDateObj.getTime();
+       return (a.start || "").localeCompare(b.start || "");
+    });
   }
 
   return (
@@ -970,12 +1032,115 @@ export default function DashboardPage() {
     </button>
     </div>
     )}
+
+    {/* NOWY DESIGN SEKCJI KLUBOWICZA */}
+    {appRole === 'klubowicz' && currentUser && (
+      <div className="space-y-10 animate-in fade-in zoom-in-95">
+        
+        {/* TWOJE AKTYWNE ZAPISY */}
+        <section className="space-y-4">
+          <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje aktywne zapisy</h2>
+          <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+            <div className="grid grid-cols-12 gap-4 px-6 py-4 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider hidden md:grid">
+              <div className="col-span-5">Data</div>
+              <div className="col-span-5">Zajęcia</div>
+              <div className="col-span-2 text-right">Wypisz</div>
+            </div>
+            
+            <div className="divide-y divide-slate-100">
+              {myUpcomingClasses.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-500 font-medium">
+                  Nie masz aktualnie żadnych aktywnych zapisów na zajęcia.
+                </div>
+              ) : (
+                (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => (
+                  <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-4 px-6 py-5 items-center hover:bg-slate-50 transition-colors">
+                    <div className="md:col-span-5 space-y-1">
+                      <div className="text-sm font-semibold text-slate-800 lowercase first-letter:uppercase">
+                        {cls.fullDateObj.toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {cls.start} - {cls.end} ({calculateDuration(cls.start, cls.end)})
+                      </div>
+                    </div>
+                    <div className="md:col-span-5 space-y-1">
+                      <div className="text-sm font-bold text-slate-900">{cls.title}</div>
+                      <div className="text-xs text-slate-500">{cls.trainer || 'Brak trenera'}</div>
+                    </div>
+                    <div className="md:col-span-2 flex md:justify-end items-center mt-2 md:mt-0">
+                      <button 
+                        onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
+                        className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer"
+                        title="Wypisz się z zajęć"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l4 4m0-4l-4 4" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            {myUpcomingClasses.length > 3 && (
+              <div className="p-4 flex justify-center bg-slate-50/50 border-t border-slate-100">
+                <button 
+                  onClick={() => setShowAllMyClasses(!showAllMyClasses)}
+                  className="bg-white border border-slate-300 text-slate-700 font-bold px-6 py-2.5 rounded-full text-xs shadow-sm hover:bg-slate-50 transition-colors flex items-center gap-2 cursor-pointer"
+                >
+                  <span className="text-slate-400">↕</span> 
+                  {showAllMyClasses ? 'ZWIŃ LISTĘ' : `POKAŻ WSZYSTKIE (${myUpcomingClasses.length})`}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* TWOJE KARNETY */}
+        <section className="space-y-4">
+          <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje karnety</h2>
+          <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+            <div className="p-6 space-y-4">
+              <h3 className="font-black text-xl text-slate-900 uppercase">
+                {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 
+                  ? currentUser.karnetyKlubowicza[0].nazwa 
+                  : (currentUser.pass || 'Brak aktywnego karnetu')}
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-xs font-bold border border-slate-200">
+                  Aktywne zapisy: {prawdziweZapisyKlubowicza}
+                </span>
+                {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && (
+                  <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-xs font-bold border border-slate-200">
+                    Ważny do: {currentUser.karnetyKlubowicza[0].waznyDo}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="bg-slate-50 border-t border-slate-100 p-4 flex justify-end">
+              <button 
+                onClick={() => setIsBuyPassModalOpen(true)}
+                className="bg-white border border-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-full shadow-sm text-xs hover:bg-slate-100 transition-colors flex items-center gap-2 cursor-pointer"
+              >
+                <span className="text-slate-500 font-serif">$</span> KUP KARNET
+              </button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    )}
+
+    {/* ZMODYFIKOWANY NAGŁÓWEK GRAFIKU DOPASOWANY DO ZDJĘCIA */}
     <section className="space-y-4">
-    <div className="flex items-center justify-between bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
-    <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950">
-    GRAFIK ZAJĘĆ (BIEŻĄCY TYDZIEŃ)
-    </h1>
+    <div className={`flex items-center justify-between mb-2 ${appRole === 'admin' ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
+      <h2 className={`font-medium uppercase tracking-wider ${appRole === 'klubowicz' ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
+        {appRole === 'klubowicz' ? 'Grafik' : 'GRAFIK ZAJĘĆ (BIEŻĄCY TYDZIEŃ)'}
+      </h2>
     </div>
+
     <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
     {dashboardDays.map((col, idx) => {
     const isToday =
