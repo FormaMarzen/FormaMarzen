@@ -1008,7 +1008,7 @@ export default function DashboardPage() {
     <div className={`text-xs font-black uppercase tracking-wider border-b pb-2 mb-2 text-center ${
     isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
     }`}>
-    <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
+      <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
     <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
     </div>
     {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
@@ -1256,7 +1256,7 @@ export default function DashboardPage() {
     </div>
     <div>
     <h4 className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</h4>
-    <span className="text-[10px] text-slate-500 block mt-0.5">✉ {client.email}</span>
+    <span className="text-[10px] text-slate-500 block mt-0.5">📞 {client.phone || 'Brak telefonu'}</span>
     </div>
     </div>
     <div className="flex items-center gap-1.5 text-slate-400 text-xs">
@@ -1284,12 +1284,19 @@ export default function DashboardPage() {
     )}
     </div>
     <div className="flex flex-wrap items-center gap-2">
-    <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-amber-100 text-amber-800 border border-amber-200 uppercase">
-    {client.status || 'Aktywny'}
-    </span>
-    <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-    Rejestracja: {client.registered}
-    </span>
+    {aktywnaBlokada ? (
+      <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-rose-100 text-rose-800 border border-rose-200 uppercase">
+        ZABLOKOWANE
+      </span>
+    ) : aktywnyKarnetZawieszony ? (
+      <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-amber-100 text-amber-900 border border-amber-300 uppercase">
+        ZAWIESZONY
+      </span>
+    ) : (
+      <span className="px-2.5 py-1 rounded-md text-[10px] font-black tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase">
+        {client.status || 'AKTYWNY'}
+      </span>
+    )}
     </div>
     </div>
     );
