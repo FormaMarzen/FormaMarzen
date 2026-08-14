@@ -72,6 +72,21 @@ export default function DashboardPage() {
   // NOWY STAN DO ROZWIJANIA LISTY AKTYWNYCH ZAPISÓW
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
 
+  // 🌟 NOWY STAN DO STEROWANIA TYGODNIAMI W GRAFIKU 🌟
+  const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
+
+  const shiftWeek = (direction: number) => {
+    const newDate = new Date(selectedWeekDate);
+    newDate.setDate(newDate.getDate() + (direction * 7));
+    setSelectedWeekDate(newDate);
+  };
+
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.value) {
+      setSelectedWeekDate(new Date(e.target.value));
+    }
+  };
+
   // Funkcje pomocnicze
   const toggleDay = (dateStr: string) => setExpandedDays(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
 
@@ -396,7 +411,6 @@ export default function DashboardPage() {
     }
   };
 
-  // LOGIKA TRWAŁEGO ZAPISU AVATARA
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !profileClient) return;
@@ -729,7 +743,6 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
-  // NOWA FUNKCJA DO WYPISYWANIA SIĘ BEZPOŚREDNIO Z GŁÓWNEJ LISTY
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const todayDateOnly = new Date();
     todayDateOnly.setHours(0,0,0,0);
@@ -807,7 +820,6 @@ export default function DashboardPage() {
     }
     setClientToUnregister(null); setBlokadaZapisow(false); loadData();
   };
-
   const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
     if (isOdwolane || isUsuniete) return '#fda4af';
     if (!title) return '#0284c7';
@@ -855,7 +867,7 @@ export default function DashboardPage() {
     return new Date(dCopy.setDate(diff));
   };
   const today = new Date();
-  const currentMonday = getMonday(new Date());
+  const currentMonday = getMonday(selectedWeekDate);
   const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
     const dayDate = new Date(currentMonday);
     dayDate.setDate(currentMonday.getDate() + index);
@@ -1135,10 +1147,41 @@ export default function DashboardPage() {
 
     {/* ZMODYFIKOWANY NAGŁÓWEK GRAFIKU DOPASOWANY DO ZDJĘCIA */}
     <section className="space-y-4">
-    <div className={`flex items-center justify-between mb-2 ${appRole === 'admin' ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
+    <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${appRole === 'admin' ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
       <h2 className={`font-medium uppercase tracking-wider ${appRole === 'klubowicz' ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
-        {appRole === 'klubowicz' ? 'Grafik' : 'GRAFIK ZAJĘĆ (BIEŻĄCY TYDZIEŃ)'}
+        {appRole === 'klubowicz' ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
       </h2>
+      
+      <div className="flex items-center justify-center gap-4 bg-white border border-slate-200 rounded-3xl p-2.5 shadow-sm self-start md:self-auto w-full md:w-auto">
+        <button onClick={() => shiftWeek(-1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        
+        <div className="flex flex-col items-center min-w-[150px]">
+          <label className="cursor-pointer flex flex-col items-center group relative">
+            <span className="text-xs font-black text-slate-800 uppercase tracking-wider text-center group-hover:text-sky-600 transition-colors">
+              {(() => {
+                const d1 = getMonday(selectedWeekDate);
+                const d2 = new Date(d1); d2.setDate(d2.getDate() + 4);
+                return `${d1.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })} - ${d2.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })}`;
+              })()}
+            </span>
+            <div className="mt-1.5 p-1.5 bg-slate-100 rounded-full border border-slate-200 shadow-sm group-hover:bg-sky-50 transition-colors">
+              ✏️
+            </div>
+            <input 
+              type="date" 
+              className="absolute opacity-0 inset-0 w-full h-full cursor-pointer" 
+              value={selectedWeekDate.toISOString().split('T')[0]} 
+              onChange={handleDateChange} 
+            />
+          </label>
+        </div>
+
+        <button onClick={() => shiftWeek(1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+        </button>
+      </div>
     </div>
 
     <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
