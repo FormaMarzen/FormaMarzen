@@ -1486,8 +1486,8 @@ export default function DashboardPage() {
     </div>
     )}
     </div>
-    {/* ZMIANA SZYEROKOŚCI ZDJĘCIA */}
-    <div className="w-16 h-16 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-2xl shrink-0 shadow-sm">
+    {/* ZMIANA SZYEROKOŚCI ZDJĘCIA - JESZCZE WIĘKSZE */}
+    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-5xl shrink-0 shadow-sm">
     {osoba.avatarUrl ? (
     <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
     ) : (
@@ -1568,8 +1568,8 @@ export default function DashboardPage() {
     </div>
     )}
     </div>
-    {/* ZMIANA SZYEROKOŚCI ZDJĘCIA */}
-    <div className="w-16 h-16 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-2xl shrink-0 shadow-sm">
+    {/* ZMIANA SZYEROKOŚCI ZDJĘCIA - JESZCZE WIĘKSZE */}
+    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-5xl shrink-0 shadow-sm">
     {osoba.avatarUrl ? (
     <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
     ) : (
