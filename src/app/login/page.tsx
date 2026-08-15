@@ -11,6 +11,7 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [customLogo, setCustomLogo] = useState('');
+  const [logoError, setLogoError] = useState(false); // Stan zabezpieczający przed błędem obrazka
   
   // Stany dla odzyskiwania hasła
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
@@ -20,6 +21,7 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
+    // Zachowujemy wsparcie dla localStorage (jeśli kiedyś będziesz chciał dynamicznie zmieniać logo w locie)
     const savedLogo = localStorage.getItem('forma_marzen_logo');
     if (savedLogo) {
       setCustomLogo(savedLogo);
@@ -78,6 +80,13 @@ export default function LoginPage() {
           <div className="w-20 h-20 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center p-2 overflow-hidden">
             {customLogo ? (
               <img src={customLogo} alt="Logo" className="max-h-full max-w-full object-contain" />
+            ) : !logoError ? (
+              <img 
+                src="/logo.png" 
+                alt="Forma Marzeń Logo" 
+                className="max-h-full max-w-full object-contain"
+                onError={() => setLogoError(true)} // Zabezpieczenie: jeśli plik nie istnieje, przełącz na emoji
+              />
             ) : (
               <div className="text-red-600 font-black text-2xl flex flex-col items-center">
                 <span>🏋️‍♂️</span>
