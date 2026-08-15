@@ -19,6 +19,13 @@ export default function KarnetPage() {
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [passToExtend, setPassToExtend] = useState<any>(null);
 
+  // STANY DLA ZAWIESZEŃ KARNETU
+  const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
+  const [passToSuspendId, setPassToSuspendId] = useState<string>('');
+  const [suspendStartDate, setSuspendStartDate] = useState('');
+  const [suspendEndDate, setSuspendEndDate] = useState('');
+  const [suspendError, setSuspendError] = useState('');
+
   useEffect(() => {
     loadData();
   }, []);
@@ -205,6 +212,18 @@ export default function KarnetPage() {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
       Portfel: nowyStanPortfelaStr
     };
+
+    // Zaktualizuj główną datę 'Wygasa' w kliencie
+    const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
+      const dateA = a.waznyDo || '9999-12-31';
+      const dateB = b.waznyDo || '9999-12-31';
+      return dateB.localeCompare(dateA); 
+    })[0]?.waznyDo;
+
+    if(latestExpDate) {
+      dbPayload.Wygasa = latestExpDate;
+    }
+
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
@@ -249,7 +268,7 @@ export default function KarnetPage() {
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
 
-    let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
+    let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
@@ -257,14 +276,13 @@ export default function KarnetPage() {
     
     // Sprawdzamy czy to karnet na czas (bez wejść) i czy mamy go już w tablicy
     const isTimeBased = limitWejscBaza === null;
-    const existingPassIndex = karnetyList.findIndex(k => k.nazwa === selectedBuyPass);
+    const existingPassIndex = updatedKarnetyList.findIndex(k => k.nazwa === selectedBuyPass);
 
-    let updatedKarnety = [];
     let nowaDataWygasnieciaStr = '';
 
     if (isTimeBased && existingPassIndex !== -1) {
       // PRZEDŁUŻAMY ISTNIEJĄCY KARNET CZASOWY
-      updatedKarnety = karnetyList.map((k, index) => {
+      updatedKarnetyList = updatedKarnetyList.map((k, index) => {
         if (index === existingPassIndex) {
           let baseDate = new Date();
           // Jeśli wybrano 'after' dla przedłużenia
@@ -325,7 +343,7 @@ export default function KarnetPage() {
         historiaZawieszen: []
       };
 
-      updatedKarnety = [...karnetyList, nowyKarnetObj];
+      updatedKarnetyList.push(nowyKarnetObj);
     }
 
     const currentWalletNum = parseFloat(currentUser.Portfel?.replace(/[^0-9.-]+/g, "") || "0");
@@ -333,9 +351,21 @@ export default function KarnetPage() {
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
     const dbPayload: any = {
-      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnety) : updatedKarnety,
+      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
       Portfel: nowyStanPortfelaStr
     };
+
+    // Zaktualizuj główną datę 'Wygasa' w kliencie
+    const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
+      const dateA = a.waznyDo || '9999-12-31';
+      const dateB = b.waznyDo || '9999-12-31';
+      return dateB.localeCompare(dateA); 
+    })[0]?.waznyDo;
+
+    if(latestExpDate) {
+      dbPayload.Wygasa = latestExpDate;
+    }
+
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
@@ -367,6 +397,172 @@ export default function KarnetPage() {
     setIsBuyPassModalOpen(true);
   };
 
+  // POMOCNICZA FUNKCJA DO OBLICZANIA DNI POMIĘDZY DATAMI
+  const getDaysBetween = (d1: string, d2: string) => {
+    const date1 = new Date(d1);
+    const date2 = new Date(d2);
+    date1.setHours(0,0,0,0);
+    date2.setHours(0,0,0,0);
+    return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1; // Włącznie z dniem początkowym
+  };
+
+  // ZAWIESZANIE KARNETU (OBSŁUGA ZASAD)
+  const handleSuspendSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSuspendError('');
+    
+    if (!passToSuspendId || !suspendStartDate || !suspendEndDate) {
+      setSuspendError('Wypełnij wszystkie pola.');
+      return;
+    }
+
+    const start = new Date(suspendStartDate);
+    const end = new Date(suspendEndDate);
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    if (start < today) {
+      setSuspendError('Data rozpoczęcia nie może być w przeszłości.');
+      return;
+    }
+    if (end < start) {
+      setSuspendError('Data zakończenia nie może być wcześniejsza niż data rozpoczęcia.');
+      return;
+    }
+
+    const requestedDays = getDaysBetween(suspendStartDate, suspendEndDate);
+    if (requestedDays > 14) {
+      setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
+      return;
+    }
+
+    // Wyciągnij karnet z bazy usera
+    const karnetIndex = karnetyList.findIndex((k: any) => k.id.toString() === passToSuspendId.toString());
+    if (karnetIndex === -1) {
+      setSuspendError('Nie znaleziono karnetu.');
+      return;
+    }
+    const targetKarnet = karnetyList[karnetIndex];
+    const suspensionHistory = targetKarnet.historiaZawieszen || [];
+
+    const month = start.getMonth(); // 0 = styczeń, 6 = lipiec, 7 = sierpień
+    const year = start.getFullYear();
+
+    const isVacation = (month === 6 || month === 7); 
+    const quarter = Math.floor(month / 3) + 1;
+
+    // Sprawdzanie zasad na podstawie historii
+    let sumDaysInPeriod = 0;
+    let countSuspensionsInPeriod = 0;
+
+    if (isVacation) {
+      // ZASADA 2: WAKACJE - 1 zawieszenie na max 14 dni w danym miesiącu
+      suspensionHistory.forEach((susp: any) => {
+        const hStart = new Date(susp.od);
+        if (hStart.getFullYear() === year && hStart.getMonth() === month) {
+          sumDaysInPeriod += susp.dni;
+          countSuspensionsInPeriod += 1;
+        }
+      });
+      if (countSuspensionsInPeriod >= 1) {
+        setSuspendError(`Wygasł limit ilościowy zawieszeń (1/miesiąc) na miesiąc wakacyjny (${month === 6 ? 'Lipiec' : 'Sierpień'}).`);
+        return;
+      }
+      if (sumDaysInPeriod + requestedDays > 14) {
+        setSuspendError(`W tym miesiącu wakacyjnym pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni.`);
+        return;
+      }
+    } else {
+      // ZASADA 1: KWARTAŁ - max 2 zawieszenia, zsumowane max 14 dni
+      suspensionHistory.forEach((susp: any) => {
+        const hStart = new Date(susp.od);
+        const hMonth = hStart.getMonth();
+        const hQuarter = Math.floor(hMonth / 3) + 1;
+        
+        // Zliczamy tylko zawieszenia, które nie wypadły na wakacje (aby oddzielić logicznie system)
+        if (hStart.getFullYear() === year && hQuarter === quarter && hMonth !== 6 && hMonth !== 7) {
+          sumDaysInPeriod += susp.dni;
+          countSuspensionsInPeriod += 1;
+        }
+      });
+      if (countSuspensionsInPeriod >= 2) {
+        setSuspendError('Wykorzystano już 2 dostępne zawieszenia w tym kwartale.');
+        return;
+      }
+      if (sumDaysInPeriod + requestedDays > 14) {
+        setSuspendError(`W tym kwartale pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni zawieszenia (Limit to 14 na kwartał).`);
+        return;
+      }
+    }
+
+    // APLIKACJA ZAWIESZENIA - WYDŁUŻENIE DATY WAŻNOŚCI KARNETU
+    let updatedKarnetyList = [...karnetyList];
+    let nowaDataWygasnieciaStr = targetKarnet.waznyDo;
+
+    if (targetKarnet.waznyDo) {
+      const parts = targetKarnet.waznyDo.split('-');
+      if (parts.length === 3) {
+        const oldExpDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        oldExpDate.setDate(oldExpDate.getDate() + requestedDays);
+        
+        const nYear = oldExpDate.getFullYear();
+        const nMonth = String(oldExpDate.getMonth() + 1).padStart(2, '0');
+        const nDay = String(oldExpDate.getDate()).padStart(2, '0');
+        nowaDataWygasnieciaStr = `${nYear}-${nMonth}-${nDay}`;
+      }
+    }
+
+    updatedKarnetyList[karnetIndex] = {
+      ...targetKarnet,
+      zawieszonyOd: suspendStartDate,
+      zawieszonyDo: suspendEndDate,
+      waznyDo: nowaDataWygasnieciaStr,
+      statusTekst: `Zawieszony (${suspendStartDate} - ${suspendEndDate}) - przedłużony do ${nowaDataWygasnieciaStr}`,
+      historiaZawieszen: [
+        ...suspensionHistory,
+        {
+          od: suspendStartDate,
+          do: suspendEndDate,
+          dni: requestedDays,
+          utworzono: new Date().toISOString()
+        }
+      ]
+    };
+
+    // Zaktualizuj główną datę 'Wygasa' w kliencie by system to widział globalnie
+    const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
+      const dateA = a.waznyDo || '9999-12-31';
+      const dateB = b.waznyDo || '9999-12-31';
+      return dateB.localeCompare(dateA); 
+    })[0]?.waznyDo;
+
+    const dbPayload: any = {
+      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      Wygasa: latestExpDate
+    };
+
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+
+    if (updateError) {
+      setSuspendError(`Błąd aktualizacji bazy danych: ${updateError.message}`);
+      return;
+    }
+
+    alert(`Pomyślnie zawieszono karnet na ${requestedDays} dni. Data wygaśnięcia przesunięta na: ${nowaDataWygasnieciaStr}`);
+    setIsSuspendModalOpen(false);
+    setSuspendStartDate('');
+    setSuspendEndDate('');
+    window.location.reload();
+  };
+
+  const activeTimePasses = karnetyList.filter((k: any) => {
+    const limitWejscBaza = k.pozostaloWejsc;
+    const isTimeBased = limitWejscBaza === null || limitWejscBaza === undefined;
+    const isActive = !k.statusTekst?.includes('Oczekujący');
+    // Umożliwiamy zawieszenie tylko karnetów czasowych (bez wejść), które już działają
+    return isTimeBased && isActive;
+  });
+
   if (isLoading) {
     return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie danych karnetu...</div>;
   }
@@ -387,11 +583,12 @@ export default function KarnetPage() {
             </div>
           ) : (
             karnetyList.map((karnet: any) => {
-              // WYLICZANIE KOLORÓW ETYKIETY (Oczekujący / Wygasa / Aktywny)
+              // WYLICZANIE KOLORÓW ETYKIETY (Oczekujący / Wygasa / Aktywny / Zawieszony)
               let isExpiring = false;
               let isPending = karnet.statusTekst?.includes('Oczekujący');
+              let isSuspended = karnet.statusTekst?.includes('Zawieszony');
 
-              if (!isPending) {
+              if (!isPending && !isSuspended) {
                 if (karnet.waznyDo) {
                   const todayDate = new Date();
                   todayDate.setHours(0, 0, 0, 0);
@@ -410,7 +607,9 @@ export default function KarnetPage() {
               }
 
               let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; // Domyślnie zielony
-              if (isPending) {
+              if (isSuspended) {
+                statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; // Zawieszony (Szary)
+              } else if (isPending) {
                 statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; // Oczekujący żółty
               } else if (isExpiring) {
                 statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; // Kończący się czerwony
@@ -452,7 +651,7 @@ export default function KarnetPage() {
           )}
         </div>
 
-        <div className="mt-4">
+        <div className="mt-4 flex flex-wrap gap-3">
           <button 
             onClick={openBuyModal}
             className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-sm transition-colors cursor-pointer flex items-center gap-2"
@@ -462,8 +661,41 @@ export default function KarnetPage() {
         </div>
       </div>
 
+      {/* SEKCJA 1.5: ZARZĄDZANIE ZAWIESZENIAMI */}
+      <div className="pt-2">
+        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">ZARZĄDZANIE ZAWIESZENIAMI</h2>
+        <div className="bg-slate-100 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+          <div className="flex items-start gap-4 text-sm text-slate-700">
+            <div className="w-10 h-10 shrink-0 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center text-lg">❄️</div>
+            <div className="space-y-2">
+              <h4 className="font-bold text-slate-900">Zasady zawieszania karnetu</h4>
+              <ul className="list-disc pl-4 space-y-1 text-xs">
+                <li>Możesz zawiesić karnet maksymalnie **2 razy w ciągu każdego kwartału** roku, na maksymalnie zsumowaną ilość **14 dni**.</li>
+                <li>W miesiącach wakacyjnych (Lipiec i Sierpień) posiadasz **osobny limit**: 1 zawieszenie na miesiąc, trwające maksymalnie 14 dni.</li>
+                <li>Dni, w których karnet jest zawieszony, zostają automatycznie doliczone do daty wygaśnięcia.</li>
+              </ul>
+            </div>
+          </div>
+          <div className="pt-2 flex justify-end">
+            <button 
+              onClick={() => {
+                if (activeTimePasses.length === 0) {
+                  alert('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić (karnety na wejścia lub już zawieszone nie podlegają tej operacji).');
+                  return;
+                }
+                setPassToSuspendId(activeTimePasses[0].id.toString());
+                setIsSuspendModalOpen(true);
+              }}
+              className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-2.5 rounded-xl shadow-sm transition-colors cursor-pointer"
+            >
+              ZAWIEŚ KARNET
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* SEKCJA 2: HISTORIA TRANSAKCJI */}
-      <div className="pt-4">
+      <div className="pt-2">
         <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">HISTORIA TRANSAKCJI</h2>
         
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
@@ -509,6 +741,73 @@ export default function KarnetPage() {
         </div>
       </div>
 
+      {/* MODAL ZAWIESZENIA KARNETU */}
+      {isSuspendModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">❄️ Zawieszenie karnetu</h3>
+              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+            
+            <form onSubmit={handleSuspendSubmit} className="space-y-4 text-xs">
+              
+              {suspendError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold p-3 rounded-xl text-center">
+                  ⚠️ {suspendError}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Karnet do zawieszenia</label>
+                <select 
+                  required
+                  value={passToSuspendId} 
+                  onChange={(e) => setPassToSuspendId(e.target.value)} 
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+                >
+                  {activeTimePasses.map((k: any) => (
+                    <option key={k.id} value={k.id.toString()}>{k.nazwa} (Ważny do {k.waznyDo})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Od dnia *</label>
+                  <input 
+                    type="date" 
+                    required 
+                    value={suspendStartDate} 
+                    onChange={(e) => setSuspendStartDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Do dnia (włącznie) *</label>
+                  <input 
+                    type="date" 
+                    required 
+                    value={suspendEndDate} 
+                    onChange={(e) => setSuspendEndDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+                <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                  Anuluj
+                </button>
+                <button type="submit" className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                  Zamroź karnet
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL PRZEDŁUŻENIA KARNETU Z POZIOMU KAFELKA */}
       {isExtendModalOpen && passToExtend && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -541,7 +840,7 @@ export default function KarnetPage() {
         </div>
       )}
 
-      {/* MODAL ZAKUPU NOWEGO KARNETU (UKRYWA KUPIONE JUŻ KARNETY CZASOWE) */}
+      {/* MODAL ZAKUPU NOWEGO KARNETU */}
       {isBuyPassModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -552,7 +851,7 @@ export default function KarnetPage() {
             
             <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-700 font-medium">
-                Wybierz karnet, aby przypisać go bezpośrednio do Twojego konta. Posiadane już karnety czasowe zostały ukryte (możesz je przedłużyć używając przycisku "Przedłuż" na konkretnym karnecie).
+                Wybierz karnet, aby przypisać go bezpośrednio do Twojego konta. Posiadane już karnety czasowe zostały ukryte.
               </div>
 
               <div className="space-y-1">
@@ -573,7 +872,6 @@ export default function KarnetPage() {
                 )}
               </div>
 
-              {/* OPCJE AKTYWACJI KARNETU WIDOCZNE TYLKO JEŚLI UŻYTKOWNIK MA JUŻ KARNET */}
               {hasActivePasses && maxDateStr && dostepneKarnetyDoZakupu.length > 0 && (
                 <div className="space-y-2 pt-2 border-t border-slate-100">
                   <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
