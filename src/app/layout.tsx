@@ -322,6 +322,21 @@ export default function RootLayout({
 
   return (
     <html lang="pl">
+      <head>
+        <title>Forma Marzeń</title>
+        <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
+        
+        {/* Tagi PWA dla urządzeń z Androidem (Google Chrome) i Windows */}
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#0284c7" />
+        <meta name="mobile-web-app-capable" content="yes" />
+
+        {/* Tagi PWA dla urządzeń Apple (iOS / Safari) */}
+        <link rel="apple-touch-icon" href="/logo.png" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="Forma Marzeń" />
+      </head>
       <body className="min-h-screen bg-sky-50/50 text-slate-800 flex font-sans antialiased h-screen overflow-hidden">
         
         <AuthGuard>
