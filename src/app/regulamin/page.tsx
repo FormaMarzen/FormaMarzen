@@ -291,12 +291,12 @@ export default function RegulaminPage() {
 
   // Pomocnicza funkcja do znalezienia imienia i nazwiska klienta po adresie email
   const getClientNameByEmail = (email?: string) => {
-    if (!email) return 'Nieznany użytkownik';
+    if (!email) return 'Klubowicz (brak adresu e-mail w historii)';
     const found = clients.find(c => c['E-mail']?.toLowerCase() === email.toLowerCase());
     if (found) {
       return `${found.Imię} ${found.Nazwisko}`;
     }
-    return email; // Fallback do emaila jeśli nie znaleziono w klienci
+    return email; 
   };
 
   // Filtrowanie historii dla administratora po wpisaniu imienia/nazwiska/emaila

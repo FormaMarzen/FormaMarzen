@@ -19,6 +19,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   
   // Stan przechowujący regulaminy, które muszą zostać natychmiast zaakceptowane
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
@@ -37,6 +38,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       
       if (session && !isPublicPath) {
         setUserId(session.user.id);
+        setUserEmail(session.user.email ?? null);
         
         // 1. Sprawdzamy czy to administrator (admini nie muszą akceptować regulaminów)
         let isAdmin = false;
@@ -105,7 +107,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
     const { error } = await supabase
       .from('regulation_acceptances')
-      .insert([{ user_id: userId, regulation_slug: slug }]);
+      .insert([{ 
+        user_id: userId, 
+        user_email: userEmail,
+        regulation_slug: slug 
+      }]);
 
     if (!error) {
       // Usuwamy zaakceptowany regulamin z kolejki "do akceptacji"
@@ -127,9 +133,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // EKRAN BLOKADY (App Blocker) - jeśli są regulaminy do zaakceptowania i nie jest to strona publiczna
+  // EKRAN BLOKADY (App Blocker)
   if (pendingRegulations.length > 0 && !isPublicPath) {
-    const currentReg = pendingRegulations[0]; // Wyświetlamy pierwszy w kolejce
+    const currentReg = pendingRegulations[0]; 
     
     return (
       <div className="fixed inset-0 z-[99999] bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-4 sm:p-8">
@@ -164,7 +170,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
             <button 
               onClick={() => handleAccept(currentReg.slug)}
               disabled={isAccepting}
-              className="w-full sm:w-auto px-8 py-3.5 text-slate-950 bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors font-black shadow-sm disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wider"
+              className="w-full sm:w-auto px-8 py-3.5 text-slate-950 bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors font-black shadow-sm disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wider cursor-pointer"
             >
               {isAccepting ? 'Przetwarzanie...' : 'Akceptuję zasady'}
               {!isAccepting && <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>}
@@ -175,6 +181,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // STANDARDOWY ZWROT (jeśli wszystko jest zaaprobowane lub publiczne)
+  // STANDARDOWY ZWROT
   return <>{children}</>;
 }
