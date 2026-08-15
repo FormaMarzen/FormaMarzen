@@ -402,7 +402,10 @@ export default function KarnetPage() {
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
 
-  // ZAWIESZANIE KARNETU (OBSŁUGA ZASAD Z UWZGLĘDNIENIEM WRZEŚNIA)
+  // POMOCNICZA ZMIENNA Z DZISIEJSZĄ DATĄ (Do blokowania dat w kalendarzu)
+  const dzisiajString = new Date().toISOString().split('T')[0];
+
+  // ZAWIESZANIE KARNETU (OBSŁUGA ZASAD)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -418,7 +421,7 @@ export default function KarnetPage() {
     today.setHours(0,0,0,0);
 
     if (start < today) {
-      setSuspendError('Data rozpoczęcia nie może być w przeszłości.');
+      setSuspendError('Data rozpoczęcia nie może być w przeszłości. Zawieszenie jest możliwe od dzisiaj.');
       return;
     }
     if (end < start) {
@@ -438,6 +441,17 @@ export default function KarnetPage() {
       return;
     }
     const targetKarnet = karnetyList[karnetIndex];
+
+    // ZASADA: ZAWIESZENIE MUSI BYĆ W CZASIE TRWANIA KARNETU
+    if (targetKarnet.waznyDo) {
+      const expDate = new Date(targetKarnet.waznyDo);
+      expDate.setHours(23, 59, 59, 999);
+      if (start > expDate) {
+        setSuspendError(`Zawieszenie musi rozpocząć się w trakcie ważności karnetu (najpóźniej ${targetKarnet.waznyDo}).`);
+        return;
+      }
+    }
+
     const suspensionHistory = targetKarnet.historiaZawieszen || [];
 
     const month = start.getMonth(); // 0 = styczeń, 6 = lipiec, 7 = sierpień, 8 = wrzesień
@@ -608,13 +622,13 @@ export default function KarnetPage() {
                 }
               }
 
-              let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; // Domyślnie zielony
+              let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
               if (isSuspended) {
-                statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; // Zawieszony (Szary)
+                statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
               } else if (isPending) {
-                statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; // Oczekujący żółty
+                statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; 
               } else if (isExpiring) {
-                statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; // Kończący się czerwony
+                statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; 
               }
 
               return (
@@ -811,6 +825,7 @@ export default function KarnetPage() {
                 <ul className="list-none space-y-2 pl-1">
                   <li className="flex gap-2"><span className="text-blue-500 font-bold">1.</span> Klient może zawiesić karnet maksymalnie <strong>2 razy w ciągu każdego kwartału</strong> roku.</li>
                   <li className="flex gap-2"><span className="text-blue-500 font-bold">2.</span> Maksymalna zsumowana ilość dni zawieszenia w kwartale to <strong>14 dni</strong>.</li>
+                  <li className="flex gap-2"><span className="text-blue-500 font-bold">3.</span> Zawieszenie jest możliwe tylko od <strong>dzisiaj</strong> na czas trwania ważności karnetu. Nie ma możliwości zawieszania wstecz.</li>
                 </ul>
               </div>
 
@@ -874,6 +889,7 @@ export default function KarnetPage() {
                   <input 
                     type="date" 
                     required 
+                    min={dzisiajString} 
                     value={suspendStartDate} 
                     onChange={(e) => setSuspendStartDate(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
@@ -884,6 +900,7 @@ export default function KarnetPage() {
                   <input 
                     type="date" 
                     required 
+                    min={suspendStartDate || dzisiajString}
                     value={suspendEndDate} 
                     onChange={(e) => setSuspendEndDate(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
