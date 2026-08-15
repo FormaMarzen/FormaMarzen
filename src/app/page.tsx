@@ -1184,7 +1184,7 @@ export default function DashboardPage() {
       )}
 
       <section className="space-y-4">
-        <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${appRole === 'admin' ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
+        <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
           <h2 className={`font-medium uppercase tracking-wider ${['klubowicz', 'trener'].includes(appRole) ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
             {['klubowicz', 'trener'].includes(appRole) ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
           </h2>
@@ -1669,7 +1669,9 @@ export default function DashboardPage() {
           )
           .sort(sortAlfabet);
         
-        const canSeeDetails = appRole === 'admin' || (currentUser && String(currentUser.id) === String(selectedClass?.id));
+        // Zmieniono warunek uprawnień: zarządzać listą zajęć (obecność, wypisywanie, dopisywanie) może zarówno admin, jak i trener
+        const canManageClass = appRole === 'admin' || appRole === 'trener';
+        const canSeeDetails = canManageClass || (currentUser && String(currentUser.id) === String(selectedClass?.id));
         
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
@@ -1742,7 +1744,7 @@ export default function DashboardPage() {
                             )}
                           </div>
                         </div>
-                        {appRole === 'admin' && (
+                        {canManageClass && (
                           <div className="flex items-center justify-end gap-2 border-t border-sky-100 pt-3 text-xs w-full">
                             {(!osobaZapisana.nieobecny) && (
                               <label className={`flex items-center gap-2 px-3 py-2 rounded-xl border font-black uppercase tracking-wider text-[10px] cursor-pointer transition-all shadow-sm ${
@@ -1843,7 +1845,7 @@ export default function DashboardPage() {
                               )}
                             </div>
                           </div>
-                          {appRole === 'admin' && (
+                          {canManageClass && (
                             <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
                               <span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
                               <button

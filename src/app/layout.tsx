@@ -20,7 +20,6 @@ export default function RootLayout({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
-  // Dodana rola 'trener'
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [isMounted, setIsMounted] = useState(false);
 
@@ -58,11 +57,9 @@ export default function RootLayout({
         setProfileEmail(userEmail);
         
         if (userEmail === 'maciejklaput@gmail.com') {
-          // Administrator ma wszystko
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
         } else {
-          // Sprawdzamy czy użytkownik jest TRENEREM w bazie
           const { data: trenerData } = await supabase
             .from('trenerzy')
             .select('*')
@@ -74,7 +71,6 @@ export default function RootLayout({
             setProfileName(trenerData.imie_nazwisko || userEmail.split('@')[0]);
             setProfilePhone(trenerData.telefon || '-');
             
-            // Sprawdzamy czy ma powiązane konto klubowicza (dla np. awatara)
             const { data: klientData } = await supabase
               .from('klienci')
               .select('Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
@@ -87,7 +83,6 @@ export default function RootLayout({
               if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
             }
           } else {
-            // Jeśli nie jest trenerem ani adminem, zostaje zwykłym klubowiczem
             setAppRole('klubowicz');
             const { data: klientData } = await supabase
               .from('klienci')
@@ -263,17 +258,28 @@ export default function RootLayout({
     }
   ];
 
-  // Zminimalizowane menu przeznaczone wyłącznie dla trenera
   const trenerMenuSections = [
     {
-      title: "Główne",
+      title: "Strefa Trenera",
       items: [
         { href: '/', label: 'Trener (Grafik)', icon: '📅' },
+      ]
+    },
+    {
+      title: "Konto Klubowicza",
+      items: [
+        { href: '/karnet', label: 'Karnet', icon: '🎟️' },
+        { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
+        { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
+        { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
+        { href: '/portfel', label: 'Portfel', icon: '💳' },
+        { href: '/ambasador', label: 'Ambasador', icon: '👥' },
+        { href: '/sklep', label: 'Sklep', icon: '🛒' },
+        { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
     }
   ];
 
-  // Wybór odpowiedniego menu na podstawie roli
   const activeMenuSections = appRole === 'admin' 
     ? adminMenuSections 
     : appRole === 'trener' 
@@ -370,7 +376,6 @@ export default function RootLayout({
         <title>Forma Marzeń</title>
         <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
         
-        {/* Wymuszenie odświeżenia przez zmianę parametru w adresach */}
         <link rel="manifest" href="/manifest.json?v=2" />
         <meta name="theme-color" content="#0284c7" />
         <meta name="mobile-web-app-capable" content="yes" />
