@@ -16,6 +16,14 @@ interface ClassItem {
   start_time?: string;
 }
 
+interface RegulationItem {
+  id: string;
+  slug: string;
+  title: string;
+  content: string;
+  checkbox_text?: string;
+}
+
 export default function FreeRegistrationPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
@@ -30,11 +38,15 @@ export default function FreeRegistrationPage() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState(''); // 🔑 Nowe pole na hasło
-  const [acceptTerms, setAcceptTerms] = useState(false);
-  const [acceptPay, setAcceptPay] = useState(false);
-  const [acceptReturn, setAcceptReturn] = useState(false);
+  const [password, setPassword] = useState('');
   
+  // Dynamiczne regulaminy i zgody
+  const [regulations, setRegulations] = useState<RegulationItem[]>([]);
+  const [acceptedRegulations, setAcceptedRegulations] = useState<{ [key: string]: boolean }>({});
+  
+  // Stan modalu podglądu regulaminu
+  const [activeModalReg, setActiveModalReg] = useState<RegulationItem | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -43,6 +55,7 @@ export default function FreeRegistrationPage() {
     if (savedLogo) setCustomLogo(savedLogo);
 
     fetchGrafik(currentDate);
+    fetchRegulations();
   }, [currentDate]);
 
   const fetchGrafik = async (date: Date) => {
@@ -58,6 +71,19 @@ export default function FreeRegistrationPage() {
       ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
       ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
     ]);
+  };
+
+  const fetchRegulations = async () => {
+    const { data, error } = await supabase.from('regulations').select('*').order('id', { ascending: true });
+    if (data && !error) {
+      setRegulations(data);
+      // Inicjalizacja stanu zaznaczeń na false dla każdego regulaminu
+      const initialAccepted: { [key: string]: boolean } = {};
+      data.forEach((reg: RegulationItem) => {
+        initialAccepted[reg.slug] = false;
+      });
+      setAcceptedRegulations(initialAccepted);
+    }
   };
 
   const changeDay = (days: number) => {
@@ -76,10 +102,41 @@ export default function FreeRegistrationPage() {
     setStep(2);
   };
 
+  const handleCheckboxChange = (slug: string, checked: boolean) => {
+    setAcceptedRegulations(prev => ({ ...prev, [slug]: checked }));
+  };
+
+  // Renderowanie tekstu z obsługą tagów [[tytuł linku]] oraz kliknięciem otwierającym modal
+  const renderCheckboxTextWithLinks = (reg: RegulationItem) => {
+    const text = reg.checkbox_text || `Zapoznałem się i akceptuję [[${reg.title}]]`;
+    const parts = text.split(/\[\[(.*?)\]\]/g);
+
+    return parts.map((part, index) => {
+      if (index % 2 === 1) {
+        return (
+          <span 
+            key={index} 
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveModalReg(reg);
+            }}
+            className="text-sky-600 font-bold underline cursor-pointer hover:text-sky-700 transition-colors"
+          >
+            {part}
+          </span>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
+
   const handleRegisterAndLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!acceptTerms || !acceptPay || !acceptReturn) {
-      setErrorMsg('Musisz zaakceptować wszystkie wymagane zgody.');
+    
+    // Sprawdzenie czy wszystkie regulaminy zostały zaakceptowane
+    const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
+    if (!allAccepted) {
+      setErrorMsg('Musisz zaznaczyć i zaakceptować wszystkie wymagane zgody i regulaminy.');
       return;
     }
 
@@ -91,7 +148,7 @@ export default function FreeRegistrationPage() {
     setIsLoading(true);
     setErrorMsg('');
 
-    // 1. Rejestracja w Supabase Auth z podanym przez użytkownika hasłem
+    // 1. Rejestracja w Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: email,
       password: password,
@@ -106,10 +163,21 @@ export default function FreeRegistrationPage() {
       return;
     }
 
+    const newUserId = authData.user?.id;
     const newClientId = Date.now();
     const todayIsoStr = new Date().toISOString().split('T')[0];
 
-    // 2. Dodanie klienta do tabeli "klienci", aby od razu pojawił się w zakładce Klienci i miał panel klubowicza
+    // 2. Zapis akceptacji regulaminów do tabeli "regulation_acceptances"
+    if (newUserId) {
+      const acceptanceInserts = regulations.map(reg => ({
+        user_id: newUserId,
+        regulation_slug: reg.slug,
+        accepted_at: new Date().toISOString()
+      }));
+      await supabase.from('regulation_acceptances').insert(acceptanceInserts);
+    }
+
+    // 3. Dodanie klienta do tabeli "klienci"
     const { error: klientError } = await supabase.from('klienci').insert([
       {
         id: newClientId,
@@ -136,7 +204,7 @@ export default function FreeRegistrationPage() {
       console.error("Błąd zapisu klienta do bazy:", klientError);
     }
 
-    // 3. Dodanie wpisu do tabeli zapisów na zajęcia (jeśli wybrano konkretne zajęcia)
+    // 4. Dodanie wpisu do tabeli zapisów na zajęcia
     if (selectedClass?.id) {
       const classKey = `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`;
       await supabase.from('zapisy_zajec').insert([
@@ -149,7 +217,7 @@ export default function FreeRegistrationPage() {
       ]);
     }
 
-    // 4. Automatyczne logowanie po rejestracji
+    // 5. Automatyczne logowanie po rejestracji
     const { error: loginError } = await supabase.auth.signInWithPassword({
       email: email,
       password: password,
@@ -286,19 +354,25 @@ export default function FreeRegistrationPage() {
               />
             </div>
 
-            <div className="space-y-2 pt-2 text-[11px] text-slate-600">
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input type="checkbox" checked={acceptPay} onChange={(e) => setAcceptPay(e.target.checked)} className="mt-0.5 accent-blue-600" />
-                <span>Zapoznałem się i akceptuję <strong>Płatności online</strong></span>
-              </label>
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} className="mt-0.5 accent-blue-600" />
-                <span>Zapoznałem się i akceptuję <strong>Regulamin klubu</strong></span>
-              </label>
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input type="checkbox" checked={acceptReturn} onChange={(e) => setAcceptReturn(e.target.checked)} className="mt-0.5 accent-blue-600" />
-                <span>„Zapoznałem się i akceptuję rezygnację z 14-dniowego prawa do zwrotu”</span>
-              </label>
+            {/* DYNAMICZNIE GENEROWANE CHECKBOXY REGULAMINÓW Z BAZY */}
+            <div className="space-y-2.5 pt-2 text-[11px] text-slate-600 border-t border-slate-100 mt-4 pt-4">
+              {regulations.length > 0 ? (
+                regulations.map((reg) => (
+                  <label key={reg.slug} className="flex items-start gap-2.5 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={!!acceptedRegulations[reg.slug]} 
+                      onChange={(e) => handleCheckboxChange(reg.slug, e.target.checked)} 
+                      className="mt-0.5 accent-blue-600 shrink-0" 
+                    />
+                    <span className="leading-relaxed">
+                      {renderCheckboxTextWithLinks(reg)}
+                    </span>
+                  </label>
+                ))
+              ) : (
+                <div className="text-slate-400 italic text-center">Ładowanie wymaganych zgód...</div>
+              )}
             </div>
 
             <div className="flex gap-2 pt-3">
@@ -319,6 +393,35 @@ export default function FreeRegistrationPage() {
         )}
 
       </div>
+
+      {/* MODAL PODGLĄDU REGULAMINU (OTWIERANY PO KLIKNIĘCIU W LINK W TEKŚCIE CHECKBOXA) */}
+      {activeModalReg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-base text-slate-800">{activeModalReg.title}</h3>
+              <button 
+                onClick={() => setActiveModalReg(null)}
+                className="text-slate-400 hover:text-slate-700 font-bold text-lg p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+              {activeModalReg.content || 'Brak treści tego dokumentu.'}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button 
+                onClick={() => setActiveModalReg(null)}
+                className="px-5 py-2 bg-slate-800 text-white font-bold rounded-xl text-xs hover:bg-slate-900 cursor-pointer"
+              >
+                Zamknij
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
