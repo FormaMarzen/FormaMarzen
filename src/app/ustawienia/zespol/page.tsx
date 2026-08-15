@@ -82,9 +82,14 @@ export default function ZespolPage() {
     fetchZespol();
   }, []);
 
+  // NAPRAWIONA FUNKCJA PRZEŁĄCZANIA WSZYSTKICH CHECKBOXÓW
   const handleToggleAll = () => {
-    const newState = !pelnyDostep;
-    setPelnyDostep(newState);
+    // Sprawdzamy, czy wszystkie uprawnienia są aktualnie zaznaczone na true
+    const allChecked = Object.values(permissions).every((val) => val === true);
+    
+    // Jeśli wszystkie są zaznaczone, odznaczamy je (false). W przeciwnym razie zaznaczamy wszystkie (true).
+    const newState = !allChecked;
+    
     const updated: { [key: string]: boolean } = {};
     Object.keys(permissions).forEach((key) => {
       updated[key] = newState;
@@ -336,7 +341,7 @@ export default function ZespolPage() {
                 <div className="space-y-4 pt-4 border-t border-gray-100 pb-10 animate-in fade-in duration-200">
                   <div className="flex justify-between items-center">
                     <h3 className="font-bold text-gray-400 uppercase tracking-wider text-[11px]">Uprawnienia</h3>
-                    <button onClick={handleToggleAll} className="font-bold text-amber-600 hover:text-amber-700 cursor-pointer">
+                    <button type="button" onClick={handleToggleAll} className="font-bold text-amber-600 hover:text-amber-700 cursor-pointer">
                       ☑ Przełącz wszystko
                     </button>
                   </div>
