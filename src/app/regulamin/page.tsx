@@ -8,6 +8,7 @@ type Regulation = {
   slug: string;
   title: string;
   content: string;
+  force_accept_date?: string;
 };
 
 type AcceptanceHistory = {
@@ -33,6 +34,7 @@ export default function RegulaminPage() {
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
+  const [forceAccept, setForceAccept] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -98,12 +100,14 @@ export default function RegulaminPage() {
       setIsCreatingNew(true);
       setEditTitle('');
       setEditContent('');
+      setForceAccept(false);
     } else if (regulation) {
       setSelectedRegulation(regulation);
       setIsEditMode(edit);
       setIsCreatingNew(false);
       setEditTitle(regulation.title || '');
       setEditContent(regulation.content || '');
+      setForceAccept(false);
     }
   };
 
@@ -113,6 +117,7 @@ export default function RegulaminPage() {
     setIsCreatingNew(false);
     setEditTitle('');
     setEditContent('');
+    setForceAccept(false);
   };
 
   const handleSaveRegulation = async () => {
@@ -122,9 +127,19 @@ export default function RegulaminPage() {
       // Tworzenie nowego regulaminu
       const newSlug = editTitle.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + Date.now();
       
+      const payload: any = { 
+        slug: newSlug, 
+        title: editTitle, 
+        content: editContent 
+      };
+
+      if (forceAccept) {
+        payload.force_accept_date = new Date().toISOString();
+      }
+      
       const { data, error } = await supabase
         .from('regulations')
-        .insert([{ slug: newSlug, title: editTitle, content: editContent }])
+        .insert([payload])
         .select()
         .single();
 
@@ -137,13 +152,23 @@ export default function RegulaminPage() {
       }
     } else if (selectedRegulation) {
       // Aktualizacja istniejącego
+      const payload: any = { 
+        title: editTitle, 
+        content: editContent, 
+        updated_at: new Date().toISOString() 
+      };
+
+      if (forceAccept) {
+        payload.force_accept_date = new Date().toISOString();
+      }
+
       const { error } = await supabase
         .from('regulations')
-        .update({ title: editTitle, content: editContent, updated_at: new Date().toISOString() })
+        .update(payload)
         .eq('id', selectedRegulation.id);
 
       if (!error) {
-        setRegulations(regulations.map(r => r.id === selectedRegulation.id ? { ...r, title: editTitle, content: editContent } : r));
+        setRegulations(regulations.map(r => r.id === selectedRegulation.id ? { ...r, ...payload } : r));
         handleCloseModal();
       } else {
         console.error(error);
@@ -357,11 +382,27 @@ export default function RegulaminPage() {
                   <div className="flex-1 flex flex-col">
                     <label className="text-sm font-semibold text-slate-600 block mb-1">Treść regulaminu</label>
                     <textarea
-                      className="w-full flex-1 min-h-[300px] p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none text-slate-700 bg-white"
+                      className="w-full flex-1 min-h-[250px] p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none text-slate-700 bg-white"
                       value={editContent}
                       onChange={(e) => setEditContent(e.target.value)}
                       placeholder="Tutaj wpisz treść dokumentu..."
                     />
+                  </div>
+                  
+                  <div className="mt-2 bg-orange-50 p-4 rounded-xl border border-orange-100 flex items-start gap-3">
+                    <input 
+                      type="checkbox" 
+                      id="forceAccept" 
+                      checked={forceAccept}
+                      onChange={(e) => setForceAccept(e.target.checked)}
+                      className="mt-1 w-5 h-5 text-orange-600 rounded border-gray-300 focus:ring-orange-500"
+                    />
+                    <label htmlFor="forceAccept" className="text-sm font-bold text-slate-800 cursor-pointer">
+                      Wymuś ponowną akceptację przez wszystkich klubowiczów
+                      <span className="block text-xs font-normal text-slate-600 mt-0.5">
+                        Jeśli zaznaczysz tę opcję, po zapisaniu zmian każdy klubowicz przy wejściu do aplikacji zobaczy okno blokujące dostęp do momentu akceptacji tego dokumentu.
+                      </span>
+                    </label>
                   </div>
                 </div>
               ) : (
