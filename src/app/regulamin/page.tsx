@@ -14,6 +14,8 @@ type Regulation = {
 
 type AcceptanceHistory = {
   id: string;
+  user_id: string;
+  user_email?: string;
   regulation_slug: string;
   accepted_at: string;
   regulations: {
@@ -21,15 +23,26 @@ type AcceptanceHistory = {
   };
 };
 
+type ClientProfile = {
+  Imię: string;
+  Nazwisko: string;
+  'E-mail': string;
+};
+
 export default function RegulaminPage() {
   const [regulations, setRegulations] = useState<Regulation[]>([]);
   const [history, setHistory] = useState<AcceptanceHistory[]>([]);
+  const [clients, setClients] = useState<ClientProfile[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [isAdmin, setIsAdmin] = useState(false); 
   const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
-  // Stan Modala
+  // Stan wyszukiwarki historii dla administratora
+  const [adminSearchQuery, setAdminSearchQuery] = useState('');
+
+  // Stan Modala edycji/tworzenia
   const [selectedRegulation, setSelectedRegulation] = useState<Regulation | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
@@ -51,10 +64,11 @@ export default function RegulaminPage() {
     
     if (user) {
       setUserId(user.id);
+      setUserEmail(user.email || null);
       
-      // Sprawdzanie uprawnień administratora
+      let adminCheck = false;
       if (user.email === 'maciejklaput@gmail.com') {
-        setIsAdmin(true);
+        adminCheck = true;
       } else {
         const { data: clientData } = await supabase
           .from('klienci')
@@ -63,23 +77,49 @@ export default function RegulaminPage() {
           .single();
 
         const role = clientData?.rola || clientData?.role || user.user_metadata?.role;
-        setIsAdmin(role === 'admin' || role === 'administrator');
+        adminCheck = (role === 'admin' || role === 'administrator');
       }
+      setIsAdmin(adminCheck);
 
-      // Pobieranie historii dla użytkownika
-      const { data: historyData } = await supabase
-        .from('regulation_acceptances')
-        .select(`
-          id,
-          regulation_slug,
-          accepted_at,
-          regulations ( title )
-        `)
-        .eq('user_id', user.id)
-        .order('accepted_at', { ascending: false });
+      if (adminCheck) {
+        // Administrator pobiera całą historię akceptacji oraz listę klientów do mapowania nazwisk
+        const { data: allHistory } = await supabase
+          .from('regulation_acceptances')
+          .select(`
+            id,
+            user_id,
+            user_email,
+            regulation_slug,
+            accepted_at,
+            regulations ( title )
+          `)
+          .order('accepted_at', { ascending: false });
 
-      if (historyData) {
-        setHistory(historyData as any);
+        if (allHistory) setHistory(allHistory as any);
+
+        const { data: allClients } = await supabase
+          .from('klienci')
+          .select('Imię, Nazwisko, "E-mail"');
+
+        if (allClients) setClients(allClients as any);
+      } else {
+        // Zwykły klubowicz pobiera tylko swoją historię
+        const { data: historyData } = await supabase
+          .from('regulation_acceptances')
+          .select(`
+            id,
+            user_id,
+            user_email,
+            regulation_slug,
+            accepted_at,
+            regulations ( title )
+          `)
+          .eq('user_id', user.id)
+          .order('accepted_at', { ascending: false });
+
+        if (historyData) {
+          setHistory(historyData as any);
+        }
       }
     }
 
@@ -130,7 +170,6 @@ export default function RegulaminPage() {
     setIsSaving(true);
 
     if (isCreatingNew) {
-      // Tworzenie nowego regulaminu
       const newSlug = editTitle.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + Date.now();
       
       const payload: any = { 
@@ -158,7 +197,6 @@ export default function RegulaminPage() {
         alert('Wystąpił błąd podczas dodawania regulaminu.');
       }
     } else if (selectedRegulation) {
-      // Aktualizacja istniejącego
       const payload: any = { 
         title: editTitle, 
         content: editContent, 
@@ -215,7 +253,11 @@ export default function RegulaminPage() {
     
     const { error } = await supabase
       .from('regulation_acceptances')
-      .insert([{ user_id: userId, regulation_slug: slug }]);
+      .insert([{ 
+        user_id: userId, 
+        user_email: userEmail,
+        regulation_slug: slug 
+      }]);
 
     if (!error) {
       await fetchData();
@@ -228,16 +270,14 @@ export default function RegulaminPage() {
   };
 
   const isAccepted = (slug: string) => {
-    return history.some(h => h.regulation_slug === slug);
+    return history.some(h => h.regulation_slug === slug && h.user_id === userId);
   };
 
-  // Funkcja renderująca podgląd tekstu checkboxa z zamianą [[ ]] na klikalny link
   const renderCheckboxPreview = (text: string) => {
     if (!text) return <span className="text-slate-400">Podgląd pojawi się tutaj...</span>;
     
     const parts = text.split(/\[\[(.*?)\]\]/g);
     return parts.map((part, index) => {
-      // Części parzyste to zwykły tekst, nieparzyste to te ujęte w [[ ]]
       if (index % 2 === 1) {
         return (
           <span key={index} className="text-orange-600 font-bold underline cursor-pointer hover:text-orange-700 transition-colors">
@@ -248,6 +288,24 @@ export default function RegulaminPage() {
       return <span key={index}>{part}</span>;
     });
   };
+
+  // Pomocnicza funkcja do znalezienia imienia i nazwiska klienta po adresie email
+  const getClientNameByEmail = (email?: string) => {
+    if (!email) return 'Nieznany użytkownik';
+    const found = clients.find(c => c['E-mail']?.toLowerCase() === email.toLowerCase());
+    if (found) {
+      return `${found.Imię} ${found.Nazwisko}`;
+    }
+    return email; // Fallback do emaila jeśli nie znaleziono w klienci
+  };
+
+  // Filtrowanie historii dla administratora po wpisaniu imienia/nazwiska/emaila
+  const filteredHistory = history.filter(item => {
+    if (!isAdmin || !adminSearchQuery.trim()) return true;
+    const clientName = getClientNameByEmail(item.user_email).toLowerCase();
+    const query = adminSearchQuery.toLowerCase();
+    return clientName.includes(query) || (item.user_email && item.user_email.toLowerCase().includes(query));
+  });
 
   if (loading) {
     return (
@@ -268,13 +326,14 @@ export default function RegulaminPage() {
         {isAdmin && (
           <button 
             onClick={() => handleOpenModal(null, true, true)}
-            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider text-sm flex items-center gap-2"
+            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider text-sm flex items-center gap-2 cursor-pointer"
           >
             <span>+</span> DODAJ DOKUMENT
           </button>
         )}
       </div>
 
+      {/* KAFELKI REGULAMINÓW */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
         {regulations.map((reg) => (
           <div key={reg.id} className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-md transition-all flex flex-col justify-between">
@@ -294,7 +353,7 @@ export default function RegulaminPage() {
             <div className="flex flex-col gap-2 mt-auto">
               <button 
                 onClick={() => handleOpenModal(reg, false)}
-                className="w-full py-2.5 px-4 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium rounded-xl border border-slate-200 transition-colors flex items-center justify-center gap-2"
+                className="w-full py-2.5 px-4 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium rounded-xl border border-slate-200 transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                 CZYTAJ
@@ -303,7 +362,7 @@ export default function RegulaminPage() {
               {isAdmin && (
                 <button 
                   onClick={() => handleOpenModal(reg, true)}
-                  className="w-full py-2.5 px-4 bg-orange-50 hover:bg-orange-100 text-orange-600 font-medium rounded-xl border border-orange-200 transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2.5 px-4 bg-orange-50 hover:bg-orange-100 text-orange-600 font-medium rounded-xl border border-orange-200 transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
                   EDYTUJ
@@ -319,31 +378,51 @@ export default function RegulaminPage() {
         )}
       </div>
 
+      {/* SEKCJA HISTORIA AKCEPTACJI */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6 border-b border-slate-100">
+        <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
             <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            Historia akceptacji
+            {isAdmin ? 'Historia akceptacji wszystkich klubowiczów' : 'Historia akceptacji'}
           </h2>
+
+          {/* Wyszukiwarka dla administratora */}
+          {isAdmin && (
+            <div className="w-full sm:w-72">
+              <input
+                type="text"
+                placeholder="🔍 Szukaj imię i nazwisko..."
+                value={adminSearchQuery}
+                onChange={(e) => setAdminSearchQuery(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:outline-none focus:border-orange-500 text-slate-800 font-medium"
+              />
+            </div>
+          )}
         </div>
         
-        {history.length === 0 ? (
-          <div className="p-8 text-center text-slate-500">
-            Brak historii akceptacji regulaminów w naszym systemie.
+        {filteredHistory.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-xs">
+            {adminSearchQuery ? 'Brak wyników pasujących do wyszukiwanego klubowicza.' : 'Brak historii akceptacji regulaminów w naszym systemie.'}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead className="bg-slate-50">
                 <tr>
+                  {isAdmin && <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Klubowicz</th>}
                   <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Nazwa dokumentu</th>
                   <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Data akceptacji</th>
                   <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500 text-right">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {history.map((item) => (
+                {filteredHistory.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                    {isAdmin && (
+                      <td className="py-4 px-6 text-sm text-slate-800 font-bold">
+                        {getClientNameByEmail(item.user_email)}
+                      </td>
+                    )}
                     <td className="py-4 px-6 text-sm text-slate-800 font-medium">
                       {item.regulations?.title || item.regulation_slug}
                     </td>
@@ -373,6 +452,7 @@ export default function RegulaminPage() {
         )}
       </div>
 
+      {/* MODAL PODGLĄDU / EDYCJI */}
       {(selectedRegulation || isCreatingNew) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
@@ -386,7 +466,7 @@ export default function RegulaminPage() {
               </h3>
               <button 
                 onClick={handleCloseModal} 
-                className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-100 p-2 rounded-full transition-colors"
+                className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-100 p-2 rounded-full transition-colors cursor-pointer"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
               </button>
@@ -399,7 +479,7 @@ export default function RegulaminPage() {
                     <label className="text-sm font-semibold text-slate-600 block mb-1">Tytuł dokumentu *</label>
                     <input
                       type="text"
-                      className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none text-slate-800 font-medium bg-white"
+                      className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none text-slate-800 font-medium bg-white text-xs"
                       value={editTitle}
                       onChange={(e) => setEditTitle(e.target.value)}
                       placeholder="np. Rezygnacja z prawa do zwrotu"
@@ -411,14 +491,13 @@ export default function RegulaminPage() {
                       <label className="text-sm font-semibold text-slate-600 block mb-1">Tekst przy checkboxie (widoczny przy rejestracji) *</label>
                       <input
                         type="text"
-                        className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none text-slate-800 bg-white"
+                        className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none text-slate-800 bg-white text-xs"
                         value={editCheckboxText}
                         onChange={(e) => setEditCheckboxText(e.target.value)}
                         placeholder="np. Zapoznałem się i akceptuję [[Regulamin klubu]]"
                       />
                       <p className="text-xs text-sky-700 mt-2 font-medium">
-                        Użyj podwójnych nawiasów <strong>[[ ]]</strong>, aby podlinkować dokument w wybranym miejscu. 
-                        Przykład: "Wyrażam zgodę i akceptuję [[regulamin]]"
+                        Użyj podwójnych nawiasów <strong>[[ ]]</strong>, aby podlinkować dokument w wybranym miejscu.
                       </p>
                     </div>
 
@@ -426,7 +505,7 @@ export default function RegulaminPage() {
                       <p className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Podgląd tekstu przy checkboxie:</p>
                       <div className="flex items-center gap-3">
                         <div className="w-5 h-5 rounded border-2 border-slate-300 bg-slate-50 shrink-0"></div>
-                        <div className="text-sm text-slate-700 select-none">
+                        <div className="text-xs text-slate-700 select-none">
                           {renderCheckboxPreview(editCheckboxText)}
                         </div>
                       </div>
@@ -436,10 +515,10 @@ export default function RegulaminPage() {
                   <div className="flex-1 flex flex-col">
                     <label className="text-sm font-semibold text-slate-600 block mb-1">Treść regulaminu</label>
                     <textarea
-                      className="w-full flex-1 min-h-[250px] p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none text-slate-700 bg-white"
+                      className="w-full flex-1 min-h-[250px] p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none text-slate-700 bg-white text-xs"
                       value={editContent}
                       onChange={(e) => setEditContent(e.target.value)}
-                      placeholder="Tutaj wpisz pełną treść dokumentu, która otworzy się po kliknięciu w link..."
+                      placeholder="Tutaj wpisz pełną treść dokumentu..."
                     />
                   </div>
                   
@@ -449,7 +528,7 @@ export default function RegulaminPage() {
                       id="forceAccept" 
                       checked={forceAccept}
                       onChange={(e) => setForceAccept(e.target.checked)}
-                      className="mt-1 w-5 h-5 text-orange-600 rounded border-gray-300 focus:ring-orange-500"
+                      className="mt-1 w-5 h-5 text-orange-600 rounded border-gray-300 focus:ring-orange-500 cursor-pointer"
                     />
                     <label htmlFor="forceAccept" className="text-sm font-bold text-slate-800 cursor-pointer">
                       Wymuś ponowną akceptację przez wszystkich klubowiczów
@@ -460,7 +539,7 @@ export default function RegulaminPage() {
                   </div>
                 </div>
               ) : (
-                <div className="prose prose-slate max-w-none text-slate-700 whitespace-pre-wrap leading-relaxed">
+                <div className="prose prose-slate max-w-none text-slate-700 whitespace-pre-wrap leading-relaxed text-xs">
                   {selectedRegulation?.content || 'Treść tego dokumentu nie została jeszcze uzupełniona.'}
                 </div>
               )}
@@ -472,7 +551,7 @@ export default function RegulaminPage() {
                   <button 
                     onClick={handleDeleteRegulation}
                     disabled={isSaving}
-                    className="px-5 py-2.5 text-rose-600 bg-white hover:bg-rose-50 border border-rose-200 rounded-xl transition-colors font-semibold disabled:opacity-50 flex items-center gap-2"
+                    className="px-5 py-2.5 text-rose-600 bg-white hover:bg-rose-50 border border-rose-200 rounded-xl transition-colors font-semibold disabled:opacity-50 flex items-center gap-2 cursor-pointer text-xs"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                     Usuń dokument
@@ -484,7 +563,7 @@ export default function RegulaminPage() {
                 <button 
                   onClick={handleCloseModal}
                   disabled={isSaving}
-                  className="px-6 py-2.5 text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors font-semibold disabled:opacity-50"
+                  className="px-6 py-2.5 text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors font-semibold disabled:opacity-50 cursor-pointer text-xs"
                 >
                   Anuluj
                 </button>
@@ -493,7 +572,7 @@ export default function RegulaminPage() {
                   <button 
                     onClick={handleSaveRegulation}
                     disabled={isSaving || !editTitle.trim()}
-                    className="px-6 py-2.5 text-white bg-orange-600 rounded-xl hover:bg-orange-700 transition-colors font-semibold shadow-sm disabled:opacity-50 flex items-center gap-2"
+                    className="px-6 py-2.5 text-white bg-orange-600 rounded-xl hover:bg-orange-700 transition-colors font-semibold shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer text-xs"
                   >
                     {isSaving ? 'Zapisywanie...' : 'Zapisz zmiany'}
                   </button>
@@ -502,7 +581,7 @@ export default function RegulaminPage() {
                     <button 
                       onClick={() => handleAcceptRegulation(selectedRegulation.slug)}
                       disabled={isSaving}
-                      className="px-6 py-2.5 text-white bg-green-600 rounded-xl hover:bg-green-700 transition-colors font-semibold shadow-sm disabled:opacity-50 flex items-center gap-2"
+                      className="px-6 py-2.5 text-white bg-green-600 rounded-xl hover:bg-green-700 transition-colors font-semibold shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer text-xs"
                     >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
                       {isSaving ? 'Przetwarzanie...' : 'Akceptuję regulamin'}
