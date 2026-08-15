@@ -77,7 +77,6 @@ export default function FreeRegistrationPage() {
     const { data, error } = await supabase.from('regulations').select('*').order('id', { ascending: true });
     if (data && !error) {
       setRegulations(data);
-      // Inicjalizacja stanu zaznaczeń na false dla każdego regulaminu
       const initialAccepted: { [key: string]: boolean } = {};
       data.forEach((reg: RegulationItem) => {
         initialAccepted[reg.slug] = false;
@@ -106,7 +105,6 @@ export default function FreeRegistrationPage() {
     setAcceptedRegulations(prev => ({ ...prev, [slug]: checked }));
   };
 
-  // Renderowanie tekstu z obsługą tagów [[tytuł linku]] oraz kliknięciem otwierającym modal
   const renderCheckboxTextWithLinks = (reg: RegulationItem) => {
     const text = reg.checkbox_text || `Zapoznałem się i akceptuję [[${reg.title}]]`;
     const parts = text.split(/\[\[(.*?)\]\]/g);
@@ -133,7 +131,6 @@ export default function FreeRegistrationPage() {
   const handleRegisterAndLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Sprawdzenie czy wszystkie regulaminy zostały zaakceptowane
     const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
     if (!allAccepted) {
       setErrorMsg('Musisz zaznaczyć i zaakceptować wszystkie wymagane zgody i regulaminy.');
@@ -167,10 +164,11 @@ export default function FreeRegistrationPage() {
     const newClientId = Date.now();
     const todayIsoStr = new Date().toISOString().split('T')[0];
 
-    // 2. Zapis akceptacji regulaminów do tabeli "regulation_acceptances"
+    // 2. Zapis akceptacji regulaminów do tabeli (TERAZ Z ADRESEM E-MAIL)
     if (newUserId) {
       const acceptanceInserts = regulations.map(reg => ({
         user_id: newUserId,
+        user_email: email, 
         regulation_slug: reg.slug,
         accepted_at: new Date().toISOString()
       }));
@@ -354,7 +352,6 @@ export default function FreeRegistrationPage() {
               />
             </div>
 
-            {/* DYNAMICZNIE GENEROWANE CHECKBOXY REGULAMINÓW Z BAZY */}
             <div className="space-y-2.5 pt-2 text-[11px] text-slate-600 border-t border-slate-100 mt-4 pt-4">
               {regulations.length > 0 ? (
                 regulations.map((reg) => (
@@ -394,7 +391,6 @@ export default function FreeRegistrationPage() {
 
       </div>
 
-      {/* MODAL PODGLĄDU REGULAMINU (OTWIERANY PO KLIKNIĘCIU W LINK W TEKŚCIE CHECKBOXA) */}
       {activeModalReg && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
