@@ -62,18 +62,20 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
             .not('force_accept_date', 'is', null);
 
           if (forcedRegs && forcedRegs.length > 0) {
-            // 3. Pobieramy akceptacje tego konkretnego użytkownika
+            // 3. Pobieramy akceptacje tego konkretnego użytkownika - sortujemy po dacie malejąco (NAJNOWSZE PIERWSZE)
             const { data: userAcceptances } = await supabase
               .from('regulation_acceptances')
               .select('*')
-              .eq('user_id', session.user.id);
+              .eq('user_id', session.user.id)
+              .order('accepted_at', { ascending: false });
 
             // 4. Filtrujemy te, które wymagają (ponownej) akceptacji
             const toAccept = forcedRegs.filter(reg => {
+              // find() teraz znajdzie najnowszą akceptację, ponieważ posortowaliśmy tablicę malejąco
               const acceptance = userAcceptances?.find(a => a.regulation_slug === reg.slug);
               if (!acceptance) return true; // Brak jakiejkolwiek akceptacji
               
-              // Sprawdzamy, czy data akceptacji jest starsza niż data wymuszenia
+              // Sprawdzamy, czy NAJNOWSZA data akceptacji jest starsza niż data wymuszenia
               const forceDate = new Date(reg.force_accept_date).getTime();
               const acceptedDate = new Date(acceptance.accepted_at).getTime();
               return acceptedDate < forceDate; 
