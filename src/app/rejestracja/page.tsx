@@ -28,6 +28,7 @@ export default function FreeRegistrationPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [customLogo, setCustomLogo] = useState('');
+  const [logoError, setLogoError] = useState(false);
   
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedClass, setSelectedClass] = useState<{ id?: any; title: string; time: string; date: string } | null>(null);
@@ -164,11 +165,11 @@ export default function FreeRegistrationPage() {
     const newClientId = Date.now();
     const todayIsoStr = new Date().toISOString().split('T')[0];
 
-    // 2. Zapis akceptacji regulaminów do tabeli (TERAZ Z ADRESEM E-MAIL)
+    // 2. Zapis akceptacji regulaminów z adresem e-mail
     if (newUserId) {
       const acceptanceInserts = regulations.map(reg => ({
         user_id: newUserId,
-        user_email: email, 
+        user_email: email,
         regulation_slug: reg.slug,
         accepted_at: new Date().toISOString()
       }));
@@ -238,6 +239,13 @@ export default function FreeRegistrationPage() {
           <div className="w-16 h-16 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center p-2 overflow-hidden">
             {customLogo ? (
               <img src={customLogo} alt="Logo" className="max-h-full max-w-full object-contain" />
+            ) : !logoError ? (
+              <img 
+                src="/logo.png" 
+                alt="Forma Marzeń Logo" 
+                className="max-h-full max-w-full object-contain"
+                onError={() => setLogoError(true)}
+              />
             ) : (
               <span className="text-red-600 font-black text-xl">🏋️‍♂️</span>
             )}
