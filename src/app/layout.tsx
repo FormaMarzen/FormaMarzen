@@ -20,7 +20,8 @@ export default function RootLayout({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
-  const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('klubowicz');
+  // Dodana rola 'trener'
+  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [isMounted, setIsMounted] = useState(false);
 
   const [profileName, setProfileName] = useState('Ładowanie...');
@@ -57,24 +58,52 @@ export default function RootLayout({
         setProfileEmail(userEmail);
         
         if (userEmail === 'maciejklaput@gmail.com') {
+          // Administrator ma wszystko
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
         } else {
-          setAppRole('klubowicz');
-          const { data: klientData } = await supabase
-            .from('klienci')
-            .select('Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
-            .eq('E-mail', userEmail)
+          // Sprawdzamy czy użytkownik jest TRENEREM w bazie
+          const { data: trenerData } = await supabase
+            .from('trenerzy')
+            .select('*')
+            .eq('email', userEmail)
             .single();
 
-          if (klientData) {
-            const k = klientData as any;
-            setProfileName(`${k.Imię} ${k.Nazwisko}`);
-            setProfilePhone(k['Numer tel.'] || '-');
-            setProfileBirth(k.Urodziny || '');
-            if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+          if (trenerData) {
+            setAppRole('trener');
+            setProfileName(trenerData.imie_nazwisko || userEmail.split('@')[0]);
+            setProfilePhone(trenerData.telefon || '-');
+            
+            // Sprawdzamy czy ma powiązane konto klubowicza (dla np. awatara)
+            const { data: klientData } = await supabase
+              .from('klienci')
+              .select('Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
+              .eq('E-mail', userEmail)
+              .single();
+              
+            if (klientData) {
+              const k = klientData as any;
+              setProfileBirth(k.Urodziny || '');
+              if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+            }
           } else {
-            setProfileName(userEmail.split('@')[0]);
+            // Jeśli nie jest trenerem ani adminem, zostaje zwykłym klubowiczem
+            setAppRole('klubowicz');
+            const { data: klientData } = await supabase
+              .from('klienci')
+              .select('Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
+              .eq('E-mail', userEmail)
+              .single();
+
+            if (klientData) {
+              const k = klientData as any;
+              setProfileName(`${k.Imię} ${k.Nazwisko}`);
+              setProfilePhone(k['Numer tel.'] || '-');
+              setProfileBirth(k.Urodziny || '');
+              if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+            } else {
+              setProfileName(userEmail.split('@')[0]);
+            }
           }
         }
       }
@@ -234,7 +263,22 @@ export default function RootLayout({
     }
   ];
 
-  const activeMenuSections = appRole === 'admin' ? adminMenuSections : klientMenuSections;
+  // Zminimalizowane menu przeznaczone wyłącznie dla trenera
+  const trenerMenuSections = [
+    {
+      title: "Główne",
+      items: [
+        { href: '/', label: 'Trener (Grafik)', icon: '📅' },
+      ]
+    }
+  ];
+
+  // Wybór odpowiedniego menu na podstawie roli
+  const activeMenuSections = appRole === 'admin' 
+    ? adminMenuSections 
+    : appRole === 'trener' 
+      ? trenerMenuSections 
+      : klientMenuSections;
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -355,10 +399,14 @@ export default function RootLayout({
               <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white p-4 flex flex-col justify-between shrink-0 z-30 transition-transform duration-300 ease-in-out h-screen overflow-y-auto ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
                 <div>
                   <div className="flex items-center justify-between mb-6 px-2 pt-2">
-                    <span className="text-sm font-black text-sky-950 uppercase tracking-wider">
+                    <span className="text-sm font-black text-sky-950 uppercase tracking-wider flex items-center flex-wrap">
                       Forma Marzeń 
-                      <span className={`text-[9px] px-2 py-0.5 rounded font-bold ml-1 ${appRole === 'admin' ? 'bg-amber-500/20 text-amber-800' : 'bg-sky-500/20 text-sky-800'}`}>
-                        {appRole === 'admin' ? 'ADMIN' : 'KLUBOWICZ'}
+                      <span className={`text-[9px] px-2 py-0.5 rounded font-bold ml-1 mt-1 ${
+                        appRole === 'admin' ? 'bg-amber-500/20 text-amber-800' : 
+                        appRole === 'trener' ? 'bg-emerald-500/20 text-emerald-800' : 
+                        'bg-sky-500/20 text-sky-800'
+                      }`}>
+                        {appRole === 'admin' ? 'ADMIN' : appRole === 'trener' ? 'TRENER' : 'KLUBOWICZ'}
                       </span>
                     </span>
                     <button 
@@ -412,7 +460,9 @@ export default function RootLayout({
                   </div>
                   <div className="overflow-hidden">
                     <div className="text-xs font-bold text-slate-900 truncate">{profileName}</div>
-                    <div className="text-[10px] text-slate-500">{appRole === 'admin' ? 'Administrator' : 'Klubowicz'}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {appRole === 'admin' ? 'Administrator' : appRole === 'trener' ? 'Trener' : 'Klubowicz'}
+                    </div>
                   </div>
                 </div>
               </aside>
@@ -431,7 +481,7 @@ export default function RootLayout({
                       </svg>
                     </button>
                     <span className="font-black text-sky-950 text-xs sm:text-sm tracking-wider uppercase">
-                      {appRole === 'admin' ? 'Panel Zarządzania' : 'Strefa Klienta'}
+                      {appRole === 'admin' ? 'Panel Zarządzania' : appRole === 'trener' ? 'Panel Trenera' : 'Strefa Klienta'}
                     </span>
                   </div>
 

@@ -19,9 +19,10 @@ export default function DashboardPage() {
   const [zapisyNaZajecia, setZapisyNaZajecia] = useState<{ [key: string]: any[] }>({});
   const [rodzajeZajec, setRodzajeZajec] = useState<any[]>([]);
   const [wszystkieTransakcje, setWszystkieTransakcje] = useState<any[]>([]);
-  const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('klubowicz');
+  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentTrenerProfile, setCurrentTrenerProfile] = useState<any>(null);
   
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
   const [profileClient, setProfileClient] = useState<any | null>(null);
@@ -97,13 +98,21 @@ export default function DashboardPage() {
   const loadData = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     const userEmail = session?.user?.email;
+    
+    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+    if (trenerzyData) setZespolTrenerzy(trenerzyData);
+    
     if (userEmail === 'maciejklaput@gmail.com') {
       setAppRole('admin');
     } else {
-      setAppRole('klubowicz');
+      const trenerObj = trenerzyData?.find(t => t.email === userEmail);
+      if (trenerObj) {
+        setAppRole('trener');
+        setCurrentTrenerProfile(trenerObj);
+      } else {
+        setAppRole('klubowicz');
+      }
     }
-    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
-    if (trenerzyData) setZespolTrenerzy(trenerzyData);
     
     const { data: tData } = await supabase.from('transakcje').select('*').order('created_at', { ascending: false });
     if (tData) {
@@ -948,7 +957,7 @@ export default function DashboardPage() {
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
   
-  if (appRole === 'klubowicz' && currentUser) {
+  if (['klubowicz', 'trener'].includes(appRole) && currentUser) {
     const karnety = currentUser.karnetyKlubowicza || [];
     if (karnety.length === 0) { needsNewPass = true; } else {
       const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
@@ -1005,7 +1014,7 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
-      {appRole === 'klubowicz' && currentUser && (() => {
+      {['klubowicz', 'trener'].includes(appRole) && currentUser && (() => {
         const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
         if (walletVal < 0) {
           return (
@@ -1031,7 +1040,7 @@ export default function DashboardPage() {
         return null;
       })()}
 
-      {appRole === 'klubowicz' && needsNewPass && (
+      {['klubowicz', 'trener'].includes(appRole) && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center shrink-0 border border-amber-200">
@@ -1051,7 +1060,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
+      {['klubowicz', 'trener'].includes(appRole) && !needsNewPass && isPassExpiringSoon && (
         <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
@@ -1071,7 +1080,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {appRole === 'klubowicz' && currentUser && (
+      {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
           <section className="space-y-4">
@@ -1176,8 +1185,8 @@ export default function DashboardPage() {
 
       <section className="space-y-4">
         <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${appRole === 'admin' ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
-          <h2 className={`font-medium uppercase tracking-wider ${appRole === 'klubowicz' ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
-            {appRole === 'klubowicz' ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
+          <h2 className={`font-medium uppercase tracking-wider ${['klubowicz', 'trener'].includes(appRole) ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
+            {['klubowicz', 'trener'].includes(appRole) ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
           </h2>
           
           <div className="flex items-center justify-center gap-4 bg-white border border-slate-200 rounded-3xl p-2.5 shadow-sm self-start md:self-auto w-full md:w-auto">
@@ -1262,7 +1271,7 @@ export default function DashboardPage() {
                       const topColor = getTopBorderColor(item.title, item.isOdwołane, item.isUsunięte);
                       const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
                       const isPastEvent = isPastDay || isPastTime;
-                      const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
+                      const isLockedForClient = ['klubowicz', 'trener'].includes(appRole) && isPastEvent;
                       return (
                         <div
                           key={classIdx}
@@ -1371,6 +1380,7 @@ export default function DashboardPage() {
           })}
         </div>
       </section>
+      
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
           <section className="lg:col-span-6 space-y-3">
@@ -1658,6 +1668,9 @@ export default function DashboardPage() {
             (c.email || '').toLowerCase().includes(searchClientQuery.toLowerCase())
           )
           .sort(sortAlfabet);
+        
+        const canSeeDetails = appRole === 'admin' || (currentUser && String(currentUser.id) === String(selectedClass?.id));
+        
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
             <div className="bg-slate-100 border border-sky-200 rounded-3xl max-w-5xl w-full p-6 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto relative">
@@ -1696,8 +1709,6 @@ export default function DashboardPage() {
                     } else if (stanPortfela < 0) {
                       portfelColorClass = 'text-rose-600 font-bold';
                     }
-                    const isMe = currentUser && String(osoba.id) === String(currentUser.id);
-                    const canSeeDetails = appRole === 'admin' || isMe;
                     const displayName = canSeeDetails
                       ? `${osoba.firstName} ${osoba.lastName}`
                       : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
@@ -1799,8 +1810,6 @@ export default function DashboardPage() {
                       } else if (stanPortfela < 0) {
                         portfelColorClass = 'text-rose-600 font-bold';
                       }
-                      const isMe = currentUser && String(osoba.id) === String(currentUser.id);
-                      const canSeeDetails = appRole === 'admin' || isMe;
                       const displayName = canSeeDetails
                         ? `${osoba.firstName} ${osoba.lastName}`
                         : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
@@ -1852,7 +1861,7 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {appRole === 'klubowicz' ? (
+              {['klubowicz', 'trener'].includes(appRole) ? (
                 <div className="pt-2">
                   {selectedClass.isLockedForClient ? (
                     <div className="w-full bg-slate-100 border border-slate-200 text-slate-500 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
@@ -1964,7 +1973,7 @@ export default function DashboardPage() {
           </div>
         );
       })()}
-
+      
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
@@ -2421,7 +2430,7 @@ export default function DashboardPage() {
       )}
 
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
-        <div className="fixed inset0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
