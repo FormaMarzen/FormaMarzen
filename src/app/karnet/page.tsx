@@ -21,6 +21,7 @@ export default function KarnetPage() {
 
   // STANY DLA ZAWIESZEŃ KARNETU
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
+  const [isSuspendInfoModalOpen, setIsSuspendInfoModalOpen] = useState(false);
   const [passToSuspendId, setPassToSuspendId] = useState<string>('');
   const [suspendStartDate, setSuspendStartDate] = useState('');
   const [suspendEndDate, setSuspendEndDate] = useState('');
@@ -77,7 +78,6 @@ export default function KarnetPage() {
     setIsLoading(false);
   };
 
-  // Ustalanie najdalszej daty końca obecnych karnetów
   const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
   
   // SORTOWANIE KARNETÓW: OD NAJSZYBCIEJ KOŃCZĄCYCH SIĘ NA SAMEJ GÓRZE
@@ -106,13 +106,20 @@ export default function KarnetPage() {
     });
   }
 
-  // 🌟 INTELIGENTNY FILTR: UKRYWA KARNETY CZASOWE, KTÓRE UŻYTKOWNIK JUŻ POSIADA
+  // WYZNACZENIE GLOBALNEJ HISTORII ZAWIESZEŃ Z WSZYSTKICH KARNETÓW
+  const allSuspensions = karnetyList.flatMap((k: any) => 
+    (k.historiaZawieszen || []).map((susp: any) => ({
+      ...susp,
+      karnetNazwa: k.nazwa
+    }))
+  ).sort((a: any, b: any) => new Date(b.utworzono).getTime() - new Date(a.utworzono).getTime());
+
+  // INTELIGENTNY FILTR: UKRYWA KARNETY CZASOWE, KTÓRE UŻYTKOWNIK JUŻ POSIADA
   const dostepneKarnetyDoZakupu = dostepneKarnety.filter((defKarnetu) => {
     const limitWejscBaza = defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null;
     const isTimeBased = limitWejscBaza === null || limitWejscBaza === '';
     const alreadyOwned = karnetyList.some((k: any) => k.nazwa === defKarnetu.nazwa);
     
-    // Zwraca true (pokazuje), jeśli NIE JEST TO (karnet czasowy ORAZ użytkownik go posiada)
     return !(isTimeBased && alreadyOwned);
   });
 
@@ -137,13 +144,11 @@ export default function KarnetPage() {
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, ""));
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : passToExtend.cena;
     
-    // Sprawdzamy typ karnetu: jeśli brak limitu wejść to karnet czasowy
     const isTimeBased = passToExtend.pozostaloWejsc === null || passToExtend.pozostaloWejsc === undefined;
 
     let updatedKarnetyList = [...karnetyList];
 
     if (isTimeBased) {
-      // KARNET CZASOWY: Zmieniamy tylko datę (nie tworzymy nowego kafelka)
       updatedKarnetyList = updatedKarnetyList.map(k => {
         if (k.id === passToExtend.id) {
           let baseDate = new Date();
@@ -169,7 +174,6 @@ export default function KarnetPage() {
         return k;
       });
     } else {
-      // KARNET NA WEJŚCIA: Tworzymy zupełnie nowy karnet
       let baseDate = new Date();
       if (passToExtend.waznyDo) {
         const parts = passToExtend.waznyDo.split('-');
@@ -213,7 +217,6 @@ export default function KarnetPage() {
       Portfel: nowyStanPortfelaStr
     };
 
-    // Zaktualizuj główną datę 'Wygasa' w kliencie
     const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
       const dateA = a.waznyDo || '9999-12-31';
       const dateB = b.waznyDo || '9999-12-31';
@@ -227,7 +230,6 @@ export default function KarnetPage() {
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
-    // 1. Zapis do bazy
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
@@ -235,7 +237,6 @@ export default function KarnetPage() {
       return;
     }
 
-    // 2. Dodanie rekordu transakcji
     if (cenaWartosc > 0) {
       await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
@@ -274,18 +275,15 @@ export default function KarnetPage() {
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
     
-    // Sprawdzamy czy to karnet na czas (bez wejść) i czy mamy go już w tablicy
     const isTimeBased = limitWejscBaza === null;
     const existingPassIndex = updatedKarnetyList.findIndex(k => k.nazwa === selectedBuyPass);
 
     let nowaDataWygasnieciaStr = '';
 
     if (isTimeBased && existingPassIndex !== -1) {
-      // PRZEDŁUŻAMY ISTNIEJĄCY KARNET CZASOWY
       updatedKarnetyList = updatedKarnetyList.map((k, index) => {
         if (index === existingPassIndex) {
           let baseDate = new Date();
-          // Jeśli wybrano 'after' dla przedłużenia
           if (activationMode === 'after' && k.waznyDo) {
             const parts = k.waznyDo.split('-');
             if (parts.length === 3) {
@@ -308,7 +306,6 @@ export default function KarnetPage() {
         return k;
       });
     } else {
-      // TWORZYMY CAŁKOWICIE NOWY KARNET (nowy kafelek)
       let baseStartDate = new Date(); 
       if (activationMode === 'after' && maxDateStr) {
         const parts = maxDateStr.split('-');
@@ -355,7 +352,6 @@ export default function KarnetPage() {
       Portfel: nowyStanPortfelaStr
     };
 
-    // Zaktualizuj główną datę 'Wygasa' w kliencie
     const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
       const dateA = a.waznyDo || '9999-12-31';
       const dateB = b.waznyDo || '9999-12-31';
@@ -403,10 +399,10 @@ export default function KarnetPage() {
     const date2 = new Date(d2);
     date1.setHours(0,0,0,0);
     date2.setHours(0,0,0,0);
-    return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1; // Włącznie z dniem początkowym
+    return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
 
-  // ZAWIESZANIE KARNETU (OBSŁUGA ZASAD)
+  // ZAWIESZANIE KARNETU (OBSŁUGA ZASAD Z UWZGLĘDNIENIEM WRZEŚNIA)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -436,7 +432,6 @@ export default function KarnetPage() {
       return;
     }
 
-    // Wyciągnij karnet z bazy usera
     const karnetIndex = karnetyList.findIndex((k: any) => k.id.toString() === passToSuspendId.toString());
     if (karnetIndex === -1) {
       setSuspendError('Nie znaleziono karnetu.');
@@ -445,18 +440,30 @@ export default function KarnetPage() {
     const targetKarnet = karnetyList[karnetIndex];
     const suspensionHistory = targetKarnet.historiaZawieszen || [];
 
-    const month = start.getMonth(); // 0 = styczeń, 6 = lipiec, 7 = sierpień
+    const month = start.getMonth(); // 0 = styczeń, 6 = lipiec, 7 = sierpień, 8 = wrzesień
     const year = start.getFullYear();
+
+    // REGULA WRZESIEŃ: Zablokuj, jeśli we wrześniu, a w wakacje (lipiec/sierpień) był już zawieszony
+    if (month === 8) {
+      const usedInVacation = suspensionHistory.some((susp: any) => {
+        const hStart = new Date(susp.od);
+        const hMonth = hStart.getMonth();
+        return hStart.getFullYear() === year && (hMonth === 6 || hMonth === 7);
+      });
+      
+      if (usedInVacation) {
+        setSuspendError('Zgodnie z regulaminem, jeśli karnet był zawieszany w wakacje (lipiec/sierpień), nie możesz zawiesić go we wrześniu.');
+        return;
+      }
+    }
 
     const isVacation = (month === 6 || month === 7); 
     const quarter = Math.floor(month / 3) + 1;
 
-    // Sprawdzanie zasad na podstawie historii
     let sumDaysInPeriod = 0;
     let countSuspensionsInPeriod = 0;
 
     if (isVacation) {
-      // ZASADA 2: WAKACJE - 1 zawieszenie na max 14 dni w danym miesiącu
       suspensionHistory.forEach((susp: any) => {
         const hStart = new Date(susp.od);
         if (hStart.getFullYear() === year && hStart.getMonth() === month) {
@@ -473,13 +480,11 @@ export default function KarnetPage() {
         return;
       }
     } else {
-      // ZASADA 1: KWARTAŁ - max 2 zawieszenia, zsumowane max 14 dni
       suspensionHistory.forEach((susp: any) => {
         const hStart = new Date(susp.od);
         const hMonth = hStart.getMonth();
         const hQuarter = Math.floor(hMonth / 3) + 1;
         
-        // Zliczamy tylko zawieszenia, które nie wypadły na wakacje (aby oddzielić logicznie system)
         if (hStart.getFullYear() === year && hQuarter === quarter && hMonth !== 6 && hMonth !== 7) {
           sumDaysInPeriod += susp.dni;
           countSuspensionsInPeriod += 1;
@@ -529,7 +534,6 @@ export default function KarnetPage() {
       ]
     };
 
-    // Zaktualizuj główną datę 'Wygasa' w kliencie by system to widział globalnie
     const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
       const dateA = a.waznyDo || '9999-12-31';
       const dateB = b.waznyDo || '9999-12-31';
@@ -559,7 +563,6 @@ export default function KarnetPage() {
     const limitWejscBaza = k.pozostaloWejsc;
     const isTimeBased = limitWejscBaza === null || limitWejscBaza === undefined;
     const isActive = !k.statusTekst?.includes('Oczekujący');
-    // Umożliwiamy zawieszenie tylko karnetów czasowych (bez wejść), które już działają
     return isTimeBased && isActive;
   });
 
@@ -583,7 +586,6 @@ export default function KarnetPage() {
             </div>
           ) : (
             karnetyList.map((karnet: any) => {
-              // WYLICZANIE KOLORÓW ETYKIETY (Oczekujący / Wygasa / Aktywny / Zawieszony)
               let isExpiring = false;
               let isPending = karnet.statusTekst?.includes('Oczekujący');
               let isSuspended = karnet.statusTekst?.includes('Zawieszony');
@@ -663,33 +665,80 @@ export default function KarnetPage() {
 
       {/* SEKCJA 1.5: ZARZĄDZANIE ZAWIESZENIAMI */}
       <div className="pt-2">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">ZARZĄDZANIE ZAWIESZENIAMI</h2>
-        <div className="bg-slate-100 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-          <div className="flex items-start gap-4 text-sm text-slate-700">
-            <div className="w-10 h-10 shrink-0 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center text-lg">❄️</div>
-            <div className="space-y-2">
-              <h4 className="font-bold text-slate-900">Zasady zawieszania karnetu</h4>
-              <ul className="list-disc pl-4 space-y-1 text-xs">
-                <li>Możesz zawiesić karnet maksymalnie **2 razy w ciągu każdego kwartału** roku, na maksymalnie zsumowaną ilość **14 dni**.</li>
-                <li>W miesiącach wakacyjnych (Lipiec i Sierpień) posiadasz **osobny limit**: 1 zawieszenie na miesiąc, trwające maksymalnie 14 dni.</li>
-                <li>Dni, w których karnet jest zawieszony, zostają automatycznie doliczone do daty wygaśnięcia.</li>
-              </ul>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+          <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">ZARZĄDZANIE ZAWIESZENIAMI</h2>
+          <button 
+            onClick={() => setIsSuspendInfoModalOpen(true)}
+            className="text-sky-600 hover:text-sky-800 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer bg-sky-50 px-3 py-1.5 rounded-lg border border-sky-200"
+          >
+            <span className="text-base leading-none">ℹ️</span> Zasady zawieszania karnetów
+          </button>
+        </div>
+        
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+            <div className="flex-1 text-center sm:text-left">
+              <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet czasowy?</h3>
+              <p className="text-xs text-slate-500 mt-1">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia.</p>
             </div>
-          </div>
-          <div className="pt-2 flex justify-end">
             <button 
               onClick={() => {
                 if (activeTimePasses.length === 0) {
-                  alert('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić (karnety na wejścia lub już zawieszone nie podlegają tej operacji).');
+                  alert('Nie posiadasz aktualnie aktywnego karnetu czasowego, który można by zawiesić.');
                   return;
                 }
                 setPassToSuspendId(activeTimePasses[0].id.toString());
                 setIsSuspendModalOpen(true);
               }}
-              className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-2.5 rounded-xl shadow-sm transition-colors cursor-pointer"
+              className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
             >
-              ZAWIEŚ KARNET
+              <span>❄️</span> ZAWIEŚ KARNET
             </button>
+          </div>
+
+          {/* TABELA HISTORII ZAWIESZEŃ */}
+          <div className="pt-2">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Historia Twoich zawieszeń</h3>
+            {allSuspensions.length === 0 ? (
+              <div className="text-xs text-slate-400 italic bg-white p-4 rounded-xl border border-slate-100 text-center">
+                Brak historii zawieszeń na Twoim koncie.
+              </div>
+            ) : (
+              <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-sm">
+                <table className="w-full text-left border-collapse min-w-max text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-4">Data Operacji</th>
+                      <th className="py-3 px-4">Karnet</th>
+                      <th className="py-3 px-4">Okres zawieszenia</th>
+                      <th className="py-3 px-4 text-center">Zużyte dni</th>
+                      <th className="py-3 px-4 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {allSuspensions.map((susp: any, idx: number) => {
+                      const formattedCreated = susp.utworzono ? new Date(susp.utworzono).toLocaleString('pl-PL', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute:'2-digit'}) : '-';
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-3 px-4 font-medium text-slate-500">{formattedCreated}</td>
+                          <td className="py-3 px-4 font-bold text-slate-800">{susp.karnetNazwa}</td>
+                          <td className="py-3 px-4 text-slate-600">
+                            <span className="font-semibold">{susp.od}</span> <span className="text-slate-400">do</span> <span className="font-semibold">{susp.do}</span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg font-bold border border-slate-200">{susp.dni} dni</span>
+                          </td>
+                          <td className="py-3 px-4 text-emerald-600 font-bold text-right flex items-center justify-end gap-1">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                            Zatwierdzone
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -741,13 +790,60 @@ export default function KarnetPage() {
         </div>
       </div>
 
-      {/* MODAL ZAWIESZENIA KARNETU */}
+      {/* MODAL ZASAD ZAWIESZEŃ (INFORMACYJNY) */}
+      {isSuspendInfoModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <span className="text-xl">ℹ️</span> Zasady zawieszania karnetów
+              </h3>
+              <button onClick={() => setIsSuspendInfoModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
+            </div>
+            
+            <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
+              <div className="bg-sky-50 p-4 rounded-xl border border-sky-100 text-sky-900 font-medium">
+                Masz wyjazd służbowy, chorobę lub planujesz urlop? Nasz system pozwala na samodzielne zamrożenie karnetu czasowego, abyś nie tracił opłaconych dni!
+              </div>
+              
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm">Standardowe zasady (w ciągu roku)</h4>
+                <ul className="list-none space-y-2 pl-1">
+                  <li className="flex gap-2"><span className="text-blue-500 font-bold">1.</span> Klient może zawiesić karnet maksymalnie <strong>2 razy w ciągu każdego kwartału</strong> roku.</li>
+                  <li className="flex gap-2"><span className="text-blue-500 font-bold">2.</span> Maksymalna zsumowana ilość dni zawieszenia w kwartale to <strong>14 dni</strong>.</li>
+                </ul>
+              </div>
+
+              <div className="space-y-2 border-t border-slate-100 pt-4">
+                <h4 className="font-bold text-slate-900 text-sm">Zasady wakacyjne (Lipiec, Sierpień, Wrzesień)</h4>
+                <ul className="list-none space-y-2 pl-1">
+                  <li className="flex gap-2"><span className="text-orange-500 font-bold">1.</span> W miesiącach letnich limit kwartalny nie obowiązuje.</li>
+                  <li className="flex gap-2"><span className="text-orange-500 font-bold">2.</span> W lipcu oraz sierpniu możesz zawiesić karnet <strong>1 raz w każdym z tych miesięcy</strong>, na maksymalnie <strong>14 dni</strong>.</li>
+                  <li className="flex gap-2"><span className="text-rose-500 font-bold">3.</span> Jeżeli zawiesisz karnet w lipcu lub sierpniu, <strong>tracisz możliwość zawieszenia go we wrześniu</strong>.</li>
+                </ul>
+              </div>
+              
+              <div className="bg-slate-100 p-3 rounded-lg text-[11px] font-semibold text-slate-500 mt-2">
+                * Dni, w których karnet jest zawieszony, zostają automatycznie doliczone do daty wygaśnięcia Twojego karnetu. System sam pilnuje limitów - jeśli przekroczysz dozwolony czas, zostaniesz o tym poinformowany podczas próby zawieszenia.
+              </div>
+            </div>
+
+            <div className="pt-4 flex justify-end border-t border-slate-100">
+              <button onClick={() => setIsSuspendInfoModalOpen(false)} className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                Zrozumiałem
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ZAWIESZENIA KARNETU (FORMULARZ) */}
       {isSuspendModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">❄️ Zawieszenie karnetu</h3>
-              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
             </div>
             
             <form onSubmit={handleSuspendSubmit} className="space-y-4 text-xs">
