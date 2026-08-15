@@ -9,6 +9,7 @@ type Regulation = {
   title: string;
   content: string;
   force_accept_date?: string;
+  checkbox_text?: string;
 };
 
 type AcceptanceHistory = {
@@ -32,8 +33,10 @@ export default function RegulaminPage() {
   const [selectedRegulation, setSelectedRegulation] = useState<Regulation | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
+  const [editCheckboxText, setEditCheckboxText] = useState('');
   const [forceAccept, setForceAccept] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -49,7 +52,7 @@ export default function RegulaminPage() {
     if (user) {
       setUserId(user.id);
       
-      // Sprawdzanie uprawnień administratora - identycznie jak w layout.tsx
+      // Sprawdzanie uprawnień administratora
       if (user.email === 'maciejklaput@gmail.com') {
         setIsAdmin(true);
       } else {
@@ -100,6 +103,7 @@ export default function RegulaminPage() {
       setIsCreatingNew(true);
       setEditTitle('');
       setEditContent('');
+      setEditCheckboxText('');
       setForceAccept(false);
     } else if (regulation) {
       setSelectedRegulation(regulation);
@@ -107,6 +111,7 @@ export default function RegulaminPage() {
       setIsCreatingNew(false);
       setEditTitle(regulation.title || '');
       setEditContent(regulation.content || '');
+      setEditCheckboxText(regulation.checkbox_text || '');
       setForceAccept(false);
     }
   };
@@ -117,6 +122,7 @@ export default function RegulaminPage() {
     setIsCreatingNew(false);
     setEditTitle('');
     setEditContent('');
+    setEditCheckboxText('');
     setForceAccept(false);
   };
 
@@ -130,7 +136,8 @@ export default function RegulaminPage() {
       const payload: any = { 
         slug: newSlug, 
         title: editTitle, 
-        content: editContent 
+        content: editContent,
+        checkbox_text: editCheckboxText 
       };
 
       if (forceAccept) {
@@ -155,6 +162,7 @@ export default function RegulaminPage() {
       const payload: any = { 
         title: editTitle, 
         content: editContent, 
+        checkbox_text: editCheckboxText,
         updated_at: new Date().toISOString() 
       };
 
@@ -221,6 +229,24 @@ export default function RegulaminPage() {
 
   const isAccepted = (slug: string) => {
     return history.some(h => h.regulation_slug === slug);
+  };
+
+  // Funkcja renderująca podgląd tekstu checkboxa z zamianą [[ ]] na klikalny link
+  const renderCheckboxPreview = (text: string) => {
+    if (!text) return <span className="text-slate-400">Podgląd pojawi się tutaj...</span>;
+    
+    const parts = text.split(/\[\[(.*?)\]\]/g);
+    return parts.map((part, index) => {
+      // Części parzyste to zwykły tekst, nieparzyste to te ujęte w [[ ]]
+      if (index % 2 === 1) {
+        return (
+          <span key={index} className="text-orange-600 font-bold underline cursor-pointer hover:text-orange-700 transition-colors">
+            {part}
+          </span>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
   };
 
   if (loading) {
@@ -368,24 +394,52 @@ export default function RegulaminPage() {
             
             <div className="p-6 overflow-y-auto flex-1">
               {isEditMode ? (
-                <div className="h-full flex flex-col gap-4">
+                <div className="h-full flex flex-col gap-5">
                   <div>
-                    <label className="text-sm font-semibold text-slate-600 block mb-1">Tytuł dokumentu</label>
+                    <label className="text-sm font-semibold text-slate-600 block mb-1">Tytuł dokumentu *</label>
                     <input
                       type="text"
                       className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none text-slate-800 font-medium bg-white"
                       value={editTitle}
                       onChange={(e) => setEditTitle(e.target.value)}
-                      placeholder="Wpisz nazwę, np. Regulamin klubu"
+                      placeholder="np. Rezygnacja z prawa do zwrotu"
                     />
                   </div>
+
+                  <div className="bg-sky-50 border border-sky-100 p-4 rounded-xl space-y-4">
+                    <div>
+                      <label className="text-sm font-semibold text-slate-600 block mb-1">Tekst przy checkboxie (widoczny przy rejestracji) *</label>
+                      <input
+                        type="text"
+                        className="w-full p-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none text-slate-800 bg-white"
+                        value={editCheckboxText}
+                        onChange={(e) => setEditCheckboxText(e.target.value)}
+                        placeholder="np. Zapoznałem się i akceptuję [[Regulamin klubu]]"
+                      />
+                      <p className="text-xs text-sky-700 mt-2 font-medium">
+                        Użyj podwójnych nawiasów <strong>[[ ]]</strong>, aby podlinkować dokument w wybranym miejscu. 
+                        Przykład: "Wyrażam zgodę i akceptuję [[regulamin]]"
+                      </p>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg border border-sky-100 shadow-sm">
+                      <p className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Podgląd tekstu przy checkboxie:</p>
+                      <div className="flex items-center gap-3">
+                        <div className="w-5 h-5 rounded border-2 border-slate-300 bg-slate-50 shrink-0"></div>
+                        <div className="text-sm text-slate-700 select-none">
+                          {renderCheckboxPreview(editCheckboxText)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex-1 flex flex-col">
                     <label className="text-sm font-semibold text-slate-600 block mb-1">Treść regulaminu</label>
                     <textarea
                       className="w-full flex-1 min-h-[250px] p-4 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none text-slate-700 bg-white"
                       value={editContent}
                       onChange={(e) => setEditContent(e.target.value)}
-                      placeholder="Tutaj wpisz treść dokumentu..."
+                      placeholder="Tutaj wpisz pełną treść dokumentu, która otworzy się po kliknięciu w link..."
                     />
                   </div>
                   
