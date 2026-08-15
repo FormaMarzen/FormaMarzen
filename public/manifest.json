@@ -1,20 +1,21 @@
 {
   "name": "Forma Marzeń",
-  "short_name": "FormaMarzeń",
+  "short_name": "Forma Marzeń",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#0284c7",
   "icons": [
     {
-      "src": "/logo.png",
+      "src": "/logo.png?v=2",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/logo.png",
+      "src": "/logo.png?v=2",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }
