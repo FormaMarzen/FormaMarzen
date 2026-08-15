@@ -5,6 +5,14 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../raporty/klienci/supabase';
 
+interface RegulationItem {
+  id: string;
+  slug: string;
+  title: string;
+  content: string;
+  checkbox_text?: string;
+}
+
 export default function RegistrationPassPage() {
   const router = useRouter();
 
@@ -22,22 +30,39 @@ export default function RegistrationPassPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [selectedPass, setSelectedPass] = useState<any | null>(null);
 
+  // Regulaminy
+  const [regulations, setRegulations] = useState<RegulationItem[]>([]);
+  const [acceptedRegulations, setAcceptedRegulations] = useState<{ [key: string]: boolean }>({});
+  const [activeModalReg, setActiveModalReg] = useState<RegulationItem | null>(null);
+
   // Status i walidacja
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // Pobranie karnetów przy załadowaniu
+  // Pobranie karnetów i regulaminów przy załadowaniu
   useEffect(() => {
-    const fetchKarnety = async () => {
-      const { data } = await supabase.from('karnety').select('*');
-      if (data) {
-        setDostepneKarnety(data.map((k: any) => ({
+    const fetchInitialData = async () => {
+      // Pobieranie karnetów
+      const { data: karnetyData } = await supabase.from('karnety').select('*');
+      if (karnetyData) {
+        setDostepneKarnety(karnetyData.map((k: any) => ({
           ...k,
           cena: k.cena_brutto || k.cena || '0.00'
         })));
       }
+
+      // Pobieranie regulaminów
+      const { data: regData } = await supabase.from('regulations').select('*').order('id', { ascending: true });
+      if (regData) {
+        setRegulations(regData);
+        const initialAccepted: { [key: string]: boolean } = {};
+        regData.forEach((reg: RegulationItem) => {
+          initialAccepted[reg.slug] = false;
+        });
+        setAcceptedRegulations(initialAccepted);
+      }
     };
-    fetchKarnety();
+    fetchInitialData();
   }, []);
 
   const handleNextToStep2 = (e: React.FormEvent) => {
@@ -63,7 +88,41 @@ export default function RegistrationPassPage() {
     setStep(3);
   };
 
+  const handleCheckboxChange = (slug: string, checked: boolean) => {
+    setAcceptedRegulations(prev => ({ ...prev, [slug]: checked }));
+  };
+
+  const renderCheckboxTextWithLinks = (reg: RegulationItem) => {
+    const text = reg.checkbox_text || `Zapoznałem się i akceptuję [[${reg.title}]]`;
+    const parts = text.split(/\[\[(.*?)\]\]/g);
+
+    return parts.map((part, index) => {
+      if (index % 2 === 1) {
+        return (
+          <span 
+            key={index} 
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveModalReg(reg);
+            }}
+            className="text-sky-600 font-bold underline cursor-pointer hover:text-sky-700 transition-colors"
+          >
+            {part}
+          </span>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
+
   const handleFinalSubmit = async () => {
+    // Sprawdzenie regulaminów
+    const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
+    if (!allAccepted) {
+      setErrorMsg("Musisz zaakceptować wszystkie wymagane zgody i regulaminy.");
+      return;
+    }
+
     setIsLoading(true);
     setErrorMsg('');
 
@@ -81,7 +140,18 @@ export default function RegistrationPassPage() {
         throw new Error(`Błąd tworzenia konta: ${authError.message}`);
       }
 
-      // 2. Przygotowanie danych wybranego karnetu
+      // 2. Zapis akceptacji regulaminów (powiązanie z User ID)
+      if (authData.user) {
+        const acceptanceInserts = regulations.map(reg => ({
+          user_id: authData.user!.id,
+          user_email: email,
+          regulation_slug: reg.slug,
+          accepted_at: new Date().toISOString()
+        }));
+        await supabase.from('regulation_acceptances').insert(acceptanceInserts);
+      }
+
+      // 3. Przygotowanie danych karnetu
       let dniWażności = 30;
       if (selectedPass.dlugosc) {
         const dlugoscStr = selectedPass.dlugosc.toLowerCase();
@@ -117,10 +187,9 @@ export default function RegistrationPassPage() {
         historiaZawieszen: []
       };
 
-      // 3. Obliczanie ujemnego portfela
       const ujemnyPortfelStr = `-${cenaWartosc.toFixed(2)} PLN`;
 
-      // 4. Zapis do bazy danych 'klienci' z poprawną nazwą kolumny 'karnetyKlubowicza'
+      // 4. Zapis do bazy danych 'klienci'
       const payload: any = {
         'Imię': firstName,
         'Nazwisko': lastName,
@@ -172,7 +241,6 @@ export default function RegistrationPassPage() {
 
       <div className="w-full max-w-2xl space-y-6 z-10">
         
-        {/* Nawigacja "Wstecz" */}
         <div className="flex items-center gap-3 mb-2">
           <Link href="/login" className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:border-slate-300 transition-colors shadow-sm cursor-pointer">
             ←
@@ -183,7 +251,6 @@ export default function RegistrationPassPage() {
           </div>
         </div>
 
-        {/* Pasek postępu */}
         <div className="flex gap-2 mb-6">
           <div className={`h-2 flex-1 rounded-full ${step >= 1 ? 'bg-blue-600' : 'bg-slate-200'}`}></div>
           <div className={`h-2 flex-1 rounded-full transition-colors ${step >= 2 ? 'bg-blue-600' : 'bg-slate-200'}`}></div>
@@ -198,37 +265,32 @@ export default function RegistrationPassPage() {
             </div>
           )}
 
-          {/* KROK 1: DANE OSOBOWE */}
+          {/* KROK 1 */}
           {step === 1 && (
             <form onSubmit={handleNextToStep2} className="space-y-5 animate-in fade-in">
               <h2 className="text-lg font-black text-slate-950 uppercase tracking-wider mb-2">1. Twoje dane</h2>
-              
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-bold text-slate-700">
                 <div className="space-y-1.5">
                   <label>Imię *</label>
-                  <input required type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors" placeholder="Wpisz imię..." />
+                  <input required type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors" />
                 </div>
                 <div className="space-y-1.5">
                   <label>Nazwisko *</label>
-                  <input required type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors" placeholder="Wpisz nazwisko..." />
+                  <input required type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors" />
                 </div>
               </div>
-
               <div className="space-y-1.5 text-xs font-bold text-slate-700">
                 <label>Telefon *</label>
-                <input required type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors" placeholder="Twój numer telefonu..." />
+                <input required type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors" />
               </div>
-
               <div className="space-y-1.5 text-xs font-bold text-slate-700">
                 <label>E-mail *</label>
-                <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors" placeholder="Twój adres e-mail..." />
+                <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors" />
               </div>
-
               <div className="space-y-1.5 text-xs font-bold text-slate-700">
                 <label>Hasło * (minimum 6 znaków)</label>
-                <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors" placeholder="Wpisz tajne hasło..." minLength={6} />
+                <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors" minLength={6} />
               </div>
-
               <div className="pt-4 flex justify-end border-t border-slate-100">
                 <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-8 py-3.5 rounded-xl uppercase transition-colors shadow-md text-xs cursor-pointer">
                   Dalej →
@@ -237,111 +299,82 @@ export default function RegistrationPassPage() {
             </form>
           )}
 
-          {/* KROK 2: WYBÓR KARNETU */}
+          {/* KROK 2 */}
           {step === 2 && (
             <div className="space-y-5 animate-in slide-in-from-right-4 fade-in">
               <h2 className="text-lg font-black text-slate-950 uppercase tracking-wider mb-2">2. Wybierz swój karnet</h2>
-              
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {dostepneKarnety.length === 0 ? (
-                  <div className="col-span-full py-8 text-center text-slate-400 text-xs font-bold">Ładowanie karnetów...</div>
-                ) : (
-                  dostepneKarnety.map(k => (
-                    <div 
-                      key={k.id}
-                      onClick={() => setSelectedPass(k)}
-                      className={`relative border-2 rounded-2xl p-5 cursor-pointer transition-all shadow-sm flex flex-col justify-between h-full min-h-[140px]
-                        ${selectedPass?.id === k.id 
-                          ? 'border-blue-600 bg-blue-50/50' 
-                          : 'border-slate-200 bg-white hover:border-blue-300'
-                        }`}
-                    >
-                      {selectedPass?.id === k.id && (
-                        <div className="absolute top-3 right-3 w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">✓</div>
-                      )}
-                      <div>
-                        <h4 className="font-black text-slate-900 text-base leading-tight mb-1 pr-6">{k.nazwa}</h4>
-                        <div className="text-[11px] text-slate-500 font-medium space-y-0.5">
-                          <p>Długość: <span className="font-bold text-slate-700">{k.dlugosc || 'Brak danych'}</span></p>
-                          <p>Wejścia: <span className="font-bold text-slate-700">{k.ilosc_wejsc || k.limitWejsc || k.wejscia ? `${k.ilosc_wejsc || k.limitWejsc || k.wejscia}` : 'Bez limitu (OPEN)'}</span></p>
-                        </div>
-                      </div>
-                      <div className="mt-4 pt-3 border-t border-slate-200/70 flex justify-between items-end">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Cena:</span>
-                        <span className="font-black text-blue-700 text-lg">{k.cena} PLN</span>
-                      </div>
-                    </div>
-                  ))
-                )}
+                {dostepneKarnety.map(k => (
+                  <div key={k.id} onClick={() => setSelectedPass(k)} className={`relative border-2 rounded-2xl p-5 cursor-pointer transition-all shadow-sm ${selectedPass?.id === k.id ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 bg-white hover:border-blue-300'}`}>
+                    {selectedPass?.id === k.id && (<div className="absolute top-3 right-3 w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">✓</div>)}
+                    <h4 className="font-black text-slate-900 text-sm">{k.nazwa}</h4>
+                    <p className="font-black text-blue-700 text-lg mt-2">{k.cena} PLN</p>
+                  </div>
+                ))}
               </div>
-
               <div className="pt-4 flex justify-between border-t border-slate-100">
-                <button onClick={() => setStep(1)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-3.5 rounded-xl transition-colors text-xs cursor-pointer">
-                  ← Wróć
-                </button>
-                <button onClick={handleNextToStep3} className="bg-blue-600 hover:bg-blue-700 text-white font-black px-8 py-3.5 rounded-xl uppercase transition-colors shadow-md text-xs cursor-pointer">
-                  Dalej →
-                </button>
+                <button onClick={() => setStep(1)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-3.5 rounded-xl text-xs cursor-pointer">← Wróć</button>
+                <button onClick={handleNextToStep3} className="bg-blue-600 hover:bg-blue-700 text-white font-black px-8 py-3.5 rounded-xl uppercase text-xs cursor-pointer">Dalej →</button>
               </div>
             </div>
           )}
 
-          {/* KROK 3: PODSUMOWANIE I FINALIZACJA */}
+          {/* KROK 3 */}
           {step === 3 && selectedPass && (
             <div className="space-y-6 animate-in slide-in-from-right-4 fade-in">
-              <h2 className="text-lg font-black text-slate-950 uppercase tracking-wider mb-2">3. Podsumowanie</h2>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-6">
+              <h2 className="text-lg font-black text-slate-950 uppercase tracking-wider mb-2">3. Potwierdzenie i zgody</h2>
+              
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
+                <div className="text-xs font-bold text-slate-700">Wybrany karnet: <span className="text-blue-700">{selectedPass.nazwa} - {selectedPass.cena} PLN</span></div>
                 
-                {/* Info o koncie */}
-                <div className="space-y-2">
-                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Twoje konto:</h4>
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-white rounded-full border border-slate-200 flex items-center justify-center text-xl shadow-sm">👤</div>
-                    <div className="text-sm">
-                      <p className="font-black text-slate-900">{firstName} {lastName}</p>
-                      <p className="text-slate-500 font-medium text-xs">{email}</p>
-                    </div>
-                  </div>
+                {/* Dynamiczne regulaminy */}
+                <div className="space-y-2.5 pt-2 text-[11px] text-slate-600 border-t border-slate-100 mt-2 pt-4">
+                  {regulations.length > 0 ? (
+                    regulations.map((reg) => (
+                      <label key={reg.slug} className="flex items-start gap-2.5 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={!!acceptedRegulations[reg.slug]} 
+                          onChange={(e) => handleCheckboxChange(reg.slug, e.target.checked)} 
+                          className="mt-0.5 accent-blue-600 shrink-0" 
+                        />
+                        <span className="leading-relaxed">
+                          {renderCheckboxTextWithLinks(reg)}
+                        </span>
+                      </label>
+                    ))
+                  ) : (
+                    <div className="text-slate-400 italic">Ładowanie wymaganych zgód...</div>
+                  )}
                 </div>
-
-                {/* Info o karnecie */}
-                <div className="space-y-2 pt-4 border-t border-slate-200">
-                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Wybrany pakiet:</h4>
-                  <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                    <div>
-                      <h4 className="font-black text-slate-900 text-sm">{selectedPass.nazwa}</h4>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Aktywacja nastąpi dzisiaj.</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Do zapłaty:</p>
-                      <p className="font-black text-rose-600 text-lg">{selectedPass.cena} PLN</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Informacja o płatności */}
-                <div className="bg-sky-50 border border-sky-200 text-sky-800 text-[11px] font-medium p-4 rounded-xl flex gap-3 leading-relaxed">
-                  <span className="text-lg leading-none">💡</span>
-                  <p>Po kliknięciu przycisku poniżej, Twoje konto zostanie natychmiast utworzone, a wybrany karnet dodany do profilu. Ze względu na to, że nie pobieramy jeszcze płatności online, <strong>Twoje saldo portfela będzie na minusie</strong>. Opłać zadłużenie u nas w recepcji przy pierwszej wizycie, aby móc zapisywać się na zajęcia!</p>
-                </div>
-
               </div>
 
               <div className="pt-4 flex justify-between border-t border-slate-100">
-                <button onClick={() => setStep(2)} disabled={isLoading} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-3.5 rounded-xl transition-colors text-xs cursor-pointer disabled:opacity-50">
-                  ← Wróć
-                </button>
-                <button onClick={handleFinalSubmit} disabled={isLoading} className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-8 py-3.5 rounded-xl uppercase transition-colors shadow-md text-xs cursor-pointer disabled:opacity-70 flex items-center gap-2">
+                <button onClick={() => setStep(2)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-3.5 rounded-xl text-xs cursor-pointer">← Wróć</button>
+                <button onClick={handleFinalSubmit} disabled={isLoading} className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-8 py-3.5 rounded-xl uppercase text-xs cursor-pointer disabled:opacity-70">
                   {isLoading ? 'Tworzenie konta...' : 'Zarejestruj się i kup'}
                 </button>
               </div>
             </div>
           )}
-
         </div>
       </div>
+
+      {/* Modal regulaminu */}
+      {activeModalReg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+            <div className="p-5 border-b flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-sm">{activeModalReg.title}</h3>
+              <button onClick={() => setActiveModalReg(null)} className="text-slate-400 hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 text-xs text-slate-700 whitespace-pre-wrap">{activeModalReg.content}</div>
+            <div className="p-4 border-t flex justify-end">
+              <button onClick={() => setActiveModalReg(null)} className="px-5 py-2 bg-slate-800 text-white rounded-xl text-xs cursor-pointer">Zamknij</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
