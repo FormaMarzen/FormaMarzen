@@ -202,6 +202,7 @@ export default function RootLayout({
         { href: '/ustawienia/wyglad', label: 'Wygląd', icon: '🎨' },
         { href: '/ustawienia/moduly', label: 'Moduły', icon: '🧩' },
         { href: '/ustawienia/platnosc-za-system', label: 'Płatność za system', icon: '🔒' },
+        { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
     }
   ];
