@@ -7,11 +7,12 @@ import { supabase } from '../raporty/klienci/supabase';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false); // NOWY STAN: Widoczność hasła
   const [rememberMe, setRememberMe] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [customLogo, setCustomLogo] = useState('');
-  const [logoError, setLogoError] = useState(false); // Stan zabezpieczający przed błędem obrazka
+  const [logoError, setLogoError] = useState(false); 
   
   // Stany dla odzyskiwania hasła
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
@@ -85,7 +86,7 @@ export default function LoginPage() {
                 src="/logo.png" 
                 alt="Forma Marzeń Logo" 
                 className="max-h-full max-w-full object-contain"
-                onError={() => setLogoError(true)} // Zabezpieczenie: jeśli plik nie istnieje, przełącz na emoji
+                onError={() => setLogoError(true)} 
               />
             ) : (
               <div className="text-red-600 font-black text-2xl flex flex-col items-center">
@@ -120,15 +121,20 @@ export default function LoginPage() {
 
             <div className="space-y-1 relative">
               <input 
-                type="password" 
+                type={showPassword ? "text" : "password"} 
                 required
                 placeholder="Hasło"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all text-sm pr-10"
               />
-              <button type="button" className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer">
-                👁️
+              <button 
+                type="button" 
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3.5 top-3.5 text-slate-400 hover:text-sky-600 transition-colors cursor-pointer text-base"
+                title={showPassword ? "Ukryj hasło" : "Pokaż hasło"}
+              >
+                {showPassword ? '🙈' : '👁️'}
               </button>
             </div>
 
