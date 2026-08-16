@@ -12,7 +12,6 @@ export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [transakcjeFinansowe, setTransakcjeFinansowe] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAdminWithoutClientProfile, setIsAdminWithoutClientProfile] = useState(false);
   
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('');
@@ -28,12 +27,32 @@ export default function PortfelPage() {
       const userEmail = session?.user?.email;
 
       if (userEmail) {
-        // Pobieramy dane klienta z tabeli klienci
-        const { data: klientData, error: kError } = await supabase
+        // Sprawdzamy, czy klient istnieje w tabeli klienci
+        let { data: klientData, error: kError } = await supabase
           .from('klienci')
           .select('*')
           .or(`E-mail.eq.${userEmail},email.eq.${userEmail}`)
           .maybeSingle();
+          
+        // Jeśli po wyczyszczeniu bazy nie ma rekordu dla zalogowanego użytkownika, tworzymy go automatycznie
+        if (!klientData) {
+          const newClientId = Date.now();
+          const defaultClient = {
+            id: newClientId,
+            Imię: userEmail.split('@')[0],
+            Nazwisko: 'Klubowicz',
+            "E-mail": userEmail,
+            "Numer tel.": '-',
+            Portfel: '0.00 PLN',
+            Zarejestrowany: new Date().toISOString().split('T')[0],
+            karnetyKlubowicza: []
+          };
+
+          const { error: insertErr } = await supabase.from('klienci').insert([defaultClient]);
+          if (!insertErr) {
+            klientData = defaultClient;
+          }
+        }
           
         if (klientData) {
           const rawClient = klientData as any;
@@ -53,11 +72,9 @@ export default function PortfelPage() {
 
           setTransakcjeFinansowe(finansowe);
 
-          // Bezpieczny odczyt salda z kolumny Portfel w tabeli klienci lub wyliczenie z transakcji
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
           const parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.-]+/g, "")) || 0;
 
-          // Jeśli są transakcje, możemy zsumować, ale fallbackujemy do kolumny klienta żeby uniknąć zerowania po czyszczeniu
           const finalWalletNum = finansowe.length > 0 
             ? finansowe.reduce((acc, curr) => acc + (Number(curr.kwota) || 0), 0)
             : parsedWalletNum;
@@ -69,10 +86,6 @@ export default function PortfelPage() {
             wallet: `${finalWalletNum.toFixed(2)} PLN`,
             rawWalletNum: finalWalletNum
           });
-          setIsAdminWithoutClientProfile(false);
-        } else {
-          // Jeśli nie znaleziono klienta (np. administrator zalogowany maildem maciejklaput@gmail.com)
-          setIsAdminWithoutClientProfile(true);
         }
       }
     } catch (err) {
@@ -169,26 +182,6 @@ export default function PortfelPage() {
 
   if (isLoading) {
     return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie portfela...</div>;
-  }
-
-  if (isAdminWithoutClientProfile) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 pb-20 font-sans antialiased text-slate-800">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">MÓJ PORTFEL</h2>
-        <div className="bg-white border border-sky-200 rounded-2xl p-8 shadow-sm text-center space-y-4">
-          <div className="text-4xl">ℹ️</div>
-          <h3 className="text-base font-black text-sky-950 uppercase">Konto Administratora</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Jesteś zalogowany jako administrator systemowy. Konto to nie posiada powiązanego profilu klubowicza w bazie danych, dlatego wirtualny portfel i historia transakcji klubowych nie są tutaj wyświetlane.
-          </p>
-          <div className="pt-2">
-            <a href="/raporty/klienci" className="inline-block bg-sky-900 text-white font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm hover:bg-sky-800 transition-colors">
-              Przejdź do zarządzania klientami
-            </a>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   const walletVal = currentUser ? currentUser.rawWalletNum : 0;
