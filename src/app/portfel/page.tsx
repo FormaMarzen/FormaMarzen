@@ -35,12 +35,6 @@ export default function PortfelPage() {
           
         if (klientData) {
           const rawClient = klientData as any;
-          setCurrentUser({
-            ...rawClient,
-            firstName: rawClient.Imię || rawClient.firstName || '',
-            lastName: rawClient.Nazwisko || rawClient.lastName || '',
-            wallet: rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN'
-          });
 
           // Pobranie transakcji powiązanych z kontem klienta
           const { data: tData } = await supabase
@@ -49,14 +43,25 @@ export default function PortfelPage() {
             .eq('klient_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          if (tData) {
-            const finansowe = tData.filter((t: any) => {
-              const kwota = Number(t.kwota) || 0;
-              const typ = (t.typ_operacji || '').toLowerCase();
-              return kwota !== 0 || typ.includes('zakup') || typ.includes('uzupelnienie') || typ.includes('splata') || typ.includes('portfel');
-            });
-            setTransakcjeFinansowe(finansowe);
-          }
+          const finansowe = tData ? tData.filter((t: any) => {
+            const kwota = Number(t.kwota) || 0;
+            const typ = (t.typ_operacji || '').toLowerCase();
+            return kwota !== 0 || typ.includes('zakup') || typ.includes('uzupelnienie') || typ.includes('splata') || typ.includes('portfel');
+          }) : [];
+
+          setTransakcjeFinansowe(finansowe);
+
+          // Prawdziwe saldo portfela wyznaczane dynamicznie jako suma wszystkich transakcji finansowych klienta
+          const calculatedWalletSum = finansowe.reduce((acc, curr) => acc + (Number(curr.kwota) || 0), 0);
+          const finalWalletStr = `${calculatedWalletSum.toFixed(2)} PLN`;
+
+          setCurrentUser({
+            ...rawClient,
+            firstName: rawClient.Imię || rawClient.firstName || '',
+            lastName: rawClient.Nazwisko || rawClient.lastName || '',
+            wallet: finalWalletStr,
+            rawWalletNum: calculatedWalletSum
+          });
         }
       }
     } catch (err) {
@@ -76,10 +81,11 @@ export default function PortfelPage() {
       return;
     }
 
-    const currentWalletNum = parseFloat(String(currentUser.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+    const currentWalletNum = currentUser.rawWalletNum || 0;
     const nowyStan = currentWalletNum + kwotaZmiany;
     const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
 
+    // Aktualizacja kolumny w tabeli klienci dla spójności
     const { error } = await supabase
       .from('klienci')
       .update({ Portfel: nowyStanStr })
@@ -116,7 +122,7 @@ export default function PortfelPage() {
 
   const handleSplatPortfela = async () => {
     if (!currentUser) return;
-    const currentWalletNum = parseFloat(String(currentUser.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+    const currentWalletNum = currentUser.rawWalletNum || 0;
     if (currentWalletNum >= 0) return;
 
     const kwotaSplaty = Math.abs(currentWalletNum);
@@ -132,6 +138,7 @@ export default function PortfelPage() {
       return;
     }
 
+    // Dodajemy transakcję wyrównującą saldo do zera
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'splata_portfela',
@@ -155,7 +162,7 @@ export default function PortfelPage() {
     return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie portfela...</div>;
   }
 
-  const walletVal = currentUser ? parseFloat(String(currentUser.wallet).replace(/[^0-9.-]+/g, "")) || 0 : 0;
+  const walletVal = currentUser ? currentUser.rawWalletNum : 0;
   const isNegative = walletVal < 0;
 
   return (
