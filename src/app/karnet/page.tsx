@@ -1,23 +1,24 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../raporty/klienci/supabase';
 
-export default function KarnetPage() {
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [transakcje, setTransakcje] = useState<any[]>([]);
+export default function KarnetyPage() {
+  const [karnety, setKarnety] = useState<any[]>([]);
+  const [isMounted, setIsMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-
-  const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
-  const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
-  const [selectedBuyPass, setSelectedBuyPass] = useState('');
+  const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
   
-  const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
+  // Stany dla strefy klubowicza (klient przeglądający swój karnet)
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
+  const [isClientSuspendModalOpen, setIsClientSuspendModalOpen] = useState(false);
+  const [clientSuspendDays, setClientSuspendDays] = useState('3');
+  const [clientSuspendStartDate, setClientSuspendStartDate] = useState('');
+  const [clientSuspendEndDate, setClientSuspendEndDate] = useState('');
+  const [clientSuspendMode, setClientSuspendMode] = useState<'days' | 'dates'>('days');
 
-  const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
-  const [passToExtend, setPassToExtend] = useState<any>(null);
-
-  // STANY DLA ZAWIESZEŃ KARNETU
+  // Stany dla modali w strefie klienta
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [isSuspendInfoModalOpen, setIsSuspendInfoModalOpen] = useState(false);
   const [isUnsuspendModalOpen, setIsUnsuspendModalOpen] = useState(false);
@@ -27,54 +28,214 @@ export default function KarnetPage() {
   const [suspendEndDate, setSuspendEndDate] = useState('');
   const [suspendError, setSuspendError] = useState('');
 
+  const [isBuyPassModalOpen, setIsBuyPassModalOpen] = useState(false);
+  const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
+  const [selectedBuyPass, setSelectedBuyPass] = useState('');
+  const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
+
+  const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
+  const [passToExtend, setPassToExtend] = useState<any>(null);
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // 1. POBIERANIE DANYCH Z SUPABASE (Karnety + Rodzaje Zajęć + Użytkownik)
+  const loadData = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userEmail = session?.user?.email;
+
+      const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+      if (userEmail === 'maciejklaput@gmail.com') {
+        setAppRole('admin');
+      } else {
+        const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
+        if (trenerObj) {
+          setAppRole('trener');
+        } else {
+          setAppRole('klubowicz');
+        }
+      }
+
+      const { data: klienciData } = await supabase.from('klienci').select('*');
+      if (klienciData && userEmail) {
+        const enriched = klienciData.map((c: any) => {
+          let parsedKarnety = [];
+          if (Array.isArray(c.karnetyKlubowicza)) {
+            parsedKarnety = c.karnetyKlubowicza;
+          } else if (typeof c.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+          }
+
+          let parsedGlobalHistory = [];
+          if (Array.isArray(c.historiaZawieszenGlobalna)) {
+            parsedGlobalHistory = c.historiaZawieszenGlobalna;
+          } else if (typeof c.historiaZawieszenGlobalna === 'string') {
+            try { parsedGlobalHistory = JSON.parse(c.historiaZawieszenGlobalna); } catch(e) {}
+          }
+
+          return {
+            ...c,
+            id: c.id,
+            firstName: c.Imię || '',
+            lastName: c.Nazwisko || '',
+            email: c['E-mail'] || c.email || '',
+            karnetyKlubowicza: parsedKarnety,
+            historiaZawieszenGlobalna: parsedGlobalHistory,
+            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
+          };
+        });
+        const myUser = enriched.find((c: any) => c.email === userEmail);
+        if (myUser) setCurrentUser(myUser);
+      }
+
+      // A. Pobieranie karnetów (cennik)
+      const { data: karnetyData, error: karnetyError } = await supabase
+        .from('karnety')
+        .select('*')
+        .order('id', { ascending: false });
+
+      if (karnetyError) {
+        console.error("Błąd pobierania karnetów:", karnetyError);
+      } else if (karnetyData) {
+        const parsedData = karnetyData.map((item: any) => {
+          let meta: Record<string, any> = {};
+          try {
+            meta = JSON.parse(item.inne_ustawienia || '{}');
+          } catch (e) {
+            console.log("Brak dodatkowych ustawień dla:", item.nazwa);
+          }
+
+          return {
+            id: item.id,
+            utworzony: item.created_at ? item.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+            nazwa: item.nazwa,
+            cena: item.cena_brutto ? item.cena_brutto.toString() : '0',
+            typKarnetu: item.typ_karnetu,
+            limitCzasowy: item.dlugosc,
+            dostepDo: item.dostep_do_zajec,
+            dostepnyOnline: item.sprzedaz_online,
+            wUzyciu: item.wUzyciu || 0,
+            ilosc_wejsc: item.ilosc_wejsc || meta.ilosc_wejsc || null,
+            ...meta 
+          };
+        });
+        setKarnety(parsedData);
+        setDostepneKarnety(parsedData);
+      }
+
+      // B. Pobieranie rodzajów zajęć z bazy
+      const { data: rodzajeData, error: rodzajeError } = await supabase
+        .from('rodzaje_zajec')
+        .select('*')
+        .order('nazwa', { ascending: true });
+
+      if (rodzajeError) {
+        console.error("Błąd pobierania rodzajów zajęć:", rodzajeError);
+      } else if (rodzajeData && rodzajeData.length > 0) {
+        setDostepneRodzajeZajec(rodzajeData);
+      } else {
+        setDostepneRodzajeZajec([
+          { id: 1, nazwa: 'Brak zajęć w bazie (Dodaj w zakładce Rodzaje zajęć)' }
+        ]);
+      }
+
+    } catch (err) {
+      console.error("Błąd sieci podczas pobierania:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
+    setIsMounted(true);
     loadData();
   }, []);
 
-  const loadData = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    const userEmail = session?.user?.email;
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
-    if (userEmail) {
-      const { data: klientData } = await supabase
-        .from('klienci')
-        .select('*')
-        .eq('E-mail', userEmail)
-        .single();
-        
-      if (klientData) {
-        if (typeof klientData.karnetyKlubowicza === 'string') {
-          try {
-            klientData.karnetyKlubowicza = JSON.parse(klientData.karnetyKlubowicza);
-          } catch (e) {
-            klientData.karnetyKlubowicza = [];
-          }
+  // Stany formularza administratora
+  const [nazwa, setNazwa] = useState('');
+  const [cena, setCena] = useState('');
+  const [stawkaVat, setStawkaVat] = useState('8%');
+  const [typKarnetu, setTypKarnetu] = useState('Na czas');
+  const [czasIlosc, setCzasIlosc] = useState('1');
+  const [czasJednostka, setCzasJednostka] = useState('Miesiąc');
+  const [iloscTreningow, setIloscTreningow] = useState('10');
+  const [dodajLimitCzasowy, setDodajLimitCzasowy] = useState(true);
+  const [limitIlosc, setLimitIlosc] = useState('1');
+  const [limitOkres, setLimitOkres] = useState('Miesiąc');
+  const [dostepDo, setDostepDo] = useState('wszystkich zajęć');
+  const [zaznaczoneZajecia, setZaznaczoneZajecia] = useState<string[]>([]);
+  const [limitCzasowyZapisow, setLimitCzasowyZapisow] = useState('Domyślny (14 dni)');
+  const [niestandardowyDni, setNiestandardowyDni] = useState('14');
+  const [tygodniowyLimit, setTygodniowyLimit] = useState('Bez limitu');
+  const [dziennyLimit, setDziennyLimit] = useState('Domyślny (Bez limitu)');
+  const [niestandardowyDziennyIlosc, setNiestandardowyDziennyIlosc] = useState('1');
+  const [blokujPortfel, setBlokujPortfel] = useState(false);
+  const [portfelPrógKwota, setPortfelPrógKwota] = useState('0');
+  const [dostepnyOnline, setDostepnyOnline] = useState(false);
+  const [ponownyZakup, setPonownyZakup] = useState(true);
+  const [zmianaNaInny, setZmianaNaInny] = useState(true);
+  const [kupInnyKarnet, setKupInnyKarnet] = useState(true);
+  const [opis, setOpis] = useState('');
+  const [obrazekUrl, setObrazekUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleOpenAdd = () => {
+    setEditingId(null);
+    setNazwa(''); setCena(''); setStawkaVat('8%'); setTypKarnetu('Na czas'); setCzasIlosc('1'); setCzasJednostka('Miesiąc'); setIloscTreningow('10'); setDodajLimitCzasowy(true); setLimitIlosc('1'); setLimitOkres('Miesiąc'); setDostepDo('wszystkich zajęć'); setZaznaczoneZajecia([]); setLimitCzasowyZapisow('Domyślny (14 dni)'); setNiestandardowyDni('14'); setTygodniowyLimit('Bez limitu'); setDziennyLimit('Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc('1'); setBlokujPortfel(false); setPortfelPrógKwota('0'); setDostepnyOnline(false); setPonownyZakup(true); setZmianaNaInny(true); setKupInnyKarnet(true); setOpis(''); setObrazekUrl(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (item: any) => {
+    setEditingId(item.id);
+    setNazwa(item.nazwa || ''); setCena(item.cena || ''); setStawkaVat(item.stawkaVat || '8%'); setTypKarnetu(item.typKarnetu || 'Na czas'); setCzasIlosc(item.czasIlosc || '1'); setCzasJednostka(item.czasJednostka || 'Miesiąc'); setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10'); setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); setLimitIlosc(item.limitIlosc || '1'); setLimitOkres(item.limitOkres || 'Miesiąc'); setDostepDo(item.dostepDo || 'wszystkich zajęć'); setZaznaczoneZajecia(item.zaznaczoneZajecia || []); setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); setNiestandardowyDni(item.niestandardowyDni || '14'); setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); setBlokujPortfel(item.blokujPortfel ?? false); setPortfelPrógKwota(item.portfelPrógKwota || '0'); setDostepnyOnline(item.dostepnyOnline ?? false); setPonownyZakup(item.ponownyZakup ?? true); setZmianaNaInny(item.zmianaNaInny ?? true); setKupInnyKarnet(item.kupInnyKarnet ?? true); setOpis(item.opis || ''); setObrazekUrl(item.obrazekUrl || null);
+    setIsModalOpen(true);
+  };
+
+  const handleToggleZajecie = (nazwaZajec: string) => {
+    if (zaznaczoneZajecia.includes(nazwaZajec)) {
+      setZaznaczoneZajecia(zaznaczoneZajecia.filter(z => z !== nazwaZajec));
+    } else {
+      setZaznaczoneZajecia([...zaznaczoneZajecia, nazwaZajec]);
+    }
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 250; 
+        const MAX_HEIGHT = 250;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+        } else {
+          if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
         }
-        setCurrentUser(klientData);
-        
-        const { data: tData } = await supabase
-          .from('transakcje')
-          .select('*')
-          .eq('klient_id', klientData.id)
-          .order('created_at', { ascending: false });
-          
-        if (tData) setTransakcje(tData);
-      }
-    }
 
-    const { data: karnetyData } = await supabase.from('karnety').select('*');
-    if (karnetyData) {
-      setDostepneKarnety(karnetyData.map((k: any) => ({
-        ...k,
-        cena: k.cena_brutto || k.cena || '0.00'
-      })));
-    }
-    
-    setIsLoading(false);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        setObrazekUrl(compressedDataUrl);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
-  
   const karnetyList = [...rawKarnetyList].sort((a: any, b: any) => {
     const dateA = a.waznyDo || '9999-12-31';
     const dateB = b.waznyDo || '9999-12-31';
@@ -100,12 +261,12 @@ export default function KarnetPage() {
     });
   }
 
-  const allSuspensions = karnetyList.flatMap((k: any) => 
-    (k.historiaZawieszen || []).map((susp: any) => ({
-      ...susp,
-      karnetNazwa: k.nazwa
-    }))
-  ).sort((a: any, b: any) => new Date(b.utworzono).getTime() - new Date(a.utworzono).getTime());
+  // Globalna historia zawieszeń wyciągnięta z konta klienta
+  const globalSuspensions = currentUser?.historiaZawieszenGlobalna || [];
+  const allSuspensions = globalSuspensions.map((susp: any) => ({
+    ...susp,
+    karnetNazwa: susp.karnetNazwa || 'Karnet'
+  })).sort((a: any, b: any) => new Date(b.utworzono || 0).getTime() - new Date(a.utworzono || 0).getTime());
 
   const dostepneKarnetyDoZakupu = dostepneKarnety.filter((defKarnetu) => {
     const limitWejscBaza = defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null;
@@ -190,8 +351,7 @@ export default function KarnetPage() {
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
-        zawieszonyDo: null,
-        historiaZawieszen: []
+        zawieszonyDo: null
       };
       updatedKarnetyList.push(nowyKarnetObj);
     }
@@ -319,8 +479,7 @@ export default function KarnetPage() {
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
-        zawieszonyDo: null,
-        historiaZawieszen: []
+        zawieszonyDo: null
       };
       updatedKarnetyList.push(nowyKarnetObj);
     }
@@ -366,12 +525,6 @@ export default function KarnetPage() {
     window.location.reload(); 
   };
 
-  const openBuyModal = () => {
-    setActivationMode('today');
-    setSelectedBuyPass('');
-    setIsBuyPassModalOpen(true);
-  };
-
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -379,8 +532,6 @@ export default function KarnetPage() {
     date2.setHours(0,0,0,0);
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
-
-  const dzisiajString = new Date().toISOString().split('T')[0];
 
   // AUTOMATYCZNE WYPISYWANIE Z ZAJĘĆ PODCZAS ZAWIESZENIA
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
@@ -448,7 +599,7 @@ export default function KarnetPage() {
     }
   };
 
-  // ❄️ 1. LOGIKA ZAWIESZANIA (ZAPIS PLANU) - ZABRONIONA DATA WSTECZNA
+  // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -458,8 +609,7 @@ export default function KarnetPage() {
       return;
     }
 
-    // Bezpieczne porównanie stringów dat YYYY-MM-DD eliminujące błędy stref czasowych
-    if (suspendStartDate < dzisiajString) {
+    if (suspendStartDate < todayStr) {
       setSuspendError('Data rozpoczęcia nie może być w przeszłości. Zawieszenie jest możliwe od dzisiaj.');
       return;
     }
@@ -486,13 +636,13 @@ export default function KarnetPage() {
       }
     }
 
-    const suspensionHistory = targetKarnet.historiaZawieszen || [];
     const startObj = new Date(suspendStartDate);
     const month = startObj.getMonth(); 
     const year = startObj.getFullYear();
+    const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
 
     if (month === 8) {
-      const usedInVacation = suspensionHistory.some((susp: any) => {
+      const usedInVacation = globalHistory.some((susp: any) => {
         const hStart = new Date(susp.od);
         const hMonth = hStart.getMonth();
         return hStart.getFullYear() === year && (hMonth === 6 || hMonth === 7);
@@ -510,7 +660,7 @@ export default function KarnetPage() {
     let countSuspensionsInPeriod = 0;
 
     if (isVacation) {
-      suspensionHistory.forEach((susp: any) => {
+      globalHistory.forEach((susp: any) => {
         const hStart = new Date(susp.od);
         if (hStart.getFullYear() === year && hStart.getMonth() === month) {
           const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
@@ -527,7 +677,7 @@ export default function KarnetPage() {
         return;
       }
     } else {
-      suspensionHistory.forEach((susp: any) => {
+      globalHistory.forEach((susp: any) => {
         const hStart = new Date(susp.od);
         const hMonth = hStart.getMonth();
         const hQuarter = Math.floor(hMonth / 3) + 1;
@@ -552,23 +702,27 @@ export default function KarnetPage() {
       ...targetKarnet,
       zawieszonyOd: suspendStartDate,
       zawieszonyDo: suspendEndDate,
-      statusTekst: `Zawieszony (od ${suspendStartDate} do ${suspendEndDate})`,
-      historiaZawieszen: [
-        ...suspensionHistory,
-        {
-          od: suspendStartDate,
-          planowane_do: suspendEndDate,
-          do: '-',
-          planowane_dni: requestedDays,
-          dni: 0,
-          status: 'aktywne',
-          utworzono: new Date().toISOString()
-        }
-      ]
+      statusTekst: `Zawieszony (od ${suspendStartDate} do ${suspendEndDate})`
     };
 
+    const newGlobalSuspension = {
+      id: Date.now(),
+      karnetId: targetKarnet.id,
+      karnetNazwa: targetKarnet.nazwa,
+      od: suspendStartDate,
+      planowane_do: suspendEndDate,
+      do: '-',
+      planowane_dni: requestedDays,
+      dni: 0,
+      status: 'aktywne',
+      utworzono: new Date().toISOString()
+    };
+
+    const updatedGlobalHistory = [...globalHistory, newGlobalSuspension];
+
     const dbPayload: any = {
-      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList
+      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory
     };
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
@@ -578,7 +732,6 @@ export default function KarnetPage() {
       return;
     }
 
-    // Automatyczne wypisanie z zajęć w okresie zawieszenia
     await handleAutoWypiszPoZawieszeniu(currentUser.id, suspendStartDate, suspendEndDate, targetKarnet.nazwa);
 
     alert(`Pomyślnie zapisano zawieszenie. System automatycznie wypisał Cię z zajęć w wybranym okresie.`);
@@ -588,7 +741,7 @@ export default function KarnetPage() {
     window.location.reload();
   };
 
-  // 🔓 2. LOGIKA ODWIESZANIA
+  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA)
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -627,8 +780,9 @@ export default function KarnetPage() {
       }
     }
 
-    const updatedHistory = (targetKarnet.historiaZawieszen || []).map((susp: any) => {
-      if (susp.status === 'aktywne') {
+    const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
+    const updatedGlobalHistory = globalHistory.map((susp: any) => {
+      if (susp.status === 'aktywne' && susp.karnetId?.toString() === targetKarnet.id?.toString()) {
         return {
           ...susp,
           do: actualEnd.toISOString().split('T')[0],
@@ -645,8 +799,7 @@ export default function KarnetPage() {
       zawieszonyOd: null,
       zawieszonyDo: null,
       waznyDo: nowaDataWygasnieciaStr,
-      statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
-      historiaZawieszen: updatedHistory
+      statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
     };
 
     const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
@@ -657,6 +810,7 @@ export default function KarnetPage() {
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory,
       Wygasa: latestExpDate
     };
 
@@ -679,521 +833,795 @@ export default function KarnetPage() {
 
   const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd);
 
-  if (isLoading) {
+  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nazwa.trim() || !cena.trim()) return;
+
+    let wyliczonaDlugosc = '';
+    let dodanaIloscWejsc = null;
+
+    if (typKarnetu === 'Na czas') {
+      wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
+    } else {
+      dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
+      if (dodajLimitCzasowy) {
+        wyliczonaDlugosc = `${iloscTreningow} wejść / ${limitIlosc} ${limitOkres.toLowerCase()}${parseInt(limitIlosc) > 1 && limitOkres === 'Miesiąc' ? 'e' : ''}`;
+      } else {
+        wyliczonaDlugosc = `${iloscTreningow} wejść (bez limitu czasu)`;
+      }
+    }
+
+    const metaDane = {
+      stawkaVat,
+      czasIlosc,
+      czasJednostka,
+      iloscTreningow,
+      ilosc_wejsc: dodanaIloscWejsc,
+      dodajLimitCzasowy,
+      limitIlosc,
+      limitOkres,
+      zaznaczoneZajecia,
+      limitCzasowyZapisow,
+      niestandardowyDni,
+      tygodniowyLimit,
+      dziennyLimit,
+      niestandardowyDziennyIlosc,
+      blokujPortfel,
+      portfelPrógKwota,
+      ponownyZakup,
+      zmianaNaInny,
+      kupInnyKarnet,
+      opis,
+      obrazekUrl, 
+      wUzyciu: 0
+    };
+
+    const supabasePayload = {
+      nazwa: nazwa,
+      cena_brutto: parseFloat(cena) || 0,
+      typ_karnetu: typKarnetu,
+      dlugosc: wyliczonaDlugosc,
+      dostep_do_zajec: dostepDo,
+      sprzedaz_online: dostepnyOnline,
+      ilosc_wejsc: dodanaIloscWejsc,
+      inne_ustawienia: JSON.stringify(metaDane)
+    };
+
+    try {
+      if (editingId !== null) {
+        const { error } = await supabase.from('karnety').update(supabasePayload).eq('id', editingId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('karnety').insert([supabasePayload]);
+        if (error) throw error;
+      }
+
+      loadData(); 
+      setIsModalOpen(false);
+      
+    } catch (error: any) {
+      console.error("Szczegóły błędu bazy danych:", error);
+      alert(`Błąd zapisu: ${error.message || ''} | Code: ${error.code || ''}`);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (confirm("Czy na pewno chcesz usunąć ten karnet z cennika?")) {
+      try {
+        const { error } = await supabase.from('karnety').delete().eq('id', id);
+        if (error) throw error;
+        loadData();
+      } catch (error: any) {
+        console.error("Błąd podczas usuwania:", error);
+        alert(`Nie udało się usunąć: ${error.message || JSON.stringify(error)}`);
+      }
+    }
+  };
+
+  if (!isMounted || isLoading) {
     return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie danych karnetu...</div>;
   }
 
-  return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in">
-      
-      {/* SEKCJA 1: AKTYWNE KARNETY */}
-      <div>
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">TWOJE KARNETY</h2>
+  // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU Z OPCJĄ ZAWIESZENIA
+  if (appRole === 'klubowicz' && currentUser) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-24">
         
-        <div className="space-y-4">
-          {karnetyList.length === 0 ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-sm">
-              <span className="text-4xl block mb-3">🎟️</span>
-              <h3 className="text-slate-800 font-bold mb-1">Brak aktywnych karnetów</h3>
-              <p className="text-slate-500 text-xs">Wykup karnet, aby w pełni korzystać z możliwości klubu.</p>
-            </div>
-          ) : (
-            karnetyList.map((karnet: any) => {
-              let isExpiring = false;
-              let isPending = karnet.statusTekst?.includes('Oczekujący');
-              let isSuspended = !!karnet.zawieszonyOd;
+        {/* SEKCJA 1: AKTYWNE KARNETY */}
+        <div>
+          <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">TWOJE KARNETY</h2>
+          
+          <div className="space-y-4">
+            {karnetyList.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-sm">
+                <span className="text-4xl block mb-3">🎟️</span>
+                <h3 className="text-slate-800 font-bold mb-1">Brak aktywnych karnetów</h3>
+                <p className="text-slate-500 text-xs">Wykup karnet, aby w pełni korzystać z możliwości klubu.</p>
+              </div>
+            ) : (
+              karnetyList.map((karnet: any) => {
+                let isExpiring = false;
+                let isPending = karnet.statusTekst?.includes('Oczekujący');
+                let isSuspended = !!karnet.zawieszonyOd;
 
-              if (!isPending && !isSuspended) {
-                if (karnet.waznyDo) {
-                  const todayDate = new Date();
-                  todayDate.setHours(0, 0, 0, 0);
-                  const expDate = new Date(karnet.waznyDo);
-                  expDate.setHours(0, 0, 0, 0);
-                  const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-                  if (diffDays <= 5) {
-                    isExpiring = true;
+                if (!isPending && !isSuspended) {
+                  if (karnet.waznyDo) {
+                    const todayDate = new Date();
+                    todayDate.setHours(0, 0, 0, 0);
+                    const expDate = new Date(karnet.waznyDo);
+                    expDate.setHours(0, 0, 0, 0);
+                    const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+                    if (diffDays <= 5) isExpiring = true;
+                  }
+                  if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
+                    if (karnet.pozostaloWejsc <= 2) isExpiring = true;
                   }
                 }
-                if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
-                  if (karnet.pozostaloWejsc <= 2) {
-                    isExpiring = true;
-                  }
-                }
-              }
 
-              let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
-              if (isSuspended) {
-                statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
-              } else if (isPending) {
-                statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; 
-              } else if (isExpiring) {
-                statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; 
-              }
+                let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
+                if (isSuspended) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
+                else if (isPending) statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; 
+                else if (isExpiring) statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; 
 
-              return (
-                <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                    <div className="space-y-3">
-                      <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200 shadow-sm">
-                          Aktywne zapisy: {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined ? karnet.pozostaloWejsc : 'Bez limitu'}
-                        </span>
-                        <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
-                          {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
-                        </span>
+                return (
+                  <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                      <div className="space-y-3">
+                        <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200 shadow-sm">
+                            Aktywne zapisy: {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined ? karnet.pozostaloWejsc : 'Bez limitu'}
+                          </span>
+                          <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
+                            {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  
-                  <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
-                    {isSuspended ? (
-                       <button 
-                         onClick={() => { setPassToUnsuspendId(karnet.id.toString()); setIsUnsuspendModalOpen(true); }}
-                         className="bg-slate-800 border border-slate-900 text-white hover:bg-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                       >
-                         <span className="text-sm">🔓</span> ODWIEŚ KARNET
-                       </button>
-                    ) : (
-                      <button 
-                        onClick={() => { setPassToExtend(karnet); setIsExtendModalOpen(true); }}
-                        className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                      >
-                        <span className="text-sm">🕒</span> PRZEDŁUŻ
-                      </button>
-                    )}
-                    <button 
-                      onClick={openBuyModal}
-                      className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer"
-                    >
-                      $ KUP KARNET
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button 
-            onClick={openBuyModal}
-            className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-sm transition-colors cursor-pointer flex items-center gap-2"
-          >
-            <span className="text-lg leading-none rounded-full bg-white/20 w-4 h-4 flex items-center justify-center">+</span> DOKUP DODATKOWY KARNET
-          </button>
-        </div>
-      </div>
-
-      {/* SEKCJA 1.5: ZARZĄDZANIE ZAWIESZENIAMI */}
-      <div className="pt-2">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-          <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">ZARZĄDZANIE ZAWIESZENIAMI</h2>
-          <button 
-            onClick={() => setIsSuspendInfoModalOpen(true)}
-            className="text-sky-600 hover:text-sky-800 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer bg-sky-50 px-3 py-1.5 rounded-lg border border-sky-200"
-          >
-            <span className="text-base leading-none">ℹ️</span> Zasady zawieszania karnetów
-          </button>
-        </div>
-        
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
-          <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex-1 text-center sm:text-left">
-              <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
-              <p className="text-xs text-slate-500 mt-1">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
-            </div>
-            {suspendedPasses.length > 0 ? (
-               <button 
-                 onClick={() => {
-                   setPassToUnsuspendId(suspendedPasses[0].id.toString());
-                   setIsUnsuspendModalOpen(true);
-                 }}
-                 className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
-               >
-                 <span>🔓</span> ODWIEŚ KARNET
-               </button>
-            ) : (
-              <button 
-                onClick={() => {
-                  if (activePassesForSuspend.length === 0) {
-                    alert('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić.');
-                    return;
-                  }
-                  setPassToSuspendId(activePassesForSuspend[0].id.toString());
-                  setIsSuspendModalOpen(true);
-                }}
-                className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
-              >
-                <span>❄️</span> ZAWIEŚ KARNET
-              </button>
-            )}
-          </div>
-
-          {/* TABELA HISTORII ZAWIESZEŃ */}
-          <div className="pt-2">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Historia Twoich zawieszeń</h3>
-            {allSuspensions.length === 0 ? (
-              <div className="text-xs text-slate-400 italic bg-white p-4 rounded-xl border border-slate-100 text-center">
-                Brak historii zawieszeń na Twoim koncie.
-              </div>
-            ) : (
-              <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-sm">
-                <table className="w-full text-left border-collapse min-w-max text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                      <th className="py-3 px-4">Data Operacji</th>
-                      <th className="py-3 px-4">Karnet</th>
-                      <th className="py-3 px-4">Okres zawieszenia</th>
-                      <th className="py-3 px-4 text-center">Zużyte dni</th>
-                      <th className="py-3 px-4 text-right">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {allSuspensions.map((susp: any, idx: number) => {
-                      const formattedCreated = susp.utworzono ? new Date(susp.utworzono).toLocaleString('pl-PL', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute:'2-digit'}) : '-';
-                      const isZakonczone = susp.status === 'zakończone' || susp.status === undefined;
-
-                      return (
-                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                          <td className="py-3 px-4 font-medium text-slate-500">{formattedCreated}</td>
-                          <td className="py-3 px-4 font-bold text-slate-800">{susp.karnetNazwa}</td>
-                          <td className="py-3 px-4 text-slate-600">
-                            <span className="font-semibold">{susp.od}</span> <span className="text-slate-400">do</span> <span className="font-semibold">{susp.status === 'aktywne' ? susp.planowane_do : susp.do}</span>
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            {isZakonczone ? (
-                              <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg font-bold border border-slate-200">{susp.dni} dni</span>
-                            ) : (
-                              <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold border border-slate-200 text-[10px]">Plan. {susp.planowane_dni}</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            {isZakonczone ? (
-                              <span className="text-emerald-600 font-bold flex items-center justify-end gap-1">
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                                Zakończone
-                              </span>
-                            ) : (
-                              <span className="text-amber-600 font-bold flex items-center justify-end gap-1">
-                                ⏳ Trwa
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* SEKCJA 2: HISTORIA TRANSAKCJI */}
-      <div className="pt-2">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">HISTORIA TRANSAKCJI</h2>
-        
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-max">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                  <th className="py-4 px-5">#</th>
-                  <th className="py-4 px-5">DATA TRANSAKCJI</th>
-                  <th className="py-4 px-5">PRZEDMIOT</th>
-                  <th className="py-4 px-5">CENA</th>
-                  <th className="py-4 px-5">RABAT</th>
-                  <th className="py-4 px-5">METODA PŁATNOŚCI</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
-                {transakcje.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-slate-400">Brak historii transakcji w bazie.</td>
-                  </tr>
-                ) : (
-                  transakcje.map((t: any, index: number) => {
-                    const absKwota = Math.abs(t.kwota).toFixed(2);
-                    const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
                     
-                    return (
-                      <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5 font-medium">{index + 1}.</td>
-                        <td className="py-4 px-5">{formattedDate}</td>
-                        <td className="py-4 px-5 max-w-[200px] truncate" title={t.opis || 'Karnet'}>
-                          Karnet: <br/><span className="font-bold text-slate-900">{t.opis ? t.opis.split(': ')[1] || t.opis : 'OPEN'}</span>
-                        </td>
-                        <td className="py-4 px-5 font-bold text-slate-900">{absKwota} PLN</td>
-                        <td className="py-4 px-5">-</td>
-                        <td className="py-4 px-5 text-slate-500">Płatność online</td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                    <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
+                      {isSuspended ? (
+                         <button 
+                           onClick={() => { setPassToUnsuspendId(karnet.id.toString()); setIsUnsuspendModalOpen(true); }}
+                           className="bg-slate-800 border border-slate-900 text-white hover:bg-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                         >
+                           <span className="text-sm">🔓</span> ODWIEŚ KARNET
+                         </button>
+                      ) : (
+                        <button 
+                          onClick={() => { setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                          className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                        >
+                          <span className="text-sm">🕒</span> PRZEDŁUŻ
+                        </button>
+                      )}
+                      <button 
+                        onClick={() => { setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
+                        className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer"
+                      >
+                        $ KUP KARNET
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button 
+              onClick={() => { setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
+              className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-sm transition-colors cursor-pointer flex items-center gap-2"
+            >
+              <span className="text-lg leading-none rounded-full bg-white/20 w-4 h-4 flex items-center justify-center">+</span> DOKUP DODATKOWY KARNET
+            </button>
+          </div>
+        </div>
+
+        {/* SEKCJA 1.5: ZARZĄDZANIE ZAWIESZENIAMI */}
+        <div className="pt-2">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+            <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">ZARZĄDZANIE ZAWIESZENIAMI</h2>
+            <button 
+              onClick={() => setIsSuspendInfoModalOpen(true)}
+              className="text-sky-600 hover:text-sky-800 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer bg-sky-50 px-3 py-1.5 rounded-lg border border-sky-200"
+            >
+              <span className="text-base leading-none">ℹ️</span> Zasady zawieszania karnetów
+            </button>
+          </div>
+          
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex-1 text-center sm:text-left">
+                <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
+                <p className="text-xs text-slate-500 mt-1">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
+              </div>
+              {suspendedPasses.length > 0 ? (
+                 <button 
+                   onClick={() => {
+                     setPassToUnsuspendId(suspendedPasses[0].id.toString());
+                     setIsUnsuspendModalOpen(true);
+                   }}
+                   className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+                 >
+                   <span>🔓</span> ODWIEŚ KARNET
+                 </button>
+              ) : (
+                <button 
+                  onClick={() => {
+                    if (activePassesForSuspend.length === 0) {
+                      alert('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić.');
+                      return;
+                    }
+                    setPassToSuspendId(activePassesForSuspend[0].id.toString());
+                    setSuspendStartDate(todayStr);
+                    setSuspendEndDate(todayStr);
+                    setIsSuspendModalOpen(true);
+                  }}
+                  className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>❄️</span> ZAWIEŚ KARNET
+                </button>
+              )}
+            </div>
+
+            {/* TABELA GLOBALNEJ HISTORII ZAWIESZEŃ */}
+            <div className="pt-2">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Historia Twoich zawieszeń (Konto)</h3>
+              {allSuspensions.length === 0 ? (
+                <div className="text-xs text-slate-400 italic bg-white p-4 rounded-xl border border-slate-100 text-center">
+                  Brak historii zawieszeń na Twoim koncie.
+                </div>
+              ) : (
+                <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-sm">
+                  <table className="w-full text-left border-collapse min-w-max text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                        <th className="py-3 px-4">Data Operacji</th>
+                        <th className="py-3 px-4">Karnet</th>
+                        <th className="py-3 px-4">Okres zawieszenia</th>
+                        <th className="py-3 px-4 text-center">Zużyte dni</th>
+                        <th className="py-3 px-4 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {allSuspensions.map((susp: any, idx: number) => {
+                        const formattedCreated = susp.utworzono ? new Date(susp.utworzono).toLocaleString('pl-PL', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute:'2-digit'}) : '-';
+                        const isZakonczone = susp.status === 'zakończone' || susp.status === undefined;
+
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 font-medium text-slate-500">{formattedCreated}</td>
+                            <td className="py-3 px-4 font-bold text-slate-800">{susp.karnetNazwa}</td>
+                            <td className="py-3 px-4 text-slate-600">
+                              <span className="font-semibold">{susp.od}</span> <span className="text-slate-400">do</span> <span className="font-semibold">{susp.status === 'aktywne' ? susp.planowane_do : susp.do}</span>
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              {isZakonczone ? (
+                                <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg font-bold border border-slate-200">{susp.dni} dni</span>
+                              ) : (
+                                <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold border border-slate-200 text-[10px]">Plan. {susp.planowane_dni}</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {isZakonczone ? (
+                                <span className="text-emerald-600 font-bold flex items-center justify-end gap-1">
+                                  ✅ Zakończone
+                                </span>
+                              ) : (
+                                <span className="text-amber-600 font-bold flex items-center justify-end gap-1">
+                                  ⏳ Trwa
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* MODAL ZASAD ZAWIESZEŃ (INFORMACYJNY) */}
+        {isSuspendInfoModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-slate-200">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <span className="text-xl">ℹ️</span> Zasady zawieszania karnetów
+                </h3>
+                <button onClick={() => setIsSuspendInfoModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
+              </div>
+              
+              <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
+                <div className="bg-sky-50 p-4 rounded-xl border border-sky-100 text-sky-900 font-medium">
+                  Limity zawieszeń obowiązują globalnie dla Twojego konta klubowicza (maksymalnie 14 dni w kwartale lub 1 raz w miesiącu wakacyjnym).
+                </div>
+              </div>
+
+              <div className="pt-4 flex justify-end border-t border-slate-100">
+                <button onClick={() => setIsSuspendInfoModalOpen(false)} className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                  Zrozumiałem
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL ODWIESZANIA KARNETU */}
+        {isUnsuspendModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">🔓 Odwieszenie karnetu</h3>
+                <button onClick={() => setIsUnsuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
+              </div>
+              
+              <div className="space-y-4 text-xs">
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium p-4 rounded-xl leading-relaxed text-center">
+                  Czy na pewno chcesz <strong>już dzisiaj</strong> odwiesić swój karnet i wrócić na treningi? <br/><br/>
+                  System przeliczy faktyczne dni zawieszenia i o tę wartość przedłuży ważność karnetu.
+                </div>
+                
+                <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+                  <button type="button" onClick={() => setIsUnsuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                    Anuluj
+                  </button>
+                  <button onClick={handleUnsuspendSubmit} className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                    Tak, Odwieszam
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL ZAWIESZENIA KARNETU (FORMULARZ) */}
+        {isSuspendModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">❄️ Zawieszenie karnetu</h3>
+                <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
+              </div>
+              
+              <form onSubmit={handleSuspendSubmit} className="space-y-4 text-xs">
+                {suspendError && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold p-3 rounded-xl text-center">
+                    ⚠️ {suspendError}
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Karnet do zawieszenia</label>
+                  <select 
+                    required
+                    value={passToSuspendId} 
+                    onChange={(e) => setPassToSuspendId(e.target.value)} 
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+                  >
+                    {activePassesForSuspend.map((k: any) => (
+                      <option key={k.id} value={k.id.toString()}>{k.nazwa} (Ważny do {k.waznyDo})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-700 block">Od dnia *</label>
+                    <input 
+                      type="date" 
+                      required 
+                      min={todayStr} 
+                      value={suspendStartDate} 
+                      onChange={(e) => setSuspendStartDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-700 block">Do dnia (włącznie) *</label>
+                    <input 
+                      type="date" 
+                      required 
+                      min={suspendStartDate || todayStr}
+                      value={suspendEndDate} 
+                      onChange={(e) => setSuspendEndDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+                  <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                    Anuluj
+                  </button>
+                  <button type="submit" className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                    Zamroź karnet
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+      </div>
+    );
+  }
+
+  // PANEL ADMINISTRATORA / TRENERA (Zarządzanie cennikiem karnetów)
+  return (
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
+      
+      {/* GÓRNY PASEK AKCJI */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
+        <h1 className="text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
+          KARNETY
+        </h1>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={handleOpenAdd}
+            className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
+          >
+            <span>+ DODAJ NOWY KARNET</span>
+          </button>
+          <button className="bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-4 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer">
+            ❓ POMOC
+          </button>
         </div>
       </div>
 
-      {/* MODAL ZASAD ZAWIESZEŃ (INFORMACYJNY) */}
-      {isSuspendInfoModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                <span className="text-xl">ℹ️</span> Zasady zawieszania karnetów
-              </h3>
-              <button onClick={() => setIsSuspendInfoModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
-            </div>
-            
-            <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
-              <div className="bg-sky-50 p-4 rounded-xl border border-sky-100 text-sky-900 font-medium">
-                Masz wyjazd służbowy, chorobę lub planujesz urlop? Nasz system pozwala na zamrożenie karnetu, abyś nie tracił opłaconych dni!
-              </div>
-              
-              <div className="space-y-2">
-                <h4 className="font-bold text-slate-900 text-sm">Standardowe zasady (w ciągu roku)</h4>
-                <ul className="list-none space-y-2 pl-1">
-                  <li className="flex gap-2"><span className="text-blue-500 font-bold">1.</span> Klient może zawiesić karnet maksymalnie <strong>2 razy w ciągu każdego kwartału</strong> roku.</li>
-                  <li className="flex gap-2"><span className="text-blue-500 font-bold">2.</span> Maksymalna zsumowana ilość dni zawieszenia w kwartale to <strong>14 dni</strong>.</li>
-                  <li className="flex gap-2"><span className="text-blue-500 font-bold">3.</span> Zawieszenie jest możliwe tylko od <strong>dzisiaj</strong> na czas trwania ważności karnetu. Nie ma możliwości zawieszania wstecz.</li>
-                  <li className="flex gap-2"><span className="text-emerald-500 font-bold">4.</span> Możesz samodzielnie <strong>odwiesić karnet wcześniej</strong> - system obliczy zużyte dni i zaktualizuje limity.</li>
-                </ul>
-              </div>
-
-              <div className="space-y-2 border-t border-slate-100 pt-4">
-                <h4 className="font-bold text-slate-900 text-sm">Zasady wakacyjne (Lipiec, Sierpień, Wrzesień)</h4>
-                <ul className="list-none space-y-2 pl-1">
-                  <li className="flex gap-2"><span className="text-orange-500 font-bold">1.</span> W miesiącach letnich limit kwartalny nie obowiązuje.</li>
-                  <li className="flex gap-2"><span className="text-orange-500 font-bold">2.</span> W lipcu oraz sierpniu możesz zawiesić karnet <strong>1 raz w każdym z tych miesięcy</strong>, na maksymalnie <strong>14 dni</strong>.</li>
-                  <li className="flex gap-2"><span className="text-rose-500 font-bold">3.</span> Jeżeli zawiesisz karnet w lipcu lub sierpniu, <strong>tracisz możliwość zawieszenia go we wrześniu</strong>.</li>
-                </ul>
-              </div>
-              
-              <div className="bg-slate-100 p-3 rounded-lg text-[11px] font-semibold text-slate-500 mt-2">
-                * Dni, w których karnet faktycznie był zawieszony, zostają automatycznie doliczone do daty wygaśnięcia Twojego karnetu po wykonaniu akcji ODWIESZENIA.
-              </div>
-            </div>
-
-            <div className="pt-4 flex justify-end border-t border-slate-100">
-              <button onClick={() => setIsSuspendInfoModalOpen(false)} className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                Zrozumiałem
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL ODWIESZANIA KARNETU */}
-      {isUnsuspendModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">🔓 Odwieszenie karnetu</h3>
-              <button onClick={() => setIsUnsuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
-            </div>
-            
-            <div className="space-y-4 text-xs">
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium p-4 rounded-xl leading-relaxed text-center">
-                Czy na pewno chcesz <strong>już dzisiaj</strong> odwiesić swój karnet i wrócić na treningi? <br/><br/>
-                Po potwierdzeniu, system przeliczy dni, które rzeczywiście były zawieszone, i o tę wartość <strong>przedłuży ważność Twojego karnetu</strong>.
-              </div>
-              
-              <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
-                <button type="button" onClick={() => setIsUnsuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-                  Anuluj
-                </button>
-                <button onClick={handleUnsuspendSubmit} className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                  Tak, Odwieszam
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL ZAWIESZENIA KARNETU (FORMULARZ) */}
-      {isSuspendModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">❄️ Zawieszenie karnetu</h3>
-              <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
-            </div>
-            
-            <form onSubmit={handleSuspendSubmit} className="space-y-4 text-xs">
-              
-              {suspendError && (
-                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold p-3 rounded-xl text-center">
-                  ⚠️ {suspendError}
-                </div>
+      {/* TABELA KARNETÓW */}
+      <div className="bg-white border border-sky-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-sky-50/70 border-b border-sky-200 text-[11px] font-bold text-sky-900 uppercase tracking-wider">
+                <th className="py-3.5 px-4 w-14"></th>
+                <th className="py-3.5 px-4">Nazwa</th>
+                <th className="py-3.5 px-4">Cena brutto</th>
+                <th className="py-3.5 px-4">Typ karnetu</th>
+                <th className="py-3.5 px-4">Długość</th>
+                <th className="py-3.5 px-4">Dostęp do zajęć</th>
+                <th className="py-3.5 px-4">Inne ustawienia</th>
+                <th className="py-3.5 px-4">Sprzedaż online</th>
+                <th className="py-3.5 px-4 text-center">W użyciu</th>
+                <th className="py-3.5 px-4 text-right">Akcje</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-sky-100 text-xs">
+              {karnety.map((item) => (
+                <tr key={item.id} className="hover:bg-sky-50/40 transition-colors">
+                  <td className="py-4 px-4 text-center">
+                    {item.obrazekUrl ? (
+                      <div className="w-10 h-10 rounded-lg overflow-hidden border border-sky-200 shadow-sm mx-auto">
+                        <img src={item.obrazekUrl} alt={item.nazwa} className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="w-10 h-10 rounded-lg bg-sky-50 border border-sky-200 text-sky-800 flex items-center justify-center text-lg mx-auto">
+                        🎟️
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-4 px-4">
+                    <div className="font-bold text-slate-900 text-sm">{item.nazwa}</div>
+                    <div className="text-[10px] text-slate-400">Utworzony: {item.utworzony}</div>
+                  </td>
+                  <td className="py-4 px-4 font-bold text-slate-800">
+                    {Number(item.cena).toFixed(2)} PLN
+                    <div className="text-[10px] font-normal text-slate-500">VAT: {item.stawkaVat} (B)</div>
+                  </td>
+                  <td className="py-4 px-4 font-medium text-sky-900">
+                    {item.typKarnetu}
+                  </td>
+                  <td className="py-4 px-4 font-medium text-slate-700">
+                    {item.limitCzasowy}
+                  </td>
+                  <td className="py-4 px-4 text-slate-600 text-[11px]">
+                    <div>• Dostęp do zajęć: <strong className="text-slate-900">{item.dostepDo}</strong></div>
+                    {item.dostepDo === 'określonych zajęć' && item.zaznaczoneZajecia?.length > 0 && (
+                      <div className="text-[10px] text-sky-800 mt-0.5">({item.zaznaczoneZajecia.join(', ')})</div>
+                    )}
+                  </td>
+                  <td className="py-4 px-4 text-slate-600 text-[11px] space-y-0.5">
+                    <div>• Dzienny limit: {item.dziennyLimit === 'Niestandardowy' ? `${item.niestandardowyDziennyIlosc} dziennie` : item.dziennyLimit}</div>
+                    {item.blokujPortfel && (
+                      <div className="text-rose-700 font-bold">• Blokada portfela: &lt; {item.portfelPrógKwota} PLN</div>
+                    )}
+                  </td>
+                  <td className="py-4 px-4 text-[11px] space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500">• Rejestracja online:</span> 
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${item.dostepnyOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                        {item.dostepnyOnline ? 'Tak' : 'Nie'}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="py-4 px-4 text-center font-bold text-slate-900">{item.wUzyciu || 0}</td>
+                  <td className="py-4 px-4 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button 
+                        onClick={() => handleOpenEdit(item)}
+                        className="w-7 h-7 bg-amber-800 hover:bg-amber-900 text-white rounded-lg flex items-center justify-center transition-colors shadow-sm cursor-pointer" 
+                        title="Edytuj"
+                      >
+                        ✏️
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(item.id)}
+                        className="w-7 h-7 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center border border-rose-200 transition-colors cursor-pointer" 
+                        title="Usuń"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {karnety.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="py-16 text-center text-slate-400 font-medium">
+                    Brak zdefiniowanych karnetów. Kliknij „+ DODAJ NOWY KARNET”, aby dodać swój pierwszy karnet.
+                  </td>
+                </tr>
               )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-700 block">Karnet do zawieszenia</label>
-                <select 
-                  required
-                  value={passToSuspendId} 
-                  onChange={(e) => setPassToSuspendId(e.target.value)} 
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+      {/* MODAL DODAWANIA / EDYCJI KARNETU */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white border border-sky-200 rounded-3xl max-w-3xl w-full p-8 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto">
+            
+            <div className="flex items-center justify-between border-b border-sky-100 pb-4 sticky top-0 bg-white z-10">
+              <h3 className="font-black text-sm text-sky-950 uppercase">
+                {editingId !== null ? 'Edytuj karnet' : 'Dodaj nowy karnet'}
+              </h3>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={handleSave}
+                  className="bg-amber-800 hover:bg-amber-900 text-white font-black px-6 py-2 rounded-xl text-xs transition-colors shadow-sm cursor-pointer"
                 >
-                  {activePassesForSuspend.map((k: any) => (
-                    <option key={k.id} value={k.id.toString()}>{k.nazwa} (Ważny do {k.waznyDo})</option>
-                  ))}
-                </select>
+                  ZAPISZ
+                </button>
+                <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer text-base">✕</button>
               </div>
+            </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-700 block">Od dnia *</label>
+            <form onSubmit={handleSave} className="space-y-6 text-xs">
+              <div className="space-y-4">
+                <h4 className="font-extrabold text-sky-900 uppercase tracking-wider text-[11px] border-b border-sky-100 pb-1">
+                  Podstawowe informacje
+                </h4>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-800 block">Nazwa *</label>
                   <input 
-                    type="date" 
-                    required 
-                    min={dzisiajString} 
-                    value={suspendStartDate} 
-                    onChange={(e) => setSuspendStartDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                    type="text"
+                    required
+                    placeholder="np. OPEN, 10 wejść"
+                    value={nazwa}
+                    onChange={(e) => setNazwa(e.target.value)}
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-700 block">Do dnia (włącznie) *</label>
-                  <input 
-                    type="date" 
-                    required 
-                    min={suspendStartDate || dzisiajString}
-                    value={suspendEndDate} 
-                    onChange={(e) => setSuspendEndDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
 
-              <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
-                <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-                  Anuluj
-                </button>
-                <button type="submit" className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                  Zamroź karnet
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL PRZEDŁUŻENIA KARNETU Z POZIOMU KAFELKA */}
-      {isExtendModalOpen && passToExtend && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Przedłuż karnet</h3>
-              <button onClick={() => setIsExtendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
-            </div>
-            
-            <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
-              <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900 font-medium space-y-2">
-                <p>Przedłużasz karnet: <strong className="text-slate-900 text-sm block">{passToExtend.nazwa}</strong></p>
-                <p>Obecna ważność: <strong>{passToExtend.waznyDo}</strong></p>
-              </div>
-
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsExtendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-                  Anuluj
-                </button>
-                <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                  Przedłużam
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL ZAKUPU NOWEGO KARNETU */}
-      {isBuyPassModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup nowy karnet</h3>
-              <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
-            </div>
-            
-            <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-700 font-medium">
-                Wybierz karnet, aby przypisać go bezpośrednio do Twojego konta.
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Wybierz karnet *</label>
-                <select 
-                  required
-                  value={selectedBuyPass} 
-                  onChange={(e) => setSelectedBuyPass(e.target.value)} 
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
-                >
-                  <option value="" disabled>-- Wybierz karnet --</option>
-                  {dostepneKarnetyDoZakupu.map(k => (
-                    <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
-                  ))}
-                </select>
-              </div>
-
-              {hasActivePasses && maxDateStr && dostepneKarnetyDoZakupu.length > 0 && (
-                <div className="space-y-2 pt-2 border-t border-slate-100">
-                  <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
-                  <div className="space-y-2">
-                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-blue-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="font-bold text-slate-800 block">Cena brutto *</label>
+                    <div className="flex">
+                      <span className="bg-slate-100 border border-r-0 border-sky-200 rounded-l-xl px-3 py-2 text-slate-600 font-bold flex items-center">PLN</span>
                       <input 
-                        type="radio" 
-                        name="activationMode" 
-                        value="today" 
-                        checked={activationMode === 'today'} 
-                        onChange={() => setActivationMode('today')}
-                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                        type="number"
+                        step="0.01"
+                        required
+                        placeholder="0.00"
+                        value={cena}
+                        onChange={(e) => setCena(e.target.value)}
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-r-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500"
                       />
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-800">Od dzisiaj</span>
-                        <span className="text-[10px] text-slate-500">Zaktualizuje status natychmiast</span>
-                      </div>
-                    </label>
-                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-blue-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
-                      <input 
-                        type="radio" 
-                        name="activationMode" 
-                        value="after" 
-                        checked={activationMode === 'after'} 
-                        onChange={() => setActivationMode('after')}
-                        className="w-4 h-4 accent-blue-600 cursor-pointer"
-                      />
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-800">Przedłużenie (Oczekujący)</span>
-                        <span className="text-[10px] text-slate-500">Zacznie obowiązywać od: <strong className="text-blue-700">{maxDateStr}</strong></span>
-                      </div>
-                    </label>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-800 block">Stawka VAT</label>
+                    <input 
+                      type="text"
+                      placeholder="np. 8%, 23%, ZW"
+                      value={stawkaVat}
+                      onChange={(e) => setStawkaVat(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
+                    />
                   </div>
                 </div>
-              )}
 
-              <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
-                <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-800 block">Typ karnetu *</label>
+                  <select 
+                    value={typKarnetu}
+                    onChange={(e) => setTypKarnetu(e.target.value)}
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold cursor-pointer"
+                  >
+                    <option value="Na czas">Na czas</option>
+                    <option value="Na ilość treningów">Na ilość treningów</option>
+                  </select>
+                </div>
+
+                {typKarnetu === 'Na czas' ? (
+                  <div className="grid grid-cols-2 gap-3 bg-sky-50/60 p-4 rounded-2xl border border-sky-200">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-800 block">Ilość *</label>
+                      <input 
+                        type="number" 
+                        min="1"
+                        value={czasIlosc}
+                        onChange={(e) => setCzasIlosc(e.target.value)}
+                        className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-800 block">Okres *</label>
+                      <select 
+                        value={czasJednostka}
+                        onChange={(e) => setCzasJednostka(e.target.value)}
+                        className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold cursor-pointer"
+                      >
+                        <option value="Dzień">Dzień</option>
+                        <option value="Miesiąc">Miesiąc</option>
+                      </select>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-sky-50/60 p-4 rounded-2xl border border-sky-200 space-y-4">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-800 block">Ilość treningów *</label>
+                      <input 
+                        type="number" 
+                        min="1"
+                        placeholder="np. 10"
+                        value={iloscTreningow}
+                        onChange={(e) => setIloscTreningow(e.target.value)}
+                        className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 font-bold"
+                      />
+                    </div>
+
+                    <div className="space-y-3 pt-1">
+                      <label className="flex items-center gap-2.5 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={dodajLimitCzasowy}
+                          onChange={(e) => setDodajLimitCzasowy(e.target.checked)}
+                          className="w-4 h-4 accent-amber-700 rounded cursor-pointer"
+                        />
+                        <span className="font-bold text-slate-900">Dodaj limit czasowy</span>
+                      </label>
+
+                      {dodajLimitCzasowy && (
+                        <div className="grid grid-cols-2 gap-3 pl-6 pt-1">
+                          <div className="space-y-1">
+                            <label className="font-bold text-slate-700 block">Ilość *</label>
+                            <input 
+                              type="number" 
+                              min="1"
+                              value={limitIlosc}
+                              onChange={(e) => setLimitIlosc(e.target.value)}
+                              className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="font-bold text-slate-700 block">Okres *</label>
+                            <select 
+                              value={limitOkres}
+                              onChange={(e) => setLimitOkres(e.target.value)}
+                              className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold cursor-pointer"
+                            >
+                              <option value="Dzień">Dzień</option>
+                              <option value="Miesiąc">Miesiąc</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* OGRANICZENIA KARNETU */}
+              <div className="space-y-4 pt-2">
+                <h4 className="font-extrabold text-sky-900 uppercase tracking-wider text-[11px] border-b border-sky-100 pb-1">
+                  Ograniczenia karnetu
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1 relative">
+                    <label className="font-bold text-slate-800 block">Dostęp do:</label>
+                    <select 
+                      value={dostepDo}
+                      onChange={(e) => {
+                        setDostepDo(e.target.value);
+                      }}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold cursor-pointer"
+                    >
+                      <option value="wszystkich zajęć">wszystkich zajęć</option>
+                      <option value="określonych zajęć">określonych zajęć</option>
+                    </select>
+
+                    {dostepDo === 'określonych zajęć' && (
+                      <div className="mt-2 bg-white border border-sky-300 rounded-2xl p-3 shadow-lg space-y-2 max-h-52 overflow-y-auto">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pb-1 border-b border-sky-100">
+                          Zaznacz dostępne zajęcia:
+                        </div>
+                        {dostepneRodzajeZajec.map((zaj: any) => (
+                          <label key={zaj.id || zaj.nazwa} className="flex items-center gap-2.5 py-1.5 px-2 hover:bg-sky-50 rounded-xl cursor-pointer transition-colors">
+                            <input 
+                              type="checkbox"
+                              checked={zaznaczoneZajecia.includes(zaj.nazwa)}
+                              onChange={() => handleToggleZajecie(zaj.nazwa)}
+                              className="w-4 h-4 accent-amber-700 rounded cursor-pointer"
+                            />
+                            <span className="font-semibold text-slate-800 text-xs">{zaj.nazwa}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-800 block">Limit czasowy zapisów:</label>
+                    <select 
+                      value={limitCzasowyZapisow}
+                      onChange={(e) => setLimitCzasowyZapisow(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold cursor-pointer"
+                    >
+                      <option value="Domyślny (14 dni)">Domyślny (14 dni)</option>
+                      <option value="Niestandardowy">Niestandardowy</option>
+                    </select>
+
+                    {limitCzasowyZapisow === 'Niestandardowy' && (
+                      <div className="mt-3 bg-sky-50/60 p-3.5 rounded-2xl border border-sky-200 space-y-2">
+                        <div className="text-[11px] text-slate-600 font-medium">
+                          Ile dni przed rozpoczęciem zajęć, klubowicz może się na nie zapisać
+                        </div>
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-700 block text-[10px] uppercase">Liczba dni *</label>
+                          <input 
+                            type="number"
+                            min="0"
+                            value={niestandardowyDni}
+                            onChange={(e) => setNiestandardowyDni(e.target.value)}
+                            className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Przyciski dolne */}
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-sky-100">
+                <button 
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
+                >
                   Anuluj
                 </button>
                 <button 
-                  type="submit" 
-                  disabled={dostepneKarnetyDoZakupu.length === 0}
-                  className={`font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer ${
-                    dostepneKarnetyDoZakupu.length === 0 
-                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed' 
-                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  }`}
+                  type="submit"
+                  className="bg-amber-800 hover:bg-amber-900 text-white font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer"
                 >
-                  Kupuję
+                  {editingId !== null ? 'ZAKTUALIZUJ' : 'ZAPISZ'}
                 </button>
               </div>
+
             </form>
+
           </div>
         </div>
       )}
