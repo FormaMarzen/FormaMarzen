@@ -358,7 +358,7 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
+  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin) z pełną obsługą błędów RLS / schematu
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nazwa.trim() || !cena.trim()) return;
@@ -418,9 +418,7 @@ export default function KarnetyPage() {
         const { error } = await supabase.from('karnety').update(supabasePayload).eq('id', editingId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from('karnety').insert([{ 
-          ...supabasePayload
-        }]);
+        const { error } = await supabase.from('karnety').insert([supabasePayload]);
         if (error) throw error;
       }
 
@@ -429,7 +427,7 @@ export default function KarnetyPage() {
       
     } catch (error: any) {
       console.error("Szczegóły błędu bazy danych:", error);
-      alert(`Wystąpił błąd podczas zapisu: ${error.message || JSON.stringify(error)}`);
+      alert(`Błąd zapisu: ${error.message || ''} | Code: ${error.code || ''} | Details: ${error.details || ''} | Hint: ${error.hint || ''}`);
     }
   };
 
@@ -1147,7 +1145,8 @@ export default function KarnetyPage() {
                 </div>
               </div>
 
-              {/* Przyciski dolne */}
+/*************  ✨ Windsurf Code Generation Summary: *************/
+             {/* Przyciski dolne */}
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-sky-100">
                 <button 
                   type="button"
