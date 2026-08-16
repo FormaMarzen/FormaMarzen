@@ -20,9 +20,9 @@ export default function KarnetPage() {
   // STANY DLA ZAWIESZEŃ KARNETU
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [isSuspendInfoModalOpen, setIsSuspendInfoModalOpen] = useState(false);
-  const [isUnsuspendModalOpen, setIsUnsuspendModalOpen] = useState(false); // NOWY STAN DLA ODWIESZENIA
+  const [isUnsuspendModalOpen, setIsUnsuspendModalOpen] = useState(false);
   const [passToSuspendId, setPassToSuspendId] = useState<string>('');
-  const [passToUnsuspendId, setPassToUnsuspendId] = useState<string>(''); // ID karnetu do odwieszenia
+  const [passToUnsuspendId, setPassToUnsuspendId] = useState<string>('');
   const [suspendStartDate, setSuspendStartDate] = useState('');
   const [suspendEndDate, setSuspendEndDate] = useState('');
   const [suspendError, setSuspendError] = useState('');
@@ -382,7 +382,73 @@ export default function KarnetPage() {
 
   const dzisiajString = new Date().toISOString().split('T')[0];
 
-  // ❄️ 1. LOGIKA ZAWIESZANIA (ZAPIS PLANU, BEZ WYDŁUŻANIA WAŻNOŚCI)
+  // AUTOMATYCZNE WYPISYWANIE Z ZAJĘĆ PODCZAS ZAWIESZENIA
+  const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let cancelledCount = 0;
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', klientId);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
+          const classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
+          
+          const isAfterStart = classDateStr >= zawieszonyOd;
+          const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
+
+          if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', klientId);
+            cancelledCount++;
+          }
+        }
+      }
+    }
+
+    if (cancelledCount > 0) {
+      const { data: klientData } = await supabase.from('klienci').select('karnetyKlubowicza').eq('id', klientId).single();
+      if (klientData) {
+        let updatedKarnety = klientData.karnetyKlubowicza;
+        if (typeof updatedKarnety === 'string') {
+          try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
+        }
+        if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
+
+        const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+          const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
+        }
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: klientId,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
+      }]);
+    }
+  };
+
+  // ❄️ 1. LOGIKA ZAWIESZANIA (ZAPIS PLANU) - DOSTOSOWANA DLA KAŻDEGO KARNETU
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -491,7 +557,6 @@ export default function KarnetPage() {
       ...targetKarnet,
       zawieszonyOd: suspendStartDate,
       zawieszonyDo: suspendEndDate,
-      // NIE PRZEDŁUŻAMY WAZNY DO OD RAZU!
       statusTekst: `Zawieszony (od ${suspendStartDate} do ${suspendEndDate})`,
       historiaZawieszen: [
         ...suspensionHistory,
@@ -518,14 +583,17 @@ export default function KarnetPage() {
       return;
     }
 
-    alert(`Pomyślnie zapisano zawieszenie. Czas ważności karnetu zostanie przeliczony i wydłużony w momencie powrotu (odwieszenia).`);
+    // Automatyczne wypisanie z zajęć w okresie zawieszenia
+    await handleAutoWypiszPoZawieszeniu(currentUser.id, suspendStartDate, suspendEndDate, targetKarnet.nazwa);
+
+    alert(`Pomyślnie zapisano zawieszenie. System automatycznie wypisał Cię z zajęć w wybranym okresie.`);
     setIsSuspendModalOpen(false);
     setSuspendStartDate('');
     setSuspendEndDate('');
     window.location.reload();
   };
 
-  // 🔓 2. LOGIKA ODWIESZANIA (OBLICZENIE ZUŻYTYCH DNI I WYDŁUŻENIE)
+  // 🔓 2. LOGIKA ODWIESZANIA
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -544,9 +612,9 @@ export default function KarnetPage() {
 
     let actualEnd = today;
     if (today < start) {
-      actualEnd = start; // Anulowane przed startem
+      actualEnd = start; 
     } else if (today > plannedEnd) {
-      actualEnd = plannedEnd; // Systemowo po czasie, max to co zaplanowano
+      actualEnd = plannedEnd; 
     }
 
     let actualDays = 0;
@@ -609,11 +677,10 @@ export default function KarnetPage() {
     window.location.reload();
   };
 
-  const activeTimePasses = karnetyList.filter((k: any) => {
-    const limitWejscBaza = k.pozostaloWejsc;
-    const isTimeBased = limitWejscBaza === null || limitWejscBaza === undefined;
-    const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd;
-    return isTimeBased && isActive;
+  // Zmieniono warunek tak, aby każdy karnet posiadający datę ważności (niezależnie od typu) kwalifikował się do zawieszenia
+  const activePassesForSuspend = karnetyList.filter((k: any) => {
+    const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd && k.waznyDo;
+    return isActive;
   });
 
   const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd);
@@ -739,7 +806,7 @@ export default function KarnetPage() {
         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
             <div className="flex-1 text-center sm:text-left">
-              <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet czasowy?</h3>
+              <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
               <p className="text-xs text-slate-500 mt-1">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
             </div>
             {suspendedPasses.length > 0 ? (
@@ -755,11 +822,11 @@ export default function KarnetPage() {
             ) : (
               <button 
                 onClick={() => {
-                  if (activeTimePasses.length === 0) {
-                    alert('Nie posiadasz aktualnie aktywnego karnetu czasowego, który można by zawiesić.');
+                  if (activePassesForSuspend.length === 0) {
+                    alert('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić.');
                     return;
                   }
-                  setPassToSuspendId(activeTimePasses[0].id.toString());
+                  setPassToSuspendId(activePassesForSuspend[0].id.toString());
                   setIsSuspendModalOpen(true);
                 }}
                 className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
@@ -890,7 +957,7 @@ export default function KarnetPage() {
             
             <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
               <div className="bg-sky-50 p-4 rounded-xl border border-sky-100 text-sky-900 font-medium">
-                Masz wyjazd służbowy, chorobę lub planujesz urlop? Nasz system pozwala na samodzielne zamrożenie karnetu czasowego, abyś nie tracił opłaconych dni!
+                Masz wyjazd służbowy, chorobę lub planujesz urlop? Nasz system pozwala na zamrożenie karnetu, abyś nie tracił opłaconych dni!
               </div>
               
               <div className="space-y-2">
@@ -979,7 +1046,7 @@ export default function KarnetPage() {
                   onChange={(e) => setPassToSuspendId(e.target.value)} 
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
                 >
-                  {activeTimePasses.map((k: any) => (
+                  {activePassesForSuspend.map((k: any) => (
                     <option key={k.id} value={k.id.toString()}>{k.nazwa} (Ważny do {k.waznyDo})</option>
                   ))}
                 </select>
@@ -1036,10 +1103,6 @@ export default function KarnetPage() {
               <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900 font-medium space-y-2">
                 <p>Przedłużasz karnet: <strong className="text-slate-900 text-sm block">{passToExtend.nazwa}</strong></p>
                 <p>Obecna ważność: <strong>{passToExtend.waznyDo}</strong></p>
-                {passToExtend.pozostaloWejsc === null || passToExtend.pozostaloWejsc === undefined 
-                  ? <p className="text-emerald-700 font-bold mt-2">To karnet czasowy. Data jego wygaśnięcia zostanie bezpośrednio zaktualizowana bez tworzenia nowego kafelka.</p>
-                  : <p className="text-blue-700 font-bold mt-2">To karnet na ilość wejść. Do Twojego konta zostanie wygenerowany nowy kafelek ze świeżą pulą wejść.</p>
-                }
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
@@ -1066,7 +1129,7 @@ export default function KarnetPage() {
             
             <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-700 font-medium">
-                Wybierz karnet, aby przypisać go bezpośrednio do Twojego konta. Posiadane już karnety czasowe zostały ukryte.
+                Wybierz karnet, aby przypisać go bezpośrednio do Twojego konta.
               </div>
 
               <div className="space-y-1">
@@ -1082,9 +1145,6 @@ export default function KarnetPage() {
                     <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
                   ))}
                 </select>
-                {dostepneKarnetyDoZakupu.length === 0 && (
-                  <p className="text-rose-500 font-bold text-[10px] mt-1">Masz już wszystkie dostępne karnety czasowe.</p>
-                )}
               </div>
 
               {hasActivePasses && maxDateStr && dostepneKarnetyDoZakupu.length > 0 && (
