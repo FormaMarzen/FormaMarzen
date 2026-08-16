@@ -28,7 +28,7 @@ export default function ClientsReportPage() {
   const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'przeszle' | 'wypisy' | 'automatyczne'>('nadchodzace');
+  const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'historia'>('nadchodzace');
 
   const [isWalletHistoryOpen, setIsWalletHistoryOpen] = useState(false);
   const [isTopUpWalletOpen, setIsTopUpWalletOpen] = useState(false);
@@ -82,11 +82,21 @@ export default function ClientsReportPage() {
 
   const calculateStandardSystemDiscount = (client: any) => {
     if (!client) return 0;
+    
+    const utraty = (client.transakcje || []).filter((t: any) => t.typ_operacji === 'utrata_ciaglosci');
+    let lastResetDate = '1970-01-01T00:00:00.000Z';
+    if (utraty.length > 0) {
+      utraty.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      lastResetDate = utraty[0].created_at;
+    }
+
     const transakcjeKarnetow = (client.transakcje || []).filter(
       (t: any) => 
+        new Date(t.created_at) > new Date(lastResetDate) &&
         (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) &&
         (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))
     );
+    
     const count = transakcjeKarnetow.length;
     if (count <= 0) return 0;
     if (count === 1) return 2;
@@ -96,6 +106,8 @@ export default function ClientsReportPage() {
 
   const calculateSystemDiscount = (client: any) => {
     if (!client) return 0;
+    if (client.hasLostContinuity) return 0;
+    
     const std = calculateStandardSystemDiscount(client);
     const offset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
     return Math.max(0, Math.min(25, std + offset));
@@ -108,7 +120,6 @@ export default function ClientsReportPage() {
     return calculateSystemDiscount(client);
   };
 
-  // FUNKCJA WYPISUJĄCA Z ZAJĘĆ (Naprawia błąd ts(2304) w wierszu 1575)
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
 
@@ -151,7 +162,7 @@ export default function ClientsReportPage() {
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
-      const enriched = klienciData.map((c: any) => {
+      const enrichedPromises = klienciData.map(async (c: any) => {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => t.klient_id === c.id) : [];
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
         
@@ -164,28 +175,65 @@ export default function ClientsReportPage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
-        // LAZY EVALUATION RABATU
-        let currentRabat = c.rabat || 0;
-        if (currentRabat > 0) {
-          let hasValidPass = false;
-          let latestWaznyDo = '';
-          for (const k of parsedKarnety) {
-            if (!latestWaznyDo || (k.waznyDo && k.waznyDo > latestWaznyDo)) {
-              latestWaznyDo = k.waznyDo;
-            }
-            if (k.waznyDo && k.waznyDo >= yesterdayStr) {
-              hasValidPass = true;
-            }
-          }
-          if (parsedKarnety.length === 0 || (!hasValidPass && latestWaznyDo && latestWaznyDo < yesterdayStr)) {
-            currentRabat = 0;
-            supabase.from('klienci').update({ rabat: 0 }).eq('id', c.id).then();
+        // --- ZAUTOMATYZOWANA LOGIKA KARENCJI I UTRATY CIĄGŁOŚCI ---
+        let hasChanges = false;
+        let utrataCiaglosci = false;
+        let finalKarnety = [];
+
+        for (const k of parsedKarnety) {
+          if (k.waznyDo && k.waznyDo < yesterdayStr) {
+            hasChanges = true; 
+          } else {
+            finalKarnety.push(k);
           }
         }
 
+        if (parsedKarnety.length > 0 && finalKarnety.length === 0) {
+          utrataCiaglosci = true;
+          hasChanges = true;
+        }
+
+        let currentDiscount = c.discount;
+        let currentOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
+        let hasLostContinuity = c.hasLostContinuity || false;
+
+        if (utrataCiaglosci || finalKarnety.length === 0) {
+           if (currentDiscount > 0 || !hasLostContinuity) {
+               currentDiscount = '';
+               hasLostContinuity = true;
+               
+               const staryStd = calculateStandardSystemDiscount({ transakcje: clientTransakcje });
+               currentOffset = -staryStd; 
+               
+               hasChanges = true;
+
+               supabase.from('transakcje').insert([{
+                 klient_id: c.id,
+                 typ_operacji: 'utrata_ciaglosci',
+                 kwota: null,
+                 opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
+               }]).then();
+               
+               clientTransakcje.push({
+                 typ_operacji: 'utrata_ciaglosci',
+                 created_at: new Date().toISOString(),
+                 opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
+               });
+           }
+        }
+
+        if (hasChanges) {
+           await supabase.from('klienci').update({ 
+               karnetyKlubowicza: finalKarnety,
+               discount: currentDiscount,
+               system_discount_offset: currentOffset,
+               hasLostContinuity: hasLostContinuity
+           }).eq('id', c.id);
+        }
+
         let cenaAktywnegoKarnetu = '0.00 PLN';
-        if (parsedKarnety.length > 0) {
-          const najblizszyKarnet = parsedKarnety.reduce((prev: any, curr: any) => {
+        if (finalKarnety.length > 0) {
+          const najblizszyKarnet = finalKarnety.reduce((prev: any, curr: any) => {
             return (!prev || (curr.waznyDo && curr.waznyDo > prev.waznyDo)) ? curr : prev;
           }, null);
           if (najblizszyKarnet && najblizszyKarnet.cena) {
@@ -196,15 +244,16 @@ export default function ClientsReportPage() {
         return {
           ...c,
           id: c.id,
-          rabat: currentRabat,
-          systemDiscountOffset: c.systemDiscountOffset || c.system_discount_offset || 0,
+          rabat: 0, 
+          systemDiscountOffset: currentOffset,
+          hasLostContinuity: hasLostContinuity,
           firstName: c.Imię || '',
           lastName: c.Nazwisko || '',
           registered: c.Zarejestrowany || c.registered || '2026-06-01',
           activated: c.activated || '2026-06-01',
           expiresDate: c.expiresDate || '',
           price: cenaAktywnegoKarnetu,
-          discount: c.discount || '',
+          discount: currentDiscount || '',
           wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
           avatarUrl: c.avatarUrl || null,
           gender: c.płeć || c.gender || '',
@@ -213,13 +262,15 @@ export default function ClientsReportPage() {
           birthDate: c.birthDate || '',
           isTrainer: !!powiazanyTrener,
           trenerInfo: powiazanyTrener || null,
-          karnetyKlubowicza: parsedKarnety,
+          karnetyKlubowicza: finalKarnety, 
           transakcje: clientTransakcje,
           zapisyNadchodzace: c.zapisyNadchodzace || [],
           zapisyPrzeszle: c.zapisyPrzeszle || [],
           zapisyWypisy: c.zapisyWypisy || []
         };
       });
+      
+      const enriched = await Promise.all(enrichedPromises);
       setClients(enriched);
 
       if (profileClient) {
@@ -243,35 +294,7 @@ export default function ClientsReportPage() {
   }, []);
 
   const openProfile = async (clientToOpen: any) => {
-    let maxWaznyDo = '';
-    
-    if (clientToOpen.karnetyKlubowicza && clientToOpen.karnetyKlubowicza.length > 0) {
-      for (const k of clientToOpen.karnetyKlubowicza) {
-        if (!maxWaznyDo || k.waznyDo > maxWaznyDo) {
-          maxWaznyDo = k.waznyDo;
-        }
-      }
-    }
-
-    const wczoraj = new Date(todayStr);
-    wczoraj.setDate(wczoraj.getDate() - 1);
-    const wczorajStr = wczoraj.toISOString().split('T')[0];
-
-    let finalClient = { ...clientToOpen };
-
-    if (maxWaznyDo && maxWaznyDo < wczorajStr && clientToOpen.discount && clientToOpen.discount !== '0' && clientToOpen.discount !== '') {
-      finalClient.discount = '';
-      const { error } = await supabase.from('klienci').update({ discount: '' }).eq('id', clientToOpen.id);
-      
-      if (error) {
-        console.error("Błąd podczas zerowania rabatu:", error.message);
-      } else {
-        setClients(prev => prev.map(c => c.id === clientToOpen.id ? finalClient : c));
-        alert(`Klubowicz ${clientToOpen.firstName} ${clientToOpen.lastName} stracił ciągłość karnetu (ostatni karnet wygasł ${maxWaznyDo}). Rabat został automatycznie wyzerowany.`);
-      }
-    }
-
-    setProfileClient(finalClient);
+    setProfileClient(clientToOpen);
   };
 
   const handleToggleClientTrainer = async (client: any) => {
@@ -313,11 +336,15 @@ export default function ClientsReportPage() {
   const handleSaveSystemDiscount = async () => {
     if (!profileClient) return;
     const targetVal = parseFloat(systemDiscountInput) || 0;
-    const std = calculateStandardSystemDiscount(profileClient);
+    
+    const fakeClient = {...profileClient};
+    fakeClient.hasLostContinuity = false;
+    const std = calculateStandardSystemDiscount(fakeClient);
+    
     const newOffset = targetVal - std;
 
-    const updatedClient = { ...profileClient, systemDiscountOffset: newOffset };
-    const { error } = await supabase.from('klienci').update({ systemDiscountOffset: newOffset }).eq('id', profileClient.id);
+    const updatedClient = { ...profileClient, systemDiscountOffset: newOffset, hasLostContinuity: false };
+    const { error } = await supabase.from('klienci').update({ system_discount_offset: newOffset, hasLostContinuity: false }).eq('id', profileClient.id);
     
     if (error) {
       alert(`Błąd zapisu rabatu za ciągłość: ${error.message}`);
@@ -1444,7 +1471,6 @@ export default function ClientsReportPage() {
                                 </span>
                               </div>
                             </div>
-
                             <div className="flex items-center gap-2">
                               {czyZawieszony ? (
                                 <button 
@@ -1561,14 +1587,12 @@ export default function ClientsReportPage() {
 
               {/* Sekcja Zapisy na zajęcia */}
               <div className="space-y-4">
-                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Zapisy na zajęcia</h3>
+                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Aktywność na zajęciach</h3>
                 
                 <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                   <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold text-slate-600">
-                    <button onClick={() => setActiveZapisyTab('nadchodzace')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'nadchodzace' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>NADCHODZĄCE</button>
-                    <button onClick={() => setActiveZapisyTab('przeszle')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'przeszle' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>PRZESZŁE</button>
-                    <button onClick={() => setActiveZapisyTab('wypisy')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'wypisy' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>WYPISY</button>
-                    <button onClick={() => setActiveZapisyTab('automatyczne')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'automatyczne' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>AUTOMATYCZNE ZAPISY</button>
+                    <button onClick={() => setActiveZapisyTab('nadchodzace')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'nadchodzace' ? 'border-sky-600 text-sky-800 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>NADCHODZĄCE ZAJĘCIA</button>
+                    <button onClick={() => setActiveZapisyTab('historia')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'historia' ? 'border-sky-600 text-sky-800 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>PEŁNA HISTORIA I OBECNOŚCI</button>
                   </div>
 
                   <div className="overflow-x-auto">
@@ -1579,74 +1603,108 @@ export default function ClientsReportPage() {
                             <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
                             <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
                             <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
+                            <th className="py-2.5 px-4 whitespace-nowrap">Status</th>
                             <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał</th>
                             <th className="py-2.5 px-4 text-right whitespace-nowrap">Wypisz</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyNadchodzace && profileClient.zapisyNadchodzace.map((item: any, idx: number) => (
+                          {profileClient.zapisyNadchodzace && profileClient.zapisyNadchodzace.length > 0 ? profileClient.zapisyNadchodzace.map((item: any, idx: number) => (
                             <tr key={item.id}>
                               <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
                               <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
                               <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded text-[10px] font-bold border border-sky-200">{item.zapisujacy}</span></td>
-                              <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️</button></td>
+                              <td className="py-3 px-4 font-semibold whitespace-nowrap">
+                                <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-black border border-emerald-200">ZAPISANY</span>
+                              </td>
+                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">{item.zapisujacy || 'Klubowicz'}</span></td>
+                              <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️ Wypisz</button></td>
                             </tr>
-                          ))}
+                          )) : (
+                            <tr>
+                              <td colSpan={6} className="p-8 text-center text-slate-400 text-xs">Brak nadchodzących zajęć dla tego klubowicza.</td>
+                            </tr>
+                          )}
                         </tbody>
                       </table>
                     )}
-                    {activeZapisyTab === 'przeszle' && (
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Obecność</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyPrzeszle && profileClient.zapisyPrzeszle.map((item: any, idx: number) => (
-                            <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
-                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200">{item.obecnosc}</span></td>
+                    
+                    {activeZapisyTab === 'historia' && (() => {
+                      const classLogs = (profileClient.transakcje || []).filter((t: any) => 
+                        t.typ_operacji === 'zajecia_zapis' || t.typ_operacji === 'zajecia_wypis' || (t.opis && t.opis.toLowerCase().includes('zajęci'))
+                      ).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+                      if (classLogs.length === 0) {
+                        return <div className="p-8 text-center text-slate-400 text-xs">Brak historii aktywności na zajęciach. Zapisy i wypisy pojawią się tutaj.</div>;
+                      }
+
+                      return (
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                              <th className="py-2.5 px-4 whitespace-nowrap">Data operacji</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Akcja</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Źródło operacji</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Szczegóły logu</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    {activeZapisyTab === 'wypisy' && (
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Informacja</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyWypisy && profileClient.zapisyWypisy.map((item: any, idx: number) => (
-                            <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
-                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-200">{item.wypisujacy}</span></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    {activeZapisyTab === 'automatyczne' && (
-                      <div className="p-8 text-center text-slate-400 text-xs">Brak automatycznych zapisów.</div>
-                    )}
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {classLogs.map((log: any) => {
+                              const dt = new Date(log.created_at);
+                              const dataFormat = `${dt.toLocaleDateString('pl-PL')} ${dt.toLocaleTimeString('pl-PL', {hour: '2-digit', minute:'2-digit'})}`;
+                              
+                              let typ = 'ZAPIS';
+                              let kolor = 'text-emerald-800 bg-emerald-100 border-emerald-200';
+                              let zrodlo = '📱 Klubowicz (Aplikacja)';
+                              let zajecia = 'Zajęcia';
+
+                              const opis = log.opis || '';
+                              
+                              if (opis.includes('NIEOBECNY') || opis.includes('nieobecny')) {
+                                typ = 'NIEOBECNOŚĆ'; 
+                                kolor = 'text-amber-800 bg-amber-100 border-amber-300'; 
+                                zrodlo = '🛡️ Trener (Obecność)';
+                              } else if (opis.includes('wypisano') || opis.includes('Wypisano') || log.typ_operacji === 'zajecia_wypis' || opis.includes('Wypisanie')) {
+                                typ = 'WYPIS'; 
+                                kolor = 'text-rose-800 bg-rose-100 border-rose-200';
+                              } else {
+                                typ = 'ZAPIS'; 
+                                kolor = 'text-emerald-800 bg-emerald-100 border-emerald-200';
+                              }
+
+                              if (opis.includes('Zarządcę') || opis.includes('Trener') || opis.includes('przez klub') || opis.includes('NIEOBECNY')) {
+                                zrodlo = '🛡️ Obsługa Klubu';
+                              } else if (opis.includes('Samodzielne') || opis.includes('Aplikacja')) {
+                                zrodlo = '📱 Klubowicz';
+                              }
+
+                              const regexZajecia = /(?:zajęciach|zajęć|zajęcia)[:\s]+([^.]+)/i;
+                              const match = opis.match(regexZajecia);
+                              if (match && match[1]) {
+                                zajecia = match[1].replace(/\(.*\)/g, '').trim();
+                              } else {
+                                zajecia = opis.split('-')[1]?.trim() || opis;
+                              }
+
+                              return (
+                                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                                  <td className="py-3 px-4 font-mono text-slate-500 whitespace-nowrap">{dataFormat}</td>
+                                  <td className="py-3 px-4 whitespace-nowrap">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black border uppercase tracking-wider ${kolor}`}>
+                                      {typ}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 font-bold text-slate-900">{zajecia}</td>
+                                  <td className="py-3 px-4 font-semibold text-slate-600 whitespace-nowrap">{zrodlo}</td>
+                                  <td className="py-3 px-4 text-[10px] text-slate-500 max-w-[200px] truncate" title={opis}>{opis}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
