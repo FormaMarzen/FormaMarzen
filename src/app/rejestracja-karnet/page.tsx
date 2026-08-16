@@ -188,9 +188,11 @@ export default function RegistrationPassPage() {
       };
 
       const ujemnyPortfelStr = `-${cenaWartosc.toFixed(2)} PLN`;
+      const newClientId = Date.now();
 
-      // 4. Zapis do bazy danych 'klienci'
+      // 4. Zapis do bazy danych 'klienci' z unikalnym ID numerycznym
       const payload: any = {
+        id: newClientId,
         'Imię': firstName,
         'Nazwisko': lastName,
         'E-mail': email,
@@ -208,15 +210,20 @@ export default function RegistrationPassPage() {
         throw new Error(`Błąd zapisu do bazy klientów: ${dbError.message}`);
       }
 
-      // 5. Pobranie ID nowo utworzonego klienta w celu dodania rekordu do transakcji
-      const { data: newClient } = await supabase.from('klienci').select('id').eq('E-mail', email).single();
-      
-      if (newClient && cenaWartosc > 0) {
+      // 5. Dodanie wpisu do tabeli 'transakcje', aby portfel poprawnie zsumował ujemną kwotę zakupu karnetu
+      if (cenaWartosc > 0) {
         await supabase.from('transakcje').insert([{
-          klient_id: newClient.id,
+          klient_id: newClientId,
           typ_operacji: 'zakup_karnetu',
           kwota: -cenaWartosc,
-          opis: `Rejestracja z zakupem: ${selectedPass.nazwa}`
+          opis: `Rejestracja z zakupem karnetu: ${selectedPass.nazwa}`
+        }]);
+      } else {
+        await supabase.from('transakcje').insert([{
+          klient_id: newClientId,
+          typ_operacji: 'utworzenie_konta',
+          kwota: 0.00,
+          opis: `Rejestracja z darmowym karnetem: ${selectedPass.nazwa}`
         }]);
       }
 

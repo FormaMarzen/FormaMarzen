@@ -176,7 +176,7 @@ export default function FreeRegistrationPage() {
       await supabase.from('regulation_acceptances').insert(acceptanceInserts);
     }
 
-    // 3. Dodanie klienta do tabeli "klienci"
+    // 3. Dodanie klienta do tabeli "klienci" wraz z inicjalizacją portfela
     const { error: klientError } = await supabase.from('klienci').insert([
       {
         id: newClientId,
@@ -203,7 +203,18 @@ export default function FreeRegistrationPage() {
       console.error("Błąd zapisu klienta do bazy:", klientError);
     }
 
-    // 4. Dodanie wpisu do tabeli zapisów na zajęcia
+    // 4. Dodanie początkowej transakcji zerowej lub startowej w tabeli transakcje, 
+    // aby dynamiczny system salda portfela poprawnie odczytywał konto nowo zarejestrowanego użytkownika.
+    await supabase.from('transakcje').insert([
+      {
+        klient_id: newClientId,
+        typ_operacji: 'utworzenie_konta',
+        kwota: 0.00,
+        opis: 'Utworzenie nowego konta klubowicza (saldo startowe)'
+      }
+    ]);
+
+    // 5. Dodanie wpisu do tabeli zapisów na zajęcia
     if (selectedClass?.id) {
       const classKey = `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`;
       await supabase.from('zapisy_zajec').insert([
@@ -216,7 +227,7 @@ export default function FreeRegistrationPage() {
       ]);
     }
 
-    // 5. Automatyczne logowanie po rejestracji
+    // 6. Automatyczne logowanie po rejestracji
     const { error: loginError } = await supabase.auth.signInWithPassword({
       email: email,
       password: password,
