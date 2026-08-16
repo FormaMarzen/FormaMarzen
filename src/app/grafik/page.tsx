@@ -59,22 +59,60 @@ export default function SchedulePage() {
 
   // GŁÓWNA FUNKCJA POBIERANIA DANYCH Z SUPABASE
   const loadDataFromSupabase = async () => {
+    // 0. Pobierz definicje karnetów dla auto-naprawy wejść
+    const { data: karnetyDefData } = await supabase.from('karnety').select('*');
+    let ustrukturyzowaneKarnetyDef: any[] = [];
+    if (karnetyDefData) {
+      ustrukturyzowaneKarnetyDef = karnetyDefData.map((k: any) => {
+        let meta: Record<string, any> = {};
+        try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
+        return {
+          ...k,
+          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
+        };
+      });
+    }
+
     // 1. Klienci
     const { data: klienciData } = await supabase.from('klienci').select('*');
     if (klienciData) {
-      const parsedKlienci = klienciData.map((c: any) => ({
-        ...c,
-        id: c.id,
-        firstName: c.Imię || c.firstName || '',
-        lastName: c.Nazwisko || c.lastName || '',
-        phone: c['Numer tel.'] || c.telefon || c.phone || '',
-        email: c['E-mail'] || c.email || '',
-        wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
-        pass: c.pass || (c.karnetyKlubowicza && c.karnetyKlubowicza.length > 0 ? c.karnetyKlubowicza[0].nazwa : 'OPEN'),
-        expiresDate: c.expiresDate || (c.karnetyKlubowicza && c.karnetyKlubowicza.length > 0 ? c.karnetyKlubowicza[0].waznyDo : ''),
-        avatar: c.avatarUrl || c.avatar || null,
-        karnetyKlubowicza: c.karnetyKlubowicza || []
-      }));
+      const parsedKlienci = klienciData.map((c: any) => {
+        let parsedKarnety = [];
+        if (Array.isArray(c.karnetyKlubowicza)) {
+          parsedKarnety = c.karnetyKlubowicza;
+        } else if (typeof c.karnetyKlubowicza === 'string') {
+          try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+        } else if (c.karnetyklubowicza) {
+          parsedKarnety = c.karnetyklubowicza;
+        }
+
+        // Auto-heal brakujących wejść w historycznych karnetach
+        parsedKarnety = parsedKarnety.map((k: any) => {
+          if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa === k.nazwa);
+            if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
+              const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
+              k.pozostaloWejsc = valWejsc;
+              k.poczatkoweWejsc = valWejsc;
+            }
+          }
+          return k;
+        });
+
+        return {
+          ...c,
+          id: c.id,
+          firstName: c.Imię || c.firstName || '',
+          lastName: c.Nazwisko || c.lastName || '',
+          phone: c['Numer tel.'] || c.telefon || c.phone || '',
+          email: c['E-mail'] || c.email || '',
+          wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+          pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'OPEN'),
+          expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
+          avatar: c.avatarUrl || c.avatar || null,
+          karnetyKlubowicza: parsedKarnety
+        };
+      });
       setDostepniKlienci(parsedKlienci);
     }
 
@@ -420,7 +458,6 @@ export default function SchedulePage() {
       }
     }
 
-    // Zliczanie zapisów klienta w danym dniu
     let userSignupsOnThisDate = 0;
     Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
       if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
@@ -434,7 +471,6 @@ export default function SchedulePage() {
       alert(`Nie można zapisać! Klubowicz wykorzystał już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`);
       return;
     }
-    // --- KONIEC WERYFIKACJI LIMITU DZIENNEGO ---
 
     const limitZajec = selectedClass.limit || 12;
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
@@ -454,7 +490,20 @@ export default function SchedulePage() {
       return;
     }
 
-    // LOGOWANIE DO TABELI TRANSAKCJI
+    // --- AUTOMATYCZNE ODEJMOWANIE WEJŚCIA DLA KARNETU ILOŚCIOWEGO ---
+    let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
+    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    if (passIndex !== -1) {
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+      if (!isNaN(currentRemaining) && currentRemaining > 0) {
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: currentRemaining - 1
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klient.id);
+      }
+    }
+
     const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
     const typWydarzenia = statusZpisu === 'krzesełko' 
       ? `Zapisano na listę rezerwową (krzesełko)` 
@@ -490,12 +539,29 @@ export default function SchedulePage() {
       return;
     }
 
-    // LOGOWANIE DO TABELI TRANSAKCJI
+    // --- ZAPYTANIE O ZWROT WEJŚCIA NA KARNET ILOŚCIOWY ---
+    const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
+    let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
+    if (zwrocicWejscie) {
+      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+        if (!isNaN(currentRemaining)) {
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', clientToUnregister.id);
+        }
+      }
+    }
+
     await supabase.from('transakcje').insert([{
       klient_id: clientToUnregister.id,
       typ_operacji: 'zajecia_wypis',
       class_key: classKey,
-      opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub. Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}`
+      opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''} Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}`
     }]);
 
     if (blokadaZapisow) {
@@ -564,7 +630,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // LOGOWANIE EDYCJI ZAJĘĆ
     await supabase.from('transakcje').insert([{
       typ_operacji: 'edycja_zajec',
       class_key: classKey,
@@ -633,7 +698,6 @@ export default function SchedulePage() {
       }
     ], { onConflict: 'class_key' });
 
-    // LOGOWANIE ODWOŁANIA ZAJĘĆ
     await supabase.from('transakcje').insert([{
       typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
       class_key: classKey,
@@ -664,7 +728,6 @@ export default function SchedulePage() {
       }
     ], { onConflict: 'class_key' });
 
-    // LOGOWANIE USUNIĘCIA ZAJĘĆ
     await supabase.from('transakcje').insert([{
       typ_operacji: nextUsunięteState ? 'usuniecie_zajec' : 'przywrocenie_zajec',
       class_key: classKey,

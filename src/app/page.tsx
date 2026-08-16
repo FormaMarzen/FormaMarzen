@@ -119,6 +119,23 @@ export default function DashboardPage() {
       setWszystkieTransakcje(tData);
     }
 
+    const { data: karnetyDefData } = await supabase.from('karnety').select('*');
+    let ustrukturyzowaneKarnetyDef: any[] = [];
+    if (karnetyDefData) {
+      ustrukturyzowaneKarnetyDef = karnetyDefData.map((k: any) => {
+        let meta: Record<string, any> = {};
+        try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
+        return {
+          ...k,
+          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
+        };
+      });
+      setDostepneKarnety(karnetyDefData.map((k: any) => ({
+        ...k,
+        cena: k.cena_brutto || k.cena || '0.00'
+      })));
+    }
+
     const { data: klienciData } = await supabase.from('klienci').select('*');
     if (klienciData) {
       const enriched = klienciData.map((c: any) => {
@@ -128,6 +145,25 @@ export default function DashboardPage() {
         } else if (typeof c.karnetyKlubowicza === 'string') {
           try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
         }
+
+        parsedKarnety = parsedKarnety.map((k: any) => {
+          const lowerName = (k.nazwa || '').toLowerCase();
+          const isTimePass = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy');
+          
+          if (isTimePass) {
+            k.pozostaloWejsc = null;
+            k.poczatkoweWejsc = null;
+          } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa === k.nazwa);
+            if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
+              const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
+              k.pozostaloWejsc = valWejsc;
+              k.poczatkoweWejsc = valWejsc;
+            }
+          }
+          return k;
+        });
+
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
         const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
 
@@ -168,13 +204,7 @@ export default function DashboardPage() {
         if (currentActive) setProfileClient(currentActive);
       }
     }
-    const { data: karnetyData } = await supabase.from('karnety').select('*');
-    if (karnetyData) {
-      setDostepneKarnety(karnetyData.map((k: any) => ({
-        ...k,
-        cena: k.cena_brutto || k.cena || '0.00'
-      })));
-    }
+
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) setRodzajeZajec(rodzajeData);
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
@@ -263,6 +293,123 @@ export default function DashboardPage() {
     return true;
   };
 
+  const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string) => {
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let cancelledCount = 0;
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', klientId);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          
+          if (classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', klientId);
+            cancelledCount++;
+          }
+        }
+      }
+    }
+
+    if (cancelledCount > 0 && targetClientObj) {
+      let updatedKarnety = [...(targetClientObj.karnetyKlubowicza || [])];
+      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: klientId,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu blokady konta (${powodBlokadyText}). Zwrócono ${cancelledCount} wejść.`
+      }]);
+    }
+  };
+
+  const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let cancelledCount = 0;
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', klientId);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
+          const classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
+          
+          const isAfterStart = classDateStr >= zawieszonyOd;
+          const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
+
+          if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', klientId);
+            cancelledCount++;
+          }
+        }
+      }
+    }
+
+    if (cancelledCount > 0) {
+      const { data: klientData } = await supabase.from('klienci').select('karnetyKlubowicza').eq('id', klientId).single();
+      if (klientData) {
+        let updatedKarnety = klientData.karnetyKlubowicza;
+        if (typeof updatedKarnety === 'string') {
+          try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
+        }
+        if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
+
+        const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+          const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
+        }
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: klientId,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
+      }]);
+    }
+  };
+
   const handleToggleClientTrainer = async (client: any) => {
     if (!client.isTrainer) {
       const { error } = await supabase.from('trenerzy').insert([{
@@ -281,11 +428,28 @@ export default function DashboardPage() {
 
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
+    const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
     const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
     const nowyWypis = { ...zajecieItem, wypisujacy: 'Wypisany przez zarządcę z poziomu profilu' };
     const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
-    await supabase.from('klienci').update({ zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
-    await supabase.from('transakcje').insert([{ klient_id: profileClient.id, typ_operacji: 'zajecia_wypis', kwota: null, opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})` }]);
+
+    let karnetyZaktualizowane = [...(profileClient.karnetyKlubowicza || [])];
+    if (zwrocicWejscie) {
+      const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10);
+        const poczatkowe = parseInt(karnetyZaktualizowane[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+        if (!isNaN(currentRemaining)) {
+          karnetyZaktualizowane[passIndex] = {
+            ...karnetyZaktualizowane[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+          };
+        }
+      }
+    }
+
+    await supabase.from('klienci').update({ karnetyKlubowicza: karnetyZaktualizowane, zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
+    await supabase.from('transakcje').insert([{ klient_id: profileClient.id, typ_operacji: 'zajecia_wypis', kwota: null, opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})${zwrocicWejscie ? ' - Zwrócono 1 wejście.' : ''}` }]);
     loadData();
   };
 
@@ -327,7 +491,15 @@ export default function DashboardPage() {
     let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
-    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+    let metaBuy: Record<string, any> = {};
+    try { metaBuy = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+    
+    const lowerBuyName = selectedBuyPass.toLowerCase();
+    const isTimePassBuy = lowerBuyName.includes('open') || lowerBuyName.includes('miesiąc') || lowerBuyName.includes('miesiac') || lowerBuyName.includes('rok') || lowerBuyName.includes('czasowy');
+    
+    const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || metaBuy.ilosc_wejsc || metaBuy.iloscTreningow || null) : null;
+    const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
+
     let updatedKarnety = [];
     let nowaDataWygasnieciaStr = '';
     
@@ -341,10 +513,12 @@ export default function DashboardPage() {
           }
           baseDate.setDate(baseDate.getDate() + dniWażności);
           nowaDataWygasnieciaStr = baseDate.toISOString().split('T')[0];
-          const addedEntries = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 0;
+          const addedEntries = parsedLimitWejsc !== null ? parsedLimitWejsc : 0;
           const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
           return {
-            ...k, nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, pozostaloWejsc: limitWejscBaza !== null ? currentEntries + addedEntries : null,
+            ...k, nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, 
+            pozostaloWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? currentEntries + addedEntries : null),
+            poczatkoweWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? (k.poczatkoweWejsc || currentEntries) + addedEntries : null),
             cena: cenaStr, statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
@@ -355,7 +529,9 @@ export default function DashboardPage() {
       dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
       nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
       const nowyKarnetObj = {
-        id: Date.now(), nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+        id: Date.now(), nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, 
+        pozostaloWejsc: isTimePassBuy ? null : parsedLimitWejsc,
+        poczatkoweWejsc: isTimePassBuy ? null : parsedLimitWejsc,
         cena: cenaStr, znizkaProcentowa: '', rata: '1 / 1', statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, blokadaDo: null, powodBlokady: null,
         zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: []
       };
@@ -461,7 +637,15 @@ export default function DashboardPage() {
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
     const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
     const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
-    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+    let metaSecond: Record<string, any> = {};
+    try { metaSecond = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+    
+    const lowerSecondName = selectedPassToAdd.toLowerCase();
+    const isTimePassSecond = lowerSecondName.includes('open') || lowerSecondName.includes('miesiąc') || lowerSecondName.includes('miesiac') || lowerSecondName.includes('rok') || lowerSecondName.includes('czasowy');
+    
+    const limitWejscBaza = (!isTimePassSecond && defKarnetu) ? (defKarnetu.ilosc_wejsc || metaSecond.ilosc_wejsc || metaSecond.iloscTreningow || null) : null;
+    const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
+
     let nowyStanStr = profileClient.wallet;
     let logKwota = 0;
     let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
@@ -473,7 +657,9 @@ export default function DashboardPage() {
       logOpis = `Dodano karnet: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`;
     }
     const nowyKarnetObj = {
-      id: Date.now(), nazwa: selectedPassToAdd, waznyDo: dataWygasnieciaStr, pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+      id: Date.now(), nazwa: selectedPassToAdd, waznyDo: dataWygasnieciaStr, 
+      pozostaloWejsc: isTimePassSecond ? null : parsedLimitWejsc,
+      poczatkoweWejsc: isTimePassSecond ? null : parsedLimitWejsc,
       cena: cenaObjKarnetu, znizkaProcentowa: '', rata: '1 / 1', statusTekst: `Ważny do: ${dataWygasnieciaStr}`, blokadaDo: null, powodBlokady: null,
       zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: []
     };
@@ -488,7 +674,6 @@ export default function DashboardPage() {
     setSelectedPassToAdd('');
     setIsAddSecondPassModalOpen(false);
   };
-
   const handleSavePassEditSubmit = async () => {
     if (!profileClient || !editingPassModal) return;
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
@@ -503,8 +688,13 @@ export default function DashboardPage() {
     }
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === editingPassModal.id) {
+        const lowerName = (editingPassModal.nazwa || '').toLowerCase();
+        const isTimePass = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy');
+        
         return {
-          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, pozostaloWejsc: editingPassModal.pozostaloWejsc,
+          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, 
+          pozostaloWejsc: isTimePass ? null : editingPassModal.pozostaloWejsc,
+          poczatkoweWejsc: isTimePass ? null : (k.poczatkoweWejsc || editingPassModal.pozostaloWejsc),
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
           znizkaProcentowa: znizkaTekst, rata: editingPassModal.rata, statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
         };
@@ -558,6 +748,7 @@ export default function DashboardPage() {
     const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
     const success = await updateSupabaseClient(updatedClient, dbPayload);
     if (success) {
+      await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
       alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony (planowo do ${sDo}). Przedłużenie jego ważności zostanie dokładnie przeliczone w momencie kliknięcia "Odwieś karnet".`);
       setIsSuspendModalOpen(false);
     }
@@ -600,15 +791,73 @@ export default function DashboardPage() {
       bDo = endDate.toISOString().split('T')[0];
     }
     if (new Date(bDo) < new Date(bOd)) { alert("Data końcowa blokady musi być późniejsza lub równa dacie początkowej!"); return; }
-    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? (Nie przedłuża to ważności karnetu)`)) return;
+    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? Użytkownik zostanie automatycznie wypisany ze wszystkich nadchodzących zajęć.`)) return;
+    
+    const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let cancelledCount = 0;
+
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', profileClient.id);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          
+          if (classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', profileClient.id);
+            cancelledCount++;
+          }
+        }
+      }
+    }
+
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === suspendPassTarget.id) { return { ...k, blokadaOd: bOd, blokadaDo: bDo, powodBlokady: `Zablokowano w okresie ${bOd} - ${bDo}` }; }
+      if (k.id === suspendPassTarget.id) {
+        let newPozostalo = k.pozostaloWejsc;
+        if (newPozostalo !== null && newPozostalo !== undefined && cancelledCount > 0) {
+          const currentRemaining = parseInt(newPozostalo, 10) || 0;
+          const poczatkowe = parseInt(k.poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+          newPozostalo = Math.min(poczatkowe, currentRemaining + cancelledCount);
+        }
+        return { 
+          ...k, 
+          blokadaOd: bOd, 
+          blokadaDo: bDo, 
+          powodBlokady: powod,
+          pozostaloWejsc: newPozostalo
+        };
+      }
       return k;
     });
+
     const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
     const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    
     const success = await updateSupabaseClient(updatedClient, dbPayload);
-    if (success) { alert(`Karnet został zablokowany do ${bDo}.`); setIsSuspendModalOpen(false); }
+    if (success) { 
+      if (cancelledCount > 0) {
+        await supabase.from('transakcje').insert([{
+          klient_id: profileClient.id,
+          typ_operacji: 'zajecia_wypis',
+          opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu blokady karnetu (${powod}). Zwrócono ${cancelledCount} wejść.`
+        }]);
+      }
+      alert(`Karnet został zablokowany do ${bDo}. Uczestnik został wypisany z nadchodzących zajęć.`); 
+      setIsSuspendModalOpen(false); 
+      loadData();
+    }
   };
 
   const handleCancelBlock = async (karnetTarget: any) => {
@@ -710,8 +959,37 @@ export default function DashboardPage() {
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) { alert("Nie można zapisać się na odwołane lub usunięte zajęcia!"); return; }
     const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
     if (walletVal < 0) { alert("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać na zajęcia."); return; }
+    
     const dzisiajData = new Date().toISOString().split('T')[0];
-    if (currentUser.blokadaDo && currentUser.blokadaDo >= dzisiajData) { alert(`Nie możesz się zapisać! ${currentUser.powodBlokady || 'Posiadasz aktywną blokadę zapisów.'}`); return; }
+    const isClientBlocked = currentUser.blokadaDo && currentUser.blokadaDo >= dzisiajData;
+    const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && k.blokadaDo >= dzisiajData);
+    
+    if (isClientBlocked || isPassBlocked) {
+      alert(`Nie możesz się zapisać! ${currentUser.powodBlokady || 'Posiadasz aktywną blokadę na koncie/karnecie.'}`);
+      return;
+    }
+
+    const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const parts = classKeyStr.split('_');
+    const dateStr = parts[1];
+    const [d, m] = dateStr.split('/').map(Number);
+    const classDateObj = new Date(new Date().getFullYear(), m - 1, d);
+    const calcClassDateStr = `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
+
+    const isPassSuspended = (currentUser.karnetyKlubowicza || []).some((k: any) => {
+      if (k.zawieszonyOd) {
+         const sOd = k.zawieszonyOd;
+         const sDo = k.zawieszonyDo || '9999-12-31';
+         return calcClassDateStr >= sOd && calcClassDateStr <= sDo;
+      }
+      return false;
+    });
+
+    if (isPassSuspended) {
+      alert(`Twój karnet jest zawieszony w dniu tych zajęć (${calcClassDateStr}). Zapis jest niemożliwy!`);
+      return;
+    }
+
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const aktualni = zapisyNaZajecia[classKey] || [];
@@ -741,6 +1019,20 @@ export default function DashboardPage() {
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
     const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: currentUser.id, status: statusZpisu, obecny: false }]);
     if (error) { alert(`Nie udało się zapisać na zajęcia: ${error.message}`); return; }
+
+    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    if (passIndex !== -1) {
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+      if (!isNaN(currentRemaining) && currentRemaining > 0) {
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: currentRemaining - 1
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+      }
+    }
+
     const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
     const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
     await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
@@ -755,8 +1047,23 @@ export default function DashboardPage() {
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', currentUser.id);
     if (error) { alert(`Nie udało się wypisać z zajęć: ${error.message}`); return; }
-    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć.` }]);
-    alert("Zostałeś pomyślnie wypisany z zajęć.");
+
+    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    if (passIndex !== -1) {
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+      const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+      if (!isNaN(currentRemaining)) {
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+      }
+    }
+
+    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć. Zwrócono 1 wejście.` }]);
+    alert("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście na karnet.");
     loadData();
     setSelectedClass(null);
   };
@@ -772,16 +1079,60 @@ export default function DashboardPage() {
     if (!confirm(`Czy na pewno chcesz wypisać się z zajęć: ${title}?`)) return;
     const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', currentUser.id);
     if (error) { alert(`Nie udało się wypisać z zajęć: ${error.message}`); return; }
-    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć (z listy aktywnej): ${title}.` }]);
-    alert("Zostałeś pomyślnie wypisany z zajęć.");
+
+    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    if (passIndex !== -1) {
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+      const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+      if (!isNaN(currentRemaining)) {
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+      }
+    }
+
+    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć (z listy aktywnej): ${title}. Zwrócono 1 wejście.` }]);
+    alert("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
     loadData();
   };
 
   const handleZapiszKlientaDoZajec = async (klient: any) => {
     if (!selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) { alert("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!"); return; }
+    
     const dzisiajData = new Date().toISOString().split('T')[0];
-    if (klient.blokadaDo && klient.blokadaDo >= dzisiajData) { alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`); return; }
+    const isClientBlocked = klient.blokadaDo && klient.blokadaDo >= dzisiajData;
+    const isPassBlocked = (klient.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && k.blokadaDo >= dzisiajData);
+    
+    if (isClientBlocked || isPassBlocked) { 
+      alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`); 
+      return; 
+    }
+
+    const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const parts = classKeyStr.split('_');
+    const dateStr = parts[1];
+    const [d, m] = dateStr.split('/').map(Number);
+    const classDateObj = new Date(new Date().getFullYear(), m - 1, d);
+    const calcClassDateStr = `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
+
+    const isPassSuspended = (klient.karnetyKlubowicza || []).some((k: any) => {
+      if (k.zawieszonyOd) {
+         const sOd = k.zawieszonyOd;
+         const sDo = k.zawieszonyDo || '9999-12-31';
+         return calcClassDateStr >= sOd && calcClassDateStr <= sDo;
+      }
+      return false;
+    });
+
+    if (isPassSuspended) {
+      alert(`Karnet klienta jest zawieszony w dniu tych zajęć (${calcClassDateStr}). Zapis jest niemożliwy!`);
+      return;
+    }
+
     const walletVal = parseFloat(String(klient.wallet || klient.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
     if (walletVal < 0) {
       if (!confirm(`UWAGA: Klubowicz ${klient.firstName} ${klient.lastName} posiada zadłużenie na koncie (${klient.wallet || klient.Portfel}). Czy na pewno chcesz zapisać tę osobę na zajęcia?`)) return;
@@ -814,6 +1165,20 @@ export default function DashboardPage() {
     const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
     const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: klient.id, status: statusZpisu, obecny: false }]);
     if (error) { console.error("Błąd zapisu na zajęcia:", error); alert(`Nie udało się zapisać: ${error.message}`); return; }
+
+    let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
+    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    if (passIndex !== -1) {
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+      if (!isNaN(currentRemaining) && currentRemaining > 0) {
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: currentRemaining - 1
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klient.id);
+      }
+    }
+
     const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
     const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
     await supabase.from('transakcje').insert([{ klient_id: klient.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
@@ -827,14 +1192,34 @@ export default function DashboardPage() {
     const aktualni = zapisyNaZajecia[classKey] || [];
     const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', clientToUnregister.id);
     if (error) { console.error("Błąd wypisywania z zajęć:", error); alert(`Nie udało się wypisać: ${error.message}`); return; }
-    await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub. Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}` }]);
+
+    const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
+    let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
+    if (zwrocicWejscie) {
+      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+        if (!isNaN(currentRemaining)) {
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', clientToUnregister.id);
+        }
+      }
+    }
+
+    await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''} Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}` }]);
     if (blokadaZapisow) {
       const dni = parseInt(dlugoscBlokady) || 3;
       const dataWypisania = new Date(); const dataWygaśnięcia = new Date(dataWypisania);
       dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
       const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
       const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+      
       await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod }).eq('id', clientToUnregister.id);
+      await handleAutoWypiszPoZablokowaniu(clientToUnregister.id, clientToUnregister, powod);
     }
     setClientToUnregister(null); setBlokadaZapisow(false); loadData();
   };
@@ -851,7 +1236,9 @@ export default function DashboardPage() {
       dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
       const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
       const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+      
       await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod }).eq('id', clientToMarkAbsent.id);
+      await handleAutoWypiszPoZablokowaniu(clientToMarkAbsent.id, clientToMarkAbsent, powod);
     }
     setClientToMarkAbsent(null); setBlokadaZapisow(false); loadData();
   };
@@ -1162,9 +1549,30 @@ export default function DashboardPage() {
                   <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-xs font-bold border border-slate-200">
                     Aktywne zapisy: {prawdziweZapisyKlubowicza}
                   </span>
+                  {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && currentUser.karnetyKlubowicza[0].pozostaloWejsc !== null && currentUser.karnetyKlubowicza[0].pozostaloWejsc !== undefined && (
+                    <span className="bg-sky-100 text-sky-900 px-4 py-1.5 rounded-full text-xs font-black border border-sky-200 flex items-center gap-1">
+                      <span>🎟️ Wejścia:</span> 
+                      <span className="text-amber-700">{currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span> / <span>{currentUser.karnetyKlubowicza[0].poczatkoweWejsc || currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span>
+                    </span>
+                  )}
                   {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && (
                     <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-xs font-bold border border-slate-200">
                       Ważny do: {currentUser.karnetyKlubowicza[0].waznyDo}
+                    </span>
+                  )}
+                  {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && currentUser.karnetyKlubowicza[0].zawieszonyOd && (
+                    <span className="bg-amber-100 text-amber-900 px-4 py-1.5 rounded-full text-xs font-black border border-amber-200 flex items-center gap-1">
+                      ⏸️ ZAWIESZONE: OD {currentUser.karnetyKlubowicza[0].zawieszonyOd} {currentUser.karnetyKlubowicza[0].zawieszonyDo ? `DO ${currentUser.karnetyKlubowicza[0].zawieszonyDo}` : ''}
+                    </span>
+                  )}
+                  {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && currentUser.karnetyKlubowicza[0].blokadaDo && currentUser.karnetyKlubowicza[0].blokadaDo >= todayStr && (
+                    <span className="bg-rose-100 text-rose-800 px-4 py-1.5 rounded-full text-xs font-black border border-rose-200 flex items-center gap-1">
+                      ⚠️ ZABLOKOWANE: {currentUser.karnetyKlubowicza[0].blokadaOd ? `OD ${currentUser.karnetyKlubowicza[0].blokadaOd} ` : ''}DO {currentUser.karnetyKlubowicza[0].blokadaDo}
+                    </span>
+                  )}
+                  {currentUser.blokadaDo && currentUser.blokadaDo >= todayStr && !(currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza[0]?.blokadaDo) && (
+                    <span className="bg-rose-100 text-rose-800 px-4 py-1.5 rounded-full text-xs font-black border border-rose-200 flex items-center gap-1">
+                      ⚠️ BLOKADA ZAPISÓW DO {currentUser.blokadaDo}
                     </span>
                   )}
                 </div>
@@ -1284,6 +1692,7 @@ export default function DashboardPage() {
                             setSelectedClass({
                               ...item,
                               displayDate: col.date,
+                              isoDate: col.isoDate, 
                               durationText
                             });
                             setIsSearchingClient(false);
@@ -1380,7 +1789,6 @@ export default function DashboardPage() {
           })}
         </div>
       </section>
-      
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
           <section className="lg:col-span-6 space-y-3">
@@ -1539,15 +1947,21 @@ export default function DashboardPage() {
                                 Wygasa: {ostatecznaData}
                               </span>
                             )}
+                            {maKarnet && client.karnetyKlubowicza[0]?.pozostaloWejsc !== null && client.karnetyKlubowicza[0]?.pozostaloWejsc !== undefined && (
+                              <span className="bg-sky-100 text-sky-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-sky-200 flex items-center gap-1">
+                                <span>🎟️ Wejścia:</span>
+                                <span className="text-amber-700">{client.karnetyKlubowicza[0].pozostaloWejsc}</span> / <span>{client.karnetyKlubowicza[0].poczatkoweWejsc || client.karnetyKlubowicza[0].pozostaloWejsc}</span>
+                              </span>
+                            )}
                           </div>
                           {aktywnyKarnetZawieszony && (
-                            <span className="bg-amber-100 text-amber-900 text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded border border-amber-200">
-                              ⏸️ Zawieszony od: {aktywnyKarnetZawieszony.zawieszonyOd}
+                            <span className="bg-amber-100 text-amber-900 text-[9px] uppercase tracking-wider font-black px-2 py-1 rounded border border-amber-200 block">
+                              ⏸️ ZAWIESZONE: OD {aktywnyKarnetZawieszony.zawieszonyOd} {aktywnyKarnetZawieszony.zawieszonyDo ? `DO ${aktywnyKarnetZawieszony.zawieszonyDo}` : ''}
                             </span>
                           )}
                           {aktywnaBlokada && (
-                            <span className="bg-rose-100 text-rose-800 text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded border border-rose-200">
-                              ⚠️ Zablokowane: {aktywnaBlokada.blokadaOd ? `od ${aktywnaBlokada.blokadaOd} ` : ''}do {aktywnaBlokada.blokadaDo}
+                            <span className="bg-rose-100 text-rose-800 text-[9px] uppercase tracking-wider font-black px-2 py-1 rounded border border-rose-200 block">
+                              ⚠️ ZABLOKOWANE: OD {aktywnaBlokada.blokadaOd ? `${aktywnaBlokada.blokadaOd} ` : ''}DO {aktywnaBlokada.blokadaDo}
                             </span>
                           )}
                         </div>
@@ -1669,9 +2083,7 @@ export default function DashboardPage() {
           )
           .sort(sortAlfabet);
         
-        // Zmieniono warunek uprawnień: zarządzać listą zajęć (obecność, wypisywanie, dopisywanie) może zarówno admin, jak i trener
         const canManageClass = appRole === 'admin' || appRole === 'trener';
-        const canSeeDetails = canManageClass || (currentUser && String(currentUser.id) === String(selectedClass?.id));
         
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
@@ -1711,15 +2123,19 @@ export default function DashboardPage() {
                     } else if (stanPortfela < 0) {
                       portfelColorClass = 'text-rose-600 font-bold';
                     }
-                    const displayName = canSeeDetails
+
+                    const isThisUserMe = currentUser && String(osoba.id) === String(currentUser.id);
+                    const canSeeThisPersonDetails = canManageClass || isThisUserMe;
+                    const displayName = canSeeThisPersonDetails
                       ? `${osoba.firstName} ${osoba.lastName}`
                       : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
+
                     return (
                       <div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
                         <div className="flex items-start justify-between">
                           <div>
                             <h4 className="font-black text-slate-900 text-sm">{displayName}</h4>
-                            {canSeeDetails && (
+                            {canSeeThisPersonDetails && (
                               <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
                                 <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
                                 <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
@@ -1812,9 +2228,13 @@ export default function DashboardPage() {
                       } else if (stanPortfela < 0) {
                         portfelColorClass = 'text-rose-600 font-bold';
                       }
-                      const displayName = canSeeDetails
+
+                      const isThisUserMe = currentUser && String(osoba.id) === String(currentUser.id);
+                      const canSeeThisPersonDetails = canManageClass || isThisUserMe;
+                      const displayName = canSeeThisPersonDetails
                         ? `${osoba.firstName} ${osoba.lastName}`
                         : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
+
                       return (
                         <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
                           <div className="flex items-start justify-between">
@@ -1825,7 +2245,7 @@ export default function DashboardPage() {
                                   #{idx + 1}
                                 </span>
                               </div>
-                              {canSeeDetails && (
+                              {canSeeThisPersonDetails && (
                                 <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
                                   <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
                                   <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
@@ -2248,6 +2668,11 @@ export default function DashboardPage() {
                                       ⚠️ Zablokowane: {karnet.blokadaOd ? `od ${karnet.blokadaOd} ` : ''}do {karnet.blokadaDo}
                                     </span>
                                   )}
+                                  {czyZawieszony && (
+                                    <span className="bg-amber-100 text-amber-900 text-xs font-black px-2.5 py-1 rounded border border-amber-200">
+                                      ⏸️ ZAWIESZONE: OD {karnet.zawieszonyOd} {karnet.zawieszonyDo ? `DO ${karnet.zawieszonyDo}` : ''}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className={`${statusColorClass} text-[11px] font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap`}>
@@ -2256,6 +2681,12 @@ export default function DashboardPage() {
                                   <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
                                     Cena: {karnet.cena}
                                   </span>
+                                  {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
+                                    <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
+                                      <span>🎟️ Wejścia:</span> 
+                                      <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
@@ -2316,7 +2747,6 @@ export default function DashboardPage() {
                   )}
                 </div>
               </div>
-
               <div className="space-y-4 border-t border-slate-200 pt-4 mt-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
@@ -2426,229 +2856,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isExtendPassModalOpen && profileClient && extendPassTarget && (
-        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
-                <span>🕒</span> Przedłuż karnet dla {profileClient.firstName} {profileClient.lastName}
-              </h3>
-              <button onClick={() => setIsExtendPassModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-            <form onSubmit={handleConfirmExtendPass} className="space-y-4 text-xs">
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1">
-                <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">Aktualny karnet</div>
-                <div className="font-bold text-slate-900 text-sm whitespace-nowrap">Karnet: {extendPassTarget.nazwa}</div>
-                <div className="font-mono text-slate-600 whitespace-nowrap">Wygasa: {extendPassTarget.waznyDo}</div>
-              </div>
-              <div className="flex justify-center">
-                <div className="w-7 h-7 rounded-full bg-sky-50 border border-sky-200 flex items-center justify-center text-sky-700 font-bold">↓</div>
-              </div>
-              <div className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 space-y-3">
-                <div className="text-[10px] font-black text-sky-800 uppercase tracking-wider whitespace-nowrap">Nowy karnet</div>
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 whitespace-nowrap">
-                    <span className="font-bold text-slate-700">Karnet: </span>
-                    {isEditingNewPassType ? (
-                      <select
-                        value={extendSelectedNewPassName}
-                        onChange={(e) => setExtendSelectedNewPassName(e.target.value)}
-                        className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
-                      >
-                        {dostepneKarnety.map(k => (
-                          <option key={k.id} value={k.nazwa}>{k.nazwa}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="font-black text-slate-900 whitespace-nowrap">{extendSelectedNewPassName}</span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingNewPassType(!isEditingNewPassType)}
-                    className="p-1.5 bg-white hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer"
-                    title="Zmień typ karnetu"
-                  >
-                    ✏️
-                  </button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 whitespace-nowrap">
-                    <span className="font-bold text-slate-700">Data: </span>
-                    {isEditingNewDate ? (
-                      <input
-                        type="date"
-                        value={extendNewDate}
-                        onChange={(e) => setExtendNewDate(e.target.value)}
-                        className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800"
-                      />
-                    ) : (
-                      <span className="font-mono font-bold text-slate-900 whitespace-nowrap">{extendNewDate}</span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingNewDate(!isEditingNewDate)}
-                    className="p-1.5 bg-white hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer"
-                    title="Zmień datę"
-                  >
-                    ✏️
-                  </button>
-                </div>
-              </div>
-              <div className="pt-4 flex justify-end gap-3 border-t border-sky-100">
-                <button type="button" onClick={() => setIsExtendPassModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase whitespace-nowrap">Anuluj</button>
-                <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">🕒 Przedłuż</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isEditProfileInfoOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane konta</h3>
-              <button onClick={() => setIsEditProfileInfoOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-            <form onSubmit={handleSaveProfileInfoSubmit} className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Imię</label>
-                  <input
-                    type="text"
-                    value={profileClient.firstName || ''}
-                    onChange={(e) => setProfileClient({...profileClient, firstName: e.target.value})}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Nazwisko</label>
-                  <input
-                    type="text"
-                    value={profileClient.lastName || ''}
-                    onChange={(e) => setProfileClient({...profileClient, lastName: e.target.value})}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Numer telefonu</label>
-                <input
-                  type="text"
-                  value={profileClient.phone || ''}
-                  onChange={(e) => setProfileClient({...profileClient, phone: e.target.value})}
-                  placeholder="np. 691118579"
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Adres email</label>
-                <input
-                  type="email"
-                  value={profileClient.email || ''}
-                  onChange={(e) => setProfileClient({...profileClient, email: e.target.value})}
-                  placeholder="np. adres@email.com"
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Płeć</label>
-                <select
-                  value={profileClient.gender || ''}
-                  onChange={(e) => setProfileClient({...profileClient, gender: e.target.value})}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer"
-                >
-                  <option value="">-- Wybierz płeć --</option>
-                  <option value="Mężczyzna">Mężczyzna</option>
-                  <option value="Kobieta">Kobieta</option>
-                  <option value="Inna">Inna</option>
-                </select>
-              </div>
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsEditProfileInfoOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zapisz zmiany</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isTopUpWalletOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">💰 Uzupełnij portfel</h3>
-              <button onClick={() => setIsTopUpWalletOpen(false)} className="text-slate-400 font-bold">✕</button>
-            </div>
-            <form onSubmit={handleTopUpWalletSubmit} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold">Kwota (+/-)</label>
-                <input type="number" step="0.01" required value={walletAmountInput} onChange={(e) => setWalletAmountInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold whitespace-nowrap">Tytuł operacji (opcjonalnie)</label>
-                <input type="text" value={walletReasonInput} placeholder="np. Gotówka w recepcji" onChange={(e) => setWalletReasonInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
-              </div>
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
-                <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zatwierdź</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isWalletHistoryOpen && profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">🕒 Historia operacji i portfela</h3>
-              <button onClick={() => setIsWalletHistoryOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
-            </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex justify-between items-center text-xs">
-              <span className="font-bold text-amber-900 uppercase whitespace-nowrap">Aktualne saldo klubowicza:</span>
-              <span className={`text-base font-black px-3 py-1 rounded-lg border whitespace-nowrap ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
-                {profileClient.wallet}
-              </span>
-            </div>
-            <div className="overflow-x-auto text-xs max-h-[60vh]">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-sky-50 text-sky-900 uppercase text-[10px] tracking-wider border-b border-sky-200 sticky top-0">
-                    <th className="py-2.5 px-3 whitespace-nowrap">Data operacji</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Kategoria</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Kwota transakcji</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap">Szczegóły</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {profileClient.transakcje && profileClient.transakcje.map((item: any) => (
-                    <tr key={item.id} className="hover:bg-sky-50/30 transition-colors">
-                      <td className="py-3 px-3 font-mono whitespace-nowrap">{new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
-                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800 whitespace-nowrap">{item.typ_operacji.replace('_', ' ')}</td>
-                      <td className={`py-3 px-3 font-black text-sm whitespace-nowrap ${item.kwota !== null && item.kwota < 0 ? 'text-rose-600' : item.kwota !== null && item.kwota > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
-                        {item.kwota !== null ? `${item.kwota > 0 ? '+' : ''}${item.kwota.toFixed(2)} PLN` : '-'}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap" title={item.opis}>{item.opis}</td>
-                    </tr>
-                  ))}
-                  {(!profileClient.transakcje || profileClient.transakcje.length === 0) && (
-                    <tr>
-                      <td colSpan={4} className="py-8 text-center text-slate-400">Brak zarejestrowanej historii operacji dla tego klienta w chmurze Supabase.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="pt-3 flex justify-end border-t border-sky-100">
-              <button onClick={() => setIsWalletHistoryOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer whitespace-nowrap">Zamknij</button>
             </div>
           </div>
         </div>
@@ -2820,7 +3027,7 @@ export default function DashboardPage() {
                 <div>
                   <h4 className="font-black text-rose-900 text-xs uppercase flex items-center gap-2"><span>🔒</span> Zablokuj karnet</h4>
                   <p className="text-[10px] text-rose-800 leading-tight mt-1">
-                    Blokuje możliwość wejścia do klubu. <strong>NIE przedłuża</strong> ważności karnetu.
+                    Blokuje możliwość wejścia do klubu oraz zapisu na zajęcia. Wypisuje ze wszystkich nadchodzących zajęć. <strong>NIE przedłuża</strong> ważności karnetu.
                   </p>
                 </div>
                 <form onSubmit={handleConfirmBlockPass} className="space-y-3 text-xs mt-4">

@@ -7,11 +7,60 @@ export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
   const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
+  
+  // Stany dla strefy klubowicza (klient przeglądający swój karnet)
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
+  const [isClientSuspendModalOpen, setIsClientSuspendModalOpen] = useState(false);
+  const [clientSuspendDays, setClientSuspendDays] = useState('3');
+  const [clientSuspendStartDate, setClientSuspendStartDate] = useState('');
+  const [clientSuspendEndDate, setClientSuspendEndDate] = useState('');
+  const [clientSuspendMode, setClientSuspendMode] = useState<'days' | 'dates'>('days');
 
-  // 1. POBIERANIE DANYCH Z SUPABASE (Karnety + Rodzaje Zajęć)
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // 1. POBIERANIE DANYCH Z SUPABASE (Karnety + Rodzaje Zajęć + Użytkownik)
   const loadData = async () => {
     try {
-      // A. Pobieranie karnetów
+      const { data: { session } } = await supabase.auth.getSession();
+      const userEmail = session?.user?.email;
+
+      const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+      if (userEmail === 'maciejklaput@gmail.com') {
+        setAppRole('admin');
+      } else {
+        const trenerObj = trenerzyData?.find(t => t.email === userEmail);
+        if (trenerObj) {
+          setAppRole('trener');
+        } else {
+          setAppRole('klubowicz');
+        }
+      }
+
+      const { data: klienciData } = await supabase.from('klienci').select('*');
+      if (klienciData && userEmail) {
+        const enriched = klienciData.map((c: any) => {
+          let parsedKarnety = [];
+          if (Array.isArray(c.karnetyKlubowicza)) {
+            parsedKarnety = c.karnetyKlubowicza;
+          } else if (typeof c.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+          }
+          return {
+            ...c,
+            id: c.id,
+            firstName: c.Imię || '',
+            lastName: c.Nazwisko || '',
+            email: c['E-mail'] || c.email || '',
+            karnetyKlubowicza: parsedKarnety,
+            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
+          };
+        });
+        const myUser = enriched.find((c: any) => c.email === userEmail);
+        if (myUser) setCurrentUser(myUser);
+      }
+
+      // A. Pobieranie karnetów (cennik)
       const { data: karnetyData, error: karnetyError } = await supabase
         .from('karnety')
         .select('*')
@@ -45,7 +94,7 @@ export default function KarnetyPage() {
         setKarnety(parsedData);
       }
 
-      // B. Pobieranie rodzajów zajęć z bazy (zamiast localStorage)
+      // B. Pobieranie rodzajów zajęć z bazy
       const { data: rodzajeData, error: rodzajeError } = await supabase
         .from('rodzaje_zajec')
         .select('*')
@@ -56,7 +105,6 @@ export default function KarnetyPage() {
       } else if (rodzajeData && rodzajeData.length > 0) {
         setDostepneRodzajeZajec(rodzajeData);
       } else {
-        // Zabezpieczenie na wypadek pustej bazy
         setDostepneRodzajeZajec([
           { id: 1, nazwa: 'Brak zajęć w bazie (Dodaj w zakładce Rodzaje zajęć)' }
         ]);
@@ -106,61 +154,13 @@ export default function KarnetyPage() {
 
   const handleOpenAdd = () => {
     setEditingId(null);
-    setNazwa('');
-    setCena('');
-    setStawkaVat('8%');
-    setTypKarnetu('Na czas');
-    setCzasIlosc('1');
-    setCzasJednostka('Miesiąc');
-    setIloscTreningow('10');
-    setDodajLimitCzasowy(true);
-    setLimitIlosc('1');
-    setLimitOkres('Miesiąc');
-    setDostepDo('wszystkich zajęć');
-    setZaznaczoneZajecia([]);
-    setLimitCzasowyZapisow('Domyślny (14 dni)');
-    setNiestandardowyDni('14');
-    setTygodniowyLimit('Bez limitu');
-    setDziennyLimit('Domyślny (Bez limitu)');
-    setNiestandardowyDziennyIlosc('1');
-    setBlokujPortfel(false);
-    setPortfelPrógKwota('0');
-    setDostepnyOnline(false);
-    setPonownyZakup(true);
-    setZmianaNaInny(true);
-    setKupInnyKarnet(true);
-    setOpis('');
-    setObrazekUrl(null);
+    setNazwa(''); setCena(''); setStawkaVat('8%'); setTypKarnetu('Na czas'); setCzasIlosc('1'); setCzasJednostka('Miesiąc'); setIloscTreningow('10'); setDodajLimitCzasowy(true); setLimitIlosc('1'); setLimitOkres('Miesiąc'); setDostepDo('wszystkich zajęć'); setZaznaczoneZajecia([]); setLimitCzasowyZapisow('Domyślny (14 dni)'); setNiestandardowyDni('14'); setTygodniowyLimit('Bez limitu'); setDziennyLimit('Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc('1'); setBlokujPortfel(false); setPortfelPrógKwota('0'); setDostepnyOnline(false); setPonownyZakup(true); setZmianaNaInny(true); setKupInnyKarnet(true); setOpis(''); setObrazekUrl(null);
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (item: any) => {
     setEditingId(item.id);
-    setNazwa(item.nazwa || '');
-    setCena(item.cena || '');
-    setStawkaVat(item.stawkaVat || '8%');
-    setTypKarnetu(item.typKarnetu || 'Na czas');
-    setCzasIlosc(item.czasIlosc || '1');
-    setCzasJednostka(item.czasJednostka || 'Miesiąc');
-    setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10');
-    setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true);
-    setLimitIlosc(item.limitIlosc || '1');
-    setLimitOkres(item.limitOkres || 'Miesiąc');
-    setDostepDo(item.dostepDo || 'wszystkich zajęć');
-    setZaznaczoneZajecia(item.zaznaczoneZajecia || []);
-    setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)');
-    setNiestandardowyDni(item.niestandardowyDni || '14');
-    setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu');
-    setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)');
-    setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1');
-    setBlokujPortfel(item.blokujPortfel ?? false);
-    setPortfelPrógKwota(item.portfelPrógKwota || '0');
-    setDostepnyOnline(item.dostepnyOnline ?? false);
-    setPonownyZakup(item.ponownyZakup ?? true);
-    setZmianaNaInny(item.zmianaNaInny ?? true);
-    setKupInnyKarnet(item.kupInnyKarnet ?? true);
-    setOpis(item.opis || '');
-    setObrazekUrl(item.obrazekUrl || null);
+    setNazwa(item.nazwa || ''); setCena(item.cena || ''); setStawkaVat(item.stawkaVat || '8%'); setTypKarnetu(item.typKarnetu || 'Na czas'); setCzasIlosc(item.czasIlosc || '1'); setCzasJednostka(item.czasJednostka || 'Miesiąc'); setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10'); setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); setLimitIlosc(item.limitIlosc || '1'); setLimitOkres(item.limitOkres || 'Miesiąc'); setDostepDo(item.dostepDo || 'wszystkich zajęć'); setZaznaczoneZajecia(item.zaznaczoneZajecia || []); setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); setNiestandardowyDni(item.niestandardowyDni || '14'); setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); setBlokujPortfel(item.blokujPortfel ?? false); setPortfelPrógKwota(item.portfelPrógKwota || '0'); setDostepnyOnline(item.dostepnyOnline ?? false); setPonownyZakup(item.ponownyZakup ?? true); setZmianaNaInny(item.zmianaNaInny ?? true); setKupInnyKarnet(item.kupInnyKarnet ?? true); setOpis(item.opis || ''); setObrazekUrl(item.obrazekUrl || null);
     setIsModalOpen(true);
   };
 
@@ -205,7 +205,155 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // 2. ZAPISYWANIE DANYCH DO SUPABASE
+  // Dodana logika automatycznego wypisywania z zajęć w trakcie trwania zawieszenia
+  const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let cancelledCount = 0;
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', klientId);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
+          const classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
+          
+          const isAfterStart = classDateStr >= zawieszonyOd;
+          const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
+
+          if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', klientId);
+            cancelledCount++;
+          }
+        }
+      }
+    }
+
+    if (cancelledCount > 0) {
+      const { data: klientData } = await supabase.from('klienci').select('karnetyKlubowicza').eq('id', klientId).single();
+      if (klientData) {
+        let updatedKarnety = klientData.karnetyKlubowicza;
+        if (typeof updatedKarnety === 'string') {
+          try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
+        }
+        if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
+
+        const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+          const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
+        }
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: klientId,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu samodzielnego zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
+      }]);
+    }
+  };
+
+  // Obsługa samodzielnego zawieszania karnetu przez klubowicza
+  const handleClientSuspendSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !currentUser.karnetyKlubowicza || currentUser.karnetyKlubowicza.length === 0) return;
+    
+    let sOd = clientSuspendStartDate || todayStr;
+    let sDo = clientSuspendEndDate;
+    if (clientSuspendMode === 'days') {
+      sOd = todayStr;
+      const dni = parseInt(clientSuspendDays || '0', 10);
+      if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + dni);
+      sDo = endDate.toISOString().split('T')[0];
+    }
+    if (new Date(sDo) < new Date(sOd)) {
+      alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
+      return;
+    }
+
+    if (!confirm(`Czy na pewno chcesz zawiesić swój karnet od ${sOd} do ${sDo}?`)) return;
+
+    const updatedKarnety = currentUser.karnetyKlubowicza.map((k: any, idx: number) => {
+      if (idx === 0) {
+        return { ...k, zawieszonyOd: sOd, zawieszonyDo: sDo };
+      }
+      return k;
+    });
+
+    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+    if (error) {
+      alert("Błąd podczas zawieszania karnetu: " + error.message);
+      return;
+    }
+
+    // Wywołanie autowypisywania z zajęć
+    await handleAutoWypiszPoZawieszeniu(currentUser.id, sOd, sDo, currentUser.karnetyKlubowicza[0].nazwa);
+
+    alert("Twój karnet został pomyślnie zawieszony! System automatycznie wypisał Cię z zajęć w wybranym okresie.");
+    setIsClientSuspendModalOpen(false);
+    loadData();
+  };
+
+  const handleClientOdwiesKarnet = async (karnetTarget: any) => {
+    if (!currentUser || !karnetTarget.zawieszonyOd) return;
+    const dzisiaj = new Date();
+    const start = new Date(karnetTarget.zawieszonyOd);
+    dzisiaj.setHours(0, 0, 0, 0); start.setHours(0, 0, 0, 0);
+    let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) diffDays = 0;
+    
+    if (!confirm(`Karnet był zawieszony od ${karnetTarget.zawieszonyOd} (łącznie ${diffDays} dni). \nCzy chcesz go teraz odwiesić i przedłużyć jego ważność o ${diffDays} dni?`)) return;
+    
+    let currentExpDate = new Date(karnetTarget.waznyDo);
+    currentExpDate.setDate(currentExpDate.getDate() + diffDays);
+    const newExpDateStr = currentExpDate.toISOString().split('T')[0];
+    const historiaEntry = { id: Date.now(), od: karnetTarget.zawieszonyOd, do: todayStr, dni: diffDays };
+
+    const updatedKarnety = currentUser.karnetyKlubowicza.map((k: any) => {
+      if (k.id === karnetTarget.id) {
+        return { 
+          ...k, 
+          waznyDo: newExpDateStr, 
+          statusTekst: `Ważny do: ${newExpDateStr}`, 
+          zawieszonyOd: null, 
+          zawieszonyDo: null, 
+          historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])] 
+        };
+      }
+      return k;
+    });
+
+    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+    if (error) {
+      alert("Błąd podczas odwieszania: " + error.message);
+      return;
+    }
+
+    alert(`Karnet został odwieszony! Ważność przedłużona o ${diffDays} dni.`);
+    loadData();
+  };
+
+  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nazwa.trim() || !cena.trim()) return;
@@ -280,7 +428,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // 3. USUWANIE DANYCH Z SUPABASE
+  // 3. USUWANIE DANYCH Z SUPABASE (Admin)
   const handleDelete = async (id: number) => {
     if (confirm("Czy na pewno chcesz usunąć ten karnet z cennika?")) {
       try {
@@ -298,6 +446,152 @@ export default function KarnetyPage() {
     return <div className="p-8 text-center text-slate-500 font-bold">Ładowanie karnetów z chmury...</div>;
   }
 
+  // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU Z OPCJĄ ZAWIESZENIA
+  if (appRole === 'klubowicz' && currentUser) {
+    const aktywnyKarnet = currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 ? currentUser.karnetyKlubowicza[0] : null;
+    const czyZawieszony = aktywnyKarnet && !!aktywnyKarnet.zawieszonyOd;
+    const czyZablokowany = aktywnyKarnet && aktywnyKarnet.blokadaDo && aktywnyKarnet.blokadaDo >= todayStr;
+
+    return (
+      <div className="max-w-[1700px] mx-auto space-y-6 pb-24 animate-in fade-in">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
+          <h1 className="text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
+            TWOJE KARNETY
+          </h1>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
+          {aktywnyKarnet ? (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900 uppercase">{aktywnyKarnet.nazwa}</h3>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {aktywnyKarnet.pozostaloWejsc !== null && aktywnyKarnet.pozostaloWejsc !== undefined && (
+                      <span className="bg-sky-100 text-sky-900 px-3 py-1 rounded-full text-xs font-black border border-sky-200">
+                        🎟️ Wejścia: {aktywnyKarnet.pozostaloWejsc} / {aktywnyKarnet.poczatkoweWejsc || aktywnyKarnet.pozostaloWejsc}
+                      </span>
+                    )}
+                    <span className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold border border-slate-200">
+                      Ważny do: {aktywnyKarnet.waznyDo}
+                    </span>
+                    {czyZawieszony && (
+                      <span className="bg-amber-100 text-amber-900 px-3 py-1 rounded-full text-xs font-black border border-amber-200">
+                        ⏸️ ZAWIESZONE: OD {aktywnyKarnet.zawieszonyOd} {aktywnyKarnet.zawieszonyDo ? `DO ${aktywnyKarnet.zawieszonyDo}` : ''}
+                      </span>
+                    )}
+                    {czyZablokowany && (
+                      <span className="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-xs font-black border border-rose-200">
+                        ⚠️ ZABLOKOWANE: OD {aktywnyKarnet.blokadaOd || ''} DO {aktywnyKarnet.blokadaDo}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {czyZawieszony ? (
+                    <button 
+                      onClick={() => handleClientOdwiesKarnet(aktywnyKarnet)}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-5 py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-sm transition-colors"
+                    >
+                      ▶️ Odwieś karnet
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => {
+                        setClientSuspendStartDate(todayStr);
+                        setClientSuspendEndDate(todayStr);
+                        setClientSuspendDays('3');
+                        setClientSuspendMode('days');
+                        setIsClientSuspendModalOpen(true);
+                      }}
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-black px-5 py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-sm transition-colors"
+                    >
+                      ❄️ Zawieś karnet
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-10 text-slate-400 font-medium text-xs">
+              Brak aktywnego karnetu na koncie.
+            </div>
+          )}
+        </div>
+
+        {/* Sekcja zarządzania zawieszeniami w strefie klienta */}
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">Zarządzanie zawieszeniami</h3>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h4 className="font-bold text-slate-900 text-sm">Chcesz zamrozić swój karnet?</h4>
+              <p className="text-xs text-slate-500 mt-0.5">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
+            </div>
+            <button 
+              onClick={() => {
+                if (!aktywnyKarnet) {
+                  alert("Nie posiadasz aktywnego karnetu.");
+                  return;
+                }
+                setClientSuspendStartDate(todayStr);
+                setClientSuspendEndDate(todayStr);
+                setClientSuspendDays('3');
+                setClientSuspendMode('days');
+                setIsClientSuspendModalOpen(true);
+              }}
+              className="bg-slate-900 hover:bg-slate-800 text-white font-black px-5 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+            >
+              ❄️ Zawieś karnet
+            </button>
+          </div>
+        </div>
+
+        {/* Modal zawieszania */}
+        {isClientSuspendModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">❄️ Zawieś swój karnet</h3>
+                <button onClick={() => setIsClientSuspendModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+              </div>
+              <form onSubmit={handleClientSuspendSubmit} className="space-y-4 text-xs">
+                <div className="flex bg-slate-100 rounded-xl p-1 font-bold">
+                  <button type="button" onClick={() => setClientSuspendMode('days')} className={`flex-1 py-2 rounded-lg cursor-pointer transition-colors ${clientSuspendMode === 'days' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}>Liczba dni</button>
+                  <button type="button" onClick={() => setClientSuspendMode('dates')} className={`flex-1 py-2 rounded-lg cursor-pointer transition-colors ${clientSuspendMode === 'dates' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}>Zakres dat</button>
+                </div>
+                {clientSuspendMode === 'days' ? (
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700">Liczba dni zawieszenia</label>
+                    <input type="number" min="1" required value={clientSuspendDays} onChange={(e) => setClientSuspendDays(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700">Zawieszony od</label>
+                      <input type="date" required value={clientSuspendStartDate} onChange={(e) => setClientSuspendStartDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700">Zawieszony do</label>
+                      <input type="date" required value={clientSuspendEndDate} onChange={(e) => setClientSuspendEndDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                    </div>
+                  </>
+                )}
+                <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                  <button type="button" onClick={() => setIsClientSuspendModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                  <button type="submit" className="bg-slate-900 hover:bg-slate-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider">Potwierdź zawieszenie</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // PANEL ADMINISTRATORA / TRENERA (Zarządzanie cennikiem karnetów)
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
       

@@ -143,14 +143,26 @@ export default function ClientsReportPage() {
     return calculateSystemDiscount(client);
   };
 
+  // WYPISANIE Z ZAJĘĆ Z ZAPYTANIEM O ZWROT WEJŚCIA NA KARNET
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
+
+    const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
 
     const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
     const nowyWypis = { ...zajecieItem, wypisujacy: 'Zarządca' };
     const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
 
+    let karnetyZaktualizowane = [...(profileClient.karnetyKlubowicza || [])];
+    if (zwrocicWejscie) {
+      const aktywnyKarnetIlosciowy = karnetyZaktualizowane.find((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (aktywnyKarnetIlosciowy) {
+        aktywnyKarnetIlosciowy.pozostaloWejsc = (aktywnyKarnetIlosciowy.pozostaloWejsc || 0) + 1;
+      }
+    }
+
     await supabase.from('klienci').update({ 
+      karnetyKlubowicza: karnetyZaktualizowane,
       zapisyNadchodzace: uaktualnioneNadchodzace, 
       zapisy_nadchodzace: uaktualnioneNadchodzace, 
       zapisyWypisy: uaktualnioneWypisy,
@@ -161,7 +173,7 @@ export default function ClientsReportPage() {
       klient_id: profileClient.id,
       typ_operacji: 'zajecia_wypis',
       kwota: null,
-      opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})`
+      opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})${zwrocicWejscie ? ' - zwrócono 1 wejście' : ''}`
     }]);
 
     loadData();
@@ -184,6 +196,24 @@ export default function ClientsReportPage() {
       setZespolTrenerzy(trenerzyData);
     }
 
+    let ustrukturyzowaneKarnety: any[] = [];
+    if (karnetyData) {
+      ustrukturyzowaneKarnety = karnetyData.map((k: any) => {
+        let meta: Record<string, any> = {};
+        try {
+          meta = JSON.parse(k.inne_ustawienia || '{}');
+        } catch(e) {}
+
+        return {
+          ...k,
+          cena: k.cena_brutto || k.cena || '0.00',
+          limitCzasowy: k.dlugosc || k.limitCzasowy || '',
+          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
+        };
+      });
+      setDostepneKarnety(ustrukturyzowaneKarnety);
+    }
+
     if (klienciData) {
       const todayDate = new Date();
       const yesterday = new Date(todayDate);
@@ -203,8 +233,23 @@ export default function ClientsReportPage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
+        // --- AUTONAPRAWA / UZUPEŁNIENIE WEJŚĆ DLA ISTNIEJĄCYCH KARNETÓW ---
+        let karnetyZmienione = false;
+        parsedKarnety = parsedKarnety.map((k: any) => {
+          if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+            const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
+            if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
+              const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
+              k.pozostaloWejsc = valWejsc;
+              k.poczatkoweWejsc = valWejsc;
+              karnetyZmienione = true;
+            }
+          }
+          return k;
+        });
+
         // --- AUTOMATYCZNA KARENCJA I UTRATA CIĄGŁOŚCI ---
-        let hasChanges = false;
+        let hasChanges = karnetyZmienione;
         let utrataCiaglosci = false;
         let finalKarnety = [];
 
@@ -306,23 +351,6 @@ export default function ClientsReportPage() {
         if (currentActive) setProfileClient(currentActive);
       }
     }
-
-    if (karnetyData) {
-      const ustrukturyzowaneKarnety = karnetyData.map((k: any) => {
-        let meta: Record<string, any> = {};
-        try {
-          meta = JSON.parse(k.inne_ustawienia || '{}');
-        } catch(e) {}
-
-        return {
-          ...k,
-          cena: k.cena_brutto || k.cena || '0.00',
-          limitCzasowy: k.dlugosc || k.limitCzasowy || '',
-          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || null
-        };
-      });
-      setDostepneKarnety(ustrukturyzowaneKarnety);
-    }
   };
 
   useEffect(() => {
@@ -421,7 +449,10 @@ export default function ClientsReportPage() {
       cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 150;
       cenaKarnetu = `${cenaWartosc.toFixed(2)} PLN`;
 
-      const initialWejscia = defKarnetu?.ilosc_wejsc ? parseInt(defKarnetu.ilosc_wejsc, 10) : null;
+      let metaDef: Record<string, any> = {};
+      try { metaDef = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+      const initialWejsciaVal = defKarnetu ? (defKarnetu.ilosc_wejsc || metaDef.ilosc_wejsc || metaDef.iloscTreningow || null) : null;
+      const parsedInitialWejscia = initialWejsciaVal !== null ? parseInt(initialWejsciaVal, 10) : null;
 
       poczatkoweKarnety.push({
         id: Date.now(),
@@ -436,8 +467,8 @@ export default function ClientsReportPage() {
         zawieszonyOd: null,
         zawieszonyDo: null,
         historiaZawieszen: [],
-        pozostaloWejsc: initialWejscia,
-        poczatkoweWejsc: initialWejscia
+        pozostaloWejsc: parsedInitialWejscia,
+        poczatkoweWejsc: parsedInitialWejscia
       });
     }
 
@@ -593,6 +624,11 @@ export default function ClientsReportPage() {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
+    let metaExt: Record<string, any> = {};
+    try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+    const extWejsciaVal = defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null;
+    const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
+
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === extendPassTarget.id) {
         return {
@@ -601,7 +637,9 @@ export default function ClientsReportPage() {
           waznyDo: extendNewDate,
           cena: nowaCena,
           znizkaProcentowa: znizkaTekst,
-          statusTekst: `Ważny do: ${extendNewDate}`
+          statusTekst: `Ważny do: ${extendNewDate}`,
+          pozostaloWejsc: parsedExtWejscia !== null ? parsedExtWejscia : k.pozostaloWejsc,
+          poczatkoweWejsc: parsedExtWejscia !== null ? parsedExtWejscia : k.poczatkoweWejsc
         };
       }
       return k;
@@ -656,7 +694,10 @@ export default function ClientsReportPage() {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
-    const limitWejscBaza = defKarnetu?.ilosc_wejsc ? parseInt(defKarnetu.ilosc_wejsc, 10) : null;
+    let metaAdd: Record<string, any> = {};
+    try { metaAdd = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || metaAdd.ilosc_wejsc || metaAdd.iloscTreningow || null) : null;
+    const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
 
     let nowyStanStr = profileClient.wallet;
     let logKwota = 0;
@@ -674,8 +715,8 @@ export default function ClientsReportPage() {
       id: Date.now(),
       nazwa: selectedPassToAdd,
       waznyDo: dataWygasnieciaStr,
-      pozostaloWejsc: limitWejscBaza,
-      poczatkoweWejsc: limitWejscBaza,
+      pozostaloWejsc: parsedLimitWejsc,
+      poczatkoweWejsc: parsedLimitWejsc,
       cena: cenaObjKarnetu,
       znizkaProcentowa: znizkaTekst,
       rata: '1 / 1',
@@ -1992,7 +2033,7 @@ export default function ClientsReportPage() {
                 <input type="text" value={walletReasonInput} placeholder="np. Gotówka w recepcji" onChange={(e) => setWalletReasonInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
+                <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
                 <button type="submit" className="bg-amber-700 hover:bg-amber-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Zatwierdź</button>
               </div>
             </form>
