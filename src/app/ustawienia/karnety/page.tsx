@@ -123,7 +123,7 @@ export default function KarnetyPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  // Stany formularza
+  // Stany formularza administratora
   const [nazwa, setNazwa] = useState('');
   const [cena, setCena] = useState('');
   const [stawkaVat, setStawkaVat] = useState('8%');
@@ -205,7 +205,7 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // Dodana logika automatycznego wypisywania z zajęć w trakcie trwania zawieszenia
+  // Automatyczne wypisywanie z zajęć w trakcie trwania zawieszenia
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -266,12 +266,12 @@ export default function KarnetyPage() {
       await supabase.from('transakcje').insert([{
         klient_id: klientId,
         typ_operacji: 'zajecia_wypis',
-        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu samodzielnego zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
       }]);
     }
   };
 
-  // Obsługa samodzielnego zawieszania karnetu przez klubowicza
+  // Obsługa samodzielnego zawieszania karnetu przez klubowicza (zabezpieczona przed datami wstecznymi)
   const handleClientSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !currentUser.karnetyKlubowicza || currentUser.karnetyKlubowicza.length === 0) return;
@@ -286,7 +286,12 @@ export default function KarnetyPage() {
       endDate.setDate(endDate.getDate() + dni);
       sDo = endDate.toISOString().split('T')[0];
     }
-    if (new Date(sDo) < new Date(sOd)) {
+    
+    if (sOd < todayStr) {
+      alert("Data rozpoczęcia zawieszenia nie może być w przeszłości!");
+      return;
+    }
+    if (sDo < sOd) {
       alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
       return;
     }
