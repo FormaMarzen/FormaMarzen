@@ -21,7 +21,7 @@ export default function KarnetyPage() {
         console.error("Błąd pobierania karnetów:", karnetyError);
       } else if (karnetyData) {
         const parsedData = karnetyData.map((item: any) => {
-          let meta = {};
+          let meta: Record<string, any> = {};
           try {
             meta = JSON.parse(item.inne_ustawienia || '{}');
           } catch (e) {
@@ -38,6 +38,7 @@ export default function KarnetyPage() {
             dostepDo: item.dostep_do_zajec,
             dostepnyOnline: item.sprzedaz_online,
             wUzyciu: item.wUzyciu || 0,
+            ilosc_wejsc: item.ilosc_wejsc || meta.ilosc_wejsc || null,
             ...meta 
           };
         });
@@ -210,12 +211,12 @@ export default function KarnetyPage() {
     if (!nazwa.trim() || !cena.trim()) return;
 
     let wyliczonaDlugosc = '';
-    let dodanaIloscWejsc = null; // Specjalne pole dla inteligentnego systemu banerów
+    let dodanaIloscWejsc = null;
 
     if (typKarnetu === 'Na czas') {
       wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
     } else {
-      dodanaIloscWejsc = iloscTreningow; // <-- TUTAJ ZAPISUJEMY LIMIT WEJŚĆ
+      dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
       if (dodajLimitCzasowy) {
         wyliczonaDlugosc = `${iloscTreningow} wejść / ${limitIlosc} ${limitOkres.toLowerCase()}${parseInt(limitIlosc) > 1 && limitOkres === 'Miesiąc' ? 'e' : ''}`;
       } else {
@@ -228,7 +229,7 @@ export default function KarnetyPage() {
       czasIlosc,
       czasJednostka,
       iloscTreningow,
-      ilosc_wejsc: dodanaIloscWejsc, // <-- To pole jest używane przez stronę główną!
+      ilosc_wejsc: dodanaIloscWejsc,
       dodajLimitCzasowy,
       limitIlosc,
       limitOkres,
@@ -255,16 +256,15 @@ export default function KarnetyPage() {
       dlugosc: wyliczonaDlugosc,
       dostep_do_zajec: dostepDo,
       sprzedaz_online: dostepnyOnline,
+      ilosc_wejsc: dodanaIloscWejsc,
       inne_ustawienia: JSON.stringify(metaDane)
     };
 
     try {
       if (editingId !== null) {
-        // AKTUALIZACJA KARNETU
         const { error } = await supabase.from('karnety').update(supabasePayload).eq('id', editingId);
         if (error) throw error;
       } else {
-        // NOWY KARNET
         const { error } = await supabase.from('karnety').insert([{ 
           ...supabasePayload
         }]);

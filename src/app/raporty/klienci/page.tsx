@@ -77,6 +77,29 @@ export default function ClientsReportPage() {
     selectedPass: '', 
   });
 
+  // --- KULOODPORNY PARSER DAT ---
+  const parseClassDate = (dateStr: string) => {
+    if (!dateStr) return 0;
+    let d = String(dateStr).trim();
+    
+    const regex = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
+    const match = d.match(regex);
+    if (match) {
+      const year = match[3];
+      const month = match[2].padStart(2, '0');
+      const day = match[1].padStart(2, '0');
+      const hour = match[4] ? match[4].padStart(2, '0') : '23';
+      const min = match[5] ? match[5].padStart(2, '0') : '59';
+      
+      const isoStr = `${year}-${month}-${day}T${hour}:${min}:00`;
+      const parsed = new Date(isoStr).getTime();
+      if (!isNaN(parsed)) return parsed;
+    }
+
+    const fallback = new Date(d).getTime();
+    return isNaN(fallback) ? 0 : fallback;
+  };
+
   // --- FUNKCJE POMOCNICZE I RABATOWE ---
   const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
 
@@ -124,10 +147,15 @@ export default function ClientsReportPage() {
     if (!profileClient) return;
 
     const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id);
-    const nowyWypis = { ...zajecieItem, wypisujacy: 'Wypisany przez zarządcę z poziomu profilu' };
+    const nowyWypis = { ...zajecieItem, wypisujacy: 'Zarządca' };
     const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
 
-    await supabase.from('klienci').update({ zapisyNadchodzace: uaktualnioneNadchodzace, zapisyWypisy: uaktualnioneWypisy }).eq('id', profileClient.id);
+    await supabase.from('klienci').update({ 
+      zapisyNadchodzace: uaktualnioneNadchodzace, 
+      zapisy_nadchodzace: uaktualnioneNadchodzace, 
+      zapisyWypisy: uaktualnioneWypisy,
+      zapisy_wypisy: uaktualnioneWypisy
+    }).eq('id', profileClient.id);
 
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
@@ -175,7 +203,7 @@ export default function ClientsReportPage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
-        // --- ZAUTOMATYZOWANA LOGIKA KARENCJI I UTRATY CIĄGŁOŚCI ---
+        // --- AUTOMATYCZNA KARENCJA I UTRATA CIĄGŁOŚCI ---
         let hasChanges = false;
         let utrataCiaglosci = false;
         let finalKarnety = [];
@@ -264,9 +292,9 @@ export default function ClientsReportPage() {
           trenerInfo: powiazanyTrener || null,
           karnetyKlubowicza: finalKarnety, 
           transakcje: clientTransakcje,
-          zapisyNadchodzace: c.zapisyNadchodzace || [],
-          zapisyPrzeszle: c.zapisyPrzeszle || [],
-          zapisyWypisy: c.zapisyWypisy || []
+          zapisyNadchodzace: c.zapisyNadchodzace || c.zapisy_nadchodzace || [],
+          zapisyPrzeszle: c.zapisyPrzeszle || c.zapisy_przeszle || [],
+          zapisyWypisy: c.zapisyWypisy || c.zapisy_wypisy || []
         };
       });
       
@@ -280,11 +308,19 @@ export default function ClientsReportPage() {
     }
 
     if (karnetyData) {
-      const ustrukturyzowaneKarnety = karnetyData.map((k: any) => ({
-        ...k,
-        cena: k.cena_brutto || k.cena || '0.00',
-        limitCzasowy: k.dlugosc || k.limitCzasowy || ''
-      }));
+      const ustrukturyzowaneKarnety = karnetyData.map((k: any) => {
+        let meta: Record<string, any> = {};
+        try {
+          meta = JSON.parse(k.inne_ustawienia || '{}');
+        } catch(e) {}
+
+        return {
+          ...k,
+          cena: k.cena_brutto || k.cena || '0.00',
+          limitCzasowy: k.dlugosc || k.limitCzasowy || '',
+          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || null
+        };
+      });
       setDostepneKarnety(ustrukturyzowaneKarnety);
     }
   };
@@ -385,6 +421,8 @@ export default function ClientsReportPage() {
       cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 150;
       cenaKarnetu = `${cenaWartosc.toFixed(2)} PLN`;
 
+      const initialWejscia = defKarnetu?.ilosc_wejsc ? parseInt(defKarnetu.ilosc_wejsc, 10) : null;
+
       poczatkoweKarnety.push({
         id: Date.now(),
         nazwa: newClient.selectedPass,
@@ -397,7 +435,9 @@ export default function ClientsReportPage() {
         powodBlokady: null,
         zawieszonyOd: null,
         zawieszonyDo: null,
-        historiaZawieszen: []
+        historiaZawieszen: [],
+        pozostaloWejsc: initialWejscia,
+        poczatkoweWejsc: initialWejscia
       });
     }
 
@@ -616,7 +656,7 @@ export default function ClientsReportPage() {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
-    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+    const limitWejscBaza = defKarnetu?.ilosc_wejsc ? parseInt(defKarnetu.ilosc_wejsc, 10) : null;
 
     let nowyStanStr = profileClient.wallet;
     let logKwota = 0;
@@ -634,7 +674,8 @@ export default function ClientsReportPage() {
       id: Date.now(),
       nazwa: selectedPassToAdd,
       waznyDo: dataWygasnieciaStr,
-      pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+      pozostaloWejsc: limitWejscBaza,
+      poczatkoweWejsc: limitWejscBaza,
       cena: cenaObjKarnetu,
       znizkaProcentowa: znizkaTekst,
       rata: '1 / 1',
@@ -1469,6 +1510,12 @@ export default function ClientsReportPage() {
                                 <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
                                   Cena: {karnet.cena} {karnet.znizkaProcentowa ? ` ${karnet.znizkaProcentowa}` : ''}
                                 </span>
+                                {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
+                                  <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2.5 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
+                                    <span>🎟️ Wejścia:</span> 
+                                    <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1596,108 +1643,128 @@ export default function ClientsReportPage() {
                   </div>
 
                   <div className="overflow-x-auto">
-                    {activeZapisyTab === 'nadchodzace' && (
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Status</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał</th>
-                            <th className="py-2.5 px-4 text-right whitespace-nowrap">Wypisz</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyNadchodzace && profileClient.zapisyNadchodzace.length > 0 ? profileClient.zapisyNadchodzace.map((item: any, idx: number) => (
-                            <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
-                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold whitespace-nowrap">
-                                <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-black border border-emerald-200">ZAPISANY</span>
-                              </td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">{item.zapisujacy || 'Klubowicz'}</span></td>
-                              <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️ Wypisz</button></td>
-                            </tr>
-                          )) : (
-                            <tr>
-                              <td colSpan={6} className="p-8 text-center text-slate-400 text-xs">Brak nadchodzących zajęć dla tego klubowicza.</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    )}
-                    
-                    {activeZapisyTab === 'historia' && (() => {
-                      const classLogs = (profileClient.transakcje || []).filter((t: any) => 
-                        t.typ_operacji === 'zajecia_zapis' || t.typ_operacji === 'zajecia_wypis' || (t.opis && t.opis.toLowerCase().includes('zajęci'))
-                      ).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                    {activeZapisyTab === 'nadchodzace' && (() => {
+                      const nowTime = new Date().getTime();
+                      
+                      const upcomingClasses = (profileClient.zapisyNadchodzace || []).filter((item: any) => {
+                        const pTime = parseClassDate(item.data);
+                        return pTime === 0 || pTime >= (nowTime - 4 * 3600000); 
+                      });
 
-                      if (classLogs.length === 0) {
-                        return <div className="p-8 text-center text-slate-400 text-xs">Brak historii aktywności na zajęciach. Zapisy i wypisy pojawią się tutaj.</div>;
+                      return (
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                              <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Data i czas zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Nazwa zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Status</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał</th>
+                              <th className="py-2.5 px-4 text-right whitespace-nowrap">Akcje</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {upcomingClasses.length > 0 ? upcomingClasses.map((item: any, idx: number) => (
+                              <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                                <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.data}</td>
+                                <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
+                                <td className="py-3 px-4 font-semibold whitespace-nowrap">
+                                  <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-black border border-emerald-200">ZAPISANY</span>
+                                </td>
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
+                                    {item.zapisujacy?.toLowerCase().includes('klubowicz') ? '📱 Klubowicz' : `🛡️ ${item.zapisujacy || 'Trener'}`}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer transition-colors" title="Wypisz">🗑️ Wypisz</button></td>
+                              </tr>
+                            )) : (
+                              <tr>
+                                <td colSpan={6} className="p-8 text-center text-slate-400 text-xs">Brak nadchodzących zajęć dla tego klubowicza. Zapisy pojawią się tutaj.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      );
+                    })()}
+
+                    {activeZapisyTab === 'historia' && (() => {
+                      const nowTime = new Date().getTime();
+                      const allHistory: any[] = [];
+
+                      (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
+                        const st = parseClassDate(item.data);
+                        if (st !== 0 && st < (nowTime - 3600000)) {
+                          allHistory.push({ ...item, _typ: 'nadchodzace_przeszle', _sortTime: st });
+                        }
+                      });
+                      
+                      (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
+                        const st = parseClassDate(item.data);
+                        allHistory.push({ ...item, _typ: 'przeszle', _sortTime: st || nowTime - 1 });
+                      });
+                      
+                      (profileClient.zapisyWypisy || []).forEach((item: any) => {
+                        const st = parseClassDate(item.data);
+                        allHistory.push({ ...item, _typ: 'wypis', _sortTime: st || nowTime - 2 });
+                      });
+
+                      allHistory.sort((a, b) => b._sortTime - a._sortTime);
+
+                      if (allHistory.length === 0) {
+                        return <div className="p-8 text-center text-slate-400 text-xs">Brak historii aktywności na zajęciach.</div>;
                       }
 
                       return (
                         <table className="w-full text-left text-xs">
                           <thead>
                             <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                              <th className="py-2.5 px-4 whitespace-nowrap">Data operacji</th>
-                              <th className="py-2.5 px-4 whitespace-nowrap">Akcja</th>
-                              <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                              <th className="py-2.5 px-4 whitespace-nowrap">Źródło operacji</th>
-                              <th className="py-2.5 px-4 whitespace-nowrap">Szczegóły logu</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Data i czas zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Nazwa zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Status Akcji</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał / wypisał</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Obecność / Szczegóły</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {classLogs.map((log: any) => {
-                              const dt = new Date(log.created_at);
-                              const dataFormat = `${dt.toLocaleDateString('pl-PL')} ${dt.toLocaleTimeString('pl-PL', {hour: '2-digit', minute:'2-digit'})}`;
-                              
-                              let typ = 'ZAPIS';
-                              let kolor = 'text-emerald-800 bg-emerald-100 border-emerald-200';
-                              let zrodlo = '📱 Klubowicz (Aplikacja)';
-                              let zajecia = 'Zajęcia';
+                            {allHistory.map((item: any, idx: number) => {
+                              let status = 'ZAKOŃCZONE';
+                              let kolorStatus = 'bg-slate-100 text-slate-800 border-slate-200';
+                              let szczegoly = 'Brak weryfikacji';
+                              let zrodlo = item.zapisujacy || item.wypisujacy || 'Klubowicz';
 
-                              const opis = log.opis || '';
-                              
-                              if (opis.includes('NIEOBECNY') || opis.includes('nieobecny')) {
-                                typ = 'NIEOBECNOŚĆ'; 
-                                kolor = 'text-amber-800 bg-amber-100 border-amber-300'; 
-                                zrodlo = '🛡️ Trener (Obecność)';
-                              } else if (opis.includes('wypisano') || opis.includes('Wypisano') || log.typ_operacji === 'zajecia_wypis' || opis.includes('Wypisanie')) {
-                                typ = 'WYPIS'; 
-                                kolor = 'text-rose-800 bg-rose-100 border-rose-200';
-                              } else {
-                                typ = 'ZAPIS'; 
-                                kolor = 'text-emerald-800 bg-emerald-100 border-emerald-200';
+                              if (item._typ === 'nadchodzace_przeszle') {
+                                  status = 'ZAKOŃCZONE';
+                                  szczegoly = '⏳ Oczekuje na weryfikację trenera';
+                              } else if (item._typ === 'przeszle') {
+                                  status = 'ZAKOŃCZONE';
+                                  const ob = (item.obecnosc || '').toLowerCase();
+                                  if (ob.includes('nieobecny') || ob.includes('nieobecność')) {
+                                      szczegoly = '🔴 NIEOBECNY';
+                                  } else if (ob.includes('obecny') || ob.includes('obecność')) {
+                                      szczegoly = '🟢 OBECNY';
+                                  }
+                              } else if (item._typ === 'wypis') {
+                                  status = 'WYPISANY';
+                                  kolorStatus = 'bg-rose-100 text-rose-800 border-rose-200';
+                                  szczegoly = '⚪ Wypisano z listy';
                               }
 
-                              if (opis.includes('Zarządcę') || opis.includes('Trener') || opis.includes('przez klub') || opis.includes('NIEOBECNY')) {
-                                zrodlo = '🛡️ Obsługa Klubu';
-                              } else if (opis.includes('Samodzielne') || opis.includes('Aplikacja')) {
-                                zrodlo = '📱 Klubowicz';
-                              }
-
-                              const regexZajecia = /(?:zajęciach|zajęć|zajęcia)[:\s]+([^.]+)/i;
-                              const match = opis.match(regexZajecia);
-                              if (match && match[1]) {
-                                zajecia = match[1].replace(/\(.*\)/g, '').trim();
-                              } else {
-                                zajecia = opis.split('-')[1]?.trim() || opis;
-                              }
+                              if (zrodlo.toLowerCase().includes('klubowicz') && !zrodlo.includes('📱')) zrodlo = `📱 ${zrodlo}`;
+                              if ((zrodlo.toLowerCase().includes('trener') || zrodlo.toLowerCase().includes('zarządca') || zrodlo.toLowerCase().includes('system')) && !zrodlo.includes('🛡️')) zrodlo = `🛡️ ${zrodlo}`;
 
                               return (
-                                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                                  <td className="py-3 px-4 font-mono text-slate-500 whitespace-nowrap">{dataFormat}</td>
+                                <tr key={`${item.id}-${item._typ}-${idx}`} className="hover:bg-slate-50 transition-colors">
+                                  <td className="py-3 px-4 font-mono font-bold text-slate-700 whitespace-nowrap">{item.data}</td>
+                                  <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
                                   <td className="py-3 px-4 whitespace-nowrap">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black border uppercase tracking-wider ${kolor}`}>
-                                      {typ}
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black border uppercase tracking-wider ${kolorStatus}`}>
+                                      {status}
                                     </span>
                                   </td>
-                                  <td className="py-3 px-4 font-bold text-slate-900">{zajecia}</td>
                                   <td className="py-3 px-4 font-semibold text-slate-600 whitespace-nowrap">{zrodlo}</td>
-                                  <td className="py-3 px-4 text-[10px] text-slate-500 max-w-[200px] truncate" title={opis}>{opis}</td>
+                                  <td className="py-3 px-4 font-bold text-xs whitespace-nowrap">{szczegoly}</td>
                                 </tr>
                               );
                             })}
@@ -1960,7 +2027,9 @@ export default function ClientsReportPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {profileClient.transakcje && profileClient.transakcje.map((item: any) => (
+                  {profileClient.transakcje && profileClient.transakcje
+                    .filter((item: any) => item.typ_operacji !== 'zajecia_zapis' && item.typ_operacji !== 'zajecia_wypis')
+                    .map((item: any) => (
                     <tr key={item.id} className="hover:bg-sky-50/30 transition-colors">
                       <td className="py-3 px-3 font-mono whitespace-nowrap">{new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
                       <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800 whitespace-nowrap">{item.typ_operacji.replace('_', ' ')}</td>
@@ -1970,9 +2039,9 @@ export default function ClientsReportPage() {
                       <td className="py-3 px-3 text-slate-600 whitespace-nowrap" title={item.opis}>{item.opis}</td>
                     </tr>
                   ))}
-                  {(!profileClient.transakcje || profileClient.transakcje.length === 0) && (
+                  {(!profileClient.transakcje || profileClient.transakcje.filter((item: any) => item.typ_operacji !== 'zajecia_zapis' && item.typ_operacji !== 'zajecia_wypis').length === 0) && (
                     <tr>
-                      <td colSpan={4} className="py-8 text-center text-slate-400">Brak zarejestrowanej historii operacji dla tego klienta w chmurze Supabase.</td>
+                      <td colSpan={4} className="py-8 text-center text-slate-400">Brak zarejestrowanej historii operacji finansowych dla tego klienta w chmurze Supabase.</td>
                     </tr>
                   )}
                 </tbody>
