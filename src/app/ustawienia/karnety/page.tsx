@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from '../../raporty/klienci/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
@@ -271,7 +276,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // Obsługa samodzielnego zawieszania karnetu przez klubowicza (zabezpieczona przed datami wstecznymi)
+  // Obsługa samodzielnego zawieszania karnetu przez klubowicza
   const handleClientSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !currentUser.karnetyKlubowicza || currentUser.karnetyKlubowicza.length === 0) return;
@@ -311,7 +316,6 @@ export default function KarnetyPage() {
       return;
     }
 
-    // Wywołanie autowypisywania z zajęć
     await handleAutoWypiszPoZawieszeniu(currentUser.id, sOd, sDo, currentUser.karnetyKlubowicza[0].nazwa);
 
     alert("Twój karnet został pomyślnie zawieszony! System automatycznie wypisał Cię z zajęć w wybranym okresie.");
@@ -358,7 +362,7 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin) z pełną obsługą błędów RLS / schematu
+  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin) z automatyczną synchronizacją zasad nadrzędnych
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nazwa.trim() || !cena.trim()) return;
@@ -420,6 +424,30 @@ export default function KarnetyPage() {
       } else {
         const { error } = await supabase.from('karnety').insert([supabasePayload]);
         if (error) throw error;
+
+        // Synchronizacja z nadrzędnymi zasadami zapisu (utworzenie domyślnych wpisów dla nowego karnetu)
+        const { data: rulesData } = await supabase
+          .from('club_booking_rules')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (rulesData) {
+          const currentWindowMap = rulesData.booking_window_per_pass || {};
+          const currentGraceMap = rulesData.expired_pass_grace_per_pass || {};
+
+          await supabase.from('club_booking_rules').update({
+            booking_window_per_pass: {
+              ...currentWindowMap,
+              [nazwa]: rulesData.booking_window_days ?? 14
+            },
+            expired_pass_grace_per_pass: {
+              ...currentGraceMap,
+              [nazwa]: rulesData.expired_pass_grace_days ?? 15
+            }
+          }).eq('id', rulesData.id);
+        }
       }
 
       loadData(); 
@@ -427,7 +455,7 @@ export default function KarnetyPage() {
       
     } catch (error: any) {
       console.error("Szczegóły błędu bazy danych:", error);
-      alert(`Błąd zapisu: ${error.message || ''} | Code: ${error.code || ''} | Details: ${error.details || ''} | Hint: ${error.hint || ''}`);
+      alert(`Błąd zapisu: ${error.message || ''}`);
     }
   };
 
@@ -449,14 +477,14 @@ export default function KarnetyPage() {
     return <div className="p-8 text-center text-slate-500 font-bold">Ładowanie karnetów z chmury...</div>;
   }
 
-  // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU Z OPCJĄ ZAWIESZENIA
+  // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU
   if (appRole === 'klubowicz' && currentUser) {
     const aktywnyKarnet = currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 ? currentUser.karnetyKlubowicza[0] : null;
     const czyZawieszony = aktywnyKarnet && !!aktywnyKarnet.zawieszonyOd;
     const czyZablokowany = aktywnyKarnet && aktywnyKarnet.blokadaDo && aktywnyKarnet.blokadaDo >= todayStr;
 
     return (
-      <div className="max-w-[1700px] mx-auto space-y-6 pb-24 animate-in fade-in">
+      <div className="max-w-[1700px] mx-auto space-y-6 pb-24 animate-in fade-in font-sans antialiased text-slate-800">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
           <h1 className="text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
             TWOJE KARNETY
@@ -574,11 +602,11 @@ export default function KarnetyPage() {
                   <>
                     <div className="space-y-1">
                       <label className="font-bold text-slate-700">Zawieszony od</label>
-                      <input type="date" required value={clientSuspendStartDate} onChange={(e) => setClientSuspendStartDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                      <input type="date" required value={clientSuspendStartDate} onChange={(e) => setClientSuspendStartDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" />
                     </div>
                     <div className="space-y-1">
                       <label className="font-bold text-slate-700">Zawieszony do</label>
-                      <input type="date" required value={clientSuspendEndDate} onChange={(e) => setClientSuspendEndDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                      <input type="date" required value={clientSuspendEndDate} onChange={(e) => setClientSuspendEndDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" />
                     </div>
                   </>
                 )}
@@ -596,7 +624,7 @@ export default function KarnetyPage() {
 
   // PANEL ADMINISTRATORA / TRENERA (Zarządzanie cennikiem karnetów)
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
       
       {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
@@ -752,7 +780,7 @@ export default function KarnetyPage() {
                     placeholder="np. OPEN, 10 wejść"
                     value={nazwa}
                     onChange={(e) => setNazwa(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
                   />
                 </div>
 
@@ -768,7 +796,7 @@ export default function KarnetyPage() {
                         placeholder="0.00"
                         value={cena}
                         onChange={(e) => setCena(e.target.value)}
-                        className="w-full bg-sky-50/50 border border-sky-200 rounded-r-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500"
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-r-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
                       />
                     </div>
                   </div>
@@ -959,7 +987,7 @@ export default function KarnetyPage() {
                     <select 
                       value={tygodniowyLimit}
                       onChange={(e) => setTygodniowyLimit(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 cursor-pointer"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 cursor-pointer font-medium"
                     >
                       <option value="Bez limitu">Bez limitu</option>
                       <option value="1 raz w tygodniu">1 raz w tygodniu</option>
@@ -1140,13 +1168,12 @@ export default function KarnetyPage() {
                     placeholder="Opis karnetu..."
                     value={opis}
                     onChange={(e) => setOpis(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-medium"
                   />
                 </div>
               </div>
 
-/*************  ✨ Windsurf Code Generation Summary: *************/
-             {/* Przyciski dolne */}
+              {/* Przyciski dolne */}
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-sky-100">
                 <button 
                   type="button"

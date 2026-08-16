@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../raporty/klienci/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -17,41 +22,48 @@ export default function PortfelPage() {
   }, []);
 
   const loadData = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    const userEmail = session?.user?.email;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userEmail = session?.user?.email;
 
-    if (userEmail) {
-      const { data: klientData } = await supabase
-        .from('klienci')
-        .select('*')
-        .eq('E-mail', userEmail)
-        .single();
-        
-      if (klientData) {
-        setCurrentUser({
-          ...klientData,
-          wallet: klientData.Portfel || klientData.portfel || '0.00 PLN'
-        });
-
-        // Pobieramy transakcje klienta, odfiltrowując wpisy dotyczące samej obecności/zapisów na zajęcia (gdzie kwota to 0 lub brak finansów)
-        const { data: tData } = await supabase
-          .from('transakcje')
+      if (userEmail) {
+        const { data: klientData } = await supabase
+          .from('klienci')
           .select('*')
-          .eq('klient_id', klientData.id)
-          .order('created_at', { ascending: false });
-
-        if (tData) {
-          // Zostawiamy tylko transakcje finansowe (zakupy, doładowania, spłaty, gdzie kwota != 0 lub typ to zakup/uzupełnienie/spłata)
-          const finansowe = tData.filter((t: any) => {
-            const kwota = Number(t.kwota) || 0;
-            const typ = (t.typ_operacji || '').toLowerCase();
-            return kwota !== 0 || typ.includes('zakup') || typ.includes('uzupelnienie') || typ.includes('splata');
+          .or(`E-mail.eq.${userEmail},email.eq.${userEmail}`)
+          .maybeSingle();
+          
+        if (klientData) {
+          const rawClient = klientData as any;
+          setCurrentUser({
+            ...rawClient,
+            firstName: rawClient.Imię || rawClient.firstName || '',
+            lastName: rawClient.Nazwisko || rawClient.lastName || '',
+            wallet: rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN'
           });
-          setTransakcjeFinansowe(finansowe);
+
+          // Pobranie transakcji powiązanych z kontem klienta
+          const { data: tData } = await supabase
+            .from('transakcje')
+            .select('*')
+            .eq('klient_id', rawClient.id)
+            .order('created_at', { ascending: false });
+
+          if (tData) {
+            const finansowe = tData.filter((t: any) => {
+              const kwota = Number(t.kwota) || 0;
+              const typ = (t.typ_operacji || '').toLowerCase();
+              return kwota !== 0 || typ.includes('zakup') || typ.includes('uzupelnienie') || typ.includes('splata') || typ.includes('portfel');
+            });
+            setTransakcjeFinansowe(finansowe);
+          }
         }
       }
+    } catch (err) {
+      console.error("Błąd ładowania danych portfela:", err);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   const handleTopUpSubmit = async (e: React.FormEvent) => {
@@ -59,7 +71,10 @@ export default function PortfelPage() {
     if (!currentUser || !topUpAmount) return;
 
     const kwotaZmiany = parseFloat(topUpAmount);
-    if (isNaN(kwotaZmiany) || kwotaZmiany <= 0) return;
+    if (isNaN(kwotaZmiany) || kwotaZmiany <= 0) {
+      alert("Wprowadź poprawną kwotę większą od zera.");
+      return;
+    }
 
     const currentWalletNum = parseFloat(String(currentUser.wallet).replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStan = currentWalletNum + kwotaZmiany;
@@ -75,11 +90,21 @@ export default function PortfelPage() {
       return;
     }
 
+    const opisOperacji = topUpReason.trim() || `Doładowanie portfela: +${kwotaZmiany.toFixed(2)} PLN`;
+
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'uzupelnienie_portfela',
       kwota: kwotaZmiany,
-      opis: topUpReason || `Doładowanie portfela: +${kwotaZmiany.toFixed(2)} PLN`
+      opis: opisOperacji
+    }]);
+
+    await supabase.from('booking_logs').insert([{
+      action_type: 'WALLET_TOPUP',
+      status: 'SUCCESS',
+      reason: `Doładowano portfel użytkownika ${currentUser.firstName} ${currentUser.lastName}: +${kwotaZmiany.toFixed(2)} PLN`,
+      rule_applied: 'wallet_credit',
+      payload: { klient_id: currentUser.id, kwota: kwotaZmiany, nowy_stan: nowyStanStr }
     }]);
 
     alert("Portfel został pomyślnie doładowany!");
@@ -111,10 +136,18 @@ export default function PortfelPage() {
       klient_id: currentUser.id,
       typ_operacji: 'splata_portfela',
       kwota: kwotaSplaty,
-      opis: `Spłata ujemnego salda portfela`
+      opis: `Spłata ujemnego salda portfela (${kwotaSplaty.toFixed(2)} PLN)`
     }]);
 
-    alert("Portfel został pomyślnie spłacony!");
+    await supabase.from('booking_logs').insert([{
+      action_type: 'WALLET_SETTLED',
+      status: 'SUCCESS',
+      reason: `Uregulowano ujemne saldo portfela użytkownika ${currentUser.firstName} ${currentUser.lastName}`,
+      rule_applied: 'wallet_debt_settled',
+      payload: { klient_id: currentUser.id, kwota: kwotaSplaty, nowy_stan: nowyStanStr }
+    }]);
+
+    alert("Zadłużenie zostało pomyślnie uregulowane! Blokada zapisów z tytułu ujemnego salda została zdjęta.");
     loadData();
   };
 
@@ -126,7 +159,7 @@ export default function PortfelPage() {
   const isNegative = walletVal < 0;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in pb-20">
+    <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
       {/* SEKCJA 1: MÓJ PORTFEL */}
       <div className="space-y-4">
@@ -151,7 +184,7 @@ export default function PortfelPage() {
                 onClick={handleSplatPortfela}
                 className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 text-white font-black text-xs px-5 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
               >
-                Spłać portfel
+                Spłać zadłużenie
               </button>
             )}
             <button 

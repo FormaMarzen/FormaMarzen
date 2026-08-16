@@ -1,9 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from './supabase';
+import { createClient } from '@supabase/supabase-js';
 
-export default function ClientsReportPage() {
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -143,6 +148,218 @@ export default function ClientsReportPage() {
     return calculateSystemDiscount(client);
   };
 
+  // --- AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ (KRZESEŁKA) ---
+  const promoteWaitlistForClass = async (classKey: string) => {
+    const { data: participants } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('class_key', classKey);
+
+    if (!participants) return;
+
+    const parts = classKey.split('_');
+    const classId = parts[0];
+    let limit = 12;
+
+    const [{ data: szablon }, { data: jednorazowe }, { data: nadpisanie }] = await Promise.all([
+      supabase.from('grafik_zajec').select('*').eq('id', classId).maybeSingle(),
+      supabase.from('zajecia_jednorazowe').select('*').eq('id', classId).maybeSingle(),
+      supabase.from('nadpisania_zajec').select('*').eq('class_key', classKey).maybeSingle()
+    ]);
+
+    if (nadpisanie?.limit) limit = nadpisanie.limit;
+    else if (szablon?.limit || szablon?.limit_miejsc) limit = szablon.limit || szablon.limit_miejsc;
+    else if (jednorazowe?.limit || jednorazowe?.limit_miejsc) limit = jednorazowe.limit || jednorazowe.limit_miejsc;
+
+    const mainList = participants.filter((p: any) => p.status === 'zapisany');
+    const firstWaitlist = participants.find((p: any) => p.status === 'krzesełko');
+
+    if (mainList.length < limit && firstWaitlist) {
+      await supabase
+        .from('zapisy_zajec')
+        .update({ status: 'zapisany' })
+        .eq('class_key', classKey)
+        .eq('klient_id', firstWaitlist.klient_id);
+
+      const { data: promotedClient } = await supabase
+        .from('klienci')
+        .select('*')
+        .eq('id', firstWaitlist.klient_id)
+        .single();
+
+      const pClient = promotedClient as any;
+      const name = pClient 
+        ? `${pClient.Imię || pClient.firstName || ''} ${pClient.Nazwisko || pClient.lastName || ''}`.trim() 
+        : `ID: ${firstWaitlist.klient_id}`;
+
+      await supabase.from('transakcje').insert([{
+        klient_id: firstWaitlist.klient_id,
+        typ_operacji: 'zajecia_awans_rezerwa',
+        class_key: classKey,
+        opis: `Automatyczny awans: ${name} przepisany z listy rezerwowej (krzesełka) na listę główną.`
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'WAITLIST_PROMOTED',
+        status: 'SUCCESS',
+        reason: `${name} awansował na listę główną w ${classKey}`,
+        rule_applied: 'waitlist_auto_promote',
+        payload: { klient_id: firstWaitlist.klient_id, class_key: classKey }
+      }]);
+    }
+  };
+
+  // --- AUTOMATYCZNE WYPISYWANIE PO BLOKADZIE ---
+  const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string) => {
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let cancelledCount = 0;
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', klientId);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          let classDate = new Date();
+          if (dateStr.includes('/')) {
+            const [d, m] = dateStr.split('/').map(Number);
+            classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          } else if (dateStr.includes('-')) {
+            classDate = new Date(dateStr);
+          }
+          
+          if (classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', klientId);
+            cancelledCount++;
+
+            await promoteWaitlistForClass(signup.class_key);
+          }
+        }
+      }
+    }
+
+    if (cancelledCount > 0 && targetClientObj) {
+      let updatedKarnety = [...(targetClientObj.karnetyKlubowicza || [])];
+      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: klientId,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu blokady konta/karnetu (${powodBlokadyText}). Zwrócono ${cancelledCount} wejść.`
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'BLOCK_CANCEL_ALL',
+        status: 'SUCCESS',
+        reason: `Automatycznie wypisano z ${cancelledCount} zajęć po nałożeniu blokady`,
+        rule_applied: 'absence_ban',
+        payload: { klient_id: klientId, count: cancelledCount }
+      }]);
+    }
+  };
+
+  // --- AUTOMATYCZNE WYPISYWANIE PO ZAWIESZENIU ---
+  const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
+    const now = new Date();
+    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let cancelledCount = 0;
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', klientId);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const dateStr = parts[1];
+        if (dateStr) {
+          let classDate = new Date();
+          let classDateStr = '';
+          if (dateStr.includes('/')) {
+            const [d, m] = dateStr.split('/').map(Number);
+            classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+            const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
+            classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
+          } else if (dateStr.includes('-')) {
+            classDate = new Date(dateStr);
+            classDateStr = dateStr;
+          }
+          
+          const isAfterStart = classDateStr >= zawieszonyOd;
+          const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
+
+          if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', klientId);
+            cancelledCount++;
+
+            await promoteWaitlistForClass(signup.class_key);
+          }
+        }
+      }
+    }
+
+    if (cancelledCount > 0) {
+      const { data: klientData } = await supabase.from('klienci').select('karnetyKlubowicza').eq('id', klientId).single();
+      if (klientData) {
+        let updatedKarnety = klientData.karnetyKlubowicza;
+        if (typeof updatedKarnety === 'string') {
+          try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
+        }
+        if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
+
+        const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+          const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
+        }
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: klientId,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'SUSPEND_CANCEL_ALL',
+        status: 'SUCCESS',
+        reason: `Automatycznie wypisano z ${cancelledCount} zajęć po zawieszeniu karnetu`,
+        rule_applied: 'pass_suspension',
+        payload: { klient_id: klientId, count: cancelledCount }
+      }]);
+    }
+  };
+
   // WYPISANIE Z ZAJĘĆ Z ZAPYTANIEM O ZWROT WEJŚCIA NA KARNET
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
@@ -161,6 +378,16 @@ export default function ClientsReportPage() {
       }
     }
 
+    if (zajecieItem.classKey) {
+      await supabase
+        .from('zapisy_zajec')
+        .delete()
+        .eq('class_key', zajecieItem.classKey)
+        .eq('klient_id', profileClient.id);
+
+      await promoteWaitlistForClass(zajecieItem.classKey);
+    }
+
     await supabase.from('klienci').update({ 
       karnetyKlubowicza: karnetyZaktualizowane,
       zapisyNadchodzace: uaktualnioneNadchodzace, 
@@ -174,6 +401,14 @@ export default function ClientsReportPage() {
       typ_operacji: 'zajecia_wypis',
       kwota: null,
       opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})${zwrocicWejscie ? ' - zwrócono 1 wejście' : ''}`
+    }]);
+
+    await supabase.from('booking_logs').insert([{
+      action_type: 'CANCEL_SUCCESS',
+      status: 'SUCCESS',
+      reason: `Wypisano klubowicza ${profileClient.firstName} ${profileClient.lastName} z poziomu profilu`,
+      rule_applied: 'ADMIN_CANCEL',
+      payload: { klient_id: profileClient.id, zajecie: zajecieItem.zajecia }
     }]);
 
     loadData();
@@ -233,7 +468,6 @@ export default function ClientsReportPage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
-        // --- AUTONAPRAWA / UZUPEŁNIENIE WEJŚĆ DLA ISTNIEJĄCYCH KARNETÓW ---
         let karnetyZmienione = false;
         parsedKarnety = parsedKarnety.map((k: any) => {
           if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
@@ -248,7 +482,6 @@ export default function ClientsReportPage() {
           return k;
         });
 
-        // --- AUTOMATYCZNA KARENCJA I UTRATA CIĄGŁOŚCI ---
         let hasChanges = karnetyZmienione;
         let utrataCiaglosci = false;
         let finalKarnety = [];
@@ -320,8 +553,8 @@ export default function ClientsReportPage() {
           rabat: 0, 
           systemDiscountOffset: currentOffset,
           hasLostContinuity: hasLostContinuity,
-          firstName: c.Imię || '',
-          lastName: c.Nazwisko || '',
+          firstName: c.Imię || c.firstName || '',
+          lastName: c.Nazwisko || c.lastName || '',
           registered: c.Zarejestrowany || c.registered || '2026-06-01',
           activated: c.activated || '2026-06-01',
           expiresDate: c.expiresDate || '',
@@ -538,8 +771,15 @@ export default function ClientsReportPage() {
 
   const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
-      await supabase.from('klienci').delete().eq('id', id);
+      const { data: userSignups } = await supabase.from('zapisy_zajec').select('class_key').eq('klient_id', id);
+      await supabase.from('zapisy_zajec').delete().eq('klient_id', id);
+      if (userSignups) {
+        for (const s of userSignups) {
+          await promoteWaitlistForClass(s.class_key);
+        }
+      }
       await supabase.from('transakcje').delete().eq('klient_id', id);
+      await supabase.from('klienci').delete().eq('id', id);
       
       setTableActionClient(null);
       if (profileClient && profileClient.id === id) setProfileClient(null);
@@ -774,7 +1014,7 @@ export default function ClientsReportPage() {
       return;
     }
 
-    if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? Rzeczywista liczba dni doliczona do ważności karnetu zostanie i tak wyliczona dokładnie w momencie ręcznego odwieszenia.`)) return;
+    if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? System automatycznie wypisze klubowicza z zajęć w tym okresie i zwróci wejścia.`)) return;
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === suspendPassTarget.id) {
@@ -790,7 +1030,8 @@ export default function ClientsReportPage() {
     const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
     
     if (!error) {
-      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony (planowo do ${sDo}). Przedłużenie jego ważności zostanie dokładnie przeliczone w momencie kliknięcia "Odwieś karnet".`);
+      await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
+      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony.`);
       setIsSuspendModalOpen(false);
       loadData();
     } else {
@@ -866,7 +1107,9 @@ export default function ClientsReportPage() {
       return;
     }
 
-    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? (Nie przedłuża to ważności karnetu)`)) return;
+    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? Użytkownik zostanie automatycznie wypisany z nadchodzących zajęć.`)) return;
+
+    const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === suspendPassTarget.id) {
@@ -874,7 +1117,7 @@ export default function ClientsReportPage() {
           ...k, 
           blokadaOd: bOd,
           blokadaDo: bDo,
-          powodBlokady: `Zablokowano w okresie ${bOd} - ${bDo}`
+          powodBlokady: powod
         };
       }
       return k;
@@ -883,6 +1126,7 @@ export default function ClientsReportPage() {
     const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
     
     if (!error) {
+      await handleAutoWypiszPoZablokowaniu(profileClient.id, profileClient, powod);
       alert(`Karnet został zablokowany do ${bDo}.`);
       setIsSuspendModalOpen(false);
       loadData();
@@ -1002,7 +1246,6 @@ export default function ClientsReportPage() {
     (c.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
     (c.phone || '').includes(searchQuery)
   );
-
   const sortedClients = [...filteredClients].sort((a, b) => {
     if (!sortField) return 0;
     
@@ -1043,7 +1286,7 @@ export default function ClientsReportPage() {
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
 
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden">
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
       {/* Pasek Nagłówka */}
       <div className="flex justify-between items-center border-b border-sky-200 pb-4">
@@ -1552,7 +1795,7 @@ export default function ClientsReportPage() {
                                   Cena: {karnet.cena} {karnet.znizkaProcentowa ? ` ${karnet.znizkaProcentowa}` : ''}
                                 </span>
                                 {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
-                                  <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2.5 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
+                                  <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
                                     <span>🎟️ Wejścia:</span> 
                                     <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
                                   </span>
@@ -2021,16 +2264,16 @@ export default function ClientsReportPage() {
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">💰 Uzupełnij portfel</h3>
-              <button onClick={() => setIsTopUpWalletOpen(false)} className="text-slate-400 font-bold">✕</button>
+              <button onClick={() => setIsTopUpWalletOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleTopUpWalletSubmit} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="font-bold">Kwota (+/-)</label>
-                <input type="number" step="0.01" required value={walletAmountInput} onChange={(e) => setWalletAmountInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                <label className="font-bold text-slate-700">Kwota (+/-)</label>
+                <input type="number" step="0.01" required value={walletAmountInput} onChange={(e) => setWalletAmountInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
               </div>
               <div className="space-y-1">
-                <label className="font-bold whitespace-nowrap">Tytuł operacji (opcjonalnie)</label>
-                <input type="text" value={walletReasonInput} placeholder="np. Gotówka w recepcji" onChange={(e) => setWalletReasonInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                <label className="font-bold text-slate-700 whitespace-nowrap">Tytuł operacji (opcjonalnie)</label>
+                <input type="text" value={walletReasonInput} placeholder="np. Gotówka w recepcji" onChange={(e) => setWalletReasonInput(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
@@ -2149,7 +2392,7 @@ export default function ClientsReportPage() {
             </div>
             <div className="space-y-3 text-xs">
               <div className="space-y-1">
-                <label className="font-bold">Wybierz nowy karnet z bazy</label>
+                <label className="font-bold text-slate-700">Wybierz nowy karnet z bazy</label>
                 <select 
                   value={editingPassModal.nazwa || ''} 
                   onChange={(e) => {
@@ -2165,7 +2408,7 @@ export default function ClientsReportPage() {
                       cena: def ? `${finalCena.toFixed(2)} PLN` : editingPassModal.cena
                     });
                   }} 
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer"
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer text-slate-800"
                 >
                   <option value="">-- Wybierz karnet z bazy --</option>
                   {dostepneKarnety.map(k => {
@@ -2186,21 +2429,21 @@ export default function ClientsReportPage() {
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="font-bold">Ważny do</label>
+                <label className="font-bold text-slate-700">Ważny do</label>
                 <input 
                   type="date" 
                   value={editingPassModal.waznyDo || ''} 
                   onChange={(e) => setEditingPassModal({...editingPassModal, waznyDo: e.target.value})} 
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer text-slate-800" 
                 />
               </div>
               <div className="space-y-1">
-                <label className="font-bold">Pozostało wejść</label>
+                <label className="font-bold text-slate-700">Pozostało wejść</label>
                 <input 
                   type="number" 
                   value={editingPassModal.pozostaloWejsc ?? ''} 
                   onChange={(e) => setEditingPassModal({...editingPassModal, pozostaloWejsc: e.target.value === '' ? null : parseInt(e.target.value, 10)})} 
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
                 />
               </div>
             </div>
@@ -2292,7 +2535,7 @@ export default function ClientsReportPage() {
                 <div>
                   <h4 className="font-black text-rose-900 text-xs uppercase flex items-center gap-2"><span>🔒</span> Zablokuj karnet</h4>
                   <p className="text-[10px] text-rose-800 leading-tight mt-1">
-                    Blokuje możliwość wejścia do klubu. <strong>NIE przedłuża</strong> ważności karnetu.
+                    Blokuje możliwość wejścia do klubu i wypisuje z nadchodzących zajęć. <strong>NIE przedłuża</strong> ważności karnetu.
                   </p>
                 </div>
                 
@@ -2379,8 +2622,8 @@ export default function ClientsReportPage() {
             </div>
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1"><label className="font-bold whitespace-nowrap">Imię</label><input type="text" value={editingClient.firstName || ''} onChange={(e) => setEditingClient({...editingClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
-                <div className="space-y-1"><label className="font-bold whitespace-nowrap">Nazwisko</label><input type="text" value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2" /></div>
+                <div className="space-y-1"><label className="font-bold text-slate-700 whitespace-nowrap">Imię</label><input type="text" value={editingClient.firstName || ''} onChange={(e) => setEditingClient({...editingClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold" /></div>
+                <div className="space-y-1"><label className="font-bold text-slate-700 whitespace-nowrap">Nazwisko</label><input type="text" value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold" /></div>
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setEditingClient(null)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>

@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../../raporty/klienci/supabase'; 
+import { createClient } from '@supabase/supabase-js';
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function ZarzadzajGrafikiemPage() {
   const [activeTab, setActiveTab] = useState<'cykliczne' | 'jednorazowe'>('cykliczne');
@@ -41,55 +46,59 @@ export default function ZarzadzajGrafikiemPage() {
 
   // POBIERANIE WSZYSTKICH DANYCH Z SUPABASE
   const loadData = async () => {
-    // 1. Rodzaje zajęć
-    const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
-    if (rodzajeData) {
-      setDostepneRodzajeZajec(rodzajeData);
-      if (rodzajeData.length > 0 && !wybranyRodzajZajec) {
-        setWybranyRodzajZajec(rodzajeData[0].nazwa);
+    try {
+      // 1. Rodzaje zajęć
+      const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
+      if (rodzajeData) {
+        setDostepneRodzajeZajec(rodzajeData);
+        if (rodzajeData.length > 0 && !wybranyRodzajZajec) {
+          setWybranyRodzajZajec(rodzajeData[0].nazwa);
+        }
       }
-    }
 
-    // 2. Trenerzy
-    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
-    if (trenerzyData) {
-      setListaTrenerow(trenerzyData);
-      if (trenerzyData.length > 0 && !wybranyTrener) {
-        setWybranyTrener(trenerzyData[0].imie_nazwisko);
+      // 2. Trenerzy
+      const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+      if (trenerzyData) {
+        setListaTrenerow(trenerzyData);
+        if (trenerzyData.length > 0 && !wybranyTrener) {
+          setWybranyTrener(trenerzyData[0].imie_nazwisko);
+        }
       }
-    }
 
-    // 3. Cykliczne (Poprawione mapowanie na zgodne ze schematem bazy)
-    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
-    if (szablonyData) {
-      setCykliczneClasses(szablonyData.map((s: any) => ({
-        id: s.id,
-        title: s.title,
-        startDate: `Utworzono: ${s.created_at ? s.created_at.split('T')[0] : 'Brak'}`,
-        start: s.start || '08:00',
-        end: s.end || '09:00',
-        limit: s.limit || 12,
-        days: s.days || {},
-        trainer: s.trainer,
-        advanced: ['Powtarzalność: Co tydzień']
-      })));
-    }
+      // 3. Cykliczne
+      const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
+      if (szablonyData) {
+        setCykliczneClasses(szablonyData.map((s: any) => ({
+          id: s.id,
+          title: s.title || s.nazwa,
+          startDate: `Utworzono: ${s.created_at ? s.created_at.split('T')[0] : 'Brak'}`,
+          start: s.start || s.start_time || '08:00',
+          end: s.end || s.end_time || '09:00',
+          limit: s.limit || s.limit_miejsc || 12,
+          days: s.days || {},
+          trainer: s.trainer || s.prowadzacy || '',
+          advanced: ['Powtarzalność: Co tydzień']
+        })));
+      }
 
-    // 4. Jednorazowe (Zostaje jak było, skoro działało poprawnie)
-    const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
-    if (jednorazoweData) {
-      setJednorazoweClasses(jednorazoweData.map((j: any) => ({
-        id: j.id,
-        title: j.title || j.nazwa,
-        displayDate: j.display_date || j.data,
-        fullDateStr: j.full_date_str || j.data,
-        start: j.start_time || (j.godzina ? j.godzina.split(' - ')[0] : '08:00'),
-        end: j.end_time || (j.godzina ? j.godzina.split(' - ')[1] : '09:00'),
-        limit: j.limit_miejsc || 12,
-        trainer: j.trainer || j.prowadzacy,
-        isJednorazowe: true,
-        advanced: ['Zajęcia jednorazowe']
-      })));
+      // 4. Jednorazowe
+      const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
+      if (jednorazoweData) {
+        setJednorazoweClasses(jednorazoweData.map((j: any) => ({
+          id: j.id,
+          title: j.title || j.nazwa,
+          displayDate: j.display_date || j.data,
+          fullDateStr: j.full_date_str || j.data,
+          start: j.start_time || (j.godzina ? j.godzina.split(' - ')[0] : '08:00'),
+          end: j.end_time || (j.godzina ? j.godzina.split(' - ')[1] : '09:00'),
+          limit: j.limit_miejsc || j.limit || 12,
+          trainer: j.trainer || j.prowadzacy || '',
+          isJednorazowe: true,
+          advanced: ['Zajęcia jednorazowe']
+        })));
+      }
+    } catch (error) {
+      console.error("Błąd pobierania grafiku:", error);
     }
   };
 
@@ -107,6 +116,8 @@ export default function ZarzadzajGrafikiemPage() {
     setKoniecH('09');
     setKoniecM('00');
     setMaxOsob('12');
+    setDataJednorazowa(new Date().toISOString().split('T')[0]);
+    setWybraneDni({ pon: true, wt: false, sr: true, czw: false, pt: false, sb: false, nd: false });
     setIsModalOpen(true);
   };
 
@@ -139,10 +150,9 @@ export default function ZarzadzajGrafikiemPage() {
     const nazwaDoZapisu = wybranyRodzajZajec || 'Ogólnorozwojowe';
     const startStr = `${startH}:${startM}`;
     const endStr = `${koniecH}:${koniecM}`;
-    const limitNum = parseInt(maxOsob) || 12;
+    const limitNum = parseInt(maxOsob, 10) || 12;
 
     if (activeTab === 'cykliczne') {
-      // ✅ Payload w 100% zgodny z tabelą `grafik_zajec`
       const payload = {
         title: nazwaDoZapisu,
         start: startStr,
@@ -164,7 +174,6 @@ export default function ZarzadzajGrafikiemPage() {
         return;
       }
     } else {
-      // Zapis do tabeli: zajecia_jednorazowe (Zostawiamy jak było, skoro działało)
       const [y, m, d] = dataJednorazowa.split('-');
       const displayDateStr = `${d}/${m}`;
 
@@ -226,7 +235,7 @@ export default function ZarzadzajGrafikiemPage() {
   );
 
   return (
-    <div className="max-w-[1600px] mx-auto space-y-4 px-2 sm:px-4 pb-24 overflow-x-hidden">
+    <div className="max-w-[1600px] mx-auto space-y-4 px-2 sm:px-4 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
       {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
@@ -249,7 +258,7 @@ export default function ZarzadzajGrafikiemPage() {
           <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs">🔍</span>
           <input 
             type="text"
-            placeholder="Wyszukaj zajęcia..."
+            placeholder="Wyszukaj zajęcia po nazwie lub trenerze..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-sky-50/50 border border-sky-200 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500"
@@ -328,7 +337,7 @@ export default function ZarzadzajGrafikiemPage() {
                     </td>
                   )}
 
-                  <td className="py-3 px-3 text-slate-800 font-medium whitespace-nowrap">{item.trainer}</td>
+                  <td className="py-3 px-3 text-slate-800 font-medium whitespace-nowrap">{item.trainer || 'Brak'}</td>
                   <td className="py-3 px-3 text-slate-500 text-[10px] space-y-0.5 max-w-[220px]">
                     {item.advanced?.map((adv: string, idx: number) => (
                       <div key={idx} className="truncate">• {adv}</div>
@@ -356,7 +365,7 @@ export default function ZarzadzajGrafikiemPage() {
               ))}
               {filteredClasses.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={activeTab === 'cykliczne' ? 7 : 7} className="py-12 text-center text-slate-400 font-medium">
                     Brak zajęć w zakładce {activeTab === 'cykliczne' ? 'Cykliczne' : 'Jednorazowe'}. Dodaj pierwsze za pomocą przycisku powyżej.
                   </td>
                 </tr>
@@ -417,13 +426,10 @@ export default function ZarzadzajGrafikiemPage() {
                     onChange={(e) => setWybranyTrener(e.target.value)}
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2.5 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none"
                   >
-                    {listaTrenerow.length > 0 ? (
-                      listaTrenerow.map((t: any) => (
-                        <option key={t.id} value={t.imie_nazwisko}>{t.imie_nazwisko}</option>
-                      ))
-                    ) : (
-                      <option value="">Brak trenerów w bazie (dodaj w zespole)</option>
-                    )}
+                    <option value="">-- Wybierz trenera --</option>
+                    {listaTrenerow.map((t: any) => (
+                      <option key={t.id} value={t.imie_nazwisko}>{t.imie_nazwisko}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -434,7 +440,7 @@ export default function ZarzadzajGrafikiemPage() {
                       type="date"
                       value={dataJednorazowa}
                       onChange={(e) => setDataJednorazowa(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:border-sky-500 focus:outline-none"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:border-sky-500 focus:outline-none cursor-pointer"
                     />
                   </div>
                 )}
@@ -443,10 +449,10 @@ export default function ZarzadzajGrafikiemPage() {
                   <div className="space-y-1">
                     <label className="font-bold text-slate-800 block">Początek</label>
                     <div className="flex gap-2">
-                      <select value={startH} onChange={(e) => handleStartChange(e.target.value, startM)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none">
+                      <select value={startH} onChange={(e) => handleStartChange(e.target.value, startM)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none font-bold">
                         {Array.from({length: 24}, (_, i) => String(i).padStart(2, '0')).map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
-                      <select value={startM} onChange={(e) => handleStartChange(startH, e.target.value)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none">
+                      <select value={startM} onChange={(e) => handleStartChange(startH, e.target.value)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none font-bold">
                         {Array.from({length: 60}, (_, i) => String(i).padStart(2, '0')).map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </div>
@@ -455,10 +461,10 @@ export default function ZarzadzajGrafikiemPage() {
                   <div className="space-y-1">
                     <label className="font-bold text-slate-800 block">Koniec</label>
                     <div className="flex gap-2">
-                      <select value={koniecH} onChange={(e) => setKoniecH(e.target.value)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none">
+                      <select value={koniecH} onChange={(e) => setKoniecH(e.target.value)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none font-bold">
                         {Array.from({length: 24}, (_, i) => String(i).padStart(2, '0')).map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
-                      <select value={koniecM} onChange={(e) => setKoniecM(e.target.value)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none">
+                      <select value={koniecM} onChange={(e) => setKoniecM(e.target.value)} className="w-1/2 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-slate-800 cursor-pointer focus:border-sky-500 focus:outline-none font-bold">
                         {Array.from({length: 60}, (_, i) => String(i).padStart(2, '0')).map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </div>
@@ -469,9 +475,10 @@ export default function ZarzadzajGrafikiemPage() {
                   <label className="font-bold text-slate-800 block">Maksymalna ilość osób *</label>
                   <input 
                     type="number"
+                    min="1"
                     value={maxOsob}
                     onChange={(e) => setMaxOsob(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2.5 text-slate-800 focus:border-sky-500 focus:outline-none"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2.5 text-slate-800 focus:border-sky-500 focus:outline-none font-bold"
                   />
                 </div>
 

@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../raporty/klienci/supabase'; 
+import { createClient } from '@supabase/supabase-js';
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function SchedulePage() {
   const [selectedClass, setSelectedClass] = useState<any | null>(null);
@@ -57,9 +62,47 @@ export default function SchedulePage() {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
+  // STAN NADRZĘDNYCH ZASAD ZAPISÓW (OGÓLNE + PER TRENING/KARNET)
+  const [bookingRules, setBookingRules] = useState<any>({
+    cancel_deadline_minutes: 90,
+    booking_cutoff_minutes: null,
+    booking_window_days: 14,
+    expired_pass_grace_days: 15,
+    max_daily_bookings: null,
+    max_daily_same_type_bookings: 1,
+    cancel_deadline_per_class: {},
+    booking_cutoff_per_class: {},
+    booking_window_per_pass: {},
+    expired_pass_grace_per_pass: {},
+  });
+
   // GŁÓWNA FUNKCJA POBIERANIA DANYCH Z SUPABASE
   const loadDataFromSupabase = async () => {
-    // 0. Pobierz definicje karnetów dla auto-naprawy wejść
+    // 0. Pobierz nadrzędne zasady zapisów z bazy
+    const { data: rulesData } = await supabase
+      .from('club_booking_rules')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (rulesData) {
+      setBookingRules({
+        cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
+        booking_cutoff_minutes: rulesData.booking_cutoff_minutes ?? null,
+        booking_window_days: rulesData.booking_window_days ?? 14,
+        expired_pass_grace_days: rulesData.expired_pass_grace_days ?? 15,
+        max_daily_bookings: rulesData.max_daily_bookings ?? null,
+        max_daily_same_type_bookings: rulesData.max_daily_same_type_bookings ?? 1,
+        cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
+        booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
+        booking_window_per_pass: rulesData.booking_window_per_pass || {},
+        expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
+      });
+      setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
+    }
+
+    // 1. Definicje karnetów
     const { data: karnetyDefData } = await supabase.from('karnety').select('*');
     let ustrukturyzowaneKarnetyDef: any[] = [];
     if (karnetyDefData) {
@@ -73,7 +116,7 @@ export default function SchedulePage() {
       });
     }
 
-    // 1. Klienci
+    // 2. Klienci
     const { data: klienciData } = await supabase.from('klienci').select('*');
     if (klienciData) {
       const parsedKlienci = klienciData.map((c: any) => {
@@ -86,7 +129,7 @@ export default function SchedulePage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
-        // Auto-heal brakujących wejść w historycznych karnetach
+        // Auto-naprawa wejść dla karnetów
         parsedKarnety = parsedKarnety.map((k: any) => {
           if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa === k.nazwa);
@@ -116,7 +159,7 @@ export default function SchedulePage() {
       setDostepniKlienci(parsedKlienci);
     }
 
-    // 2. Zapisy na zajęcia
+    // 3. Zapisy na zajęcia
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     if (zapisyData) {
       const grouped: { [key: string]: any[] } = {};
@@ -131,7 +174,7 @@ export default function SchedulePage() {
       setZapisyNaZajecia(grouped);
     }
 
-    // 3. Nadpisania zajęć (edycje, odwołania)
+    // 4. Nadpisania zajęć (edycje, odwołania)
     const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
     if (nadpisaniaData) {
       const nadpisaniaMap: { [key: string]: any } = {};
@@ -148,7 +191,7 @@ export default function SchedulePage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    // 4. Wydarzenia kilkudniowe
+    // 5. Wydarzenia kilkudniowe
     const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
     if (wydarzeniaData) {
       setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({
@@ -159,7 +202,7 @@ export default function SchedulePage() {
       })));
     }
 
-    // 5. Zajęcia jednorazowe/duplikowane
+    // 6. Zajęcia jednorazowe/duplikowane
     const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
     if (jednorazoweData) {
       setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
@@ -175,7 +218,7 @@ export default function SchedulePage() {
       })));
     }
 
-    // 6. Trenerzy
+    // 7. Trenerzy
     const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
     if (trenerzyData) {
       setListaTrenerow(trenerzyData);
@@ -184,7 +227,7 @@ export default function SchedulePage() {
       }
     }
 
-    // 7. Szablony zajęć (stały grafik) z Supabase (tabela: grafik_zajec)
+    // 8. Szablony grafiku stałego
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
     if (szablonyData) {
       setZapisaneZajecia(szablonyData.map((s: any) => ({
@@ -198,7 +241,7 @@ export default function SchedulePage() {
       })));
     }
 
-    // 8. Rodzaje zajęć (kolory/etykiety) z Supabase
+    // 9. Rodzaje zajęć
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) {
       setRodzajeZajec(rodzajeData);
@@ -209,11 +252,11 @@ export default function SchedulePage() {
     setIsMounted(true);
     const now = new Date();
     
-    // SPRAWDZENIE WEEKENDU - jeśli sobota (6) lub niedziela (0), przeskocz na przyszły poniedziałek
+    // Sprawdzenie weekendu - w sobotę lub niedzielę przeskocz na poniedziałek
     const dayOfWeek = now.getDay();
-    if (dayOfWeek === 6) { // Sobota
+    if (dayOfWeek === 6) {
       now.setDate(now.getDate() + 2);
-    } else if (dayOfWeek === 0) { // Niedziela
+    } else if (dayOfWeek === 0) {
       now.setDate(now.getDate() + 1);
     }
 
@@ -231,7 +274,7 @@ export default function SchedulePage() {
   }, []);
 
   if (!isMounted || !currentDate || !calendarViewDate) {
-    return <div className="p-8 text-center text-slate-500 font-bold">Ładowanie grafiku zajęć...</div>;
+    return <div className="p-8 text-center text-slate-500 font-bold text-xs">Ładowanie grafiku zajęć...</div>;
   }
 
   const openHistoryModal = async (item: any, displayDate: string) => {
@@ -414,6 +457,9 @@ export default function SchedulePage() {
     }
   };
 
+  // =========================================================================
+  // GŁÓWNA LOGIKA ZAPISU KLIENTA Z NADRZĘDNYM SILNIKIEM REGUŁ PER-TRENING / PER-KARNET
+  // =========================================================================
   const handleZapiszKlientaDoZajec = async (klient: any) => {
     if (!selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
@@ -421,29 +467,145 @@ export default function SchedulePage() {
       return;
     }
 
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    const limitZajec = selectedClass.limit || 12;
+
+    const [dStr, mStr] = selectedClass.displayDate.split('/');
+    const classYear = currentDate ? currentDate.getFullYear() : new Date().getFullYear();
+    const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
+    const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+    const now = new Date();
+
+    // 1. Sprawdzenie aktywnej blokady konta
     if (klient.blokadaDo) {
       const dataBlokady = new Date(klient.blokadaDo);
-      const teraz = new Date();
-      if (teraz <= dataBlokady) {
-        alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`);
+      if (now <= dataBlokady) {
+        const errReason = klient.powodBlokady || `Aktywna blokada konta do ${klient.blokadaDo}.`;
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${klient.firstName} ${klient.lastName}: ${errReason}`,
+          rule_applied: 'absence_ban',
+          payload: { klient_id: klient.id, class_key: classKey }
+        }]);
+        alert(`Nie można zapisać klienta! ${errReason}`);
         return;
       }
     }
 
-    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const aktualni = zapisyNaZajecia[classKey] || [];
-
+    // 2. Czy klient jest już zapisany na te konkretne zajęcia
     if (aktualni.some(k => k.id === klient.id)) {
       alert("Ten klient jest już zapisany na te zajęcia!");
       return;
     }
 
-    // --- WERYFIKACJA LIMITU DZIENNEGO ---
-    let dailyLimit = Infinity; 
+    // 3. Okno zapisu w przód (per karnet z fallbackiem do wartości domyślnej)
+    const passName = klient.pass || 'OPEN';
+    const bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
+    const maxBookingDate = new Date();
+    maxBookingDate.setDate(maxBookingDate.getDate() + bookingWindowDays);
+    maxBookingDate.setHours(23, 59, 59, 999);
+
+    if (classStartDateTime > maxBookingDate) {
+      const reason = `Dla karnetu "${passName}" zapisy otwierają się ${bookingWindowDays} dni przed zajęciami.`;
+      await supabase.from('booking_logs').insert([{
+        action_type: 'BOOKING_BLOCKED',
+        status: 'BLOCKED',
+        reason: `${klient.firstName} ${klient.lastName}: ${reason}`,
+        rule_applied: 'booking_window_per_pass',
+        payload: { klient_id: klient.id, class_key: classKey, pass: passName, window_days: bookingWindowDays }
+      }]);
+      alert(`Nie można zapisać! ${reason}`);
+      return;
+    }
+
+    // 4. Blokada zapisów przed rozpoczęciem (per rodzaj treningu)
+    const trainingName = selectedClass.title || '';
+    const cutoffMinutes = bookingRules.booking_cutoff_per_class?.[trainingName] !== undefined
+      ? bookingRules.booking_cutoff_per_class[trainingName]
+      : bookingRules.booking_cutoff_minutes;
+
+    if (cutoffMinutes !== null && cutoffMinutes !== undefined && cutoffMinutes > 0) {
+      const cutoffMs = cutoffMinutes * 60 * 1000;
+      const diffMs = classStartDateTime.getTime() - now.getTime();
+      if (diffMs > 0 && diffMs < cutoffMs) {
+        const reason = `Zapisy na "${trainingName}" są blokowane na ${cutoffMinutes} minut przed rozpoczęciem.`;
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${klient.firstName} ${klient.lastName}: ${reason}`,
+          rule_applied: 'booking_cutoff_per_class',
+          payload: { klient_id: klient.id, class_key: classKey, training: trainingName, cutoff: cutoffMinutes }
+        }]);
+        alert(`Nie można zapisać! ${reason}`);
+        return;
+      }
+    }
+
+    // 5. Karencja po wygaśnięciu karnetu (per karnet)
+    if (klient.expiresDate) {
+      const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
+      const expDate = new Date(klient.expiresDate);
+      expDate.setDate(expDate.getDate() + graceDays);
+      expDate.setHours(23, 59, 59, 999);
+
+      if (classStartDateTime > expDate) {
+        const reason = `Karnet "${passName}" wygasł. Okres karencji wynosił ${graceDays} dni.`;
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${klient.firstName} ${klient.lastName}: ${reason}`,
+          rule_applied: 'expired_pass_grace_per_pass',
+          payload: { klient_id: klient.id, class_key: classKey, pass: passName, grace_days: graceDays }
+        }]);
+        alert(`Nie można zapisać! ${reason}`);
+        return;
+      }
+    }
+
+    // 6. Nadrzędny limit zajęć jednego typu dziennie (max_daily_same_type_bookings)
+    const maxSameType = bookingRules.max_daily_same_type_bookings ?? 1;
+    if (maxSameType < 999) {
+      let sameTypeCountOnDate = 0;
+      const standardoweTegoDnia = zapisaneZajecia.map(item => ({ ...item, displayDate: selectedClass.displayDate }));
+      const jednorazoweTegoDnia = jednorazoweZajecia.filter(j => j.displayDate === selectedClass.displayDate);
+      const wszystkieZajeciaDnia = [...standardoweTegoDnia, ...jednorazoweTegoDnia];
+
+      wszystkieZajeciaDnia.forEach((c) => {
+        const cKey = `${c.id}_${selectedClass.displayDate}`;
+        const cTitle = (c.title || '').trim().toLowerCase();
+        const sTitle = (selectedClass.title || '').trim().toLowerCase();
+        
+        if (cTitle === sTitle && zapisyNaZajecia[cKey]) {
+          if (zapisyNaZajecia[cKey].some((u: any) => u.id === klient.id)) {
+            sameTypeCountOnDate++;
+          }
+        }
+      });
+
+      if (sameTypeCountOnDate >= maxSameType) {
+        const reason = `Osiągnięto limit (${maxSameType}) zapisów na trening "${selectedClass.title}" w tym dniu.`;
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${klient.firstName} ${klient.lastName}: ${reason}`,
+          rule_applied: 'max_daily_same_type_bookings',
+          payload: { klient_id: klient.id, class_key: classKey, same_type_limit: maxSameType }
+        }]);
+        alert(`Nie można zapisać! ${reason}`);
+        return;
+      }
+    }
+
+    // 7. Limit wszystkich zajęć dziennie
+    let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined 
+      ? bookingRules.max_daily_bookings 
+      : Infinity;
+
     if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0) {
       const activePass = klient.karnetyKlubowicza[0];
       let meta: any = {};
-      
       try {
         meta = typeof activePass.inne_ustawienia === 'string' 
           ? JSON.parse(activePass.inne_ustawienia) 
@@ -454,7 +616,8 @@ export default function SchedulePage() {
       const iloscLimitu = meta.niestandardowyDziennyIlosc || activePass.niestandardowyDziennyIlosc;
       
       if (typLimitu === 'Niestandardowy') {
-        dailyLimit = parseInt(iloscLimitu, 10) || Infinity;
+        const passLimit = parseInt(iloscLimitu, 10) || Infinity;
+        dailyLimit = Math.min(dailyLimit, passLimit);
       }
     }
 
@@ -468,18 +631,27 @@ export default function SchedulePage() {
     });
 
     if (userSignupsOnThisDate >= dailyLimit) {
-      alert(`Nie można zapisać! Klubowicz wykorzystał już swój dzienny limit zapisów na ten dzień (Limit: ${dailyLimit}).`);
+      const reason = `Klubowicz wykorzystał dzienny limit wejść na ten dzień (${dailyLimit}).`;
+      await supabase.from('booking_logs').insert([{
+        action_type: 'BOOKING_BLOCKED',
+        status: 'BLOCKED',
+        reason: `${klient.firstName} ${klient.lastName}: ${reason}`,
+        rule_applied: 'max_daily_bookings',
+        payload: { klient_id: klient.id, class_key: classKey, daily_limit: dailyLimit }
+      }]);
+      alert(`Nie można zapisać! ${reason}`);
       return;
     }
 
-    const limitZajec = selectedClass.limit || 12;
-    const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
+    // 8. Zapis na listę główną lub krzesełko
+    const isFull = aktualni.length >= limitZajec;
+    const statusZapisu = isFull ? 'krzesełko' : 'zapisany';
 
     const { error } = await supabase.from('zapisy_zajec').insert([
       {
         class_key: classKey,
         klient_id: klient.id,
-        status: statusZpisu,
+        status: statusZapisu,
         obecny: false
       }
     ]);
@@ -490,7 +662,7 @@ export default function SchedulePage() {
       return;
     }
 
-    // --- AUTOMATYCZNE ODEJMOWANIE WEJŚCIA DLA KARNETU ILOŚCIOWEGO ---
+    // Odjęcie wejścia przy karnecie ilościowym
     let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -505,7 +677,7 @@ export default function SchedulePage() {
     }
 
     const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
-    const typWydarzenia = statusZpisu === 'krzesełko' 
+    const typWydarzenia = statusZapisu === 'krzesełko' 
       ? `Zapisano na listę rezerwową (krzesełko)` 
       : `Zapisano na zajęcia`;
 
@@ -516,11 +688,22 @@ export default function SchedulePage() {
       opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}`
     }]);
 
+    await supabase.from('booking_logs').insert([{
+      action_type: statusZapisu === 'krzesełko' ? 'WAITLIST_JOIN' : 'BOOKING_SUCCESS',
+      status: 'SUCCESS',
+      reason: `${klient.firstName} ${klient.lastName} zapisany do ${classKey} (${statusZapisu})`,
+      rule_applied: 'VALIDATION_PASSED',
+      payload: { klient_id: klient.id, class_key: classKey, status: statusZapisu }
+    }]);
+
     setIsSearchingClient(false);
     setSearchClientQuery('');
     loadDataFromSupabase();
   };
 
+  // =========================================================================
+  // GŁÓWNA LOGIKA WYPISANIA KLIENTA Z AUTOMATYCZNYM PRZEPISYWANIEM Z REZERWY
+  // =========================================================================
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -539,7 +722,7 @@ export default function SchedulePage() {
       return;
     }
 
-    // --- ZAPYTANIE O ZWROT WEJŚCIA NA KARNET ILOŚCIOWY ---
+    // Zwrot wejścia na karnet ilościowy
     const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
     let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
     if (zwrocicWejscie) {
@@ -561,9 +744,49 @@ export default function SchedulePage() {
       klient_id: clientToUnregister.id,
       typ_operacji: 'zajecia_wypis',
       class_key: classKey,
-      opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''} Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}`
+      opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''} Obłożenie: ${aktualni.length - 1}/${limitZajec}`
     }]);
 
+    await supabase.from('booking_logs').insert([{
+      action_type: 'CANCEL_SUCCESS',
+      status: 'SUCCESS',
+      reason: `${clientToUnregister.firstName} ${clientToUnregister.lastName} wypisany z ${classKey}`,
+      rule_applied: 'USER_CANCEL',
+      payload: { klient_id: clientToUnregister.id, class_key: classKey, zwrot: zwrocicWejscie }
+    }]);
+
+    // Automatyczne przepisanie pierwszej osoby z listy rezerwowej na główną
+    const pozostaliUczestnicy = aktualni.filter(u => u.id !== clientToUnregister.id);
+    const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
+    const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
+
+    if (listaGlownaPoWypisie.length < limitZajec && pierwszaRezerwa) {
+      await supabase
+        .from('zapisy_zajec')
+        .update({ status: 'zapisany' })
+        .eq('class_key', classKey)
+        .eq('klient_id', pierwszaRezerwa.id);
+
+      const awansowanyKlient = dostepniKlienci.find(c => c.id === pierwszaRezerwa.id);
+      const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${pierwszaRezerwa.id}`;
+
+      await supabase.from('transakcje').insert([{
+        klient_id: pierwszaRezerwa.id,
+        typ_operacji: 'zajecia_awans_rezerwa',
+        class_key: classKey,
+        opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej (krzesełka) na listę główną.`
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'WAITLIST_PROMOTED',
+        status: 'SUCCESS',
+        reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
+        rule_applied: 'waitlist_auto_promote',
+        payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
+      }]);
+    }
+
+    // Nałożenie blokady za nieobecność
     if (blokadaZapisow) {
       const dni = parseInt(dlugoscBlokady) || 3;
       const dataWypisania = new Date();
@@ -571,7 +794,7 @@ export default function SchedulePage() {
       dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
 
       const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
-      const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+      const powod = `Blokada zapisów na ${dni} dni za niestawienie się na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
 
       await supabase
         .from('klienci')
@@ -633,12 +856,12 @@ export default function SchedulePage() {
     await supabase.from('transakcje').insert([{
       typ_operacji: 'edycja_zajec',
       class_key: classKey,
-      opis: `Zmieniono dane zajęć. Nowy limit: ${newLimitNum}, Trener: ${editTrainer}, Godziny: ${newStart}-${newEnd}`
+      opis: `Zmieniono dane zajęć. Limit: ${newLimitNum}, Trener: ${editTrainer}, Czas: ${newStart}-${newEnd}`
     }]);
 
     setEditClassModalData(null);
     loadDataFromSupabase();
-    alert("Zajęcia w tym dniu zostały pomyślnie zaktualizowane w chmurze!");
+    alert("Zajęcia w tym dniu zostały zaktualizowane!");
   };
 
   const handleSaveDuplicateClass = async (e: React.FormEvent) => {
@@ -674,7 +897,7 @@ export default function SchedulePage() {
     }
 
     setDuplicateModalData(null);
-    alert(`Pomyślnie dodano zduplikowane zajęcia "${dupPlan}" na dzień ${dupDate}!`);
+    alert(`Pomyślnie dodano zajęcia "${dupPlan}" na dzień ${dupDate}!`);
     loadDataFromSupabase();
   };
 
@@ -739,9 +962,9 @@ export default function SchedulePage() {
   };
 
   return (
-    <div className="max-w-[1700px] mx-auto space-y-4 pb-24 relative">
+    <div className="max-w-[1700px] mx-auto space-y-4 pb-24 relative font-sans antialiased text-slate-800">
       
-      {/* GÓRNY PASEK AKCJI Z PRZYCISKIEM WYDARZENIA KILKUDNIOWEGO */}
+      {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
         <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
           GRAFIK ZAJĘĆ
@@ -762,7 +985,7 @@ export default function SchedulePage() {
       <div className="flex items-center gap-2 overflow-x-auto pb-2">
         <button 
           onClick={handlePrevWeek}
-          className="w-9 h-9 bg-white text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 transition-colors"
+          className="w-9 h-9 bg-white text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 transition-colors cursor-pointer"
           title="Poprzedni tydzień"
         >
           ◀
@@ -797,7 +1020,7 @@ export default function SchedulePage() {
 
         <button 
           onClick={handleNextWeek}
-          className="w-9 h-9 bg-white text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 transition-colors"
+          className="w-9 h-9 bg-white text-sky-700 hover:bg-sky-100 border border-sky-200 rounded-full flex items-center justify-center font-bold shadow-sm shrink-0 transition-colors cursor-pointer"
           title="Następny tydzień"
         >
           ▶
@@ -808,9 +1031,9 @@ export default function SchedulePage() {
       {isCalendarOpen && (
         <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-lg max-w-md mx-auto space-y-4 animate-in fade-in zoom-in-95 duration-150">
           <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-            <button onClick={prevMonth} className="w-8 h-8 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg font-bold">◀</button>
+            <button onClick={prevMonth} className="w-8 h-8 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg font-bold cursor-pointer">◀</button>
             <h3 className="font-black text-sm text-sky-950 uppercase">{monthNames[month]} {year}</h3>
-            <button onClick={nextMonth} className="w-8 h-8 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg font-bold">▶</button>
+            <button onClick={nextMonth} className="w-8 h-8 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg font-bold cursor-pointer">▶</button>
           </div>
 
           <div className="grid grid-cols-7 gap-1 text-center text-xs">
@@ -834,7 +1057,7 @@ export default function SchedulePage() {
                     setCurrentDate(thisDate);
                     setIsCalendarOpen(false);
                   }}
-                  className={`py-2 rounded-xl text-xs font-bold transition-colors ${
+                  className={`py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
                     isSelected ? 'bg-rose-900 text-white shadow-sm' : 'hover:bg-sky-100 text-slate-700 bg-sky-50/50'
                   }`}
                 >
@@ -845,7 +1068,7 @@ export default function SchedulePage() {
           </div>
 
           <div className="flex justify-end pt-2 border-t border-sky-100">
-            <button onClick={() => setIsCalendarOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-1.5 rounded-xl text-xs">
+            <button onClick={() => setIsCalendarOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-1.5 rounded-xl text-xs cursor-pointer">
               Zamknij
             </button>
           </div>
@@ -1106,7 +1329,7 @@ export default function SchedulePage() {
                   </span>
                   <button 
                     onClick={() => setSelectedClass(null)} 
-                    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full flex items-center justify-center font-bold"
+                    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full flex items-center justify-center font-bold cursor-pointer"
                   >
                     ✕
                   </button>
@@ -1152,7 +1375,6 @@ export default function SchedulePage() {
                             </div>
                           </div>
 
-                          {/* WYŚWIETLANIE ZDJĘCIA / AVATARA KLIENTA */}
                           <div className="w-10 h-10 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 shadow-sm">
                             {osoba.avatar ? (
                               <img src={osoba.avatar} alt="Avatar" className="w-full h-full object-cover" />
@@ -1175,7 +1397,7 @@ export default function SchedulePage() {
                             </label>
                             <button 
                               onClick={() => setClientToUnregister(osoba)}
-                              className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+                              className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
                             >
                               WYPISZ
                             </button>
@@ -1236,7 +1458,6 @@ export default function SchedulePage() {
                               </div>
                             </div>
 
-                            {/* ZDJĘCIE / AVATAR NA LIŚCIE REZERWOWEJ */}
                             <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-xs shrink-0 shadow-sm">
                               {osoba.avatar ? (
                                 <img src={osoba.avatar} alt="Avatar" className="w-full h-full object-cover" />
@@ -1251,7 +1472,7 @@ export default function SchedulePage() {
                               <span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
                               <button 
                                 onClick={() => setClientToUnregister(osoba)}
-                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px]"
+                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
                               >
                                 WYPISZ
                               </button>
@@ -1285,7 +1506,7 @@ export default function SchedulePage() {
                         <span className="font-bold text-xs text-sky-950 uppercase">
                           {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
                         </span>
-                        <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold">Anuluj</button>
+                        <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
                       </div>
                       <input 
                         type="text"
@@ -1293,7 +1514,7 @@ export default function SchedulePage() {
                         placeholder="Wpisz imię, nazwisko lub email..."
                         value={searchClientQuery}
                         onChange={(e) => setSearchClientQuery(e.target.value)}
-                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-medium"
                       />
 
                       {searchClientQuery.trim().length > 0 && (
@@ -1332,7 +1553,7 @@ export default function SchedulePage() {
               <div className="flex justify-end pt-2">
                 <button 
                   onClick={() => setSelectedClass(null)}
-                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors"
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
                 >
                   Zamknij
                 </button>
@@ -1349,7 +1570,7 @@ export default function SchedulePage() {
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚠️ Wypisz uczestnika</h3>
-              <button onClick={() => setClientToUnregister(null)} className="text-slate-400 font-bold">✕</button>
+              <button onClick={() => setClientToUnregister(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             
             <div className="space-y-3 text-xs text-slate-700">
@@ -1447,7 +1668,7 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* MODAL: HISTORIA ZAJĘĆ Z CHMURY SUPABASE */}
+      {/* MODAL: HISTORIA ZAJĘĆ */}
       {historyModalClass && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 border border-sky-200">

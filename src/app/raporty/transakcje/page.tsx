@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from '../klienci/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface TransactionItem {
   id: string | number;
@@ -38,7 +43,7 @@ export default function TransactionsPage() {
   const detectCategory = (typ: string, opis: string): TransactionItem['typKategoria'] => {
     const raw = `${typ} ${opis}`.toLowerCase();
     if (raw.includes('karnet') || raw.includes('zakup')) return 'karnet';
-    if (raw.includes('portfel') || raw.includes('doładowanie') || raw.includes('splata') || raw.includes('korekta')) return 'portfel';
+    if (raw.includes('portfel') || raw.includes('doładowanie') || raw.includes('uzupelnienie') || raw.includes('splata') || raw.includes('korekta')) return 'portfel';
     return 'inne';
   };
 
@@ -64,15 +69,15 @@ export default function TransactionsPage() {
 
       // Filtrujemy na poziomie JS, aby całkowicie wykluczyć wpisy o zapisach na zajęcia (tylko operacje finansowe)
       const tList = ((transakcjeRaw as any[]) || []).filter(
-        t => t.typ_operacji !== 'zajecia_zapis' && t.typ_operacji !== 'zajecia_wypis'
+        t => t.typ_operacji !== 'zajecia_zapis' && t.typ_operacji !== 'zajecia_wypis' && t.typ_operacji !== 'zajecia_awans_rezerwa'
       );
       
       const kList = (klienciRaw as any[]) || [];
 
       const enriched: TransactionItem[] = tList.map(t => {
-        const klient = kList.find(k => k.id === t.klient_id);
-        const imieNazwisko = klient ? `${klient.Imię || ''} ${klient.Nazwisko || ''}`.trim() : 'Brak danych klienta';
-        const email = klient ? klient['E-mail'] || '' : '';
+        const klient = kList.find(k => String(k.id) === String(t.klient_id));
+        const imieNazwisko = klient ? `${klient.Imię || klient.firstName || ''} ${klient.Nazwisko || klient.lastName || ''}`.trim() : 'Brak danych klienta';
+        const email = klient ? klient['E-mail'] || klient.email || '' : '';
 
         const dt = new Date(t.created_at);
         const dataOperacji = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
@@ -188,7 +193,7 @@ export default function TransactionsPage() {
   };
 
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 relative">
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 relative font-sans antialiased text-slate-800">
       
       {/* Pasek Nagłówka */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-sky-200 pb-4">
@@ -266,7 +271,7 @@ export default function TransactionsPage() {
               placeholder="Szukaj po klubowiczu, mailu, opisie transakcji..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-sky-50 border border-sky-100 rounded-2xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
+              className="w-full bg-sky-50 border border-sky-100 rounded-2xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors font-medium"
             />
           </div>
 
@@ -316,7 +321,7 @@ export default function TransactionsPage() {
                       type="date"
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -325,7 +330,7 @@ export default function TransactionsPage() {
                       type="date"
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
                     />
                   </div>
                 </div>
