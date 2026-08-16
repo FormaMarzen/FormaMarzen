@@ -448,7 +448,7 @@ export default function KarnetPage() {
     }
   };
 
-  // ❄️ 1. LOGIKA ZAWIESZANIA (ZAPIS PLANU) - DOSTOSOWANA DLA KAŻDEGO KARNETU
+  // ❄️ 1. LOGIKA ZAWIESZANIA (ZAPIS PLANU) - ZABRONIONA DATA WSTECZNA
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -458,16 +458,12 @@ export default function KarnetPage() {
       return;
     }
 
-    const start = new Date(suspendStartDate);
-    const end = new Date(suspendEndDate);
-    const today = new Date();
-    today.setHours(0,0,0,0);
-
-    if (start < today) {
+    // Bezpieczne porównanie stringów dat YYYY-MM-DD eliminujące błędy stref czasowych
+    if (suspendStartDate < dzisiajString) {
       setSuspendError('Data rozpoczęcia nie może być w przeszłości. Zawieszenie jest możliwe od dzisiaj.');
       return;
     }
-    if (end < start) {
+    if (suspendEndDate < suspendStartDate) {
       setSuspendError('Data zakończenia nie może być wcześniejsza niż data rozpoczęcia.');
       return;
     }
@@ -484,17 +480,16 @@ export default function KarnetPage() {
     const targetKarnet = karnetyList[karnetIndex];
 
     if (targetKarnet.waznyDo) {
-      const expDate = new Date(targetKarnet.waznyDo);
-      expDate.setHours(23, 59, 59, 999);
-      if (start > expDate) {
+      if (suspendStartDate > targetKarnet.waznyDo) {
         setSuspendError(`Zawieszenie musi rozpocząć się w trakcie ważności karnetu (najpóźniej ${targetKarnet.waznyDo}).`);
         return;
       }
     }
 
     const suspensionHistory = targetKarnet.historiaZawieszen || [];
-    const month = start.getMonth(); 
-    const year = start.getFullYear();
+    const startObj = new Date(suspendStartDate);
+    const month = startObj.getMonth(); 
+    const year = startObj.getFullYear();
 
     if (month === 8) {
       const usedInVacation = suspensionHistory.some((susp: any) => {
@@ -677,7 +672,6 @@ export default function KarnetPage() {
     window.location.reload();
   };
 
-  // Zmieniono warunek tak, aby każdy karnet posiadający datę ważności (niezależnie od typu) kwalifikował się do zawieszenia
   const activePassesForSuspend = karnetyList.filter((k: any) => {
     const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd && k.waznyDo;
     return isActive;
@@ -871,7 +865,7 @@ export default function KarnetPage() {
                             {isZakonczone ? (
                               <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg font-bold border border-slate-200">{susp.dni} dni</span>
                             ) : (
-                              <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold border border-amber-200 text-[10px]">Plan. {susp.planowane_dni}</span>
+                              <span className="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-bold border border-slate-200 text-[10px]">Plan. {susp.planowane_dni}</span>
                             )}
                           </td>
                           <td className="py-3 px-4 text-right">
