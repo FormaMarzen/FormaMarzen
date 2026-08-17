@@ -41,7 +41,7 @@ export default function KarnetyPage() {
 
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI + LICZNIK CYKLI)
+  // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI + CYKLE W JSON)
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -74,10 +74,6 @@ export default function KarnetyPage() {
           }
         }
       }
-    }
-
-    if (client.cyklCiaglosci && typeof client.cyklCiaglosci === 'number' && client.cyklCiaglosci > maxCykl) {
-      maxCykl = client.cyklCiaglosci;
     }
 
     if (!isContinuous) {
@@ -161,7 +157,6 @@ export default function KarnetyPage() {
               lastName: c.Nazwisko || '',
               email: c['E-mail'] || c.email || '',
               discount: c.discount || '',
-              cyklCiaglosci: c.cyklCiaglosci || (parsedKarnety[0]?.cykl || parsedKarnety.length || 1),
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
@@ -186,7 +181,6 @@ export default function KarnetyPage() {
                "Numer tel.": '-',
                Portfel: '0.00 PLN',
                discount: '',
-               cyklCiaglosci: 1,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -199,7 +193,6 @@ export default function KarnetyPage() {
                  lastName: defaultClient.Nazwisko,
                  email: defaultClient["E-mail"],
                  discount: '',
-                 cyklCiaglosci: 1,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN'
                };
@@ -399,7 +392,7 @@ export default function KarnetyPage() {
     return !(isTimeBased && alreadyOwned);
   });
 
-  // PRZEDŁUŻENIE KARNETU Z DYNAMICZNYM ZWIĘKSZANIEM CYKLU CIĄGŁOŚCI
+  // PRZEDŁUŻENIE KARNETU Z DYNAMICZNYM ZWIĘKSZANIEM CYKLU CIĄGŁOŚCI (BEZ BŁĘDU KOLUMNY SQL)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -419,8 +412,8 @@ export default function KarnetyPage() {
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
     
-    // Obliczenie aktualnego i kolejnego cyklu ciągłości
-    const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (currentUser.cyklCiaglosci || 1));
+    // Obliczenie aktualnego i kolejnego cyklu ciągłości w obiekcie karnetu
+    const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (karnetyList.length || 1));
     const nextCykl = currentCykl + 1;
 
     // Wyliczenie efektywnego rabatu dla bieżącego przedłużenia
@@ -516,7 +509,6 @@ export default function KarnetyPage() {
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
-      cyklCiaglosci: nextCykl
     };
     
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
@@ -551,7 +543,6 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
-      cyklCiaglosci: nextCykl,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
@@ -597,10 +588,10 @@ export default function KarnetyPage() {
     const existingPassIndex = updatedKarnetyList.findIndex(k => k.nazwa === selectedBuyPass);
 
     let nowaDataWygasnieciaStr = '';
-    let nextCykl = currentUser.cyklCiaglosci || 1;
+    let nextCykl = (karnetyList.length || 0) + 1;
 
     if (isTimeBased && existingPassIndex !== -1) {
-      nextCykl = (updatedKarnetyList[existingPassIndex].cykl || nextCykl) + 1;
+      nextCykl = (updatedKarnetyList[existingPassIndex].cykl || updatedKarnetyList.length || 1) + 1;
 
       updatedKarnetyList = updatedKarnetyList.map((k, index) => {
         if (index === existingPassIndex) {
@@ -681,7 +672,6 @@ export default function KarnetyPage() {
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
-      cyklCiaglosci: nextCykl
     };
     
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
@@ -716,7 +706,6 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
-      cyklCiaglosci: nextCykl,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
