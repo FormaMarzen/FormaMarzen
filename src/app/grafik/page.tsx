@@ -174,7 +174,7 @@ export default function SchedulePage() {
       setZapisyNaZajecia(grouped);
     }
 
-    // 4. Nadpisania zajęć (edycje, odwołania)
+    // 4. Nadpisania zajęć (edycje, odwołania, usunięcia)
     const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
     if (nadpisaniaData) {
       const nadpisaniaMap: { [key: string]: any } = {};
@@ -215,9 +215,8 @@ export default function SchedulePage() {
         displayDate: j.display_date,
         fullDateStr: j.full_date_str,
         isJednorazowe: true,
-        // Dodano fallback zeby nie wywalało błędów w widoku jeśli null
-        isOdwołane: false, 
-        isUsunięte: false 
+        isOdwołane: false,
+        isUsunięte: false
       })));
     }
 
@@ -257,7 +256,6 @@ export default function SchedulePage() {
     setIsMounted(true);
     const now = new Date();
     
-    // Sprawdzenie weekendu - w sobotę lub niedzielę przeskocz na poniedziałek
     const dayOfWeek = now.getDay();
     if (dayOfWeek === 6) {
       now.setDate(now.getDate() + 2);
@@ -462,9 +460,6 @@ export default function SchedulePage() {
     }
   };
 
-  // =========================================================================
-  // GŁÓWNA LOGIKA ZAPISU KLIENTA Z NADRZĘDNYM SILNIKIEM REGUŁ PER-TRENING / PER-KARNET
-  // =========================================================================
   const handleZapiszKlientaDoZajec = async (klient: any) => {
     if (!selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
@@ -482,7 +477,6 @@ export default function SchedulePage() {
     const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
     const now = new Date();
 
-    // 1. Sprawdzenie aktywnej blokady konta
     if (klient.blokadaDo) {
       const dataBlokady = new Date(klient.blokadaDo);
       if (now <= dataBlokady) {
@@ -499,13 +493,11 @@ export default function SchedulePage() {
       }
     }
 
-    // 2. Czy klient jest już zapisany na te konkretne zajęcia
     if (aktualni.some(k => k.id === klient.id)) {
       alert("Ten klient jest już zapisany na te zajęcia!");
       return;
     }
 
-    // 3. Okno zapisu w przód (per karnet z fallbackiem do wartości domyślnej)
     const passName = klient.pass || 'OPEN';
     const bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
     const maxBookingDate = new Date();
@@ -525,7 +517,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // 4. Blokada zapisów przed rozpoczęciem (per rodzaj treningu)
     const trainingName = selectedClass.title || '';
     const cutoffMinutes = bookingRules.booking_cutoff_per_class?.[trainingName] !== undefined
       ? bookingRules.booking_cutoff_per_class[trainingName]
@@ -548,7 +539,6 @@ export default function SchedulePage() {
       }
     }
 
-    // 5. Karencja po wygaśnięciu karnetu (per karnet)
     if (klient.expiresDate) {
       const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
       const expDate = new Date(klient.expiresDate);
@@ -569,7 +559,6 @@ export default function SchedulePage() {
       }
     }
 
-    // 6. Nadrzędny limit zajęć jednego typu dziennie (max_daily_same_type_bookings)
     const maxSameType = bookingRules.max_daily_same_type_bookings ?? 1;
     if (maxSameType < 999) {
       let sameTypeCountOnDate = 0;
@@ -603,7 +592,6 @@ export default function SchedulePage() {
       }
     }
 
-    // 7. Limit wszystkich zajęć dziennie
     let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined 
       ? bookingRules.max_daily_bookings 
       : Infinity;
@@ -648,7 +636,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // 8. Zapis na listę główną lub krzesełko
     const isFull = aktualni.length >= limitZajec;
     const statusZapisu = isFull ? 'krzesełko' : 'zapisany';
 
@@ -667,7 +654,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // Odjęcie wejścia przy karnecie ilościowym
     let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -706,9 +692,6 @@ export default function SchedulePage() {
     loadDataFromSupabase();
   };
 
-  // =========================================================================
-  // GŁÓWNA LOGIKA WYPISANIA KLIENTA Z AUTOMATYCZNYM PRZEPISYWANIEM Z REZERWY
-  // =========================================================================
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -727,7 +710,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // Zwrot wejścia na karnet ilościowy
     const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
     let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
     if (zwrocicWejscie) {
@@ -760,7 +742,6 @@ export default function SchedulePage() {
       payload: { klient_id: clientToUnregister.id, class_key: classKey, zwrot: zwrocicWejscie }
     }]);
 
-    // Automatyczne przepisanie pierwszej osoby z listy rezerwowej na główną
     const pozostaliUczestnicy = aktualni.filter(u => u.id !== clientToUnregister.id);
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
@@ -791,7 +772,6 @@ export default function SchedulePage() {
       }]);
     }
 
-    // Nałożenie blokady za nieobecność
     if (blokadaZapisow) {
       const dni = parseInt(dlugoscBlokady) || 3;
       const dataWypisania = new Date();
@@ -840,7 +820,6 @@ export default function SchedulePage() {
 
     const classKey = `${editClassModalData.id}_${editClassModalData.displayDate}`;
 
-    // BEZPIECZNY UPSERT OMIJAJĄCY BRAK UNIQUE CONSTRAINT
     const { data: existing } = await supabase.from('nadpisania_zajec').select('id').eq('class_key', classKey).maybeSingle();
 
     if (existing) {
@@ -926,7 +905,6 @@ export default function SchedulePage() {
     const classKey = `${item.id}_${displayDate}`;
     const nextOdwołaneState = !item.isOdwołane;
 
-    // Natychmiastowa aktualizacja lokalnego stanu, aby kafelek zgasł od razu bez czekania
     setNadpisaneZajeciaDni(prev => ({
       ...prev,
       [classKey]: { ...prev[classKey], is_odwolane: nextOdwołaneState, isOdwołane: nextOdwołaneState }
@@ -937,7 +915,6 @@ export default function SchedulePage() {
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
-    // BEZPIECZNY UPSERT
     const { data: existing } = await supabase.from('nadpisania_zajec').select('id').eq('class_key', classKey).maybeSingle();
 
     if (existing) {
@@ -978,7 +955,6 @@ export default function SchedulePage() {
     const classKey = `${item.id}_${displayDate}`;
     const nextUsunięteState = !item.isUsunięte;
 
-    // Natychmiastowa aktualizacja lokalnego stanu
     setNadpisaneZajeciaDni(prev => ({
       ...prev,
       [classKey]: { ...prev[classKey], is_usuniete: nextUsunięteState, isUsunięte: nextUsunięteState }
@@ -989,7 +965,6 @@ export default function SchedulePage() {
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
-    // BEZPIECZNY UPSERT
     const { data: existing } = await supabase.from('nadpisania_zajec').select('id').eq('class_key', classKey).maybeSingle();
 
     if (existing) {
@@ -1025,6 +1000,7 @@ export default function SchedulePage() {
 
     loadDataFromSupabase();
   };
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-4 pb-24 relative font-sans antialiased text-slate-800">
       
@@ -1160,7 +1136,12 @@ export default function SchedulePage() {
             });
 
           const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
-          const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+          let zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+
+          // UKRYWANIE USUNIĘTYCH ZAJĘĆ DLA KLUBOWICZA
+          if (appRole === 'klubowicz') {
+            zajeciaDnia = zajeciaDnia.filter((item: any) => !item.isUsunięte);
+          }
 
           return (
             <div key={idx} className="space-y-3 bg-sky-50/40 p-3 rounded-2xl border border-sky-100 min-h-[300px]">
