@@ -840,8 +840,25 @@ export default function SchedulePage() {
 
     const classKey = `${editClassModalData.id}_${editClassModalData.displayDate}`;
 
-    const { error } = await supabase.from('nadpisania_zajec').upsert([
-      {
+    // BEZPIECZNY UPSERT OMIJAJĄCY BRAK UNIQUE CONSTRAINT
+    const { data: existing } = await supabase.from('nadpisania_zajec').select('id').eq('class_key', classKey).maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase.from('nadpisania_zajec').update({
+        start: newStart,
+        end: newEnd,
+        trainer: editTrainer,
+        limit: newLimitNum,
+        is_odwolane: editClassModalData.isOdwołane || false,
+        is_usuniete: editClassModalData.isUsunięte || false
+      }).eq('id', existing.id);
+      
+      if (error) {
+        alert("Błąd aktualizacji edycji: " + error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from('nadpisania_zajec').insert([{
         class_key: classKey,
         start: newStart,
         end: newEnd,
@@ -849,13 +866,12 @@ export default function SchedulePage() {
         limit: newLimitNum,
         is_odwolane: editClassModalData.isOdwołane || false,
         is_usuniete: editClassModalData.isUsunięte || false
-      }
-    ], { onConflict: 'class_key' });
+      }]);
 
-    if (error) {
-      console.error("Błąd zapisu nadpisania w Supabase:", error);
-      alert(`Błąd: ${error.message}`);
-      return;
+      if (error) {
+        alert("Błąd zapisu edycji: " + error.message);
+        return;
+      }
     }
 
     await supabase.from('transakcje').insert([{
@@ -921,8 +937,22 @@ export default function SchedulePage() {
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
-    await supabase.from('nadpisania_zajec').upsert([
-      {
+    // BEZPIECZNY UPSERT
+    const { data: existing } = await supabase.from('nadpisania_zajec').select('id').eq('class_key', classKey).maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase.from('nadpisania_zajec').update({
+        start: item.start || '08:00',
+        end: item.end || '09:00',
+        trainer: item.trainer || '',
+        limit: item.limit || 12,
+        is_odwolane: nextOdwołaneState,
+        is_usuniete: item.isUsunięte || false
+      }).eq('id', existing.id);
+      
+      if (error) alert("Błąd aktualizacji: " + error.message);
+    } else {
+      const { error } = await supabase.from('nadpisania_zajec').insert([{
         class_key: classKey,
         start: item.start || '08:00',
         end: item.end || '09:00',
@@ -930,8 +960,10 @@ export default function SchedulePage() {
         limit: item.limit || 12,
         is_odwolane: nextOdwołaneState,
         is_usuniete: item.isUsunięte || false
-      }
-    ], { onConflict: 'class_key' });
+      }]);
+      
+      if (error) alert("Błąd zapisu: " + error.message);
+    }
 
     await supabase.from('transakcje').insert([{
       typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
@@ -957,8 +989,22 @@ export default function SchedulePage() {
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
-    await supabase.from('nadpisania_zajec').upsert([
-      {
+    // BEZPIECZNY UPSERT
+    const { data: existing } = await supabase.from('nadpisania_zajec').select('id').eq('class_key', classKey).maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase.from('nadpisania_zajec').update({
+        start: item.start || '08:00',
+        end: item.end || '09:00',
+        trainer: item.trainer || '',
+        limit: item.limit || 12,
+        is_odwolane: item.isOdwołane || false,
+        is_usuniete: nextUsunięteState
+      }).eq('id', existing.id);
+      
+      if (error) alert("Błąd aktualizacji: " + error.message);
+    } else {
+      const { error } = await supabase.from('nadpisania_zajec').insert([{
         class_key: classKey,
         start: item.start || '08:00',
         end: item.end || '09:00',
@@ -966,8 +1012,10 @@ export default function SchedulePage() {
         limit: item.limit || 12,
         is_odwolane: item.isOdwołane || false,
         is_usuniete: nextUsunięteState
-      }
-    ], { onConflict: 'class_key' });
+      }]);
+      
+      if (error) alert("Błąd zapisu: " + error.message);
+    }
 
     await supabase.from('transakcje').insert([{
       typ_operacji: nextUsunięteState ? 'usuniecie_zajec' : 'przywrocenie_zajec',
