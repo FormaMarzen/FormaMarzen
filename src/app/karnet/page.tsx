@@ -1203,7 +1203,7 @@ export default function KarnetyPage() {
         {/* MODAL ZASAD ZAWIESZEŃ (INFORMACYJNY) */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-[2rem] max-w-sm w-full p-6 shadow-2xl space-y-6">
+            <div className="bg-white rounded-[2rem] max-w-md w-full p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-sm text-slate-800 uppercase tracking-wide flex items-center gap-2">
                   <span className="text-xl leading-none opacity-80">ℹ️</span> ZASADY ZAWIESZANIA KARNETÓW
@@ -1211,10 +1211,13 @@ export default function KarnetyPage() {
                 <button onClick={() => setIsSuspendInfoModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
               </div>
               
-              <div className="bg-sky-50/80 p-5 rounded-2xl border border-sky-100">
-                <p className="text-xs text-sky-800 font-medium leading-relaxed">
-                  Limity zawieszeń obowiązują globalnie dla Twojego konta klubowicza (maksymalnie 14 dni w kwartale lub 1 raz w miesiącu wakacyjnym).
-                </p>
+              <div className="bg-sky-50/80 p-5 rounded-2xl border border-sky-100 space-y-3 text-xs text-sky-900">
+                <p className="font-bold">Limity zawieszeń obowiązują globalnie dla Twojego konta klubowicza:</p>
+                <ul className="list-disc pl-4 space-y-2 font-medium">
+                  <li><strong>Standardowy kwartał:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy).</li>
+                  <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu 1 raz w miesiącu (do 14 dni). Uwaga: jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
+                  <li><strong>Odwieszenie:</strong> Karnet możesz odwiesić w dowolnym momencie przed czasem, a niewykorzystane dni zostaną automatycznie doliczone do daty ważności.</li>
+                </ul>
               </div>
 
               <div className="flex justify-end pt-2">
