@@ -62,6 +62,8 @@ export default function PromocjePage() {
 
     if (!error && data) {
       setPromocje(data);
+    } else {
+      console.error("Błąd pobierania promocji:", error);
     }
     
     setIsLoading(false);
@@ -70,12 +72,12 @@ export default function PromocjePage() {
   const dzisiajStr = new Date().toISOString().split('T')[0];
 
   const zakonczone = promocje.filter(p => {
-    if (!p.data_do) return false; // Bezterminowe nigdy nie są automatycznie zakończone
+    if (!p.data_do) return false; 
     return p.data_do < dzisiajStr;
   }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
 
   const trwajace_lub_przyszle = promocje.filter(p => {
-    if (!p.data_do) return true; // Bezterminowe zawsze trwają (lub nadejdą)
+    if (!p.data_do) return true; 
     return p.data_do >= dzisiajStr;
   });
 
@@ -125,8 +127,12 @@ export default function PromocjePage() {
     e.stopPropagation();
     if (!window.confirm("Czy na pewno chcesz usunąć tę promocję? Tej operacji nie można cofnąć.")) return;
 
-    await supabase.from('aktualne_promocje').delete().eq('id', id);
-    fetchData();
+    const { error } = await supabase.from('aktualne_promocje').delete().eq('id', id);
+    if (error) {
+      alert("Błąd podczas usuwania: " + error.message);
+    } else {
+      fetchData();
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -152,7 +158,7 @@ export default function PromocjePage() {
           ctx?.drawImage(img, 0, 0, width, height);
           const compressed = canvas.toDataURL('image/jpeg', 0.7);
           
-          setForm({ ...form, grafika_url: compressed });
+          setForm(prev => ({ ...prev, grafika_url: compressed }));
         };
         img.src = event.target?.result as string;
       };
@@ -163,28 +169,37 @@ export default function PromocjePage() {
   const handleSavePromo = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Zbudowanie payloadu do wysyłki (odcinamy lokalny stan 'bezterminowo')
+    // Przygotowanie bezpiecznego payloadu zgodnego ze strukturą tabeli Supabase
     const payload = {
       tytul: form.tytul,
       data_od: form.data_od,
       data_do: form.bezterminowo ? null : form.data_do,
-      wartosc: form.wartosc,
-      kod_rabatowy: form.kod_rabatowy,
-      opis: form.opis,
-      grafika_url: form.grafika_url,
-      status: form.status
+      wartosc: form.wartosc || "",
+      kod_rabatowy: form.kod_rabatowy || "",
+      opis: form.opis || "",
+      grafika_url: form.grafika_url || null,
+      status: form.status || "aktywne"
     };
 
+    let error = null;
+
     if (editingId) {
-      await supabase.from('aktualne_promocje').update(payload).eq('id', editingId);
+      const res = await supabase.from('aktualne_promocje').update(payload).eq('id', editingId);
+      error = res.error;
     } else {
-      await supabase.from('aktualne_promocje').insert([payload]);
+      const res = await supabase.from('aktualne_promocje').insert([payload]);
+      error = res.error;
     }
-    setIsAdminModalOpen(false);
-    fetchData();
+
+    if (error) {
+      alert("Błąd zapisu do bazy danych: " + error.message);
+      console.error("Supabase Error:", error);
+    } else {
+      setIsAdminModalOpen(false);
+      fetchData();
+    }
   };
 
-  // Zmiana formatu daty z YYYY-MM-DD na DD.MM.RRRR
   const formatDatePL = (dateString: string) => {
     if (!dateString) return "";
     const parts = dateString.split('-');
@@ -209,7 +224,6 @@ export default function PromocjePage() {
         isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
       }`}
     >
-      {/* Przyciski admina zawsze widoczne dla zalogowanego administratora */}
       {isAdmin && (
         <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
           <button onClick={(e) => handleOpenEdit(p, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm">✏️</button>
