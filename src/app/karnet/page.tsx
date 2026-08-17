@@ -54,12 +54,9 @@ export default function KarnetyPage() {
     let maxCykl = 1;
 
     for (const k of karnety) {
-      if (k.cykl && typeof k.cykl === 'number' && k.cykl > maxCykl) {
-        maxCykl = k.cykl;
-      }
-      if (k.historiaPrzedluzen && Array.isArray(k.historiaPrzedluzen)) {
-        maxCykl = Math.max(maxCykl, k.historiaPrzedluzen.length + 1);
-      }
+      const extensionsCount = Array.isArray(k.historiaPrzedluzen) ? k.historiaPrzedluzen.length : 0;
+      const passCycle = typeof k.cykl === 'number' ? k.cykl : (1 + extensionsCount);
+      maxCykl = Math.max(maxCykl, passCycle, karnety.length + extensionsCount);
 
       if (k.waznyDo) {
         const exp = new Date(k.waznyDo);
@@ -80,7 +77,7 @@ export default function KarnetyPage() {
       return { hasContinuity: false, percent: 0, label: '0% (Brak ciągłości - zresetowano)' };
     }
 
-    const liczbaKarnetow = Math.max(karnety.length, maxCykl);
+    const liczbaKarnetow = maxCykl;
     let rabatProcent = 0;
 
     if (liczbaKarnetow === 1) {
@@ -180,7 +177,6 @@ export default function KarnetyPage() {
                "E-mail": userEmail,
                "Numer tel.": '-',
                Portfel: '0.00 PLN',
-               discount: '',
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -392,7 +388,7 @@ export default function KarnetyPage() {
     return !(isTimeBased && alreadyOwned);
   });
 
-  // PRZEDŁUŻENIE KARNETU Z DYNAMICZNYM ZWIĘKSZANIEM CYKLU CIĄGŁOŚCI (BEZ BŁĘDU KOLUMNY SQL)
+  // PRZEDŁUŻENIE KARNETU (ZAPIS CYKLI BEZPOŚREDNIO W KARNETY_KLUBOWICZA)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -412,7 +408,7 @@ export default function KarnetyPage() {
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
     
-    // Obliczenie aktualnego i kolejnego cyklu ciągłości w obiekcie karnetu
+    // Obliczenie aktualnego i kolejnego cyklu ciągłości
     const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (karnetyList.length || 1));
     const nextCykl = currentCykl + 1;
 
@@ -514,17 +510,10 @@ export default function KarnetyPage() {
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
 
-    const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
-      const dateA = a.waznyDo || '9999-12-31';
-      const dateB = b.waznyDo || '9999-12-31';
-      return dateB.localeCompare(dateA); 
-    })[0]?.waznyDo;
-
-    if(latestExpDate) dbPayload.Wygasa = latestExpDate;
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
       alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
@@ -677,17 +666,10 @@ export default function KarnetyPage() {
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
 
-    const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
-      const dateA = a.waznyDo || '9999-12-31';
-      const dateB = b.waznyDo || '9999-12-31';
-      return dateB.localeCompare(dateA); 
-    })[0]?.waznyDo;
-
-    if(latestExpDate) dbPayload.Wygasa = latestExpDate;
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
       alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
@@ -917,7 +899,7 @@ export default function KarnetyPage() {
       historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory
     };
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
       setSuspendError(`Błąd aktualizacji bazy danych: ${updateError.message}`);
@@ -999,19 +981,12 @@ export default function KarnetyPage() {
       statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
     };
 
-    const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
-      const dateA = a.waznyDo || '9999-12-31';
-      const dateB = b.waznyDo || '9999-12-31';
-      return dateB.localeCompare(dateA); 
-    })[0]?.waznyDo;
-
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
-      historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory,
-      Wygasa: latestExpDate
+      historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory
     };
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
       alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
