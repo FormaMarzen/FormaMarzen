@@ -1201,7 +1201,7 @@ export default function DashboardPage() {
       alert(`Nie możesz się zapisać! ${reason}`); 
       return; 
     }
-    
+
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
     const limitZajec = selectedClass.limit || 12;
@@ -1259,7 +1259,6 @@ export default function DashboardPage() {
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
-    // Sprawdzenie minimalnego czasu do wypisu
     const trainingName = selectedClass.title || '';
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[trainingName] ?? bookingRules.cancel_deadline_minutes ?? 90;
     const [dStr, mStr] = selectedClass.displayDate.split('/');
@@ -1315,7 +1314,6 @@ export default function DashboardPage() {
       payload: { klient_id: currentUser.id, class_key: classKey }
     }]);
 
-    // Automatyczny awans z rezerwy (krzesełka)
     const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
@@ -1360,7 +1358,6 @@ export default function DashboardPage() {
     }
     if (!currentUser) return;
     
-    // Sprawdzenie minimalnego czasu do wypisu
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] ?? bookingRules.cancel_deadline_minutes ?? 90;
     const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
     const classStartDateTime = new Date(fullDateObj.getFullYear(), fullDateObj.getMonth(), fullDateObj.getDate(), parseInt(sh), parseInt(sm), 0);
@@ -1392,7 +1389,6 @@ export default function DashboardPage() {
 
     await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć (z listy aktywnej): ${title}. Zwrócono 1 wejście.` }]);
     
-    // Automatyczny awans z krzesełka
     const limitZajec = 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
     const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
@@ -1473,7 +1469,6 @@ export default function DashboardPage() {
     const aktualni = zapisyNaZajecia[classKey] || [];
     if (aktualni.some(k => k.id === klient.id)) { alert("Ten klient jest już zapisany na te zajęcia!"); return; }
     
-    // Nadrzędne limity dzienne
     let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
       ? bookingRules.max_daily_bookings
       : Infinity;
@@ -1548,7 +1543,6 @@ export default function DashboardPage() {
 
     await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''} Obłożenie po wypisie: ${aktualni.length - 1}/${limitZajec}` }]);
     
-    // Automatyczny awans z krzesełka
     const pozostaliUczestnicy = aktualni.filter(u => u.id !== clientToUnregister.id);
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
@@ -1610,6 +1604,7 @@ export default function DashboardPage() {
     }
     setClientToMarkAbsent(null); setBlokadaZapisow(false); loadData();
   };
+
   const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
     if (isOdwolane || isUsuniete) return '#fda4af';
     if (!title) return '#0284c7';
@@ -1836,11 +1831,9 @@ export default function DashboardPage() {
 
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
-          
           <section className="space-y-4">
             <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje aktywne zapisy</h2>
             <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
-              
               {myUpcomingClasses.length > 0 && (
                 <div className="flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
                   <div className="w-[45%]">Data</div>
@@ -1848,7 +1841,6 @@ export default function DashboardPage() {
                   <div className="w-[15%] text-right pr-2">Wypisz</div>
                 </div>
               )}
-              
               <div className="divide-y divide-slate-100">
                 {myUpcomingClasses.length === 0 ? (
                   <div className="p-8 text-center text-sm text-slate-500 font-medium">
@@ -1888,7 +1880,6 @@ export default function DashboardPage() {
                   ))
                 )}
               </div>
-              
               {myUpcomingClasses.length > 3 && (
                 <div className="p-4 flex justify-center bg-white border-t border-slate-100">
                   <button 
@@ -1954,7 +1945,6 @@ export default function DashboardPage() {
               </div>
             </div>
           </section>
-
         </div>
       )}
 
@@ -2012,7 +2002,13 @@ export default function DashboardPage() {
                 return override ? { ...item, ...override } : item;
               });
             const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
-            const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+            let zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+
+            // UKRYWANIE USUNIĘTYCH ZAJĘĆ DLA KLUBOWICZA NA STRONIE GŁÓWNEJ
+            if (appRole === 'klubowicz') {
+              zajeciaDnia = zajeciaDnia.filter((item: any) => !item.isUsunięte);
+            }
+
             const isPastDay = col.isoDate < todayStr;
             const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
             const isExpanded = expandedDays[col.isoDate] || false;
@@ -2357,6 +2353,7 @@ export default function DashboardPage() {
           </section>
         </div>
       )}
+
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3691,8 +3688,7 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
-      {/* MODAL: EDYTUJ DANE KONTA */}
+{/* MODAL: EDYTUJ DANE KONTA */}
       {isEditProfileInfoOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -3763,4 +3759,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
