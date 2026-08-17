@@ -8,6 +8,9 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// GLOBALNA BLOKADA (Zabezpieczenie przed podwójnym renderowaniem React Strict Mode)
+let globalCreatingLock = false;
+
 export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [transakcjeFinansowe, setTransakcjeFinansowe] = useState<any[]>([]);
@@ -27,15 +30,26 @@ export default function PortfelPage() {
       const userEmail = session?.user?.email;
 
       if (userEmail) {
-        // Sprawdzamy, czy klient istnieje w tabeli klienci
-        let { data: klientData, error: kError } = await supabase
+        const normalizedEmail = userEmail.toLowerCase().trim();
+        
+        // Pobieramy wszystkich klientów i filtrujemy ignorując wielkość liter
+        const { data: klienciList, error: kError } = await supabase
           .from('klienci')
-          .select('*')
-          .or(`E-mail.eq.${userEmail},email.eq.${userEmail}`)
-          .maybeSingle();
+          .select('*');
           
-        // Jeśli po wyczyszczeniu bazy nie ma rekordu dla zalogowanego użytkownika, tworzymy go automatycznie
+        let klientData = klienciList ? klienciList.find((c: any) => 
+          (c['E-mail'] || '').toLowerCase().trim() === normalizedEmail || 
+          (c.email || '').toLowerCase().trim() === normalizedEmail
+        ) : null;
+
+        // Jeśli nie ma rekordu dla zalogowanego użytkownika, tworzymy go awaryjnie z użyciem BLOKADY
         if (!klientData) {
+          if (globalCreatingLock) {
+            console.log("Blokada wyścigu: inne zapytanie właśnie tworzy to konto.");
+            return;
+          }
+          globalCreatingLock = true;
+
           const newClientId = Date.now();
           const defaultClient = {
             id: newClientId,
@@ -52,12 +66,15 @@ export default function PortfelPage() {
           if (!insertErr) {
             klientData = defaultClient;
           }
+          
+          // Zwalniamy blokadę po zakończeniu
+          globalCreatingLock = false;
         }
           
         if (klientData) {
           const rawClient = klientData as any;
 
-          // Pobranie transakcji powiązanych z kontem klienta
+          // Pobranie transakcji powiązanych z kontem klienta (informacyjnie do widoku)
           const { data: tData } = await supabase
             .from('transakcje')
             .select('*')
@@ -72,24 +89,28 @@ export default function PortfelPage() {
 
           setTransakcjeFinansowe(finansowe);
 
+          // POBIERANIE SALDA BEZPOŚREDNIO Z TABELI KLIENCI Z AGRESYWNYM PARSOWANIEM MINUSA
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
-          const parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.-]+/g, "")) || 0;
-
-          const finalWalletNum = finansowe.length > 0 
-            ? finansowe.reduce((acc, curr) => acc + (Number(curr.kwota) || 0), 0)
-            : parsedWalletNum;
+          
+          const isNegative = String(rawWalletStr).includes('-'); // Sprawdzamy czy gdziekolwiek jest znak ujemny
+          let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0; // Wyciągamy same liczby
+          
+          if (isNegative) {
+            parsedWalletNum = -Math.abs(parsedWalletNum); // Jeśli był minus, wymuszamy wartość ujemną
+          }
 
           setCurrentUser({
             ...rawClient,
             firstName: rawClient.Imię || rawClient.firstName || '',
             lastName: rawClient.Nazwisko || rawClient.lastName || '',
-            wallet: `${finalWalletNum.toFixed(2)} PLN`,
-            rawWalletNum: finalWalletNum
+            wallet: `${parsedWalletNum.toFixed(2)} PLN`,
+            rawWalletNum: parsedWalletNum
           });
         }
       }
     } catch (err) {
       console.error("Błąd ładowania danych portfela:", err);
+      globalCreatingLock = false; // Zwalniamy blokadę w razie błędu try-catch
     } finally {
       setIsLoading(false);
     }
