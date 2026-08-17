@@ -1203,23 +1203,23 @@ export default function KarnetyPage() {
         {/* MODAL ZASAD ZAWIESZEŃ (INFORMACYJNY) */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-slate-200">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                  <span className="text-xl">ℹ️</span> Zasady zawieszania karnetów
+            <div className="bg-white rounded-[2rem] max-w-sm w-full p-6 shadow-2xl space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-sm text-slate-800 uppercase tracking-wide flex items-center gap-2">
+                  <span className="text-xl leading-none opacity-80">ℹ️</span> ZASADY ZAWIESZANIA KARNETÓW
                 </h3>
                 <button onClick={() => setIsSuspendInfoModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
               </div>
               
-              <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
-                <div className="bg-sky-50 p-4 rounded-xl border border-sky-100 text-sky-900 font-medium">
+              <div className="bg-sky-50/80 p-5 rounded-2xl border border-sky-100">
+                <p className="text-xs text-sky-800 font-medium leading-relaxed">
                   Limity zawieszeń obowiązują globalnie dla Twojego konta klubowicza (maksymalnie 14 dni w kwartale lub 1 raz w miesiącu wakacyjnym).
-                </div>
+                </p>
               </div>
 
-              <div className="pt-4 flex justify-end border-t border-slate-100">
-                <button onClick={() => setIsSuspendInfoModalOpen(false)} className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                  Zrozumiałem
+              <div className="flex justify-end pt-2">
+                <button onClick={() => setIsSuspendInfoModalOpen(false)} className="bg-[#1e293b] hover:bg-slate-900 text-white font-bold text-xs px-8 py-3 rounded-xl uppercase transition-colors shadow-md cursor-pointer tracking-wider">
+                  ZROZUMIAŁEM
                 </button>
               </div>
             </div>
