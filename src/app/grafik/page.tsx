@@ -214,7 +214,10 @@ export default function SchedulePage() {
         limit: j.limit_miejsc || j.limit,
         displayDate: j.display_date,
         fullDateStr: j.full_date_str,
-        isJednorazowe: true
+        isJednorazowe: true,
+        // Dodano fallback zeby nie wywalało błędów w widoku jeśli null
+        isOdwołane: false, 
+        isUsunięte: false 
       })));
     }
 
@@ -237,7 +240,9 @@ export default function SchedulePage() {
         end: s.end || s.end_time,
         trainer: s.trainer || s.prowadzacy,
         limit: s.limit || s.limit_miejsc,
-        days: s.days || {}
+        days: s.days || {},
+        isOdwołane: false,
+        isUsunięte: false
       })));
     }
 
@@ -905,6 +910,13 @@ export default function SchedulePage() {
     const classKey = `${item.id}_${displayDate}`;
     const nextOdwołaneState = !item.isOdwołane;
 
+    // Natychmiastowa aktualizacja lokalnego stanu, aby kafelek zgasł od razu bez czekania
+    setNadpisaneZajeciaDni(prev => ({
+      ...prev,
+      [classKey]: { ...prev[classKey], is_odwolane: nextOdwołaneState, isOdwołane: nextOdwołaneState }
+    }));
+    setActiveMenuClassId(null);
+
     if (nextOdwołaneState) {
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
@@ -927,13 +939,19 @@ export default function SchedulePage() {
       opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
     }]);
 
-    setActiveMenuClassId(null);
     loadDataFromSupabase();
   };
 
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const nextUsunięteState = !item.isUsunięte;
+
+    // Natychmiastowa aktualizacja lokalnego stanu
+    setNadpisaneZajeciaDni(prev => ({
+      ...prev,
+      [classKey]: { ...prev[classKey], is_usuniete: nextUsunięteState, isUsunięte: nextUsunięteState }
+    }));
+    setActiveMenuClassId(null);
 
     if (nextUsunięteState) {
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
@@ -957,10 +975,8 @@ export default function SchedulePage() {
       opis: nextUsunięteState ? 'Usunięto zajęcia z poziomu grafiku' : 'Przywrócono usunięte zajęcia'
     }]);
 
-    setActiveMenuClassId(null);
     loadDataFromSupabase();
   };
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-4 pb-24 relative font-sans antialiased text-slate-800">
       
