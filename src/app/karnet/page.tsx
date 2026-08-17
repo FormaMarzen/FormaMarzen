@@ -170,13 +170,14 @@ export default function KarnetyPage() {
              globalCreatingLock = true;
              
              const newClientId = Date.now();
-             const defaultClient = {
+             const defaultClient: any = {
                id: newClientId,
                Imię: userEmail.split('@')[0],
                Nazwisko: 'Klubowicz',
                "E-mail": userEmail,
                "Numer tel.": '-',
                Portfel: '0.00 PLN',
+               discount: '',
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -388,7 +389,7 @@ export default function KarnetyPage() {
     return !(isTimeBased && alreadyOwned);
   });
 
-  // PRZEDŁUŻENIE KARNETU (ZAPIS CYKLI BEZPOŚREDNIO W KARNETY_KLUBOWICZA)
+  // PRZEDŁUŻENIE KARNETU (ŚCIŚLE ZDEFINIOWANE POLA SUPABASE)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -408,7 +409,7 @@ export default function KarnetyPage() {
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
     
-    // Obliczenie aktualnego i kolejnego cyklu ciągłości
+    // Obliczenie aktualnego i kolejnego cyklu ciągłości wewnątrz karnetu
     const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (karnetyList.length || 1));
     const nextCykl = currentCykl + 1;
 
@@ -503,11 +504,13 @@ export default function KarnetyPage() {
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
+    // Czysty payload – wyłącznie istniejące kolumny tabeli klienci
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
     };
     
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
+    else if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
 
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
@@ -664,6 +667,7 @@ export default function KarnetyPage() {
     };
     
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
+    else if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
 
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
