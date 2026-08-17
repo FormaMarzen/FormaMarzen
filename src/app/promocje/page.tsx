@@ -7,7 +7,7 @@ interface Promocja {
   id: number;
   tytul: string;
   data_od: string;
-  data_do: string;
+  data_do: string | null;
   wartosc: string;
   kod_rabatowy: string;
   opis: string;
@@ -30,7 +30,8 @@ export default function PromocjePage() {
   const [form, setForm] = useState({
     tytul: "",
     data_od: new Date().toISOString().split('T')[0],
-    data_do: new Date().toISOString().split('T')[0],
+    data_do: new Date().toISOString().split('T')[0] as string | null,
+    bezterminowo: false,
     wartosc: "",
     kod_rabatowy: "",
     opis: "",
@@ -69,13 +70,13 @@ export default function PromocjePage() {
   const dzisiajStr = new Date().toISOString().split('T')[0];
 
   const zakonczone = promocje.filter(p => {
-    const dataKoniec = p.data_do || p.data_od;
-    return dataKoniec < dzisiajStr;
+    if (!p.data_do) return false; // Bezterminowe nigdy nie są automatycznie zakończone
+    return p.data_do < dzisiajStr;
   }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
 
   const trwajace_lub_przyszle = promocje.filter(p => {
-    const dataKoniec = p.data_do || p.data_od;
-    return dataKoniec >= dzisiajStr;
+    if (!p.data_do) return true; // Bezterminowe zawsze trwają (lub nadejdą)
+    return p.data_do >= dzisiajStr;
   });
 
   const aktywne = trwajace_lub_przyszle
@@ -93,6 +94,7 @@ export default function PromocjePage() {
       tytul: "", 
       data_od: dzisiajStr, 
       data_do: dzisiajStr, 
+      bezterminowo: false,
       wartosc: "", 
       kod_rabatowy: "", 
       opis: "", 
@@ -108,7 +110,8 @@ export default function PromocjePage() {
     setForm({
       tytul: p.tytul,
       data_od: p.data_od,
-      data_do: p.data_do || p.data_od,
+      data_do: p.data_do || dzisiajStr,
+      bezterminowo: !p.data_do,
       wartosc: p.wartosc || "",
       kod_rabatowy: p.kod_rabatowy || "",
       opis: p.opis || "",
@@ -159,10 +162,23 @@ export default function PromocjePage() {
 
   const handleSavePromo = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Zbudowanie payloadu do wysyłki (odcinamy lokalny stan 'bezterminowo')
+    const payload = {
+      tytul: form.tytul,
+      data_od: form.data_od,
+      data_do: form.bezterminowo ? null : form.data_do,
+      wartosc: form.wartosc,
+      kod_rabatowy: form.kod_rabatowy,
+      opis: form.opis,
+      grafika_url: form.grafika_url,
+      status: form.status
+    };
+
     if (editingId) {
-      await supabase.from('aktualne_promocje').update(form).eq('id', editingId);
+      await supabase.from('aktualne_promocje').update(payload).eq('id', editingId);
     } else {
-      await supabase.from('aktualne_promocje').insert([form]);
+      await supabase.from('aktualne_promocje').insert([payload]);
     }
     setIsAdminModalOpen(false);
     fetchData();
@@ -178,10 +194,11 @@ export default function PromocjePage() {
     return dateString;
   };
 
-  const formatTermin = (od: string, doDnia: string) => {
+  const formatTermin = (od: string, doDnia: string | null) => {
     const sOd = formatDatePL(od);
+    if (!doDnia) return `${sOd} — Bezterminowo`;
     const sDo = formatDatePL(doDnia);
-    if (!doDnia || od === doDnia) return sOd;
+    if (od === doDnia) return sOd;
     return `${sOd} — ${sDo}`;
   };
 
@@ -308,18 +325,16 @@ export default function PromocjePage() {
         </div>
       )}
 
-      {/* NOWY, PIĘKNY MODAL PODGLĄDU KLUBOWICZA */}
+      {/* MODAL PODGLĄDU KLUBOWICZA */}
       {isViewModalOpen && selectedPromo && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
             
-            {/* Przycisk zamykania */}
             <button 
               onClick={() => setIsViewModalOpen(false)} 
               className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
             >✕</button>
             
-            {/* Sekcja pełnego plakatu z ładnym, kinowym tłem */}
             <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: '300px', maxHeight: '65vh' }}>
               {selectedPromo.grafika_url ? (
                 <>
@@ -341,16 +356,13 @@ export default function PromocjePage() {
               )}
             </div>
 
-            {/* Treść promocji */}
             <div className="p-6 sm:p-10 space-y-8">
               
-              {/* Tytuł centralny */}
               <div className="text-center">
                 <h2 className="text-3xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter">{selectedPromo.tytul}</h2>
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-5 rounded-full"></div>
               </div>
 
-              {/* Kafelki z kluczowymi informacjami */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-sky-100">
                   <span className="text-3xl">📅</span>
@@ -386,7 +398,6 @@ export default function PromocjePage() {
                 )}
               </div>
 
-              {/* Sekcja opisu ze sformatowanym układem */}
               <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
                 <h3 className="font-black text-sm text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-3">
                   <span className="text-xl">📝</span> Szczegóły promocji
@@ -472,9 +483,22 @@ export default function PromocjePage() {
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 text-xs block uppercase">Data do (Zakończenie)</label>
                   <input 
-                    type="date" required value={form.data_do} onChange={(e) => setForm({...form, data_do: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                    type="date" 
+                    required={!form.bezterminowo} 
+                    disabled={form.bezterminowo}
+                    value={form.data_do || ''} 
+                    onChange={(e) => setForm({...form, data_do: e.target.value})}
+                    className={`w-full border rounded-xl px-4 py-2.5 text-sm font-bold focus:outline-none focus:border-sky-500 ${form.bezterminowo ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
                   />
+                  <label className="flex items-center gap-2 mt-2 pl-1 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.bezterminowo}
+                      onChange={(e) => setForm({...form, bezterminowo: e.target.checked})}
+                      className="w-4 h-4 accent-sky-600 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-slate-600">Promocja bezterminowa</span>
+                  </label>
                 </div>
               </div>
 
