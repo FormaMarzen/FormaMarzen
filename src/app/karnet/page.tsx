@@ -41,7 +41,7 @@ export default function KarnetyPage() {
 
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI)
+  // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI + LICZNIK CYKLI)
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -51,7 +51,16 @@ export default function KarnetyPage() {
     today.setHours(0, 0, 0, 0);
 
     let isContinuous = false;
+    let maxCykl = 1;
+
     for (const k of karnety) {
+      if (k.cykl && typeof k.cykl === 'number' && k.cykl > maxCykl) {
+        maxCykl = k.cykl;
+      }
+      if (k.historiaPrzedluzen && Array.isArray(k.historiaPrzedluzen)) {
+        maxCykl = Math.max(maxCykl, k.historiaPrzedluzen.length + 1);
+      }
+
       if (k.waznyDo) {
         const exp = new Date(k.waznyDo);
         exp.setHours(0, 0, 0, 0);
@@ -67,11 +76,15 @@ export default function KarnetyPage() {
       }
     }
 
+    if (client.cyklCiaglosci && typeof client.cyklCiaglosci === 'number' && client.cyklCiaglosci > maxCykl) {
+      maxCykl = client.cyklCiaglosci;
+    }
+
     if (!isContinuous) {
       return { hasContinuity: false, percent: 0, label: '0% (Brak ciągłości - zresetowano)' };
     }
 
-    const liczbaKarnetow = karnety.length;
+    const liczbaKarnetow = Math.max(karnety.length, maxCykl);
     let rabatProcent = 0;
 
     if (liczbaKarnetow === 1) {
@@ -148,6 +161,7 @@ export default function KarnetyPage() {
               lastName: c.Nazwisko || '',
               email: c['E-mail'] || c.email || '',
               discount: c.discount || '',
+              cyklCiaglosci: c.cyklCiaglosci || (parsedKarnety[0]?.cykl || parsedKarnety.length || 1),
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
@@ -156,7 +170,6 @@ export default function KarnetyPage() {
           
           let myUser = enriched.find((c: any) => c.email.toLowerCase().trim() === normalizedEmail);
           
-          // Jeśli brak konta klubowicza, tworzymy awaryjne (z użyciem blokady)
           if (!myUser && appRole === 'klubowicz') {
              if (globalCreatingLock) {
                 console.log("Blokada wyścigu przy tworzeniu konta.");
@@ -173,6 +186,7 @@ export default function KarnetyPage() {
                "Numer tel.": '-',
                Portfel: '0.00 PLN',
                discount: '',
+               cyklCiaglosci: 1,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -185,6 +199,7 @@ export default function KarnetyPage() {
                  lastName: defaultClient.Nazwisko,
                  email: defaultClient["E-mail"],
                  discount: '',
+                 cyklCiaglosci: 1,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN'
                };
@@ -384,7 +399,7 @@ export default function KarnetyPage() {
     return !(isTimeBased && alreadyOwned);
   });
 
-  // PRZEDŁUŻENIE KARNETU Z UWZGLĘDNIENIEM RABATU
+  // PRZEDŁUŻENIE KARNETU Z DYNAMICZNYM ZWIĘKSZANIEM CYKLU CIĄGŁOŚCI
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -404,7 +419,11 @@ export default function KarnetyPage() {
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
     
-    // Wyliczenie efektywnego rabatu
+    // Obliczenie aktualnego i kolejnego cyklu ciągłości
+    const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (currentUser.cyklCiaglosci || 1));
+    const nextCykl = currentCykl + 1;
+
+    // Wyliczenie efektywnego rabatu dla bieżącego przedłużenia
     const effectiveDiscount = getEffectiveDiscount(currentUser);
     const cenaWartosc = effectiveDiscount.percent > 0 
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
@@ -430,10 +449,20 @@ export default function KarnetyPage() {
           const day = String(baseDate.getDate()).padStart(2, '0');
           const nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
 
+          const nowaHistoria = [...(k.historiaPrzedluzen || []), {
+            data: todayStr,
+            staraWaznosc: k.waznyDo,
+            nowaWaznosc: nowaDataWygasnieciaStr,
+            cena: cenaStr,
+            rabat: effectiveDiscount.label
+          }];
+
           return {
             ...k,
             waznyDo: nowaDataWygasnieciaStr,
             cena: cenaStr,
+            cykl: nextCykl,
+            historiaPrzedluzen: nowaHistoria,
             znizkaProcentowa: effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
@@ -462,6 +491,14 @@ export default function KarnetyPage() {
         waznyDo: nowaDataWygasnieciaStr,
         pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
         cena: cenaStr,
+        cykl: nextCykl,
+        historiaPrzedluzen: [{
+          data: todayStr,
+          staraWaznosc: passToExtend.waznyDo,
+          nowaWaznosc: nowaDataWygasnieciaStr,
+          cena: cenaStr,
+          rabat: effectiveDiscount.label
+        }],
         znizkaProcentowa: effectiveDiscount.label,
         rata: '1 / 1',
         statusTekst: `Oczekujący (Ważny od: ${passToExtend.waznyDo} do: ${nowaDataWygasnieciaStr})`,
@@ -479,9 +516,9 @@ export default function KarnetyPage() {
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      cyklCiaglosci: nextCykl
     };
     
-    // Zabezpieczenie przed różnymi nazwami kolumn
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
 
@@ -514,6 +551,7 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
+      cyklCiaglosci: nextCykl,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
@@ -521,6 +559,7 @@ export default function KarnetyPage() {
     
     alert(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony za kwotę ${cenaStr}.`);
     setIsExtendModalOpen(false);
+    loadData();
   };
 
   // ZAKUP NOWEGO KARNETU Z UWZGLĘDNIENIEM RABATU
@@ -558,8 +597,11 @@ export default function KarnetyPage() {
     const existingPassIndex = updatedKarnetyList.findIndex(k => k.nazwa === selectedBuyPass);
 
     let nowaDataWygasnieciaStr = '';
+    let nextCykl = currentUser.cyklCiaglosci || 1;
 
     if (isTimeBased && existingPassIndex !== -1) {
+      nextCykl = (updatedKarnetyList[existingPassIndex].cykl || nextCykl) + 1;
+
       updatedKarnetyList = updatedKarnetyList.map((k, index) => {
         if (index === existingPassIndex) {
           let baseDate = new Date();
@@ -575,10 +617,20 @@ export default function KarnetyPage() {
           const day = String(baseDate.getDate()).padStart(2, '0');
           nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
 
+          const nowaHistoria = [...(k.historiaPrzedluzen || []), {
+            data: todayStr,
+            staraWaznosc: k.waznyDo,
+            nowaWaznosc: nowaDataWygasnieciaStr,
+            cena: cenaStr,
+            rabat: effectiveDiscount.label
+          }];
+
           return {
             ...k,
             waznyDo: nowaDataWygasnieciaStr,
             cena: cenaStr,
+            cykl: nextCykl,
+            historiaPrzedluzen: nowaHistoria,
             znizkaProcentowa: effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
@@ -590,6 +642,7 @@ export default function KarnetyPage() {
       if (activationMode === 'after' && maxDateStr) {
         const parts = maxDateStr.split('-');
         baseStartDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        nextCykl = nextCykl + 1;
       }
 
       const dataWygasniecia = new Date(baseStartDate);
@@ -610,6 +663,7 @@ export default function KarnetyPage() {
         waznyDo: nowaDataWygasnieciaStr,
         pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
         cena: cenaStr,
+        cykl: nextCykl,
         znizkaProcentowa: effectiveDiscount.label,
         rata: '1 / 1',
         statusTekst: statusTekst,
@@ -627,6 +681,7 @@ export default function KarnetyPage() {
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      cyklCiaglosci: nextCykl
     };
     
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
@@ -661,6 +716,7 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
+      cyklCiaglosci: nextCykl,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
@@ -669,6 +725,7 @@ export default function KarnetyPage() {
     alert(`Gratulacje! Zakupiono karnet za kwotę ${cenaStr} (Ważny do: ${nowaDataWygasnieciaStr}).`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
+    loadData();
   };
 
   const getDaysBetween = (d1: string, d2: string) => {
