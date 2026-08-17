@@ -1171,6 +1171,7 @@ export default function DashboardPage() {
       setClientToMarkAbsent(klient);
     }
   };
+
   // =========================================================================
   // GŁÓWNA LOGIKA ZAPISU KLUBOWICZA ZE STRONY GŁÓWNEJ (ZASADY NADRZĘDNE)
   // =========================================================================
@@ -1924,13 +1925,18 @@ export default function DashboardPage() {
              const override = nadpisaneZajeciaDni[classKey];
              if (override) classInfo = { ...classInfo, ...override };
 
+             // FILTRACJA: Klubowicz nie widzi zajęć usuniętych (widzi tylko odwołane)
              if (classInfo) {
-               myUpcomingClasses.push({
-                  ...classInfo,
-                  classKey,
-                  displayDate: dateStr,
-                  fullDateObj: new Date(now.getFullYear(), m - 1, d)
-               });
+               if (appRole === 'klubowicz' && classInfo.isUsunięte) {
+                 // pomijamy
+               } else {
+                 myUpcomingClasses.push({
+                    ...classInfo,
+                    classKey,
+                    displayDate: dateStr,
+                    fullDateObj: new Date(now.getFullYear(), m - 1, d)
+                 });
+               }
              }
           }
         }
@@ -2179,14 +2185,28 @@ export default function DashboardPage() {
               col.fullDate.getFullYear() === today.getFullYear();
             const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
             const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
+            
+            // Standardowe zajęcia dnia (z uwzględnieniem ukrywania usuniętych dla klubowicza)
             const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
               .filter((item: any) => item.days && item.days[col.key])
               .map((item: any) => {
                 const classKey = `${item.id}_${col.date}`;
                 const override = nadpisaneZajeciaDni[classKey];
                 return override ? { ...item, ...override } : item;
+              })
+              .filter((item: any) => {
+                if (appRole === 'klubowicz' && item.isUsunięte) return false;
+                return true;
               });
-            const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
+
+            // Jednorazowe zajęcia dnia (z uwzględnieniem ukrywania usuniętych dla klubowicza)
+            const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
+              .filter((item: any) => item.displayDate === col.date)
+              .filter((item: any) => {
+                if (appRole === 'klubowicz' && item.isUsunięte) return false;
+                return true;
+              });
+
             const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
             const isPastDay = col.isoDate < todayStr;
             const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
