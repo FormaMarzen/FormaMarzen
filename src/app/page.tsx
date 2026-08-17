@@ -32,6 +32,7 @@ export default function DashboardPage() {
   
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
   const [profileClient, setProfileClient] = useState<any | null>(null);
+  const [profileManualDiscountInput, setProfileManualDiscountInput] = useState<string>('');
   
   const [isExtendPassModalOpen, setIsExtendPassModalOpen] = useState(false);
   const [extendPassTarget, setExtendPassTarget] = useState<any | null>(null);
@@ -92,6 +93,60 @@ export default function DashboardPage() {
     expired_pass_grace_per_pass: {},
   });
 
+  // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI)
+  const calculateContinuityDiscount = (client: any) => {
+    if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
+    const karnety = client.karnetyKlubowicza || [];
+    if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Sprawdzamy czy ostatni karnet zachowuje ciągłość (jest aktywny lub skończył się max 1 dzień temu)
+    let isContinuous = false;
+    for (const k of karnety) {
+      if (k.waznyDo) {
+        const exp = new Date(k.waznyDo);
+        exp.setHours(0, 0, 0, 0);
+        const diffDays = Math.floor((today.getTime() - exp.getTime()) / (1000 * 60 * 60 * 24));
+        
+        // diffDays <= 0 oznacza karnet wciąż ważny
+        // diffDays === 1 oznacza 1 dzień po wygaśnięciu (ciągłość zachowana)
+        if (diffDays <= 1) {
+          // Jeśli karnet jest wejściowy i ma 0 wejść, sprawdzamy czy nie upłynął więcej niż 1 dzień od zerowania
+          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+            if (diffDays <= 1) isContinuous = true;
+          } else {
+            isContinuous = true;
+          }
+        }
+      }
+    }
+
+    if (!isContinuous) {
+      return { hasContinuity: false, percent: 0, label: '0% (Brak ciągłości - zresetowano)' };
+    }
+
+    // Wyliczenie historii ukończonych karnetów
+    const liczbaKarnetow = karnety.length;
+    let rabatProcent = 0;
+
+    if (liczbaKarnetow === 1) {
+      rabatProcent = 2; // Po 1 karnecie -> 2% na kolejny
+    } else if (liczbaKarnetow === 2) {
+      rabatProcent = 4; // Po 2 karnecie -> 4% na kolejny
+    } else if (liczbaKarnetow >= 3) {
+      // Za 3 i każdy kolejny po +1% aż do 25%
+      rabatProcent = Math.min(25, 4 + (liczbaKarnetow - 2) * 1);
+    }
+
+    return {
+      hasContinuity: true,
+      percent: rabatProcent,
+      label: `${rabatProcent}% (Ciągłość: ${liczbaKarnetow} ${liczbaKarnetow === 1 ? 'karnet' : 'karnety'})`
+    };
+  };
+
   const shiftWeek = (direction: number) => {
     const newDate = new Date(selectedWeekDate);
     newDate.setDate(newDate.getDate() + (direction * 7));
@@ -108,10 +163,10 @@ export default function DashboardPage() {
 
   const openProfile = (client: any) => {
     setProfileClient(client);
+    setProfileManualDiscountInput(client.discount ? String(client.discount).replace(/[^0-9.]/g, '') : '');
   };
 
   const loadData = async () => {
-    // 0. Pobierz nadrzędne zasady zapisów z bazy
     const { data: rulesData } = await supabase
       .from('club_booking_rules')
       .select('*')
@@ -240,7 +295,9 @@ export default function DashboardPage() {
       }
       if (profileClient) {
         const currentActive = enriched.find((c: any) => c.id === profileClient.id);
-        if (currentActive) setProfileClient(currentActive);
+        if (currentActive) {
+          setProfileClient(currentActive);
+        }
       }
     }
 
@@ -332,6 +389,16 @@ export default function DashboardPage() {
     return true;
   };
 
+  const handleSaveManualDiscountSubmit = async () => {
+    if (!profileClient) return;
+    const discountVal = profileManualDiscountInput.trim() === '' ? '' : `${parseFloat(profileManualDiscountInput) || 0}%`;
+    const updatedClient = { ...profileClient, discount: discountVal };
+    const dbPayload = { discount: discountVal };
+    const success = await updateSupabaseClient(updatedClient, dbPayload);
+    if (success) {
+      alert(`Pomyślnie zaktualizowano nadrzędny rabat ręczny na: ${discountVal || 'Brak (0%)'}`);
+    }
+  };
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -496,26 +563,66 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!profileClient || !extendPassTarget) return;
     if (!confirm(`Czy na pewno chcesz przedłużyć ten karnet do dnia ${extendNewDate}?`)) return;
+    
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-    const nowaCena = defKarnetu ? `${defKarnetu.cena} PLN` : extendPassTarget.cena;
+    let bazowaCenaNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget.cena.replace(/[^0-9.]/g, '')) || 0;
+    
+    // Logika priorytetu rabatów: Ręczny (nadrzędny) > Systemowy (ciągłość)
+    const manualDiscountVal = profileClient.discount ? parseFloat(String(profileClient.discount).replace(/[^0-9.]/g, '')) : 0;
+    const continuityInfo = calculateContinuityDiscount(profileClient);
+    
+    let appliedDiscount = 0;
+    let discountLabel = '';
+    
+    if (manualDiscountVal > 0) {
+      appliedDiscount = manualDiscountVal;
+      discountLabel = `(-${manualDiscountVal}% rabat ręczny)`;
+    } else if (continuityInfo.hasContinuity && continuityInfo.percent > 0) {
+      appliedDiscount = continuityInfo.percent;
+      discountLabel = `(-${continuityInfo.percent}% ciągłość)`;
+    }
+    
+    const finalPriceNum = appliedDiscount > 0 ? bazowaCenaNum * (1 - appliedDiscount / 100) : bazowaCenaNum;
+    const nowaCena = `${finalPriceNum.toFixed(2)} PLN`;
+
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === extendPassTarget.id) {
-        return { ...k, nazwa: extendSelectedNewPassName || k.nazwa, waznyDo: extendNewDate, cena: nowaCena, statusTekst: `Ważny do: ${extendNewDate}` };
+        return { 
+          ...k, 
+          nazwa: extendSelectedNewPassName || k.nazwa, 
+          waznyDo: extendNewDate, 
+          cena: nowaCena, 
+          znizkaProcentowa: discountLabel,
+          statusTekst: `Ważny do: ${extendNewDate}` 
+        };
       }
       return k;
     });
-    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), price: nowaCena, expiresDate: extendNewDate };
+
+    const updatedClient = { 
+      ...profileClient, 
+      karnetyKlubowicza: uaktualnioneKarnety, 
+      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), 
+      price: nowaCena, 
+      expiresDate: extendNewDate 
+    };
+
     const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
     if (profileClient.Cena !== undefined) dbPayload.Cena = nowaCena;
     else if (profileClient.cena !== undefined) dbPayload.cena = nowaCena;
+
     const success = await updateSupabaseClient(updatedClient, dbPayload);
-    if (success) { alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}!`); setIsExtendPassModalOpen(false); }
+    if (success) { 
+      alert(`Karnet został pomyślnie przedłużony do ${extendNewDate}! Cena po rabacie: ${nowaCena}`); 
+      setIsExtendPassModalOpen(false); 
+    }
   };
 
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
     if (!confirm(`Czy na pewno chcesz kupić karnet: ${selectedBuyPass}?`)) return;
+    
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
     let dniWażności = 30;
     if (defKarnetu && defKarnetu.dlugosc) {
@@ -527,9 +634,27 @@ export default function DashboardPage() {
       else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
+
     let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
-    const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
-    const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
+    const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+    
+    // Naliczenie rabatu przy zakupie przez klubowicza
+    const manualDiscountVal = currentUser.discount ? parseFloat(String(currentUser.discount).replace(/[^0-9.]/g, '')) : 0;
+    const continuityInfo = calculateContinuityDiscount(currentUser);
+    
+    let appliedDiscount = 0;
+    let discountLabel = '';
+    if (manualDiscountVal > 0) {
+      appliedDiscount = manualDiscountVal;
+      discountLabel = `(-${manualDiscountVal}%)`;
+    } else if (continuityInfo.hasContinuity && continuityInfo.percent > 0) {
+      appliedDiscount = continuityInfo.percent;
+      discountLabel = `(-${continuityInfo.percent}%)`;
+    }
+
+    const cenaWartosc = appliedDiscount > 0 ? basePriceNum * (1 - appliedDiscount / 100) : basePriceNum;
+    const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
+
     let metaBuy: Record<string, any> = {};
     try { metaBuy = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
     
@@ -555,10 +680,14 @@ export default function DashboardPage() {
           const addedEntries = parsedLimitWejsc !== null ? parsedLimitWejsc : 0;
           const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
           return {
-            ...k, nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, 
+            ...k, 
+            nazwa: selectedBuyPass, 
+            waznyDo: nowaDataWygasnieciaStr, 
             pozostaloWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? currentEntries + addedEntries : null),
             poczatkoweWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? (k.poczatkoweWejsc || currentEntries) + addedEntries : null),
-            cena: cenaStr, statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
+            cena: cenaStr, 
+            znizkaProcentowa: discountLabel,
+            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
         return k;
@@ -568,11 +697,20 @@ export default function DashboardPage() {
       dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
       nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
       const nowyKarnetObj = {
-        id: Date.now(), nazwa: selectedBuyPass, waznyDo: nowaDataWygasnieciaStr, 
+        id: Date.now(), 
+        nazwa: selectedBuyPass, 
+        waznyDo: nowaDataWygasnieciaStr, 
         pozostaloWejsc: isTimePassBuy ? null : parsedLimitWejsc,
         poczatkoweWejsc: isTimePassBuy ? null : parsedLimitWejsc,
-        cena: cenaStr, znizkaProcentowa: '', rata: '1 / 1', statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, blokadaDo: null, powodBlokady: null,
-        zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: []
+        cena: cenaStr, 
+        znizkaProcentowa: discountLabel, 
+        rata: '1 / 1', 
+        statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
+        blokadaDo: null, 
+        powodBlokady: null,
+        zawieszonyOd: null, 
+        zawieszonyDo: null, 
+        historiaZawieszen: []
       };
       updatedKarnety = [...karnetyList, nowyKarnetObj];
     }
@@ -581,23 +719,41 @@ export default function DashboardPage() {
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
     const nowaHistoriaEntry = {
-      id: Date.now(), date: new Date().toISOString().replace('T', ' ').substring(0, 16), type: `Zakup (Panel klienta): ${selectedBuyPass}`,
-      amount: `-${cenaWartosc.toFixed(2)} PLN`, balance: nowyStanPortfelaStr
+      id: Date.now(), 
+      date: new Date().toISOString().replace('T', ' ').substring(0, 16), 
+      type: `Zakup (Panel klienta): ${selectedBuyPass}${discountLabel ? ` ${discountLabel}` : ''}`,
+      amount: `-${cenaWartosc.toFixed(2)} PLN`, 
+      balance: nowyStanPortfelaStr
     };
+
     const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
     const ostatecznaDataWygasniecia = updatedKarnety[updatedKarnety.length - 1]?.waznyDo || '';
+    
     const updatedClient = {
-      ...currentUser, karnetyKlubowicza: updatedKarnety, pass: updatedKarnety.map((k: any) => k.nazwa).join(', '),
-      price: cenaStr, expiresDate: ostatecznaDataWygasniecia, wallet: nowyStanPortfelaStr, walletHistory: updatedWalletHistory
+      ...currentUser, 
+      karnetyKlubowicza: updatedKarnety, 
+      pass: updatedKarnety.map((k: any) => k.nazwa).join(', '),
+      price: cenaStr, 
+      expiresDate: ostatecznaDataWygasniecia, 
+      wallet: nowyStanPortfelaStr, 
+      walletHistory: updatedWalletHistory
     };
+
     const dbPayload: any = { karnetyKlubowicza: updatedKarnety };
-    if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr; else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
-    if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr; else if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
+    if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr; 
+    else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
+    if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr; 
+    else if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
     
     const success = await updateSupabaseClient(updatedClient, dbPayload);
     if (success) {
       if (cenaWartosc > 0) {
-        await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zakup_karnetu', kwota: -cenaWartosc, opis: `Zakup (Panel klienta): ${selectedBuyPass}` }]);
+        await supabase.from('transakcje').insert([{ 
+          klient_id: currentUser.id, 
+          typ_operacji: 'zakup_karnetu', 
+          kwota: -cenaWartosc, 
+          opis: `Zakup (Panel klienta): ${selectedBuyPass}${discountLabel ? ` ${discountLabel}` : ''}` 
+        }]);
       }
       alert(`Gratulacje! Twój karnet został pomyślnie zaktualizowany (Ważny do: ${nowaDataWygasnieciaStr}).`);
       setSelectedBuyPass('');
@@ -671,11 +827,29 @@ export default function DashboardPage() {
       else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
+
     const dataWygasniecia = new Date();
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
-    const cenaObjKarnetu = defKarnetu ? `${defKarnetu.cena} PLN` : '150.00 PLN';
-    const kwotaKarnetu = parseFloat(cenaObjKarnetu.replace(/[^0-9.]/g, '')) || 0;
+    
+    // Naliczenie rabatu
+    const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 150.00;
+    const manualDiscountVal = profileClient.discount ? parseFloat(String(profileClient.discount).replace(/[^0-9.]/g, '')) : 0;
+    const continuityInfo = calculateContinuityDiscount(profileClient);
+    
+    let appliedDiscount = 0;
+    let discountLabel = '';
+    if (manualDiscountVal > 0) {
+      appliedDiscount = manualDiscountVal;
+      discountLabel = `(-${manualDiscountVal}%)`;
+    } else if (continuityInfo.hasContinuity && continuityInfo.percent > 0) {
+      appliedDiscount = continuityInfo.percent;
+      discountLabel = `(-${continuityInfo.percent}%)`;
+    }
+
+    const kwotaKarnetu = appliedDiscount > 0 ? basePriceNum * (1 - appliedDiscount / 100) : basePriceNum;
+    const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
+
     let metaSecond: Record<string, any> = {};
     try { metaSecond = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
     
@@ -687,27 +861,50 @@ export default function DashboardPage() {
 
     let nowyStanStr = profileClient.wallet;
     let logKwota = 0;
-    let logOpis = `Dodano karnet: ${selectedPassToAdd} (Zapłacono z góry)`;
+    let logOpis = `Dodano karnet: ${selectedPassToAdd}${discountLabel ? ` ${discountLabel}` : ''} (Zapłacono z góry)`;
+    
     if (paymentMethod === 'later') {
       const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
       const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
       nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       logKwota = -kwotaKarnetu;
-      logOpis = `Dodano karnet: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`;
+      logOpis = `Dodano karnet: ${selectedPassToAdd}${discountLabel ? ` ${discountLabel}` : ''} (Obciążenie portfela - do zapłaty)`;
     }
+
     const nowyKarnetObj = {
-      id: Date.now(), nazwa: selectedPassToAdd, waznyDo: dataWygasnieciaStr, 
+      id: Date.now(), 
+      nazwa: selectedPassToAdd, 
+      waznyDo: dataWygasnieciaStr, 
       pozostaloWejsc: isTimePassSecond ? null : parsedLimitWejsc,
       poczatkoweWejsc: isTimePassSecond ? null : parsedLimitWejsc,
-      cena: cenaObjKarnetu, znizkaProcentowa: '', rata: '1 / 1', statusTekst: `Ważny do: ${dataWygasnieciaStr}`, blokadaDo: null, powodBlokady: null,
-      zawieszonyOd: null, zawieszonyDo: null, historiaZawieszen: []
+      cena: cenaObjKarnetu, 
+      znizkaProcentowa: discountLabel, 
+      rata: '1 / 1', 
+      statusTekst: `Ważny do: ${dataWygasnieciaStr}`, 
+      blokadaDo: null, 
+      powodBlokady: null,
+      zawieszonyOd: null, 
+      zawieszonyDo: null, 
+      historiaZawieszen: []
     };
+
     let karnetyList = Array.isArray(profileClient.karnetyKlubowicza) ? [...profileClient.karnetyKlubowicza] : [];
     const uaktualnioneKarnety = [...karnetyList, nowyKarnetObj];
-    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), price: nowyKarnetObj.cena, expiresDate: uaktualnioneKarnety[0]?.waznyDo || '', wallet: nowyStanStr };
+    const updatedClient = { 
+      ...profileClient, 
+      karnetyKlubowicza: uaktualnioneKarnety, 
+      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), 
+      price: nowyKarnetObj.cena, 
+      expiresDate: uaktualnioneKarnety[0]?.waznyDo || '', 
+      wallet: nowyStanStr 
+    };
+
     const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-    if (profileClient.Cena !== undefined) dbPayload.Cena = nowyKarnetObj.cena; else if (profileClient.cena !== undefined) dbPayload.cena = nowyKarnetObj.cena;
-    if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr; else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
+    if (profileClient.Cena !== undefined) dbPayload.Cena = nowyKarnetObj.cena; 
+    else if (profileClient.cena !== undefined) dbPayload.cena = nowyKarnetObj.cena;
+    if (profileClient.Portfel !== undefined) dbPayload.Portfel = nowyStanStr; 
+    else if (profileClient.portfel !== undefined) dbPayload.portfel = nowyStanStr;
+
     await updateSupabaseClient(updatedClient, dbPayload);
     await supabase.from('transakcje').insert([{ klient_id: profileClient.id, typ_operacji: 'zakup_karnetu', kwota: logKwota, opis: logOpis }]);
     setSelectedPassToAdd('');
@@ -732,11 +929,15 @@ export default function DashboardPage() {
         const isTimePass = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy');
         
         return {
-          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, 
+          ...k, 
+          nazwa: editingPassModal.nazwa, 
+          waznyDo: editingPassModal.waznyDo, 
           pozostaloWejsc: isTimePass ? null : editingPassModal.pozostaloWejsc,
           poczatkoweWejsc: isTimePass ? null : (k.poczatkoweWejsc || editingPassModal.pozostaloWejsc),
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
-          znizkaProcentowa: znizkaTekst, rata: editingPassModal.rata, statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
+          znizkaProcentowa: znizkaTekst, 
+          rata: editingPassModal.rata, 
+          statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
         };
       }
       return k;
@@ -924,8 +1125,11 @@ export default function DashboardPage() {
     const nowyStan = currentWalletNum + kwotaZmiany;
     const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
     const nowaHistoriaEntry = {
-      id: Date.now(), date: new Date().toISOString().replace('T', ' ').substring(0, 16), type: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta portfela'),
-      amount: `${kwotaZmiany >= 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN`, balance: nowyStanStr
+      id: Date.now(), 
+      date: new Date().toISOString().replace('T', ' ').substring(0, 16), 
+      type: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta portfela'),
+      amount: `${kwotaZmiany >= 0 ? '+' : ''}${kwotaZmiany.toFixed(2)} PLN`, 
+      balance: nowyStanStr
     };
     const updatedWalletHistory = [nowaHistoriaEntry, ...(profileClient.walletHistory || [])];
     const updatedClient = { ...profileClient, wallet: nowyStanStr, walletHistory: updatedWalletHistory };
@@ -993,7 +1197,6 @@ export default function DashboardPage() {
       setClientToMarkAbsent(klient);
     }
   };
-
   // =========================================================================
   // GŁÓWNA LOGIKA ZAPISU KLUBOWICZA ZE STRONY GŁÓWNEJ (ZASADY NADRZĘDNE)
   // =========================================================================
@@ -1201,7 +1404,7 @@ export default function DashboardPage() {
       alert(`Nie możesz się zapisać! ${reason}`); 
       return; 
     }
-
+    
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
     const limitZajec = selectedClass.limit || 12;
@@ -1284,7 +1487,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // Zwrot wejścia
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -1651,6 +1853,7 @@ export default function DashboardPage() {
     const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
     return new Date(dCopy.setDate(diff));
   };
+  
   const today = new Date();
   const currentMonday = getMonday(selectedWeekDate);
   const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
@@ -1684,7 +1887,7 @@ export default function DashboardPage() {
       if (amount === 0 && matchedPass) {
         const basePrice = parseFloat(matchedPass.cena) || 0;
         const client = klienciList.find(c => c.id === t.klient_id);
-        const discountPercent = client?.discount ? parseFloat(client.discount) : 0;
+        const discountPercent = client?.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
         if (discountPercent > 0) { amount = basePrice * (1 - discountPercent / 100); } else { amount = basePrice; }
       }
       if (amount > 0) {
@@ -1760,7 +1963,6 @@ export default function DashboardPage() {
        return (a.start || "").localeCompare(b.start || "");
     });
   }
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (() => {
@@ -1831,9 +2033,11 @@ export default function DashboardPage() {
 
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
+          
           <section className="space-y-4">
             <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje aktywne zapisy</h2>
             <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+              
               {myUpcomingClasses.length > 0 && (
                 <div className="flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
                   <div className="w-[45%]">Data</div>
@@ -1841,6 +2045,7 @@ export default function DashboardPage() {
                   <div className="w-[15%] text-right pr-2">Wypisz</div>
                 </div>
               )}
+              
               <div className="divide-y divide-slate-100">
                 {myUpcomingClasses.length === 0 ? (
                   <div className="p-8 text-center text-sm text-slate-500 font-medium">
@@ -1880,6 +2085,7 @@ export default function DashboardPage() {
                   ))
                 )}
               </div>
+              
               {myUpcomingClasses.length > 3 && (
                 <div className="p-4 flex justify-center bg-white border-t border-slate-100">
                   <button 
@@ -1945,6 +2151,7 @@ export default function DashboardPage() {
               </div>
             </div>
           </section>
+
         </div>
       )}
 
@@ -2002,13 +2209,7 @@ export default function DashboardPage() {
                 return override ? { ...item, ...override } : item;
               });
             const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
-            let zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
-
-            // UKRYWANIE USUNIĘTYCH ZAJĘĆ DLA KLUBOWICZA NA STRONIE GŁÓWNEJ
-            if (appRole === 'klubowicz') {
-              zajeciaDnia = zajeciaDnia.filter((item: any) => !item.isUsunięte);
-            }
-
+            const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
             const isPastDay = col.isoDate < todayStr;
             const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
             const isExpanded = expandedDays[col.isoDate] || false;
@@ -2761,7 +2962,7 @@ export default function DashboardPage() {
           </div>
         );
       })()}
-      
+
       {/* MODAL: AKCJE KLUBOWICZA W TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2867,367 +3068,445 @@ export default function DashboardPage() {
       )}
 
       {/* MODAL: PROFIL KLUBOWICZA */}
-      {profileClient && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
-              <button onClick={() => setProfileClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
-              <div className="flex items-center gap-3">
-                <button onClick={() => setIsWalletHistoryOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer whitespace-nowrap">🕒 LOGI UŻYTKOWNIKA</button>
-              </div>
-            </div>
-            <div className="p-6 space-y-8 flex-1">
-              <div className="flex justify-between items-start gap-6 bg-slate-50/70 border border-slate-200 rounded-2xl p-6">
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-black text-slate-900 whitespace-nowrap">{profileClient.firstName} {profileClient.lastName}</h2>
-                    <button
-                      onClick={() => setIsEditProfileInfoOpen(true)}
-                      className="w-8 h-8 bg-white hover:bg-sky-50 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center text-xs shadow-sm cursor-pointer transition-all"
-                      title="Edytuj dane konta"
-                    >
-                      ✏️
-                    </button>
-                  </div>
-                  <div className="pt-1">
-                    <button
-                      onClick={() => handleToggleClientTrainer(profileClient)}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
-                        profileClient.isTrainer
-                          ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
-                          : 'bg-sky-100 text-sky-900 border border-sky-300 hover:bg-sky-200'
-                      }`}
-                    >
-                      <span>{profileClient.isTrainer ? '⭐ Klient jest trenerem (Kliknij, aby usunąć powiązanie)' : '➕ Oznacz jako Trener w zespole'}</span>
-                    </button>
-                  </div>
-                  <div className="text-xs text-slate-600 space-y-1 pt-2">
-                    <div><span className="font-semibold">Telefon:</span> <span className="whitespace-nowrap">{profileClient.phone ? profileClient.phone : 'Nie podano'}</span></div>
-                    <div><span className="font-semibold">Email:</span> <span className="whitespace-nowrap">{profileClient.email ? profileClient.email : 'Nie podano'}</span></div>
-                    <div><span className="font-semibold">Płeć:</span> <span className="whitespace-nowrap">{profileClient.gender ? profileClient.gender : 'Nie podano'}</span></div>
-                    <div><span className="font-semibold">Urodziny:</span> <span className="whitespace-nowrap">{profileClient.birthDate ? profileClient.birthDate : 'Nie podano'}</span></div>
-                  </div>
-                </div>
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-28 h-28 rounded-full bg-slate-900 text-white font-black flex items-center justify-center text-3xl overflow-hidden border-2 border-sky-300 shadow-md">
-                    {profileClient.avatarUrl ? (
-                      <img src={profileClient.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                    ) : profileClient.gender?.toLowerCase() === 'mężczyzna' || profileClient.gender?.toLowerCase() === 'm' ? (
-                      <span>👨</span>
-                    ) : profileClient.gender?.toLowerCase() === 'kobieta' || profileClient.gender?.toLowerCase() === 'k' ? (
-                      <span>👩</span>
-                    ) : (
-                      <span>👤</span>
-                    )}
-                  </div>
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleAvatarChange}
-                    accept="image/*"
-                    className="hidden"
-                  />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-white hover:bg-sky-50 text-sky-900 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 shadow-sm cursor-pointer transition-all whitespace-nowrap"
-                  >
-                    ✏️ Edytuj zdjęcie
-                  </button>
-                </div>
-              </div>
+      {profileClient && (() => {
+        const continuityInfo = calculateContinuityDiscount(profileClient);
+        const hasManualDiscount = Boolean(profileClient.discount && parseFloat(profileClient.discount) > 0);
 
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => { setSelectedPassToAdd(dostepneKarnety[0]?.nazwa || ''); setIsAddSecondPassModalOpen(true); }}
-                      className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer shadow-sm whitespace-nowrap"
-                    >
-                      + DODAJ DRUGI KARNET
-                    </button>
-                    <div className="relative">
+        return (
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
+                <button onClick={() => setProfileClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setIsWalletHistoryOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer whitespace-nowrap">🕒 LOGI UŻYTKOWNIKA</button>
+                </div>
+              </div>
+              <div className="p-6 space-y-8 flex-1">
+                <div className="flex justify-between items-start gap-6 bg-slate-50/70 border border-slate-200 rounded-2xl p-6">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-xl font-black text-slate-900 whitespace-nowrap">{profileClient.firstName} {profileClient.lastName}</h2>
                       <button
-                        onClick={() => setIsGlobalPassMenuOpen(!isGlobalPassMenuOpen)}
-                        className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm"
-                        title="Zarządzaj karnetem"
+                        onClick={() => setIsEditProfileInfoOpen(true)}
+                        className="w-8 h-8 bg-white hover:bg-sky-50 text-slate-700 rounded-xl border border-slate-200 flex items-center justify-center text-xs shadow-sm cursor-pointer transition-all"
+                        title="Edytuj dane konta"
                       >
                         ✏️
                       </button>
-                      {isGlobalPassMenuOpen && (
-                        <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[70] text-xs">
-                          <button onClick={() => {
-                            if(profileClient.karnetyKlubowicza?.length > 0) {
-                              setExtendPassTarget(profileClient.karnetyKlubowicza[0]);
-                              setExtendSelectedNewPassName(profileClient.karnetyKlubowicza[0].nazwa);
-                              const curDate = new Date(profileClient.karnetyKlubowicza[0].waznyDo || Date.now());
-                              curDate.setMonth(curDate.getMonth() + 1);
-                              setExtendNewDate(curDate.toISOString().split('T')[0]);
-                              setIsExtendPassModalOpen(true);
-                            } else {
-                              alert("Brak aktywnego karnetu do przedłużenia.");
-                            }
-                            setIsGlobalPassMenuOpen(false);
-                          }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🕒 Przedłuż karnet</button>
-                          <button onClick={() => { alert("Umowa wypowiedziana"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📄 Wypowiedz umowę</button>
-                          <button onClick={() => {
-                            if(profileClient.karnetyKlubowicza?.length > 0) {
-                              setSuspendPassTarget(profileClient.karnetyKlubowicza[0]);
-                              setSuspendStartDate(profileClient.karnetyKlubowicza[0].zawieszonyOd || todayStr);
-                              setSuspendEndDate(profileClient.karnetyKlubowicza[0].zawieszonyDo || todayStr);
-                              setSuspendPassDays('3');
-                              setSuspendMode('days');
-                              setBlockPassStartDate(profileClient.karnetyKlubowicza[0].blokadaOd || todayStr);
-                              setBlockPassEndDate(profileClient.karnetyKlubowicza[0].blokadaDo || todayStr);
-                              setBlockMode('days');
-                              setIsSuspendModalOpen(true);
-                            }
-                            setIsGlobalPassMenuOpen(false);
-                          }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">⚙️ Status karnetu</button>
-                          <button onClick={() => { setIsSuspendHistoryModalOpen(true); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📜 Historia zawieszeń</button>
-                          <button onClick={() => { alert("Wygenerowano link do płatności"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">💳 Wygeneruj link do płatności</button>
-                          <div className="border-t border-slate-100 my-1"></div>
-                          <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) handleConfirmDeletePass(profileClient.karnetyKlubowicza[0].id); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🗑️ Usuń karnet</button>
-                        </div>
+                    </div>
+                    <div className="pt-1">
+                      <button
+                        onClick={() => handleToggleClientTrainer(profileClient)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+                          profileClient.isTrainer
+                            ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                            : 'bg-sky-100 text-sky-900 border border-sky-300 hover:bg-sky-200'
+                        }`}
+                      >
+                        <span>{profileClient.isTrainer ? '⭐ Klient jest trenerem (Kliknij, aby usunąć powiązanie)' : '➕ Oznacz jako Trener w zespole'}</span>
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-600 space-y-1 pt-2">
+                      <div><span className="font-semibold">Telefon:</span> <span className="whitespace-nowrap">{profileClient.phone ? profileClient.phone : 'Nie podano'}</span></div>
+                      <div><span className="font-semibold">Email:</span> <span className="whitespace-nowrap">{profileClient.email ? profileClient.email : 'Nie podano'}</span></div>
+                      <div><span className="font-semibold">Płeć:</span> <span className="whitespace-nowrap">{profileClient.gender ? profileClient.gender : 'Nie podano'}</span></div>
+                      <div><span className="font-semibold">Urodziny:</span> <span className="whitespace-nowrap">{profileClient.birthDate ? profileClient.birthDate : 'Nie podano'}</span></div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-28 h-28 rounded-full bg-slate-900 text-white font-black flex items-center justify-center text-3xl overflow-hidden border-2 border-sky-300 shadow-md">
+                      {profileClient.avatarUrl ? (
+                        <img src={profileClient.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                      ) : profileClient.gender?.toLowerCase() === 'mężczyzna' || profileClient.gender?.toLowerCase() === 'm' ? (
+                        <span>👨</span>
+                      ) : profileClient.gender?.toLowerCase() === 'kobieta' || profileClient.gender?.toLowerCase() === 'k' ? (
+                        <span>👩</span>
+                      ) : (
+                        <span>👤</span>
                       )}
                     </div>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleAvatarChange}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-white hover:bg-sky-50 text-sky-900 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 shadow-sm cursor-pointer transition-all whitespace-nowrap"
+                    >
+                      ✏️ Edytuj zdjęcie
+                    </button>
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  {profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.length > 0 ? (
-                    [...profileClient.karnetyKlubowicza]
-                      .sort((a: any, b: any) => (a.waznyDo || '9999-12-31').localeCompare(b.waznyDo || '9999-12-31'))
-                      .map((karnet: any) => {
-                        let isExpiring = false;
-                        let isPending = karnet.statusTekst?.includes('Oczekujący');
-                        const czyZawieszony = !!karnet.zawieszonyOd;
-                        if (!isPending) {
-                          if (karnet.waznyDo) {
-                            const todayDate = new Date();
-                            todayDate.setHours(0, 0, 0, 0);
-                            const expDate = new Date(karnet.waznyDo);
-                            expDate.setHours(0, 0, 0, 0);
-                            const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-                            if (diffDays <= 5) {
-                              isExpiring = true;
+                {/* SEKCJA RABATÓW: RĘCZNY (NADRZĘDNY) ORAZ SYSTEMOWY (CIĄGŁOŚĆ) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* BOKS 1: RABAT RĘCZNY (NADRZĘDNY) */}
+                  <div className="bg-white border-2 border-amber-300/80 rounded-2xl p-4 shadow-sm space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">🏷️</span>
+                        <h4 className="font-black text-xs text-slate-800 uppercase tracking-wider">Rabat Ręczny (Nadrzędny)</h4>
+                      </div>
+                      {hasManualDiscount ? (
+                        <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-300">
+                          AKTYWNY (PRIORYTET)
+                        </span>
+                      ) : (
+                        <span className="bg-slate-100 text-slate-500 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
+                          BRAK
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Ręcznie zdefiniowany rabat procentowy dla tego klienta. Jeśli jest wpisany, nadpisuje rabat systemowy.
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <div className="relative flex-1">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          placeholder="np. 15"
+                          value={profileManualDiscountInput}
+                          onChange={(e) => setProfileManualDiscountInput(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                        />
+                        <span className="absolute right-3 top-2.5 text-xs font-bold text-slate-400">%</span>
+                      </div>
+                      <button
+                        onClick={handleSaveManualDiscountSubmit}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+                      >
+                        Zapisz rabat
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* BOKS 2: RABAT SYSTEMOWY (CIĄGŁOŚĆ KARNETU) */}
+                  <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">🔄</span>
+                        <h4 className="font-black text-xs text-sky-950 uppercase tracking-wider">Rabat Systemowy (Ciągłość)</h4>
+                      </div>
+                      {continuityInfo.hasContinuity ? (
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-emerald-200">
+                          CIĄGŁOŚĆ ZACHOWANA
+                        </span>
+                      ) : (
+                        <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-rose-200">
+                          BRAK CIĄGŁOŚCI
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Automatyczny rabat naliczany przy przedłużaniu karnetu przed jego wygaśnięciem według zasady ciągłości (max 1 dzień po wygaśnięciu).
+                    </p>
+                    <div className="bg-sky-50/70 border border-sky-100 rounded-xl p-2.5 flex items-center justify-between">
+                      <span className="text-xs font-bold text-sky-900">Wartość rabatu systemowego:</span>
+                      <span className="text-xs font-black text-sky-950 font-mono bg-white px-3 py-1 rounded-lg border border-sky-200">
+                        {continuityInfo.label}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => { setSelectedPassToAdd(dostepneKarnety[0]?.nazwa || ''); setIsAddSecondPassModalOpen(true); }}
+                        className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer shadow-sm whitespace-nowrap"
+                      >
+                        + DODAJ DRUGI KARNET
+                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setIsGlobalPassMenuOpen(!isGlobalPassMenuOpen)}
+                          className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm"
+                          title="Zarządzaj karnetem"
+                        >
+                          ✏️
+                        </button>
+                        {isGlobalPassMenuOpen && (
+                          <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[70] text-xs">
+                            <button onClick={() => {
+                              if(profileClient.karnetyKlubowicza?.length > 0) {
+                                setExtendPassTarget(profileClient.karnetyKlubowicza[0]);
+                                setExtendSelectedNewPassName(profileClient.karnetyKlubowicza[0].nazwa);
+                                const curDate = new Date(profileClient.karnetyKlubowicza[0].waznyDo || Date.now());
+                                curDate.setMonth(curDate.getMonth() + 1);
+                                setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                setIsExtendPassModalOpen(true);
+                              } else {
+                                alert("Brak aktywnego karnetu do przedłużenia.");
+                              }
+                              setIsGlobalPassMenuOpen(false);
+                            }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🕒 Przedłuż karnet</button>
+                            <button onClick={() => { alert("Umowa wypowiedziana"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📄 Wypowiedz umowę</button>
+                            <button onClick={() => {
+                              if(profileClient.karnetyKlubowicza?.length > 0) {
+                                setSuspendPassTarget(profileClient.karnetyKlubowicza[0]);
+                                setSuspendStartDate(profileClient.karnetyKlubowicza[0].zawieszonyOd || todayStr);
+                                setSuspendEndDate(profileClient.karnetyKlubowicza[0].zawieszonyDo || todayStr);
+                                setSuspendPassDays('3');
+                                setSuspendMode('days');
+                                setBlockPassStartDate(profileClient.karnetyKlubowicza[0].blokadaOd || todayStr);
+                                setBlockPassEndDate(profileClient.karnetyKlubowicza[0].blokadaDo || todayStr);
+                                setBlockMode('days');
+                                setIsSuspendModalOpen(true);
+                              }
+                              setIsGlobalPassMenuOpen(false);
+                            }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">⚙️ Status karnetu</button>
+                            <button onClick={() => { setIsSuspendHistoryModalOpen(true); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">📜 Historia zawieszeń</button>
+                            <button onClick={() => { alert("Wygenerowano link do płatności"); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">💳 Wygeneruj link do płatności</button>
+                            <div className="border-t border-slate-100 my-1"></div>
+                            <button onClick={() => { if(profileClient.karnetyKlubowicza?.length > 0) handleConfirmDeletePass(profileClient.karnetyKlubowicza[0].id); setIsGlobalPassMenuOpen(false); }} className="w-full text-left px-4 py-2.5 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2.5 cursor-pointer whitespace-nowrap">🗑️ Usuń karnet</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.length > 0 ? (
+                      [...profileClient.karnetyKlubowicza]
+                        .sort((a: any, b: any) => (a.waznyDo || '9999-12-31').localeCompare(b.waznyDo || '9999-12-31'))
+                        .map((karnet: any) => {
+                          let isExpiring = false;
+                          let isPending = karnet.statusTekst?.includes('Oczekujący');
+                          const czyZawieszony = !!karnet.zawieszonyOd;
+                          if (!isPending) {
+                            if (karnet.waznyDo) {
+                              const todayDate = new Date();
+                              todayDate.setHours(0, 0, 0, 0);
+                              const expDate = new Date(karnet.waznyDo);
+                              expDate.setHours(0, 0, 0, 0);
+                              const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+                              if (diffDays <= 5) {
+                                isExpiring = true;
+                              }
+                            }
+                            if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
+                              if (karnet.pozostaloWejsc <= 2) {
+                                isExpiring = true;
+                              }
                             }
                           }
-                          if (karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined) {
-                            if (karnet.pozostaloWejsc <= 2) {
-                              isExpiring = true;
-                            }
+                          let statusColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                          if (isPending) {
+                            statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
+                          } else if (isExpiring) {
+                            statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
                           }
-                        }
-                        let statusColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                        if (isPending) {
-                          statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200';
-                        } else if (isExpiring) {
-                          statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200';
-                        }
-                        return (
-                          <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 relative">
-                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                              <div className="space-y-2">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
-                                  {karnet.blokadaDo && karnet.blokadaDo >= todayStr && (
-                                    <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
-                                      ⚠️ Zablokowane: {karnet.blokadaOd ? `od ${karnet.blokadaOd} ` : ''}do {karnet.blokadaDo}
+                          return (
+                            <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 relative">
+                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
+                                    {karnet.blokadaDo && karnet.blokadaDo >= todayStr && (
+                                      <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
+                                        ⚠️ Zablokowane: {karnet.blokadaOd ? `od ${karnet.blokadaOd} ` : ''}do {karnet.blokadaDo}
+                                      </span>
+                                    )}
+                                    {czyZawieszony && (
+                                      <span className="bg-amber-100 text-amber-900 text-xs font-black px-2.5 py-1 rounded border border-amber-200">
+                                        ⏸️ ZAWIESZONE: OD {karnet.zawieszonyOd} {karnet.zawieszonyDo ? `DO ${karnet.zawieszonyDo}` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`${statusColorClass} text-[11px] font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap`}>
+                                      {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                                     </span>
-                                  )}
-                                  {czyZawieszony && (
-                                    <span className="bg-amber-100 text-amber-900 text-xs font-black px-2.5 py-1 rounded border border-amber-200">
-                                      ⏸️ ZAWIESZONE: OD {karnet.zawieszonyOd} {karnet.zawieszonyDo ? `DO ${karnet.zawieszonyDo}` : ''}
+                                    <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
+                                      Cena: {karnet.cena}
                                     </span>
-                                  )}
+                                    {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
+                                      <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
+                                        <span>🎟️ Wejścia:</span> 
+                                        <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className={`${statusColorClass} text-[11px] font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap`}>
-                                    {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
-                                  </span>
-                                  <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
-                                    Cena: {karnet.cena}
-                                  </span>
-                                  {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
-                                    <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
-                                      <span>🎟️ Wejścia:</span> 
-                                      <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
-                                    </span>
+                                <div className="flex items-center gap-2">
+                                  {czyZawieszony ? (
+                                    <button
+                                      onClick={() => handleOdwiesKarnet(karnet)}
+                                      className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-emerald-200 cursor-pointer shadow-sm whitespace-nowrap"
+                                    >
+                                      ▶️ ODWIEŚ KARNET
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        setSuspendPassTarget(karnet);
+                                        setSuspendStartDate(todayStr);
+                                        setSuspendEndDate(todayStr);
+                                        setSuspendPassDays('3');
+                                        setSuspendMode('days');
+                                        setBlockPassStartDate(karnet.blokadaOd || todayStr);
+                                        setBlockPassEndDate(karnet.blokadaDo || todayStr);
+                                        setBlockMode('days');
+                                        setIsSuspendModalOpen(true);
+                                      }}
+                                      className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer shadow-sm"
+                                    >
+                                      ⚙️ STATUS
+                                    </button>
                                   )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {czyZawieszony ? (
-                                  <button
-                                    onClick={() => handleOdwiesKarnet(karnet)}
-                                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-emerald-200 cursor-pointer shadow-sm whitespace-nowrap"
-                                  >
-                                    ▶️ ODWIEŚ KARNET
-                                  </button>
-                                ) : (
                                   <button
                                     onClick={() => {
-                                      setSuspendPassTarget(karnet);
-                                      setSuspendStartDate(todayStr);
-                                      setSuspendEndDate(todayStr);
-                                      setSuspendPassDays('3');
-                                      setSuspendMode('days');
-                                      setBlockPassStartDate(karnet.blokadaOd || todayStr);
-                                      setBlockPassEndDate(karnet.blokadaDo || todayStr);
-                                      setBlockMode('days');
-                                      setIsSuspendModalOpen(true);
+                                      setExtendPassTarget(karnet);
+                                      setExtendSelectedNewPassName(karnet.nazwa);
+                                      const curDate = new Date(karnet.waznyDo || Date.now());
+                                      curDate.setMonth(curDate.getMonth() + 1);
+                                      setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                      setIsExtendPassModalOpen(true);
                                     }}
-                                    className="bg-rose-50 hover:bg-rose-100 text-rose-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-rose-200 cursor-pointer shadow-sm"
+                                    className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
                                   >
-                                    ⚙️ STATUS
+                                    🕒 Przedłuż
                                   </button>
-                                )}
-                                <button
-                                  onClick={() => {
-                                    setExtendPassTarget(karnet);
-                                    setExtendSelectedNewPassName(karnet.nazwa);
-                                    const curDate = new Date(karnet.waznyDo || Date.now());
-                                    curDate.setMonth(curDate.getMonth() + 1);
-                                    setExtendNewDate(curDate.toISOString().split('T')[0]);
-                                    setIsExtendPassModalOpen(true);
-                                  }}
-                                  className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
-                                >
-                                  🕒 Przedłuż
-                                </button>
-                                <button
-                                  onClick={() => setEditingPassModal({ ...karnet })}
-                                  className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm"
-                                  title="Edytuj"
-                                >
-                                  ✏️
-                                </button>
+                                  <button
+                                    onClick={() => setEditingPassModal({ ...karnet })}
+                                    className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm"
+                                    title="Edytuj"
+                                  >
+                                    ✏️
+                                  </button>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        );
-                      })
-                  ) : (
-                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center text-slate-400 text-xs">
-                      Brak przypisanych karnetów.
+                          );
+                        })
+                    ) : (
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center text-slate-400 text-xs">
+                        Brak przypisanych karnetów.
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-4 border-t border-slate-200 pt-4 mt-4">
+                  <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
+                    {(() => {
+                      const walletVal = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+                      let walletClass = 'bg-slate-100 text-slate-800 border-slate-200';
+                      if (walletVal < 0) walletClass = 'bg-rose-100 text-rose-800 border-rose-200';
+                      else if (walletVal > 0) walletClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                      return (
+                        <span className={`font-black px-3 py-1 rounded-xl text-sm border whitespace-nowrap ${walletClass}`}>
+                          {profileClient.wallet}
+                        </span>
+                      );
+                    })()}
+                    <div className="flex gap-3">
+                      <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer whitespace-nowrap">🕒 POKAŻ HISTORIĘ PORTFELA I OPERACJI</button>
+                      <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap">+ UZUPEŁNIJ PORTFEL</button>
                     </div>
-                  )}
-                </div>
-              </div>
-              <div className="space-y-4 border-t border-slate-200 pt-4 mt-4">
-                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
-                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
-                  {(() => {
-                    const walletVal = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-                    let walletClass = 'bg-slate-100 text-slate-800 border-slate-200';
-                    if (walletVal < 0) walletClass = 'bg-rose-100 text-rose-800 border-rose-200';
-                    else if (walletVal > 0) walletClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                    return (
-                      <span className={`font-black px-3 py-1 rounded-xl text-sm border whitespace-nowrap ${walletClass}`}>
-                        {profileClient.wallet}
-                      </span>
-                    );
-                  })()}
-                  <div className="flex gap-3">
-                    <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer whitespace-nowrap">🕒 POKAŻ HISTORIĘ PORTFELA I OPERACJI</button>
-                    <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap">+ UZUPEŁNIJ PORTFEL</button>
                   </div>
                 </div>
-              </div>
 
-              <div className="space-y-4">
-                <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Zapisy na zajęcia</h3>
-                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-                  <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold text-slate-600">
-                    <button onClick={() => setActiveZapisyTab('nadchodzace')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'nadchodzace' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>NADCHODZĄCE</button>
-                    <button onClick={() => setActiveZapisyTab('przeszle')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'przeszle' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>PRZESZŁE</button>
-                    <button onClick={() => setActiveZapisyTab('wypisy')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'wypisy' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>WYPISY</button>
-                    <button onClick={() => setActiveZapisyTab('automatyczne')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'automatyczne' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>AUTOMATYCZNE ZAPISY</button>
-                  </div>
-                  <div className="overflow-x-auto">
-                    {activeZapisyTab === 'nadchodzace' && (
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał</th>
-                            <th className="py-2.5 px-4 text-right whitespace-nowrap">Wypisz</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyNadchodzace && profileClient.zapisyNadchodzace.map((item: any, idx: number) => (
-                            <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
-                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded text-[10px] font-bold border border-sky-200">{item.zapisujacy}</span></td>
-                              <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️</button></td>
+                <div className="space-y-4">
+                  <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Zapisy na zajęcia</h3>
+                  <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                    <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold text-slate-600">
+                      <button onClick={() => setActiveZapisyTab('nadchodzace')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'nadchodzace' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>NADCHODZĄCE</button>
+                      <button onClick={() => setActiveZapisyTab('przeszle')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'przeszle' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>PRZESZŁE</button>
+                      <button onClick={() => setActiveZapisyTab('wypisy')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'wypisy' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>WYPISY</button>
+                      <button onClick={() => setActiveZapisyTab('automatyczne')} className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer whitespace-nowrap ${activeZapisyTab === 'automatyczne' ? 'border-amber-600 text-amber-700 font-black bg-white' : 'border-transparent hover:bg-slate-100'}`}>AUTOMATYCZNE ZAPISY</button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      {activeZapisyTab === 'nadchodzace' && (
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                              <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Kto zapisał</th>
+                              <th className="py-2.5 px-4 text-right whitespace-nowrap">Wypisz</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    {activeZapisyTab === 'przeszle' && (
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Obecność</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyPrzeszle && profileClient.zapisyPrzeszle.map((item: any, idx: number) => (
-                            <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
-                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200">{item.obecnosc}</span></td>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {profileClient.zapisyNadchodzace && profileClient.zapisyNadchodzace.map((item: any, idx: number) => (
+                              <tr key={item.id}>
+                                <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                                <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
+                                <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
+                                <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
+                                <td className="py-3 px-4 whitespace-nowrap"><span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded text-[10px] font-bold border border-sky-200">{item.zapisujacy}</span></td>
+                                <td className="py-3 px-4 text-right whitespace-nowrap"><button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer" title="Wypisz">🗑️</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {activeZapisyTab === 'przeszle' && (
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                              <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Karnet</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Obecność</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    {activeZapisyTab === 'wypisy' && (
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
-                            <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
-                            <th className="py-2.5 px-4 whitespace-nowrap">Informacja</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {profileClient.zapisyWypisy && profileClient.zapisyWypisy.map((item: any, idx: number) => (
-                            <tr key={item.id}>
-                              <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                              <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
-                              <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
-                              <td className="py-3 px-4 whitespace-nowrap"><span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-200">{item.wypisujacy}</span></td>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {profileClient.zapisyPrzeszle && profileClient.zapisyPrzeszle.map((item: any, idx: number) => (
+                              <tr key={item.id}>
+                                <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                                <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
+                                <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
+                                <td className="py-3 px-4 font-semibold whitespace-nowrap">{item.karnet}</td>
+                                <td className="py-3 px-4 whitespace-nowrap"><span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200">{item.obecnosc}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {activeZapisyTab === 'wypisy' && (
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                              <th className="py-2.5 px-4 w-10 whitespace-nowrap">#</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Data zajęć</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Zajęcia</th>
+                              <th className="py-2.5 px-4 whitespace-nowrap">Informacja</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    {activeZapisyTab === 'automatyczne' && (
-                      <div className="p-8 text-center text-slate-400 text-xs">Brak automatycznych zapisów.</div>
-                    )}
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {profileClient.zapisyWypisy && profileClient.zapisyWypisy.map((item: any, idx: number) => (
+                              <tr key={item.id}>
+                                <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                                <td className="py-3 px-4 font-mono whitespace-nowrap">{item.data}</td>
+                                <td className="py-3 px-4 font-bold whitespace-nowrap">{item.zajecia}</td>
+                                <td className="py-3 px-4 whitespace-nowrap"><span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-200">{item.wypisujacy}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {activeZapisyTab === 'automatyczne' && (
+                        <div className="p-8 text-center text-slate-400 text-xs">Brak automatycznych zapisów.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* MODAL: DODAJ DRUGI KARNET */}
       {isAddSecondPassModalOpen && profileClient && (
@@ -3688,7 +3967,8 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-{/* MODAL: EDYTUJ DANE KONTA */}
+
+      {/* MODAL: EDYTUJ DANE KONTA */}
       {isEditProfileInfoOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
