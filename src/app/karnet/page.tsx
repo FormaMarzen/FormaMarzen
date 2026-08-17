@@ -41,6 +41,68 @@ export default function KarnetyPage() {
 
   const todayStr = new Date().toISOString().split('T')[0];
 
+  // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI)
+  const calculateContinuityDiscount = (client: any) => {
+    if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
+    const karnety = client.karnetyKlubowicza || [];
+    if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let isContinuous = false;
+    for (const k of karnety) {
+      if (k.waznyDo) {
+        const exp = new Date(k.waznyDo);
+        exp.setHours(0, 0, 0, 0);
+        const diffDays = Math.floor((today.getTime() - exp.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays <= 1) {
+          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+            if (diffDays <= 1) isContinuous = true;
+          } else {
+            isContinuous = true;
+          }
+        }
+      }
+    }
+
+    if (!isContinuous) {
+      return { hasContinuity: false, percent: 0, label: '0% (Brak ciągłości - zresetowano)' };
+    }
+
+    const liczbaKarnetow = karnety.length;
+    let rabatProcent = 0;
+
+    if (liczbaKarnetow === 1) {
+      rabatProcent = 2;
+    } else if (liczbaKarnetow === 2) {
+      rabatProcent = 4;
+    } else if (liczbaKarnetow >= 3) {
+      rabatProcent = Math.min(25, 4 + (liczbaKarnetow - 2) * 1);
+    }
+
+    return {
+      hasContinuity: true,
+      percent: rabatProcent,
+      label: `${rabatProcent}% (Ciągłość: ${liczbaKarnetow} ${liczbaKarnetow === 1 ? 'karnet' : 'karnety'})`
+    };
+  };
+
+  // POMOCNIK DO WYCIĄGANIA EFEKTYWNEGO RABATU KLIENTA (RĘCZNY NADRZĘDNY > SYSTEMOWY)
+  const getEffectiveDiscount = (client: any) => {
+    if (!client) return { percent: 0, label: '', type: 'none' };
+    const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
+    if (manualDiscountVal > 0) {
+      return { percent: manualDiscountVal, label: `(-${manualDiscountVal}% rabat ręczny)`, type: 'manual' };
+    }
+    const continuityInfo = calculateContinuityDiscount(client);
+    if (continuityInfo.hasContinuity && continuityInfo.percent > 0) {
+      return { percent: continuityInfo.percent, label: `(-${continuityInfo.percent}% ciągłość)`, type: 'system' };
+    }
+    return { percent: 0, label: '', type: 'none' };
+  };
+
   // 1. POBIERANIE DANYCH Z SUPABASE (Karnety + Rodzaje Zajęć + Użytkownik)
   const loadData = async () => {
     try {
@@ -85,6 +147,7 @@ export default function KarnetyPage() {
               firstName: c.Imię || '',
               lastName: c.Nazwisko || '',
               email: c['E-mail'] || c.email || '',
+              discount: c.discount || '',
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
@@ -109,6 +172,7 @@ export default function KarnetyPage() {
                "E-mail": userEmail,
                "Numer tel.": '-',
                Portfel: '0.00 PLN',
+               discount: '',
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -120,6 +184,7 @@ export default function KarnetyPage() {
                  firstName: defaultClient.Imię,
                  lastName: defaultClient.Nazwisko,
                  email: defaultClient["E-mail"],
+                 discount: '',
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN'
                };
@@ -319,6 +384,7 @@ export default function KarnetyPage() {
     return !(isTimeBased && alreadyOwned);
   });
 
+  // PRZEDŁUŻENIE KARNETU Z UWZGLĘDNIENIEM RABATU
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -336,8 +402,14 @@ export default function KarnetyPage() {
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
 
-    const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, ""));
-    const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : passToExtend.cena;
+    const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    
+    // Wyliczenie efektywnego rabatu
+    const effectiveDiscount = getEffectiveDiscount(currentUser);
+    const cenaWartosc = effectiveDiscount.percent > 0 
+      ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
+      : basePriceNum;
+    const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
     
     const isTimeBased = passToExtend.pozostaloWejsc === null || passToExtend.pozostaloWejsc === undefined;
     let updatedKarnetyList = [...karnetyList];
@@ -362,6 +434,7 @@ export default function KarnetyPage() {
             ...k,
             waznyDo: nowaDataWygasnieciaStr,
             cena: cenaStr,
+            znizkaProcentowa: effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
@@ -389,7 +462,7 @@ export default function KarnetyPage() {
         waznyDo: nowaDataWygasnieciaStr,
         pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
         cena: cenaStr,
-        znizkaProcentowa: '',
+        znizkaProcentowa: effectiveDiscount.label,
         rata: '1 / 1',
         statusTekst: `Oczekujący (Ważny od: ${passToExtend.waznyDo} do: ${nowaDataWygasnieciaStr})`,
         blokadaDo: null,
@@ -400,7 +473,7 @@ export default function KarnetyPage() {
       updatedKarnetyList.push(nowyKarnetObj);
     }
 
-    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, ""));
+    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
@@ -434,7 +507,7 @@ export default function KarnetyPage() {
         klient_id: currentUser.id,
         typ_operacji: 'przedluzenie_karnetu',
         kwota: -cenaWartosc,
-        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}`
+        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${effectiveDiscount.label ? ` ${effectiveDiscount.label}` : ''}`
       }]);
     }
     
@@ -446,10 +519,11 @@ export default function KarnetyPage() {
       wallet: nowyStanPortfelaStr
     });
     
-    alert(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony.`);
+    alert(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony za kwotę ${cenaStr}.`);
     setIsExtendModalOpen(false);
   };
 
+  // ZAKUP NOWEGO KARNETU Z UWZGLĘDNIENIEM RABATU
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -469,8 +543,15 @@ export default function KarnetyPage() {
 
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     
-    const cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
-    const cenaStr = defKarnetu ? `${defKarnetu.cena} PLN` : '0.00 PLN';
+    const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+    
+    // Wyliczenie efektywnego rabatu
+    const effectiveDiscount = getEffectiveDiscount(currentUser);
+    const cenaWartosc = effectiveDiscount.percent > 0 
+      ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
+      : basePriceNum;
+    const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
+
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
     
     const isTimeBased = limitWejscBaza === null;
@@ -498,6 +579,7 @@ export default function KarnetyPage() {
             ...k,
             waznyDo: nowaDataWygasnieciaStr,
             cena: cenaStr,
+            znizkaProcentowa: effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
@@ -528,7 +610,7 @@ export default function KarnetyPage() {
         waznyDo: nowaDataWygasnieciaStr,
         pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
         cena: cenaStr,
-        znizkaProcentowa: '',
+        znizkaProcentowa: effectiveDiscount.label,
         rata: '1 / 1',
         statusTekst: statusTekst,
         blokadaDo: null,
@@ -539,7 +621,7 @@ export default function KarnetyPage() {
       updatedKarnetyList.push(nowyKarnetObj);
     }
 
-    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, ""));
+    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
@@ -572,7 +654,7 @@ export default function KarnetyPage() {
         klient_id: currentUser.id,
         typ_operacji: 'zakup_karnetu',
         kwota: -cenaWartosc,
-        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}`
+        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}${effectiveDiscount.label ? ` ${effectiveDiscount.label}` : ''}`
       }]);
     }
 
@@ -584,7 +666,7 @@ export default function KarnetyPage() {
       wallet: nowyStanPortfelaStr
     });
 
-    alert(`Gratulacje! Zapisano operację karnetu (Ważny do: ${nowaDataWygasnieciaStr}).`);
+    alert(`Gratulacje! Zakupiono karnet za kwotę ${cenaStr} (Ważny do: ${nowaDataWygasnieciaStr}).`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
   };
@@ -999,9 +1081,29 @@ export default function KarnetyPage() {
 
   // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU Z OPCJĄ ZAWIESZENIA
   if (appRole === 'klubowicz' && currentUser) {
+    const effectiveDiscount = getEffectiveDiscount(currentUser);
+
     return (
-      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-24">
+      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-24 font-sans antialiased">
         
+        {/* BANER INFORMACYJNY O AKTYWNYM RABACIE */}
+        {effectiveDiscount.percent > 0 && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🏷️</span>
+              <div>
+                <div className="font-black text-xs uppercase tracking-wider">Twój aktywny rabat: {effectiveDiscount.percent}%</div>
+                <div className="text-[11px] text-emerald-700 mt-0.5">
+                  {effectiveDiscount.type === 'manual' ? 'Przypisano indywidualny rabat stały do Twojego konta.' : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów.`} Ceny zakupu i przedłużeń karnetów uwzględniają tę zniżkę.
+                </div>
+              </div>
+            </div>
+            <span className="bg-emerald-200 text-emerald-900 font-mono font-black text-xs px-3 py-1.5 rounded-xl whitespace-nowrap">
+              -{effectiveDiscount.percent}%
+            </span>
+          </div>
+        )}
+
         {/* SEKCJA 1: AKTYWNE KARNETY */}
         <div>
           <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">TWOJE KARNETY</h2>
@@ -1042,7 +1144,14 @@ export default function KarnetyPage() {
                   <div key={karnet.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                       <div className="space-y-3">
-                        <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
+                          {karnet.znizkaProcentowa && (
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded border border-emerald-200">
+                              {karnet.znizkaProcentowa}
+                            </span>
+                          )}
+                        </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200 shadow-sm">
                             Aktywne zapisy: {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined ? karnet.pozostaloWejsc : 'Bez limitu'}
@@ -1050,6 +1159,11 @@ export default function KarnetyPage() {
                           <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
                             {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                           </span>
+                          {karnet.cena && (
+                            <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200">
+                              Cena: {karnet.cena}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1326,110 +1440,172 @@ export default function KarnetyPage() {
         )}
 
         {/* MODAL: PRZEDŁUŻ KARNET */}
-        {isExtendModalOpen && passToExtend && (
-          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Przedłuż karnet</h3>
-                <button onClick={() => setIsExtendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
-              </div>
-              <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
-                <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900">
-                  Przedłużasz karnet: <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
-                </div>
-                <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                  <button type="button" onClick={() => setIsExtendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-                    Anuluj
-                  </button>
-                  <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                    Potwierdzam przedłużenie
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+        {isExtendModalOpen && passToExtend && (() => {
+          const effectiveDiscount = getEffectiveDiscount(currentUser);
+          const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
+          const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+          const finalPrice = effectiveDiscount.percent > 0 ? basePrice * (1 - effectiveDiscount.percent / 100) : basePrice;
 
-        {/* MODAL: KUP KARNET */}
-        {isBuyPassModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
-              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Dodaj karnet</h3>
-                <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
-              </div>
-              <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
-                <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
-                  Wybierz karnet, aby przypisać go do konta (zostanie pobrana kwota z portfela).
+          return (
+            <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+                <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Przedłuż karnet</h3>
+                  <button onClick={() => setIsExtendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
                 </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Wybierz karnet z cennika *</label>
-                  <select
-                    required
-                    value={selectedBuyPass}
-                    onChange={(e) => setSelectedBuyPass(e.target.value)}
-                    className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
-                  >
-                    <option value="" disabled>-- Wybierz karnet --</option>
-                    {dostepneKarnetyDoZakupu.map((k: any) => (
-                      <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
-                    ))}
-                  </select>
-                </div>
-                {currentUser?.karnetyKlubowicza?.length > 0 && (
-                  <div className="space-y-2 pt-2 border-t border-sky-100">
-                    <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
-                    <div className="space-y-2">
-                      <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
-                        <input
-                          type="radio"
-                          name="activationMode"
-                          value="today"
-                          checked={activationMode === 'today'}
-                          onChange={() => setActivationMode('today')}
-                          className="w-4 h-4 accent-blue-600 cursor-pointer"
-                        />
-                        <div className="flex flex-col">
-                          <span className="font-bold text-slate-800">Od dzisiaj</span>
-                          <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
-                        </div>
-                      </label>
-                      <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
-                        <input
-                          type="radio"
-                          name="activationMode"
-                          value="after"
-                          checked={activationMode === 'after'}
-                          onChange={() => setActivationMode('after')}
-                          className="w-4 h-4 accent-blue-600 cursor-pointer"
-                        />
-                        <div className="flex flex-col">
-                          <span className="font-bold text-slate-800">Oczekujący</span>
-                          <span className="text-[10px] text-slate-500">Zacznie obowiązywać po wygaśnięciu obecnego</span>
-                        </div>
-                      </label>
+                <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
+                  <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900">
+                    Przedłużasz karnet: <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
+                  </div>
+                  
+                  <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Cena katalogowa:</span>
+                      <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
+                    </div>
+                    {effectiveDiscount.percent > 0 && (
+                      <div className="flex justify-between text-emerald-700 font-bold">
+                        <span>Rabat {effectiveDiscount.label}:</span>
+                        <span>-{effectiveDiscount.percent}% (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
+                      <span>Cena po przedłużeniu:</span>
+                      <span className="text-emerald-700 font-bold">{finalPrice.toFixed(2)} PLN</span>
                     </div>
                   </div>
-                )}
-                <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                  <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-                    Anuluj
-                  </button>
-                  <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                    Potwierdzam zakup
-                  </button>
-                </div>
-              </form>
+
+                  <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                    <button type="button" onClick={() => setIsExtendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                      Anuluj
+                    </button>
+                    <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                      Potwierdzam przedłużenie ({finalPrice.toFixed(2)} PLN)
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
+
+        {/* MODAL: KUP KARNET */}
+        {isBuyPassModalOpen && (() => {
+          const effectiveDiscount = getEffectiveDiscount(currentUser);
+          const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
+          const basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
+          const discountedPrice = effectiveDiscount.percent > 0 
+            ? basePrice * (1 - effectiveDiscount.percent / 100) 
+            : basePrice;
+
+          return (
+            <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+                <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Dodaj karnet</h3>
+                  <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+                </div>
+                <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
+                  <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
+                    Wybierz karnet, aby przypisać go do konta (zostanie pobrana kwota z portfela).
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Wybierz karnet z cennika *</label>
+                    <select
+                      required
+                      value={selectedBuyPass}
+                      onChange={(e) => setSelectedBuyPass(e.target.value)}
+                      className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
+                    >
+                      <option value="" disabled>-- Wybierz karnet --</option>
+                      {dostepneKarnetyDoZakupu.map((k: any) => {
+                        const kBasePrice = parseFloat(k.cena) || 0;
+                        const kFinalPrice = effectiveDiscount.percent > 0 
+                          ? (kBasePrice * (1 - effectiveDiscount.percent / 100)).toFixed(2)
+                          : k.cena;
+                        return (
+                          <option key={k.id} value={k.nazwa}>
+                            {k.nazwa} (Cena: {kFinalPrice} PLN {effectiveDiscount.percent > 0 ? `| Rabat ${effectiveDiscount.percent}%` : ''})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {selectedBuyPass && selectedPassDef && (
+                    <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
+                      <div className="flex justify-between text-slate-600">
+                        <span>Cena katalogowa:</span>
+                        <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
+                      </div>
+                      {effectiveDiscount.percent > 0 && (
+                        <div className="flex justify-between text-emerald-700 font-bold">
+                          <span>Naliczony rabat {effectiveDiscount.label}:</span>
+                          <span>-{effectiveDiscount.percent}% (-{(basePrice - discountedPrice).toFixed(2)} PLN)</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
+                        <span>Do zapłaty:</span>
+                        <span className="text-emerald-700 font-bold">{discountedPrice.toFixed(2)} PLN</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentUser?.karnetyKlubowicza?.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-sky-100">
+                      <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
+                      <div className="space-y-2">
+                        <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                          <input
+                            type="radio"
+                            name="activationMode"
+                            value="today"
+                            checked={activationMode === 'today'}
+                            onChange={() => setActivationMode('today')}
+                            className="w-4 h-4 accent-blue-600 cursor-pointer"
+                          />
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-800">Od dzisiaj</span>
+                            <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
+                          </div>
+                        </label>
+                        <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                          <input
+                            type="radio"
+                            name="activationMode"
+                            value="after"
+                            checked={activationMode === 'after'}
+                            onChange={() => setActivationMode('after')}
+                            className="w-4 h-4 accent-blue-600 cursor-pointer"
+                          />
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-800">Oczekujący</span>
+                            <span className="text-[10px] text-slate-500">Zacznie obowiązywać po wygaśnięciu obecnego</span>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                  <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                    <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                      Anuluj
+                    </button>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                      Potwierdzam zakup ({discountedPrice.toFixed(2)} PLN)
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
 
   // PANEL ADMINISTRATORA / TRENERA (Zarządzanie cennikiem karnetów)
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased">
       
       {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
