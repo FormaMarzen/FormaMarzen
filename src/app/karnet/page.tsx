@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../raporty/klienci/supabase';
 
+// GLOBALNA BLOKADA (Zabezpieczenie przed podwójnym renderowaniem React Strict Mode)
+let globalCreatingLock = false;
+
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
@@ -56,36 +59,76 @@ export default function KarnetyPage() {
         }
       }
 
-      const { data: klienciData } = await supabase.from('klienci').select('*');
-      if (klienciData && userEmail) {
-        const enriched = klienciData.map((c: any) => {
-          let parsedKarnety = [];
-          if (Array.isArray(c.karnetyKlubowicza)) {
-            parsedKarnety = c.karnetyKlubowicza;
-          } else if (typeof c.karnetyKlubowicza === 'string') {
-            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
-          }
+      if (userEmail) {
+        const normalizedEmail = userEmail.toLowerCase().trim();
+        const { data: klienciData } = await supabase.from('klienci').select('*');
+        
+        if (klienciData) {
+          const enriched = klienciData.map((c: any) => {
+            let parsedKarnety = [];
+            if (Array.isArray(c.karnetyKlubowicza)) {
+              parsedKarnety = c.karnetyKlubowicza;
+            } else if (typeof c.karnetyKlubowicza === 'string') {
+              try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+            }
 
-          let parsedGlobalHistory = [];
-          if (Array.isArray(c.historiaZawieszenGlobalna)) {
-            parsedGlobalHistory = c.historiaZawieszenGlobalna;
-          } else if (typeof c.historiaZawieszenGlobalna === 'string') {
-            try { parsedGlobalHistory = JSON.parse(c.historiaZawieszenGlobalna); } catch(e) {}
-          }
+            let parsedGlobalHistory = [];
+            if (Array.isArray(c.historiaZawieszenGlobalna)) {
+              parsedGlobalHistory = c.historiaZawieszenGlobalna;
+            } else if (typeof c.historiaZawieszenGlobalna === 'string') {
+              try { parsedGlobalHistory = JSON.parse(c.historiaZawieszenGlobalna); } catch(e) {}
+            }
 
-          return {
-            ...c,
-            id: c.id,
-            firstName: c.Imię || '',
-            lastName: c.Nazwisko || '',
-            email: c['E-mail'] || c.email || '',
-            karnetyKlubowicza: parsedKarnety,
-            historiaZawieszenGlobalna: parsedGlobalHistory,
-            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
-          };
-        });
-        const myUser = enriched.find((c: any) => c.email === userEmail);
-        if (myUser) setCurrentUser(myUser);
+            return {
+              ...c,
+              id: c.id,
+              firstName: c.Imię || '',
+              lastName: c.Nazwisko || '',
+              email: c['E-mail'] || c.email || '',
+              karnetyKlubowicza: parsedKarnety,
+              historiaZawieszenGlobalna: parsedGlobalHistory,
+              wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
+            };
+          });
+          
+          let myUser = enriched.find((c: any) => c.email.toLowerCase().trim() === normalizedEmail);
+          
+          // Jeśli brak konta klubowicza, tworzymy awaryjne (z użyciem blokady)
+          if (!myUser && appRole === 'klubowicz') {
+             if (globalCreatingLock) {
+                console.log("Blokada wyścigu przy tworzeniu konta.");
+                return;
+             }
+             globalCreatingLock = true;
+             
+             const newClientId = Date.now();
+             const defaultClient = {
+               id: newClientId,
+               Imię: userEmail.split('@')[0],
+               Nazwisko: 'Klubowicz',
+               "E-mail": userEmail,
+               "Numer tel.": '-',
+               Portfel: '0.00 PLN',
+               Zarejestrowany: new Date().toISOString().split('T')[0],
+               karnetyKlubowicza: []
+             };
+             
+             const { error: insertErr } = await supabase.from('klienci').insert([defaultClient]);
+             if (!insertErr) {
+               myUser = {
+                 ...defaultClient,
+                 firstName: defaultClient.Imię,
+                 lastName: defaultClient.Nazwisko,
+                 email: defaultClient["E-mail"],
+                 historiaZawieszenGlobalna: [],
+                 wallet: '0.00 PLN'
+               };
+             }
+             globalCreatingLock = false;
+          }
+          
+          if (myUser) setCurrentUser(myUser);
+        }
       }
 
       // A. Pobieranie karnetów (cennik)
@@ -141,6 +184,7 @@ export default function KarnetyPage() {
 
     } catch (err) {
       console.error("Błąd sieci podczas pobierania:", err);
+      globalCreatingLock = false;
     } finally {
       setIsLoading(false);
     }
@@ -356,14 +400,17 @@ export default function KarnetyPage() {
       updatedKarnetyList.push(nowyKarnetObj);
     }
 
-    const currentWalletNum = parseFloat(currentUser.Portfel?.replace(/[^0-9.-]+/g, "") || "0");
+    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, ""));
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
-      Portfel: nowyStanPortfelaStr
     };
+    
+    // Zabezpieczenie przed różnymi nazwami kolumn
+    if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
+    else dbPayload.Portfel = nowyStanPortfelaStr;
 
     const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
       const dateA = a.waznyDo || '9999-12-31';
@@ -375,7 +422,7 @@ export default function KarnetyPage() {
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
 
     if (updateError) {
       alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
@@ -390,9 +437,17 @@ export default function KarnetyPage() {
         opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}`
       }]);
     }
+    
+    setCurrentUser({
+      ...currentUser,
+      karnetyKlubowicza: updatedKarnetyList,
+      Portfel: dbPayload.Portfel || currentUser.Portfel,
+      portfel: dbPayload.portfel || currentUser.portfel,
+      wallet: nowyStanPortfelaStr
+    });
+    
     alert(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony.`);
     setIsExtendModalOpen(false);
-    window.location.reload();
   };
 
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
@@ -484,14 +539,16 @@ export default function KarnetyPage() {
       updatedKarnetyList.push(nowyKarnetObj);
     }
 
-    const currentWalletNum = parseFloat(currentUser.Portfel?.replace(/[^0-9.-]+/g, "") || "0");
+    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, ""));
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
-      Portfel: nowyStanPortfelaStr
     };
+    
+    if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
+    else dbPayload.Portfel = nowyStanPortfelaStr;
 
     const latestExpDate = [...updatedKarnetyList].sort((a: any, b: any) => {
       const dateA = a.waznyDo || '9999-12-31';
@@ -503,7 +560,7 @@ export default function KarnetyPage() {
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
 
     if (updateError) {
       alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
@@ -519,10 +576,17 @@ export default function KarnetyPage() {
       }]);
     }
 
+    setCurrentUser({
+      ...currentUser,
+      karnetyKlubowicza: updatedKarnetyList,
+      Portfel: dbPayload.Portfel || currentUser.Portfel,
+      portfel: dbPayload.portfel || currentUser.portfel,
+      wallet: nowyStanPortfelaStr
+    });
+
     alert(`Gratulacje! Zapisano operację karnetu (Ważny do: ${nowaDataWygasnieciaStr}).`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
-    window.location.reload(); 
   };
 
   const getDaysBetween = (d1: string, d2: string) => {
@@ -725,7 +789,7 @@ export default function KarnetyPage() {
       historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory
     };
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
 
     if (updateError) {
       setSuspendError(`Błąd aktualizacji bazy danych: ${updateError.message}`);
@@ -734,11 +798,16 @@ export default function KarnetyPage() {
 
     await handleAutoWypiszPoZawieszeniu(currentUser.id, suspendStartDate, suspendEndDate, targetKarnet.nazwa);
 
+    setCurrentUser({
+      ...currentUser,
+      karnetyKlubowicza: updatedKarnetyList,
+      historiaZawieszenGlobalna: updatedGlobalHistory
+    });
+
     alert(`Pomyślnie zapisano zawieszenie. System automatycznie wypisał Cię z zajęć w wybranym okresie.`);
     setIsSuspendModalOpen(false);
     setSuspendStartDate('');
     setSuspendEndDate('');
-    window.location.reload();
   };
 
   // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA)
@@ -814,16 +883,21 @@ export default function KarnetyPage() {
       Wygasa: latestExpDate
     };
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id).select();
 
     if (updateError) {
       alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
       return;
     }
 
+    setCurrentUser({
+      ...currentUser,
+      karnetyKlubowicza: updatedKarnetyList,
+      historiaZawieszenGlobalna: updatedGlobalHistory
+    });
+
     alert(`Karnet odwieszony! Zużyto ${actualDays} dni z limitu. Data ważności przedłużona do: ${nowaDataWygasnieciaStr}`);
     setIsUnsuspendModalOpen(false);
-    window.location.reload();
   };
 
   const activePassesForSuspend = karnetyList.filter((k: any) => {
@@ -1248,6 +1322,104 @@ export default function KarnetyPage() {
           </div>
         )}
 
+        {/* MODAL: PRZEDŁUŻ KARNET */}
+        {isExtendModalOpen && passToExtend && (
+          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Przedłuż karnet</h3>
+                <button onClick={() => setIsExtendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+              </div>
+              <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
+                <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900">
+                  Przedłużasz karnet: <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
+                </div>
+                <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                  <button type="button" onClick={() => setIsExtendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                    Anuluj
+                  </button>
+                  <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                    Potwierdzam przedłużenie
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: KUP KARNET */}
+        {isBuyPassModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Dodaj karnet</h3>
+                <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+              </div>
+              <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
+                <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
+                  Wybierz karnet, aby przypisać go do konta (zostanie pobrana kwota z portfela).
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Wybierz karnet z cennika *</label>
+                  <select
+                    required
+                    value={selectedBuyPass}
+                    onChange={(e) => setSelectedBuyPass(e.target.value)}
+                    className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
+                  >
+                    <option value="" disabled>-- Wybierz karnet --</option>
+                    {dostepneKarnetyDoZakupu.map((k: any) => (
+                      <option key={k.id} value={k.nazwa}>{k.nazwa} (Cena: {k.cena} PLN)</option>
+                    ))}
+                  </select>
+                </div>
+                {currentUser?.karnetyKlubowicza?.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-sky-100">
+                    <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
+                    <div className="space-y-2">
+                      <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'today' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                        <input
+                          type="radio"
+                          name="activationMode"
+                          value="today"
+                          checked={activationMode === 'today'}
+                          onChange={() => setActivationMode('today')}
+                          className="w-4 h-4 accent-blue-600 cursor-pointer"
+                        />
+                        <div className="flex flex-col">
+                          <span className="font-bold text-slate-800">Od dzisiaj</span>
+                          <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
+                        </div>
+                      </label>
+                      <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
+                        <input
+                          type="radio"
+                          name="activationMode"
+                          value="after"
+                          checked={activationMode === 'after'}
+                          onChange={() => setActivationMode('after')}
+                          className="w-4 h-4 accent-blue-600 cursor-pointer"
+                        />
+                        <div className="flex flex-col">
+                          <span className="font-bold text-slate-800">Oczekujący</span>
+                          <span className="text-[10px] text-slate-500">Zacznie obowiązywać po wygaśnięciu obecnego</span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                )}
+                <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                  <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                    Anuluj
+                  </button>
+                  <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                    Potwierdzam zakup
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
