@@ -184,6 +184,7 @@ export default function RootLayout({
         { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
+        { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
       ]
     },
     {
@@ -248,6 +249,7 @@ export default function RootLayout({
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
+        { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
     }
@@ -270,6 +272,7 @@ export default function RootLayout({
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
+        { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
     }

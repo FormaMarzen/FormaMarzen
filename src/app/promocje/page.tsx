@@ -1,0 +1,525 @@
+"use client";
+
+import React, { useState, useEffect, useRef } from "react";
+import { supabase } from "../raporty/klienci/supabase";
+
+interface Promocja {
+  id: number;
+  tytul: string;
+  data_od: string;
+  data_do: string;
+  wartosc: string;
+  kod_rabatowy: string;
+  opis: string;
+  grafika_url: string | null;
+  status: string;
+}
+
+export default function PromocjePage() {
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [promocje, setPromocje] = useState<Promocja[]>([]);
+
+  // Stany dla Modala Podglądu Klubowicza
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [selectedPromo, setSelectedPromo] = useState<Promocja | null>(null);
+
+  // Stany dla Modala Edycji/Dodawania Admina
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [form, setForm] = useState({
+    tytul: "",
+    data_od: new Date().toISOString().split('T')[0],
+    data_do: new Date().toISOString().split('T')[0],
+    wartosc: "",
+    kod_rabatowy: "",
+    opis: "",
+    grafika_url: "" as string | null,
+    status: "aktywne"
+  });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    
+    const { data: { session } } = await supabase.auth.getSession();
+    const email = session?.user?.email || "";
+    
+    if (email === "maciejklaput@gmail.com") {
+      setIsAdmin(true);
+    }
+
+    const { data, error } = await supabase
+      .from('aktualne_promocje')
+      .select('*')
+      .order('data_od', { ascending: true });
+
+    if (!error && data) {
+      setPromocje(data);
+    }
+    
+    setIsLoading(false);
+  };
+
+  const dzisiajStr = new Date().toISOString().split('T')[0];
+
+  const zakonczone = promocje.filter(p => {
+    const dataKoniec = p.data_do || p.data_od;
+    return dataKoniec < dzisiajStr;
+  }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
+
+  const trwajace_lub_przyszle = promocje.filter(p => {
+    const dataKoniec = p.data_do || p.data_od;
+    return dataKoniec >= dzisiajStr;
+  });
+
+  const aktywne = trwajace_lub_przyszle
+    .filter(p => p.status !== 'nadchodzace')
+    .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+
+  const nadchodzace = trwajace_lub_przyszle
+    .filter(p => p.status === 'nadchodzace')
+    .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+
+
+  const handleOpenAdd = () => {
+    setEditingId(null);
+    setForm({ 
+      tytul: "", 
+      data_od: dzisiajStr, 
+      data_do: dzisiajStr, 
+      wartosc: "", 
+      kod_rabatowy: "", 
+      opis: "", 
+      grafika_url: null,
+      status: "aktywne"
+    });
+    setIsAdminModalOpen(true);
+  };
+
+  const handleOpenEdit = (p: Promocja, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(p.id);
+    setForm({
+      tytul: p.tytul,
+      data_od: p.data_od,
+      data_do: p.data_do || p.data_od,
+      wartosc: p.wartosc || "",
+      kod_rabatowy: p.kod_rabatowy || "",
+      opis: p.opis || "",
+      grafika_url: p.grafika_url,
+      status: p.status || "aktywne"
+    });
+    setIsAdminModalOpen(true);
+  };
+
+  const handleDelete = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm("Czy na pewno chcesz usunąć tę promocję? Tej operacji nie można cofnąć.")) return;
+
+    await supabase.from('aktualne_promocje').delete().eq('id', id);
+    fetchData();
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 800;
+          let width = img.width; let height = img.height;
+          
+          if (width > height) {
+            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+          } else {
+            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+          }
+          
+          canvas.width = width; canvas.height = height;
+          const ctx = canvas.getContext('2d'); 
+          ctx?.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.7);
+          
+          setForm({ ...form, grafika_url: compressed });
+        };
+        img.src = event.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSavePromo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingId) {
+      await supabase.from('aktualne_promocje').update(form).eq('id', editingId);
+    } else {
+      await supabase.from('aktualne_promocje').insert([form]);
+    }
+    setIsAdminModalOpen(false);
+    fetchData();
+  };
+
+  // Zmiana formatu daty z YYYY-MM-DD na DD.MM.RRRR
+  const formatDatePL = (dateString: string) => {
+    if (!dateString) return "";
+    const parts = dateString.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}.${parts[1]}.${parts[0]}`;
+    }
+    return dateString;
+  };
+
+  const formatTermin = (od: string, doDnia: string) => {
+    const sOd = formatDatePL(od);
+    const sDo = formatDatePL(doDnia);
+    if (!doDnia || od === doDnia) return sOd;
+    return `${sOd} — ${sDo}`;
+  };
+
+  const PromoCard = ({ p, isPast = false }: { p: Promocja, isPast?: boolean }) => (
+    <div 
+      onClick={() => !isPast && (setSelectedPromo(p), setIsViewModalOpen(true))}
+      className={`relative bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
+        isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
+      }`}
+    >
+      {/* Przyciski admina zawsze widoczne dla zalogowanego administratora */}
+      {isAdmin && (
+        <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
+          <button onClick={(e) => handleOpenEdit(p, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm">✏️</button>
+          <button onClick={(e) => handleDelete(p.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm">🗑️</button>
+        </div>
+      )}
+
+      <div className="h-48 w-full bg-slate-100 relative overflow-hidden">
+        {p.grafika_url ? (
+          <img src={p.grafika_url} alt={p.tytul} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+        ) : (
+          <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎁</div>
+        )}
+        <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
+          <span>📅</span> {formatTermin(p.data_od, p.data_do)}
+        </div>
+      </div>
+
+      <div className="p-5 flex flex-col flex-grow">
+        <h3 className="font-black text-lg text-sky-950 leading-tight mb-2 line-clamp-2">{p.tytul}</h3>
+        <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{p.opis || "Brak dodatkowego opisu."}</p>
+        
+        <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
+          <div className="flex flex-col">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Rabat / Wartość</span>
+            <span className="font-black text-sky-900 text-base">{p.wartosc || "Sprawdź szczegóły"}</span>
+          </div>
+          {p.kod_rabatowy && (
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Kod rabatowy</span>
+              <span className="font-black text-amber-700 text-sm">{p.kod_rabatowy}</span>
+            </div>
+          )}
+          {!isPast && !p.kod_rabatowy && (
+            <div className="w-10 h-10 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-900 transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie promocji...</div>;
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500 pb-12">
+      
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
+            <span className="p-2 bg-amber-500 rounded-xl shadow-sm text-slate-900">🎁</span>
+            Aktualne Promocje
+          </h1>
+          <p className="text-slate-500 text-sm mt-2 font-medium max-w-2xl">
+            Bądź na bieżąco z naszymi zniżkami. Złap najlepsze okazje na karnety, treningi i suplementy!
+          </p>
+        </div>
+        
+        {isAdmin && (
+          <button 
+            onClick={handleOpenAdd}
+            className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <span>+</span> DODAJ PROMOCJĘ
+          </button>
+        )}
+      </div>
+
+      {promocje.length === 0 && (
+        <div className="text-center py-20 bg-white rounded-3xl border border-sky-100 border-dashed">
+          <div className="text-5xl mb-4">🏜️</div>
+          <h3 className="text-lg font-black text-sky-950 mb-1">Brak aktywnych promocji</h3>
+          <p className="text-slate-500 text-sm">Na ten moment nie ma żadnych specjalnych zniżek. Wróć tu wkrótce!</p>
+        </div>
+      )}
+
+      {aktywne.length > 0 && (
+        <div className="space-y-6">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-black text-sky-950 uppercase tracking-tight">⏳ Aktywne promocje</h2>
+            <div className="h-px bg-sky-200 flex-grow"></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {aktywne.map(p => <PromoCard key={p.id} p={p} />)}
+          </div>
+        </div>
+      )}
+
+      {nadchodzace.length > 0 && (
+        <div className="space-y-6">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-black text-sky-950 uppercase tracking-tight">📅 Nadchodzące</h2>
+            <div className="h-px bg-sky-200 flex-grow"></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {nadchodzace.map(p => <PromoCard key={p.id} p={p} />)}
+          </div>
+        </div>
+      )}
+
+      {zakonczone.length > 0 && (
+        <div className="space-y-6 opacity-90">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-black text-slate-400 uppercase tracking-tight">🕰️ Zakończone promocje</h2>
+            <div className="h-px bg-slate-200 flex-grow"></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {zakonczone.map(p => <PromoCard key={p.id} p={p} isPast={true} />)}
+          </div>
+        </div>
+      )}
+
+      {/* NOWY, PIĘKNY MODAL PODGLĄDU KLUBOWICZA */}
+      {isViewModalOpen && selectedPromo && (
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
+          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
+            
+            {/* Przycisk zamykania */}
+            <button 
+              onClick={() => setIsViewModalOpen(false)} 
+              className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
+            >✕</button>
+            
+            {/* Sekcja pełnego plakatu z ładnym, kinowym tłem */}
+            <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: '300px', maxHeight: '65vh' }}>
+              {selectedPromo.grafika_url ? (
+                <>
+                  <div 
+                    className="absolute inset-0 opacity-40 blur-2xl bg-cover bg-center scale-110" 
+                    style={{ backgroundImage: `url(${selectedPromo.grafika_url})` }}
+                  ></div>
+                  <img 
+                    src={selectedPromo.grafika_url} 
+                    alt="Plakat promocji" 
+                    className="relative z-10 w-full h-full object-contain max-h-[65vh] drop-shadow-2xl" 
+                  />
+                </>
+              ) : (
+                <div className="w-full h-full min-h-[300px] bg-gradient-to-br from-sky-900 to-slate-800 flex flex-col items-center justify-center text-sky-100">
+                  <span className="text-7xl mb-4 drop-shadow-lg">🎉</span>
+                  <span className="font-black text-xl tracking-widest uppercase opacity-50">Brak plakatu</span>
+                </div>
+              )}
+            </div>
+
+            {/* Treść promocji */}
+            <div className="p-6 sm:p-10 space-y-8">
+              
+              {/* Tytuł centralny */}
+              <div className="text-center">
+                <h2 className="text-3xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter">{selectedPromo.tytul}</h2>
+                <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-5 rounded-full"></div>
+              </div>
+
+              {/* Kafelki z kluczowymi informacjami */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-sky-100">
+                  <span className="text-3xl">📅</span>
+                  <div>
+                    <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest">Ważność</div>
+                    <div className="font-black text-sky-950 text-sm mt-0.5">{formatTermin(selectedPromo.data_od, selectedPromo.data_do)}</div>
+                  </div>
+                </div>
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-amber-100">
+                  <span className="text-3xl">💰</span>
+                  <div>
+                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Rabat / Wartość</div>
+                    <div className="font-black text-amber-950 text-sm mt-0.5">{selectedPromo.wartosc || "Sprawdź w klubie"}</div>
+                  </div>
+                </div>
+                
+                {selectedPromo.kod_rabatowy ? (
+                  <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-orange-100">
+                    <span className="text-3xl">🎫</span>
+                    <div>
+                      <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">Kod Rabatowy</div>
+                      <div className="font-black text-orange-950 text-sm mt-0.5">{selectedPromo.kod_rabatowy}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-emerald-100">
+                    <span className="text-3xl">✅</span>
+                    <div>
+                      <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Kod Rabatowy</div>
+                      <div className="font-black text-emerald-950 text-sm mt-0.5">Brak kodu (Dostępna dla wszystkich)</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sekcja opisu ze sformatowanym układem */}
+              <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
+                <h3 className="font-black text-sm text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-3">
+                  <span className="text-xl">📝</span> Szczegóły promocji
+                </h3>
+                <div className="text-slate-700 text-base leading-loose whitespace-pre-wrap font-medium">
+                  {selectedPromo.opis || "Brak dodatkowego opisu promocji."}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ADMINA: DODAJ/EDYTUJ */}
+      {isAdminModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl relative border-2 border-sky-900 my-8">
+            <button onClick={() => setIsAdminModalOpen(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+            
+            <div className="mb-6">
+              <h3 className="font-black text-xl text-sky-950 leading-tight">
+                {editingId ? "Edytuj promocję" : "Kreator promocji"}
+              </h3>
+              <p className="text-sm font-medium text-slate-500 mt-1">Uzupełnij informacje o zniżce, które zobaczą klubowicze.</p>
+            </div>
+
+            <form onSubmit={handleSavePromo} className="space-y-4">
+              
+              <div className="space-y-2">
+                <label className="font-bold text-slate-700 text-xs block uppercase">Grafika promocyjna</label>
+                <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
+                
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full h-32 bg-sky-50 border-2 border-dashed border-sky-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-sky-100 transition-colors overflow-hidden relative"
+                >
+                  {form.grafika_url ? (
+                    <>
+                      <img src={form.grafika_url} className="w-full h-full object-cover opacity-60" alt="Preview" />
+                      <div className="absolute inset-0 flex items-center justify-center font-bold text-sky-900 drop-shadow-md">Kliknij, aby zmienić zdjęcie</div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-2xl mb-1">📸</span>
+                      <span className="text-xs font-bold text-sky-700">Wybierz zdjęcie z dysku</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* SEKACJA WYBORU STATUSU PROMOCJI */}
+              <div className="space-y-2 pt-2 pb-2">
+                <label className="font-bold text-slate-700 text-xs block uppercase">Gdzie wyświetlić promocję?</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'aktywne' ? 'border-sky-500 bg-sky-50 text-sky-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    <input type="radio" name="status" value="aktywne" checked={form.status === 'aktywne'} onChange={() => setForm({...form, status: 'aktywne'})} className="hidden" />
+                    <span className="font-black text-sm">⏳ Aktywna teraz</span>
+                  </label>
+                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'nadchodzace' ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    <input type="radio" name="status" value="nadchodzace" checked={form.status === 'nadchodzace'} onChange={() => setForm({...form, status: 'nadchodzace'})} className="hidden" />
+                    <span className="font-black text-sm">📅 Nadchodząca</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 text-xs block uppercase">Tytuł promocji</label>
+                <input 
+                  type="text" required value={form.tytul} onChange={(e) => setForm({...form, tytul: e.target.value})}
+                  placeholder="np. Zimowa zniżka na OPEN"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Data od (Rozpoczęcie)</label>
+                  <input 
+                    type="date" required value={form.data_od} onChange={(e) => setForm({...form, data_od: e.target.value})}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Data do (Zakończenie)</label>
+                  <input 
+                    type="date" required value={form.data_do} onChange={(e) => setForm({...form, data_do: e.target.value})}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Wartość / Rabat</label>
+                  <input 
+                    type="text" value={form.wartosc} onChange={(e) => setForm({...form, wartosc: e.target.value})}
+                    placeholder="np. -20%, 99 PLN"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Kod rabatowy (opcjonalnie)</label>
+                  <input 
+                    type="text" value={form.kod_rabatowy} onChange={(e) => setForm({...form, kod_rabatowy: e.target.value})}
+                    placeholder="np. ZIMA20"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 text-xs block uppercase">Opis szczegółowy / Zasady</label>
+                <textarea 
+                  required value={form.opis} onChange={(e) => setForm({...form, opis: e.target.value})}
+                  placeholder="Wpisz szczegóły, zasady wykorzystania kodu, na jakie karnety obowiązuje..."
+                  rows={4}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none"
+                />
+              </div>
+
+              <div className="pt-4 flex gap-2">
+                <button type="button" onClick={() => setIsAdminModalOpen(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3.5 rounded-xl transition-colors cursor-pointer text-sm">
+                  Anuluj
+                </button>
+                <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm">
+                  Zapisz do bazy
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
