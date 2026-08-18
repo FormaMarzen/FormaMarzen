@@ -25,7 +25,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  const isPublicPath = pathname === '/login' || pathname?.startsWith('/rejestracja');
+  // Dodano obsługę trasy publicznego grafiku obok logowania i rejestracji
+  const isPublicPath = 
+    pathname === '/login' || 
+    pathname?.startsWith('/rejestracja') || 
+    pathname === '/grafik-publiczny' || 
+    pathname?.startsWith('/grafik-publiczny');
 
   useEffect(() => {
     const checkAuthAndRegulations = async () => {
