@@ -24,7 +24,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Bezpieczna funkcja sprawdzająca ścieżki publiczne (uwzględnia okno przeglądarki od razu)
+  // Sprawdzanie ścieżek publicznych (strona główna / jest chroniona i wymaga logowania)
   const checkIsPublic = () => {
     let currentPath = pathname;
     if (typeof window !== 'undefined') {
@@ -32,7 +32,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
     const lowerPath = (currentPath || '').toLowerCase();
     return (
-      lowerPath === '/' || 
       lowerPath === '/login' || 
       lowerPath.startsWith('/rejestracja') || 
       lowerPath === '/grafik-publiczny' || 
@@ -42,7 +41,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   const isPublicPath = checkIsPublic();
 
-  // Jeśli to ścieżka publiczna, natychmiast przepuszczamy dzieci bez czekania na logikę autoryzacji
   if (isPublicPath) {
     return <>{children}</>;
   }
