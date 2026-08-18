@@ -38,7 +38,6 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Dodano obsługę /grafik-publiczny jako strony publicznej bez wymogu logowania i layoutu panelu
   const isPublicPage = 
     pathname === '/login' || 
     pathname?.startsWith('/rejestracja') || 
@@ -62,7 +61,6 @@ export default function RootLayout({
         const userEmail = session.user.email || '';
         setProfileEmail(userEmail);
         
-        // Pobieramy dane klienta z bazy klienci
         const { data: klientData } = await supabase
           .from('klienci')
           .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
@@ -372,6 +370,19 @@ export default function RootLayout({
     alert("Klubowicz został pomyślnie dodany do chmury!");
     window.location.reload();
   };
+
+  if (!isMounted) {
+    return (
+      <html lang="pl">
+        <head>
+          <title>Forma Marzeń</title>
+        </head>
+        <body className="min-h-screen bg-sky-50/50 flex items-center justify-center">
+          <div className="text-slate-400 font-bold uppercase tracking-wider text-xs">Ładowanie aplikacji...</div>
+        </body>
+      </html>
+    );
+  }
 
   return (
     <html lang="pl">
@@ -791,7 +802,6 @@ export default function RootLayout({
                       return;
                     }
 
-                    // 1. Zapis po ID lub ilike E-mail
                     let updateClientQuery = supabase
                       .from('klienci')
                       .update({
@@ -814,7 +824,6 @@ export default function RootLayout({
                     }
 
                     if (!updatedClients || updatedClients.length === 0) {
-                      // Próba wyszukania klienta po adresie bez względu na wielkość liter
                       const { data: existingClient } = await supabase
                         .from('klienci')
                         .select('id')
@@ -832,7 +841,6 @@ export default function RootLayout({
                       }
                     }
 
-                    // 2. Aktualizacja w tabeli trenerzy jeśli występuje
                     await supabase
                       .from('trenerzy')
                       .update({ telefon: profilePhone })
