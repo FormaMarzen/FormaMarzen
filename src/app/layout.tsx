@@ -38,7 +38,12 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  const isPublicPage = pathname === '/login' || pathname?.startsWith('/rejestracja');
+  // Dodano obsługę /grafik-publiczny jako strony publicznej bez wymogu logowania i layoutu panelu
+  const isPublicPage = 
+    pathname === '/login' || 
+    pathname?.startsWith('/rejestracja') || 
+    pathname === '/grafik-publiczny' || 
+    pathname?.startsWith('/grafik-publiczny');
 
   useEffect(() => {
     setIsMounted(true);
