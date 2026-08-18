@@ -14,7 +14,7 @@ export default function DashboardPage() {
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
   const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
   
-  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST Z DOŁU EKRANU
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -87,7 +87,7 @@ export default function DashboardPage() {
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
 
-  // STAN NADRZĘDNYCH ZASAD ZAPISÓW (W TYM NOWE PARAMETRY MIN. FREKWENCJI)
+  // STAN NADRZĘDNYCH ZASAD ZAPISÓW
   const [bookingRules, setBookingRules] = useState<any>({
     cancel_deadline_minutes: 90,
     booking_cutoff_minutes: null,
@@ -126,7 +126,6 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      // Jeśli minął czas weryfikacji kompletu i jest mniej osób niż wymagane minimum
       if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
         const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
         if (activeCount < minRequired) {
@@ -1652,7 +1651,7 @@ export default function DashboardPage() {
         klient_id: pierwszaRezerwa.id,
         typ_operacji: 'zajecia_awans_rezerwa',
         class_key: classKey,
-        opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej (krzesełka) na listę główną.`
+        opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
       }]);
 
       await supabase.from('booking_logs').insert([{
