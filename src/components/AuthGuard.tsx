@@ -13,24 +13,36 @@ type Regulation = {
 };
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const pathname = usePathname() || '';
-  
-  // Natychmiastowe sprawdzenie ścieżki publicznej na górze komponentu
-  const browserPath = typeof window !== 'undefined' ? window.location.pathname : '';
-  const isPublicPath = 
-    pathname === '/grafik-publiczny' || pathname.startsWith('/grafik-publiczny') ||
-    browserPath === '/grafik-publiczny' || browserPath.startsWith('/grafik-publiczny') ||
-    pathname === '/login' || pathname.startsWith('/login') ||
-    browserPath === '/login' || browserPath.startsWith('/login') ||
-    pathname === '/rejestracja' || pathname.startsWith('/rejestracja') ||
-    browserPath === '/rejestracja' || browserPath.startsWith('/rejestracja');
 
-  // Jeśli to ścieżka publiczna, renderujemy od razu bez żadnych efektów i przekierowań!
+  // Natychmiastowe sprawdzenie ścieżki (uwzględnia okno przeglądarki od razu przy starcie)
+  const getIsPublic = () => {
+    if (typeof window !== 'undefined') {
+      const browserPath = window.location.pathname.toLowerCase();
+      if (
+        browserPath.includes('/grafik-publiczny') || 
+        browserPath.includes('/login') || 
+        browserPath.includes('/rejestracja')
+      ) {
+        return true;
+      }
+    }
+    const cleanPath = pathname.toLowerCase();
+    return (
+      cleanPath.includes('/grafik-publiczny') || 
+      cleanPath.includes('/login') || 
+      cleanPath.includes('/rejestracja')
+    );
+  };
+
+  const isPublicPath = getIsPublic();
+
+  // Jeśli to ścieżka publiczna, renderujemy zawartość NATYCHMIAST bez żadnych sprawdzarek
   if (isPublicPath) {
     return <>{children}</>;
   }
 
-  const router = useRouter();
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
@@ -40,11 +52,26 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [isAccepting, setIsAccepting] = useState(false);
 
   useEffect(() => {
+    // Podwójne zabezpieczenie wewnątrz useEffect
+    if (getIsPublic()) {
+      setIsChecking(false);
+      setIsAuthorized(true);
+      return;
+    }
+
     let isMounted = true;
 
     const checkAuthAndRegulations = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
+      if (getIsPublic()) {
+        if (isMounted) {
+          setIsChecking(false);
+          setIsAuthorized(true);
+        }
+        return;
+      }
+
       if (!session) {
         if (isMounted) {
           setIsChecking(false);
@@ -108,7 +135,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     checkAuthAndRegulations();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session) {
+      if (!session && !getIsPublic()) {
         router.push('/login');
       }
     });
@@ -117,7 +144,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       isMounted = false;
       authListener.subscription.unsubscribe();
     };
-  }, [router]);
+  }, [router, pathname]);
 
   const handleAccept = async (slug: string) => {
     if (!userId) return;
