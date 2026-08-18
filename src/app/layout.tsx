@@ -265,7 +265,7 @@ export default function RootLayout({
     {
       title: "Konto Klubowicza",
       items: [
-        { href: '/karnet', label: 'Karnet', icon: '🎟️' },
+        // Zakładka "Karnet" została pominięta dla trenera
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
