@@ -80,20 +80,21 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         return;
       } 
       
+      const email = session.user.email || '';
       if (isMounted) {
         setUserId(session.user.id);
-        setUserEmail(session.user.email ?? null);
+        setUserEmail(email);
       }
       
       let isAdmin = false;
-      if (session.user.email === 'maciejklaput@gmail.com') {
+      if (email.toLowerCase() === 'maciejklaput@gmail.com') {
         isAdmin = true;
       } else {
         const { data: clientData } = await supabase
           .from('klienci')
           .select('rola, role')
-          .eq('id', session.user.id)
-          .single();
+          .ilike('E-mail', email.trim())
+          .maybeSingle();
         const role = clientData?.rola || clientData?.role || session.user.user_metadata?.role;
         isAdmin = (role === 'admin' || role === 'administrator');
       }
