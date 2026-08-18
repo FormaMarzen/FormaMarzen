@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from '../app/raporty/klienci/supabase'; 
 
@@ -25,7 +25,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Funkcja sprawdzająca czy jakakolwiek ścieżka jest publiczna
+  // Funkcja sprawdzająca czy ścieżka jest publiczna
   const checkIsPublic = (path: string) => {
     if (!path) return false;
     const cleanPath = path.toLowerCase().trim();
@@ -39,16 +39,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   };
 
-  // Sprawdzamy z usePathname lub awaryjnie z window.location
-  const isPublicPath = useMemo(() => {
-    if (typeof window !== 'undefined') {
-      return checkIsPublic(nextPathname) || checkIsPublic(window.location.pathname);
-    }
-    return checkIsPublic(nextPathname);
-  }, [nextPathname]);
+  // Bezpieczne sprawdzenie ścieżki (uwzględnia window.location, zapobiegając błędowi null z usePathname)
+  const currentPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
+  const isPublicPath = checkIsPublic(currentPath) || checkIsPublic(nextPathname);
 
   useEffect(() => {
-    // 1. Jeśli jesteśmy na ścieżce publicznej, natychmiast autoryzujemy i nie wykonujemy żadnych przekierowań
+    // Jeżeli jesteśmy na trasie publicznej, natychmiast przerywamy weryfikację
     if (isPublicPath) {
       setIsChecking(false);
       setIsAuthorized(true);
@@ -60,9 +56,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     const checkAuthAndRegulations = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
-      // Podwójne zabezpieczenie przed przekierowaniem
-      const currentBrowserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
-      if (checkIsPublic(currentBrowserPath)) {
+      const browserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
+      if (checkIsPublic(browserPath)) {
         if (isMounted) {
           setIsChecking(false);
           setIsAuthorized(true);
@@ -138,8 +133,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
     // Listener zmian sesji Supabase
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      const currentBrowserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
-      if (!session && !checkIsPublic(currentBrowserPath)) {
+      const browserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
+      if (!session && !checkIsPublic(browserPath)) {
         router.push('/login');
       }
     });
@@ -173,7 +168,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     setIsAccepting(false);
   };
 
-  // DLA ŚCIEŻEK PUBLICZNYCH NATYCHMIAST RENDERUJEMY ZAWARTOŚĆ
+  // DLA ŚCIEŻEK PUBLICZNYCH NATYCHMIAST RENDERUJEMY ZAWARTOŚĆ BEZ SPRAWDZANIA SESJI
   if (isPublicPath) {
     return <>{children}</>;
   }
