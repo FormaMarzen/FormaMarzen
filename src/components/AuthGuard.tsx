@@ -32,6 +32,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
     const lowerPath = (currentPath || '').toLowerCase();
     return (
+      lowerPath === '/' || 
       lowerPath === '/login' || 
       lowerPath.startsWith('/rejestracja') || 
       lowerPath === '/grafik-publiczny' || 
