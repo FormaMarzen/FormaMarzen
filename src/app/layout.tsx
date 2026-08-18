@@ -38,7 +38,7 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  const isPublicPage = pathname === '/login' || pathname?.startsWith('/rejestracja');
+  const isPublicPage = pathname === '/login' || pathname?.startsWith('/rejestracja') || pathname?.startsWith('/grafik-publiczny');
 
   useEffect(() => {
     setIsMounted(true);
