@@ -68,10 +68,37 @@ export default function FreeRegistrationPage() {
 
     const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
     
-    setClassesList([
+    let combined: ClassItem[] = [
       ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
       ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
-    ]);
+    ];
+
+    // Sortowanie od najwcześniejszych do najpóźniejszych godzin danego dnia
+    combined.sort((a, b) => {
+      const timeA = a.time || a.godzina || a.start || '00:00';
+      const timeB = b.time || b.godzina || b.start || '00:00';
+      return timeA.localeCompare(timeB);
+    });
+
+    // Filtrowanie zajęć, które już minęły lub są z dni przeszłych
+    const now = new Date();
+    const selectedMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    if (selectedMidnight < todayMidnight) {
+      combined = [];
+    } else if (selectedMidnight.getTime() === todayMidnight.getTime()) {
+      const currentHours = now.getHours();
+      const currentMinutes = now.getMinutes();
+      const currentTimeStr = `${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}`;
+
+      combined = combined.filter(cls => {
+        const clsTime = cls.time || cls.godzina || cls.start || '00:00';
+        return clsTime >= currentTimeStr;
+      });
+    }
+
+    setClassesList(combined);
   };
 
   const fetchRegulations = async () => {
@@ -203,8 +230,7 @@ export default function FreeRegistrationPage() {
       console.error("Błąd zapisu klienta do bazy:", klientError);
     }
 
-    // 4. Dodanie początkowej transakcji zerowej lub startowej w tabeli transakcje, 
-    // aby dynamiczny system salda portfela poprawnie odczytywał konto nowo zarejestrowanego użytkownika.
+    // 4. Dodanie początkowej transakcji w tabeli transakcje
     await supabase.from('transakcje').insert([
       {
         klient_id: newClientId,
@@ -330,7 +356,7 @@ export default function FreeRegistrationPage() {
                 ))
               ) : (
                 <div className="text-center py-6 text-xs text-slate-400">
-                  Brak dostępnych zajęć w bazie grafiku w tym dniu.
+                  Brak dostępnych lub nadchodzących zajęć w tym dniu.
                 </div>
               )}
             </div>
