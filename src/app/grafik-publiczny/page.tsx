@@ -306,10 +306,10 @@ export default function PublicSchedulePage() {
 
           <div className="flex items-center gap-3 w-full md:w-auto justify-center">
             <Link
-              href="/"
-              className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-wider shadow-sm transition-all text-center"
+              href="/login"
+              className="w-full sm:w-auto bg-sky-950 hover:bg-sky-900 text-white font-black px-6 py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 text-center flex items-center justify-center gap-2 cursor-pointer"
             >
-              Strona Główna / Logowanie ↗
+              <span>👤</span> ZALOGUJ SIĘ DO PANELU ↗
             </Link>
           </div>
         </header>
@@ -383,7 +383,7 @@ export default function PublicSchedulePage() {
               {Array.from({ length: totalDays }).map((_, idx) => {
                 const dayNum = idx + 1;
                 const thisDate = new Date(year, month, dayNum);
-                const isSelected = currentDate.getDate() === dayNum && currentDate.getMonth() === month && currentDate.getFullYear() === year;
+                const isSelected = currentDate ? currentDate.getDate() === dayNum && currentDate.getMonth() === month && currentDate.getFullYear() === year : false;
 
                 return (
                   <button
@@ -410,7 +410,7 @@ export default function PublicSchedulePage() {
           </div>
         )}
 
-        {/* GŁÓWNA SIATKA GRAFIKU (CZYSTY PODGLĄD) */}
+        {/* GŁÓWNA SIATKA GRAFIKU (CZYSTY PODGLĄD BEZ MOŻLIWOŚCI KLIKANIA) */}
         <main className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
           {daysList.map((col, idx) => {
             const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
@@ -517,7 +517,7 @@ export default function PublicSchedulePage() {
                                 👥 {liczbaGlowna}/{limitZajec}
                               </span>
                               {liczbaKrzesełko > 0 && (
-                                <span className="bg-blue-100 text-blue-900 font-bold px-1.5 py-0.5 rounded-md border border-blue-200">
+                                <span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded-md border border-blue-200">
                                   🪑 {liczbaKrzesełko}
                                 </span>
                               )}
@@ -548,13 +548,21 @@ export default function PublicSchedulePage() {
         </main>
 
         {/* STOPKA INFORMACYJNA */}
-        <footer className="bg-white border border-sky-200 rounded-3xl p-5 text-center text-xs text-slate-500 space-y-1">
-          <p className="font-bold text-slate-700 uppercase tracking-wide">
+        <footer className="bg-white border border-sky-200 rounded-3xl p-6 text-center text-xs text-slate-500 space-y-3">
+          <p className="font-bold text-slate-800 uppercase tracking-wide text-sm">
             Chcesz zapisać się na zajęcia lub dołączyć do klubu?
           </p>
-          <p>
+          <p className="max-w-md mx-auto">
             Zaloguj się do swojego profilu klubowicza lub skontaktuj się z recepcją klubu.
           </p>
+          <div className="pt-2">
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all"
+            >
+              Przejdź do logowania ↗
+            </Link>
+          </div>
         </footer>
 
       </div>
