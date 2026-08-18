@@ -189,7 +189,7 @@ export default function DashboardPage() {
         booking_window_days: rulesData.booking_window_days ?? 14,
         expired_pass_grace_days: rulesData.expired_pass_grace_days ?? 15,
         max_daily_bookings: rulesData.max_daily_bookings ?? null,
-        max_daily_same_type_bookings: rulesData.max_daily_same_type_bookings ?? 1,
+        max_daily_same_type_bookings: 1,
         cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
         booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
         booking_window_per_pass: rulesData.booking_window_per_pass || {},
@@ -273,8 +273,8 @@ export default function DashboardPage() {
           ...c,
           _rawKarnety: c.karnetyKlubowicza,
           id: c.id,
-          firstName: c.Imię || '',
-          lastName: c.Nazwisko || '',
+          firstName: c.Imię || c.firstName || '',
+          lastName: c.Nazwisko || c.lastName || '',
           registered: c.Zarejestrowany || c.registered || '2026-08-07',
           status: c.status || 'Aktywny',
           expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
@@ -287,6 +287,8 @@ export default function DashboardPage() {
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
           birthDate: c.birthDate || '',
+          blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
+          powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
           karnetyKlubowicza: parsedKarnety,
           walletHistory: c.walletHistory || [],
           transakcje: clientTransakcje,
@@ -383,7 +385,7 @@ export default function DashboardPage() {
     }
     const { error } = await supabase.from('klienci').update(safePayload).eq('id', updatedClient.id);
     if (error) {
-      alert(`BŁĄD ZAPISU DO BAZY SUPABASE:\n${error.message}\nSprawdź konsolę (F12) dla szczegółów.`);
+      console.error("Błąd zapisu do bazy Supabase:", error);
       return false;
     }
     setKlienciList(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
@@ -407,10 +409,10 @@ export default function DashboardPage() {
       alert(`Pomyślnie zaktualizowano nadrzędny rabat ręczny na: ${discountVal || 'Brak (0%)'}`);
     }
   };
-  const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string) => {
+
+  // AUTOMATYCZNE WYPISYWANIE PO ZABLOKOWANIU (TYLKO PRZYSZŁE ZAJĘCIA, BEZ NARUSZANIA OBECNYCH I MINIONYCH)
+  const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
-    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
     let cancelledCount = 0;
     const { data: userSignups } = await supabase
       .from('zapisy_zajec')
@@ -419,13 +421,23 @@ export default function DashboardPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
+        if (excludeClassKey && signup.class_key === excludeClassKey) {
+          continue;
+        }
         const parts = (signup.class_key || '').split('_');
+        const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
           const [d, m] = dateStr.split('/').map(Number);
-          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+          const override = nadpisaneZajeciaDni[signup.class_key];
+          const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
           
-          if (classDate >= todayBeginning) {
+          const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+          const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
+          
+          if (classStartDateTime > now) {
             await supabase
               .from('zapisy_zajec')
               .delete()
@@ -1010,7 +1022,6 @@ export default function DashboardPage() {
     
     const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
     const now = new Date();
-    const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     let cancelledCount = 0;
 
     const { data: userSignups } = await supabase
@@ -1021,12 +1032,19 @@ export default function DashboardPage() {
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
         const parts = (signup.class_key || '').split('_');
+        const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
           const [d, m] = dateStr.split('/').map(Number);
-          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+          const override = nadpisaneZajeciaDni[signup.class_key];
+          const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
           
-          if (classDate >= todayBeginning) {
+          const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+          const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
+          
+          if (classStartDateTime > now) {
             await supabase
               .from('zapisy_zajec')
               .delete()
@@ -1057,8 +1075,8 @@ export default function DashboardPage() {
       return k;
     });
 
-    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: bDo, powodBlokady: powod };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: bDo, powodBlokady: powod };
     
     const success = await updateSupabaseClient(updatedClient, dbPayload);
     if (success) { 
@@ -1082,8 +1100,8 @@ export default function DashboardPage() {
       if (k.id === karnetTarget.id) { return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; }
       return k;
     });
-    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety };
-    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: null, powodBlokady: null };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: null, powodBlokady: null };
     await updateSupabaseClient(updatedClient, dbPayload);
     alert("Blokada została odwołana.");
     setIsSuspendModalOpen(false);
@@ -1136,12 +1154,20 @@ export default function DashboardPage() {
     const now = new Date();
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
       const parts = classKey.split('_');
+      const classId = parts[0];
       const dateStr = parts[1];
       if (dateStr) {
         const [d, m] = dateStr.split('/').map(Number);
-        const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
-        if (classDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
-          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => u.id === klientId)) count++;
+        const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+        const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+        const override = nadpisaneZajeciaDni[classKey];
+        const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+
+        const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+        const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
+
+        if (classStartDateTime >= now) {
+          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) count++;
         }
       }
     });
@@ -1190,14 +1216,15 @@ export default function DashboardPage() {
     }
     
     const now = new Date();
-    const dzisiajData = now.toISOString().split('T')[0];
+    const dzisiajData = todayStr;
 
     // 2. Blokady konta lub karnetu
-    const isClientBlocked = currentUser.blokadaDo && currentUser.blokadaDo >= dzisiajData;
-    const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && k.blokadaDo >= dzisiajData);
+    const clientBanDate = currentUser.blokadaDo || currentUser.blokada_do;
+    const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
+    const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
     
     if (isClientBlocked || isPassBlocked) {
-      const errReason = currentUser.powodBlokady || 'Posiadasz aktywną blokadę na koncie/karnecie.';
+      const errReason = currentUser.powodBlokady || (isClientBlocked ? `Twoje konto posiada aktywną blokadę do ${clientBanDate}.` : 'Twój karnet posiada aktywną blokadę.');
       await supabase.from('booking_logs').insert([{
         action_type: 'BOOKING_BLOCKED',
         status: 'BLOCKED',
@@ -1527,18 +1554,17 @@ export default function DashboardPage() {
   };
 
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
-    const todayDateOnly = new Date();
-    todayDateOnly.setHours(0,0,0,0);
-    if (fullDateObj.getTime() < todayDateOnly.getTime() || (fullDateObj.getTime() === todayDateOnly.getTime() && startStr < currentTimeStr)) {
-        alert("Czas na zapisy/wypisy minął (Zajęcia historyczne).");
-        return;
+    const now = new Date();
+    const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
+    const classStartDateTime = new Date(fullDateObj.getFullYear(), fullDateObj.getMonth(), fullDateObj.getDate(), parseInt(sh), parseInt(sm), 0);
+
+    if (classStartDateTime.getTime() < now.getTime()) {
+      alert("Czas na zapisy/wypisy minął (Zajęcia historyczne).");
+      return;
     }
     if (!currentUser) return;
     
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] ?? bookingRules.cancel_deadline_minutes ?? 90;
-    const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
-    const classStartDateTime = new Date(fullDateObj.getFullYear(), fullDateObj.getMonth(), fullDateObj.getDate(), parseInt(sh), parseInt(sm), 0);
-    const now = new Date();
     const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
     if (diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
@@ -1606,12 +1632,13 @@ export default function DashboardPage() {
     if (!selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) { alert("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!"); return; }
     
-    const dzisiajData = new Date().toISOString().split('T')[0];
-    const isClientBlocked = klient.blokadaDo && klient.blokadaDo >= dzisiajData;
-    const isPassBlocked = (klient.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && k.blokadaDo >= dzisiajData);
+    const dzisiajData = todayStr;
+    const clientBanDate = klient.blokadaDo || klient.blokada_do;
+    const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
+    const isPassBlocked = (klient.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
     
     if (isClientBlocked || isPassBlocked) { 
-      alert(`Nie można zapisać klienta! ${klient.powodBlokady || 'Klient posiada aktywną blokadę zapisów.'}`); 
+      alert(`Nie można zapisać klienta! ${klient.powodBlokady || (isClientBlocked ? `Klient posiada aktywną blokadę konta do ${clientBanDate}.` : 'Klient posiada aktywną blokadę karnetu.')}`); 
       return; 
     }
 
@@ -1752,32 +1779,63 @@ export default function DashboardPage() {
 
     if (blokadaZapisow) {
       const dni = parseInt(dlugoscBlokady) || 3;
-      const dataWypisania = new Date(); const dataWygaśnięcia = new Date(dataWypisania);
-      dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
+      const dataWygaśnięcia = new Date();
+      dataWygaśnięcia.setDate(dataWygaśnięcia.getDate() + dni);
       const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
       const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
       
-      await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod }).eq('id', clientToUnregister.id);
-      await handleAutoWypiszPoZablokowaniu(clientToUnregister.id, clientToUnregister, powod);
+      let updatedClientKarnety = (clientToUnregister.karnetyKlubowicza || []).map((k: any) => ({
+        ...k,
+        blokadaDo: dataStr,
+        powodBlokady: powod
+      }));
+
+      await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod, karnetyKlubowicza: updatedClientKarnety }).eq('id', clientToUnregister.id);
+      
+      // Aktualizacja stanu lokalnego
+      setKlienciList(prev => prev.map(c => c.id === clientToUnregister.id ? { ...c, blokadaDo: dataStr, powodBlokady: powod, karnetyKlubowicza: updatedClientKarnety } : c));
+      if (currentUser && currentUser.id === clientToUnregister.id) {
+        setCurrentUser((prev: any) => ({ ...prev, blokadaDo: dataStr, powodBlokady: powod, karnetyKlubowicza: updatedClientKarnety }));
+      }
+      
+      await handleAutoWypiszPoZablokowaniu(clientToUnregister.id, clientToUnregister, powod, classKey);
     }
     setClientToUnregister(null); setBlokadaZapisow(false); loadData();
   };
 
+  // POTWIERDZENIE NIEOBECNOŚCI: NIE usuwa z bieżących ani przeszłych zajęć
   const handlePotwierdzNieobecnosc = async () => {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).eq('class_key', classKey).eq('klient_id', clientToMarkAbsent.id);
     if (error) { console.error("Błąd oznaczania nieobecności:", error); alert(`Nie udało się oznaczyć: ${error.message}`); return; }
+    
     await supabase.from('transakcje').insert([{ klient_id: clientToMarkAbsent.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Został oznaczony jako NIEOBECNY na zajęciach ${selectedClass.title}.` }]);
+    
     if (blokadaZapisow) {
       const dni = parseInt(dlugoscBlokady) || 3;
-      const dataWypisania = new Date(); const dataWygaśnięcia = new Date(dataWypisania);
-      dataWygaśnięcia.setDate(dataWypisania.getDate() + dni);
+      const dataWygaśnięcia = new Date();
+      dataWygaśnięcia.setDate(dataWygaśnięcia.getDate() + dni);
       const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
       const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
       
-      await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod }).eq('id', clientToMarkAbsent.id);
-      await handleAutoWypiszPoZablokowaniu(clientToMarkAbsent.id, clientToMarkAbsent, powod);
+      let updatedClientKarnety = (clientToMarkAbsent.karnetyKlubowicza || []).map((k: any) => ({
+        ...k,
+        blokadaDo: dataStr,
+        powodBlokady: powod
+      }));
+
+      // Zapisujemy blokadę do kolumn w bazie oraz do karnetów
+      await supabase.from('klienci').update({ blokadaDo: dataStr, powodBlokady: powod, karnetyKlubowicza: updatedClientKarnety }).eq('id', clientToMarkAbsent.id);
+      
+      // Natychmiastowa aktualizacja stanu lokalnego
+      setKlienciList(prev => prev.map(c => c.id === clientToMarkAbsent.id ? { ...c, blokadaDo: dataStr, powodBlokady: powod, karnetyKlubowicza: updatedClientKarnety } : c));
+      if (currentUser && currentUser.id === clientToMarkAbsent.id) {
+        setCurrentUser((prev: any) => ({ ...prev, blokadaDo: dataStr, powodBlokady: powod, karnetyKlubowicza: updatedClientKarnety }));
+      }
+      
+      // Przekazujemy aktualny classKey, aby NIE usuwać klubowicza z obecnych zajęć
+      await handleAutoWypiszPoZablokowaniu(clientToMarkAbsent.id, clientToMarkAbsent, powod, classKey);
     }
     setClientToMarkAbsent(null); setBlokadaZapisow(false); loadData();
   };
@@ -1917,27 +1975,30 @@ export default function DashboardPage() {
         const dateStr = parts[1];
         if (dateStr) {
           const [d, m] = dateStr.split('/').map(Number);
-          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
-          if (classDate >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
-             const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-             const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-             let classInfo = stdClass || jednorazClass;
-             const override = nadpisaneZajeciaDni[classKey];
-             if (override) classInfo = { ...classInfo, ...override };
+          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+          let classInfo = stdClass || jednorazClass;
+          const override = nadpisaneZajeciaDni[classKey];
+          if (override) classInfo = { ...classInfo, ...override };
 
-             // FILTRACJA: Klubowicz nie widzi zajęć usuniętych (widzi tylko odwołane)
-             if (classInfo) {
-               if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-                 // pomijamy
-               } else {
-                 myUpcomingClasses.push({
-                    ...classInfo,
-                    classKey,
-                    displayDate: dateStr,
-                    fullDateObj: new Date(now.getFullYear(), m - 1, d)
-                 });
-               }
-             }
+          // FILTRACJA: Klubowicz nie widzi zajęć usuniętych
+          if (classInfo) {
+            if (appRole === 'klubowicz' && classInfo.isUsunięte) {
+              // pomijamy
+            } else {
+              const [sh = '00', sm = '00'] = (classInfo.start || '00:00').split(':');
+              const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
+
+              // WYŚWIETLAMY TYLKO ZAJĘCIA, KTÓRE SIĘ JESZCZE NIE ODBYŁY (USUWA MINIONE Z PANELU AKTYWNYCH)
+              if (classStartDateTime >= now) {
+                myUpcomingClasses.push({
+                  ...classInfo,
+                  classKey,
+                  displayDate: dateStr,
+                  fullDateObj: new Date(now.getFullYear(), m - 1, d)
+                });
+              }
+            }
           }
         }
       }
@@ -1947,8 +2008,76 @@ export default function DashboardPage() {
        return (a.start || "").localeCompare(b.start || "");
     });
   }
+
+  // Odczyt statusu konta/karnetu bezpośrednio z profilu klienta
+  const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
+  const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
+  const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
+      
+      {/* BANNER 1: BLOKADA KONTA KLUBOWICZA */}
+      {['klubowicz', 'trener'].includes(appRole) && currentUser && isCurrentUserBlocked && (
+        <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
+              <span className="text-2xl">🚫</span>
+            </div>
+            <div>
+              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Konto zablokowane!</h3>
+              <p className="text-xs text-rose-800 font-medium mt-0.5">
+                {currentUser.powodBlokady || `Posiadasz aktywną blokadę zapisów na zajęcia do ${currentUser.blokadaDo}.`}
+              </p>
+            </div>
+          </div>
+          <span className="bg-rose-600 text-white font-black px-4 py-2 rounded-xl text-xs uppercase tracking-wider shrink-0">
+            Blokada do: {currentUser.blokadaDo}
+          </span>
+        </div>
+      )}
+
+      {/* BANNER 2: ZABLOKOWANY KARNET */}
+      {['klubowicz', 'trener'].includes(appRole) && currentUser && activePassBlocked && !isCurrentUserBlocked && (
+        <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center shrink-0 border border-rose-200">
+              <span className="text-2xl">🔒</span>
+            </div>
+            <div>
+              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Twój karnet został zablokowany!</h3>
+              <p className="text-xs text-rose-800 font-medium mt-0.5">
+                Karnet "{activePassBlocked.nazwa}" jest zablokowany w okresie {activePassBlocked.blokadaOd ? `od ${activePassBlocked.blokadaOd} ` : ''}do {activePassBlocked.blokadaDo}.
+              </p>
+            </div>
+          </div>
+          <span className="bg-rose-600 text-white font-black px-4 py-2 rounded-xl text-xs uppercase tracking-wider shrink-0">
+            Blokada do: {activePassBlocked.blokadaDo}
+          </span>
+        </div>
+      )}
+
+      {/* BANNER 3: ZAWIESZONY KARNET */}
+      {['klubowicz', 'trener'].includes(appRole) && currentUser && activePassSuspended && (
+        <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center shrink-0 border border-amber-200">
+              <span className="text-2xl">⏸️</span>
+            </div>
+            <div>
+              <h3 className="font-black text-amber-950 text-sm sm:text-base uppercase tracking-wider">Twój karnet jest zawieszony</h3>
+              <p className="text-xs text-amber-800 font-medium mt-0.5">
+                Karnet "{activePassSuspended.nazwa}" został zawieszony od dnia {activePassSuspended.zawieszonyOd} {activePassSuspended.zawieszonyDo ? `(planowo do ${activePassSuspended.zawieszonyDo})` : ''}. Ważność zostanie doliczona po odwieszeniu.
+              </p>
+            </div>
+          </div>
+          <span className="bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-xs uppercase tracking-wider shrink-0">
+            Zawieszony
+          </span>
+        </div>
+      )}
+
+      {/* BANNER 4: ZADŁUŻENIE W PORTFELU */}
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (() => {
         const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
         if (walletVal < 0) {
@@ -1975,6 +2104,7 @@ export default function DashboardPage() {
         return null;
       })()}
 
+      {/* BANNER 5: BRAK KARNETU */}
       {['klubowicz', 'trener'].includes(appRole) && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -1986,15 +2116,16 @@ export default function DashboardPage() {
               <p className="text-xs text-amber-800 font-medium mt-0.5">Aby w pełni korzystać z klubu i zapisywać się na zajęcia, wybierz swój karnet.</p>
             </div>
           </div>
-          <button
-            onClick={() => setIsBuyPassModalOpen(true)}
-            className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+          <Link
+            href="/karnet"
+            className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0 text-center"
           >
             Kup karnet
-          </button>
+          </Link>
         </div>
       )}
 
+      {/* BANNER 6: KOŃCZĄCY SIĘ KARNET */}
       {['klubowicz', 'trener'].includes(appRole) && !needsNewPass && isPassExpiringSoon && (
         <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -2006,12 +2137,12 @@ export default function DashboardPage() {
               <p className="text-xs text-rose-800 font-medium mt-0.5">{expiringMessage}</p>
             </div>
           </div>
-          <button
-            onClick={() => setIsBuyPassModalOpen(true)}
-            className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0"
+          <Link
+            href="/karnet"
+            className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0 text-center"
           >
             Kup nowy / Przedłuż
-          </button>
+          </Link>
         </div>
       )}
 
@@ -2120,18 +2251,18 @@ export default function DashboardPage() {
                   )}
                   {currentUser.blokadaDo && currentUser.blokadaDo >= todayStr && !(currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza[0]?.blokadaDo) && (
                     <span className="bg-rose-100 text-rose-800 px-4 py-1.5 rounded-full text-xs font-black border border-rose-200 flex items-center gap-1">
-                      ⚠️ BLOKADA ZAPISÓW DO {currentUser.blokadaDo}
+                      ⚠️ BLOKADA KONTA DO {currentUser.blokadaDo} {currentUser.powodBlokady ? `(${currentUser.powodBlokady})` : ''}
                     </span>
                   )}
                 </div>
               </div>
               <div className="bg-slate-50 border-t border-slate-100 p-4 flex justify-end">
-                <button 
-                  onClick={() => setIsBuyPassModalOpen(true)}
+                <Link 
+                  href="/karnet"
                   className="bg-white border border-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-full shadow-sm text-xs hover:bg-slate-100 transition-colors flex items-center gap-2 cursor-pointer"
                 >
                   <span className="text-slate-500 font-serif">$</span> KUP KARNET
-                </button>
+                </Link>
               </div>
             </div>
           </section>
@@ -2209,24 +2340,25 @@ export default function DashboardPage() {
 
             const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
             const isPastDay = col.isoDate < todayStr;
+            const isOtherDay = !isToday;
             const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
             const isExpanded = expandedDays[col.isoDate] || false;
 
             const renderEventsAndClasses = () => (
               <>
                 {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
-                  <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm">
-                    <div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
+                  <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-xl p-2.5 text-center space-y-1 shadow-sm">
+                    <div className="py-1 px-2 bg-rose-200 text-rose-950 font-black rounded-lg text-[11px] uppercase tracking-wider border border-rose-300">
                       {wydarzenie.title}
                     </div>
-                    <div className="text-[11px] text-rose-900 font-bold">
+                    <div className="text-[10px] text-rose-900 font-bold">
                       Odwołano zajęcia z powodu wydarzenia
                     </div>
                   </div>
                 ))}
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
-                    <div className="py-12 text-center text-xs text-slate-400 font-medium">
+                    <div className="py-6 text-center text-[11px] text-slate-400 font-medium">
                       Brak zajęć w tym dniu.
                     </div>
                   ) : (
@@ -2260,8 +2392,8 @@ export default function DashboardPage() {
                             setIsSearchingClient(false);
                             setSearchClientQuery('');
                           }}
-                          style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
-                          className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all relative ${
+                          style={{ borderTopWidth: '3.5px', borderTopStyle: 'solid', borderTopColor: topColor }}
+                          className={`bg-white border rounded-xl p-2.5 space-y-1.5 shadow-sm transition-all relative ${
                             item.isOdwołane || item.isUsunięte
                               ? 'border-rose-200 opacity-80 cursor-default'
                               : isLockedForClient
@@ -2269,44 +2401,49 @@ export default function DashboardPage() {
                               : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
                           }`}
                         >
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <span className="text-base font-black text-slate-900">{item.start}</span>
-                              <h3 className="text-xs font-bold text-slate-800 mt-0.5">{item.title}</h3>
+                          <div className="flex justify-between items-center gap-1.5">
+                            <div className="flex items-baseline gap-1.5 truncate">
+                              <span className="text-xs sm:text-sm font-black text-slate-900 shrink-0">{item.start}</span>
+                              <h3 className="text-[11px] sm:text-xs font-bold text-slate-800 truncate" title={item.title}>{item.title}</h3>
                             </div>
                             {isLockedForClient && !item.isOdwołane && !item.isUsunięte && (
-                              <div className="text-slate-400 text-sm" title="Zajęcia zablokowane (minęły)">
+                              <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
                                 🔒
-                              </div>
+                              </span>
                             )}
                           </div>
+                          
                           {item.isOdwołane ? (
-                            <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
+                            <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200">
                               ODWOŁANE
                             </div>
                           ) : item.isUsunięte ? (
-                            <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
+                            <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200">
                               USUNIĘTE
                             </div>
                           ) : (
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`font-bold px-2 py-0.5 rounded text-[11px] border ${
-                                isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                              }`}>
-                                👥 {liczbaGlowna}/{limitZajec}
-                              </span>
-                              {liczbaKrzesełko > 0 && (
-                                <span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded text-[11px] border border-blue-200 flex items-center gap-1">
-                                  🪑 {liczbaKrzesełko}
+                            <div className="flex items-center justify-between gap-1 text-[10px]">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`font-bold px-1.5 py-0.5 rounded border leading-none ${
+                                  isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                }`}>
+                                  👥 {liczbaGlowna}/{limitZajec}
                                 </span>
-                              )}
+                                {liczbaKrzesełko > 0 && (
+                                  <span className="bg-blue-100 text-blue-900 font-bold px-1.5 py-0.5 rounded border border-blue-200 leading-none">
+                                    🪑 {liczbaKrzesełko}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-slate-400 font-medium whitespace-nowrap text-[9px] sm:text-[10px]">
+                                ⏱ {durationText}
+                              </span>
                             </div>
                           )}
-                          <div className="text-[11px] text-slate-500 font-medium">
-                            ⏱ {durationText}
-                          </div>
-                          <div className="text-[11px] text-slate-600 font-medium border-t border-slate-100 pt-2 flex items-center gap-1.5">
-                            <span>👤</span> {item.trainer || 'Brak trenera'}
+
+                          <div className="text-[10px] text-slate-600 font-medium border-t border-slate-100 pt-1 flex items-center gap-1 truncate">
+                            <span className="text-[9px]">👤</span>
+                            <span className="truncate">{item.trainer || 'Brak trenera'}</span>
                           </div>
                         </div>
                       );
@@ -2319,26 +2456,31 @@ export default function DashboardPage() {
             return (
               <div
                 key={idx}
-                className={`space-y-3 p-3 rounded-2xl border transition-all ${
+                className={`space-y-2 p-2.5 rounded-2xl border transition-all ${
                   isToday
                     ? 'bg-white border-rose-500 shadow-md border-t-4 border-t-rose-600'
                     : 'bg-sky-50/40 border-sky-100'
                 }`}
               >
-                <div className={`text-xs font-black uppercase tracking-wider border-b pb-2 mb-2 text-center ${
+                <div className={`text-xs font-black uppercase tracking-wider border-b pb-1.5 mb-1.5 text-center ${
                   isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
                 }`}>
                   <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
                   <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
                 </div>
                 
-                {isPastDay && hasAnyItems ? (
-                  <div className="space-y-3">
-                    <button onClick={() => toggleDay(col.isoDate)} className="w-full bg-slate-200/60 hover:bg-slate-300/80 text-slate-600 font-bold text-[10px] uppercase tracking-wider py-2 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-200">
-                      {isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`}
+                {isOtherDay && hasAnyItems ? (
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => toggleDay(col.isoDate)}
+                      className="w-full bg-slate-100 hover:bg-slate-200/80 text-slate-600 font-bold text-[10px] uppercase tracking-wider py-1.5 px-2 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-200"
+                    >
+                      {isPastDay
+                        ? (isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)
+                        : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
                     </button>
                     {isExpanded && (
-                      <div className="space-y-3 mt-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                      <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
                         {renderEventsAndClasses()}
                       </div>
                     )}
@@ -2449,7 +2591,7 @@ export default function DashboardPage() {
                     const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
                     const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
                     const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
-                    const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
+                    const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr) || (client.blokadaDo && client.blokadaDo >= todayStr);
                     let ostatecznaData = 'Brak';
                     let badgeColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
                     if (maKarnet) {
@@ -2524,7 +2666,7 @@ export default function DashboardPage() {
                           )}
                           {aktywnaBlokada && (
                             <span className="bg-rose-100 text-rose-800 text-[9px] uppercase tracking-wider font-black px-2 py-1 rounded border border-rose-200 block">
-                              ⚠️ ZABLOKOWANE: OD {aktywnaBlokada.blokadaOd ? `${aktywnaBlokada.blokadaOd} ` : ''}DO {aktywnaBlokada.blokadaDo}
+                              ⚠️ ZABLOKOWANE: DO {client.blokadaDo || (client.karnetyKlubowicza && client.karnetyKlubowicza[0]?.blokadaDo)}
                             </span>
                           )}
                         </div>
@@ -2552,7 +2694,6 @@ export default function DashboardPage() {
           </section>
         </div>
       )}
-
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
@@ -4140,4 +4281,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

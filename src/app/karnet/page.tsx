@@ -389,7 +389,9 @@ export default function KarnetyPage() {
     return !(isTimeBased && alreadyOwned);
   });
 
-  // PRZEDŁUŻENIE KARNETU (ŚCIŚLE ZDEFINIOWANE POLA SUPABASE)
+  // =========================================================================
+  // PRZEDŁUŻENIE KARNETU: AKTUALIZUJE DATĘ WYGAŚNIĘCIA ISTNIEJĄCEGO KARNETU
+  // =========================================================================
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -409,102 +411,75 @@ export default function KarnetyPage() {
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
     
-    // Obliczenie aktualnego i kolejnego cyklu ciągłości wewnątrz karnetu
     const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (karnetyList.length || 1));
     const nextCykl = currentCykl + 1;
 
-    // Wyliczenie efektywnego rabatu dla bieżącego przedłużenia
     const effectiveDiscount = getEffectiveDiscount(currentUser);
     const cenaWartosc = effectiveDiscount.percent > 0 
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
       : basePriceNum;
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
     
-    const isTimeBased = passToExtend.pozostaloWejsc === null || passToExtend.pozostaloWejsc === undefined;
     let updatedKarnetyList = [...karnetyList];
 
-    if (isTimeBased) {
-      updatedKarnetyList = updatedKarnetyList.map(k => {
-        if (k.id === passToExtend.id) {
-          let baseDate = new Date();
-          if (k.waznyDo) {
-            const parts = k.waznyDo.split('-');
-            if (parts.length === 3) {
-              baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    updatedKarnetyList = updatedKarnetyList.map(k => {
+      if (k.id === passToExtend.id) {
+        let baseDate = new Date();
+        if (k.waznyDo) {
+          const parts = k.waznyDo.split('-');
+          if (parts.length === 3) {
+            const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            if (currentExp > baseDate) {
+              baseDate = currentExp;
             }
           }
-          baseDate.setDate(baseDate.getDate() + dniWażności);
-          const year = baseDate.getFullYear();
-          const month = String(baseDate.getMonth() + 1).padStart(2, '0');
-          const day = String(baseDate.getDate()).padStart(2, '0');
-          const nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
-
-          const nowaHistoria = [...(k.historiaPrzedluzen || []), {
-            data: todayStr,
-            staraWaznosc: k.waznyDo,
-            nowaWaznosc: nowaDataWygasnieciaStr,
-            cena: cenaStr,
-            rabat: effectiveDiscount.label
-          }];
-
-          return {
-            ...k,
-            waznyDo: nowaDataWygasnieciaStr,
-            cena: cenaStr,
-            cykl: nextCykl,
-            historiaPrzedluzen: nowaHistoria,
-            znizkaProcentowa: effectiveDiscount.label,
-            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
-          };
         }
-        return k;
-      });
-    } else {
-      let baseDate = new Date();
-      if (passToExtend.waznyDo) {
-        const parts = passToExtend.waznyDo.split('-');
-        if (parts.length === 3) {
-          baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-        }
-      }
-      baseDate.setDate(baseDate.getDate() + dniWażności);
-      const year = baseDate.getFullYear();
-      const month = String(baseDate.getMonth() + 1).padStart(2, '0');
-      const day = String(baseDate.getDate()).padStart(2, '0');
-      const nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
-      
-      const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : passToExtend.pozostaloWejsc;
+        baseDate.setDate(baseDate.getDate() + dniWażności);
+        const year = baseDate.getFullYear();
+        const month = String(baseDate.getMonth() + 1).padStart(2, '0');
+        const day = String(baseDate.getDate()).padStart(2, '0');
+        const nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
 
-      const nowyKarnetObj = {
-        id: Date.now(),
-        nazwa: passToExtend.nazwa,
-        waznyDo: nowaDataWygasnieciaStr,
-        pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
-        cena: cenaStr,
-        cykl: nextCykl,
-        historiaPrzedluzen: [{
+        let updatedRemaining = k.pozostaloWejsc;
+        let updatedInitial = k.poczatkoweWejsc;
+
+        let metaExt: Record<string, any> = {};
+        try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+        const extWejsciaVal = defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null;
+        const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
+
+        if (parsedExtWejscia !== null) {
+          updatedRemaining = (k.pozostaloWejsc || 0) + parsedExtWejscia;
+          updatedInitial = (k.poczatkoweWejsc || 0) + parsedExtWejscia;
+        }
+
+        const nowaHistoria = [...(k.historiaPrzedluzen || []), {
           data: todayStr,
-          staraWaznosc: passToExtend.waznyDo,
+          staraWaznosc: k.waznyDo,
           nowaWaznosc: nowaDataWygasnieciaStr,
           cena: cenaStr,
           rabat: effectiveDiscount.label
-        }],
-        znizkaProcentowa: effectiveDiscount.label,
-        rata: '1 / 1',
-        statusTekst: `Oczekujący (Ważny od: ${passToExtend.waznyDo} do: ${nowaDataWygasnieciaStr})`,
-        blokadaDo: null,
-        powodBlokady: null,
-        zawieszonyOd: null,
-        zawieszonyDo: null
-      };
-      updatedKarnetyList.push(nowyKarnetObj);
-    }
+        }];
+
+        return {
+          ...k,
+          waznyDo: nowaDataWygasnieciaStr,
+          cena: cenaStr,
+          cykl: nextCykl,
+          historiaPrzedluzen: nowaHistoria,
+          znizkaProcentowa: effectiveDiscount.label,
+          statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
+          pozostaloWejsc: updatedRemaining,
+          poczatkoweWejsc: updatedInitial
+        };
+      }
+      return k;
+    });
 
     const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
-    // Czysty payload – wyłącznie istniejące kolumny tabeli klienci
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
     };
@@ -526,7 +501,7 @@ export default function KarnetyPage() {
     if (cenaWartosc > 0) {
       await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
-        typ_operacji: 'przedluzenie_karnetu',
+        typ_operacji: 'zakup_karnetu',
         kwota: -cenaWartosc,
         opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${effectiveDiscount.label ? ` ${effectiveDiscount.label}` : ''}`
       }]);
@@ -567,7 +542,6 @@ export default function KarnetyPage() {
     
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     
-    // Wyliczenie efektywnego rabatu
     const effectiveDiscount = getEffectiveDiscount(currentUser);
     const cenaWartosc = effectiveDiscount.percent > 0 
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
@@ -696,7 +670,6 @@ export default function KarnetyPage() {
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
     });
-
     alert(`Gratulacje! Zakupiono karnet za kwotę ${cenaStr} (Ważny do: ${nowaDataWygasnieciaStr}).`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);

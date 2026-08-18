@@ -547,6 +547,9 @@ export default function KlienciPage() {
           }
         }
 
+        const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
+        const effectiveBanReason = c.powodBlokady || c.powod_blokady || (finalKarnety[0]?.powodBlokady) || null;
+
         return {
           ...c,
           id: c.id,
@@ -566,6 +569,8 @@ export default function KlienciPage() {
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
           birthDate: c.birthDate || '',
+          blokadaDo: effectiveBanDate,
+          powodBlokady: effectiveBanReason,
           isTrainer: !!powiazanyTrener,
           trenerInfo: powiazanyTrener || null,
           karnetyKlubowicza: finalKarnety, 
@@ -1008,7 +1013,6 @@ export default function KlienciPage() {
       endDate.setDate(endDate.getDate() + dni);
       sDo = endDate.toISOString().split('T')[0];
     }
-
     if (new Date(sDo) < new Date(sOd)) {
       alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
       return;
@@ -1086,6 +1090,7 @@ export default function KlienciPage() {
     }
   };
 
+  // ZSYNCHRONIZOWANE NAKŁADANIE BLOKADY (KONTO + KARNET)
   const handleConfirmBlockPass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !suspendPassTarget) return;
@@ -1123,9 +1128,15 @@ export default function KlienciPage() {
       return k;
     });
 
-    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    const { error } = await supabase.from('klienci').update({ 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      blokadaDo: bDo,
+      powodBlokady: powod
+    }).eq('id', profileClient.id);
     
     if (!error) {
+      setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, blokadaDo: bDo, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety } : c));
+      setProfileClient((prev: any) => ({ ...prev, blokadaDo: bDo, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety }));
       await handleAutoWypiszPoZablokowaniu(profileClient.id, profileClient, powod);
       alert(`Karnet został zablokowany do ${bDo}.`);
       setIsSuspendModalOpen(false);
@@ -1135,21 +1146,33 @@ export default function KlienciPage() {
     }
   };
 
+  // ZSYNCHRONIZOWANE ZDEJMOWANIE BLOKADY (KONTO + WSZYSTKIE KARNETY)
   const handleCancelBlock = async (karnetTarget: any) => {
     if (!profileClient) return;
-    if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
+    if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu i konta?")) return;
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === karnetTarget.id) {
+      if (k.id === karnetTarget.id || k.blokadaDo) {
         return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null };
       }
       return k;
     });
 
-    await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
-    alert("Blokada została odwołana.");
-    setIsSuspendModalOpen(false);
-    loadData();
+    const { error } = await supabase.from('klienci').update({ 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      blokadaDo: null,
+      powodBlokady: null
+    }).eq('id', profileClient.id);
+
+    if (!error) {
+      setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, blokadaDo: null, powodBlokady: null, karnetyKlubowicza: uaktualnioneKarnety } : c));
+      setProfileClient((prev: any) => ({ ...prev, blokadaDo: null, powodBlokady: null, karnetyKlubowicza: uaktualnioneKarnety }));
+      alert("Blokada konta i karnetu została całkowicie odwołana.");
+      setIsSuspendModalOpen(false);
+      loadData();
+    } else {
+      alert(`Błąd podczas odwoływania blokady: ${error.message}`);
+    }
   };
 
   const handleSavePassEditSubmit = async () => {
@@ -1385,7 +1408,7 @@ export default function KlienciPage() {
               {sortedClients.map((client) => {
                 const negativeW = isWalletNegative(client.wallet);
                 const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo >= todayStr);
-                const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
+                const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr) || (client.blokadaDo && client.blokadaDo >= todayStr);
                 const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
                 const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : '';
                 const dataWygasnieciaKarnetu = maKarnet ? client.karnetyKlubowicza[0].waznyDo : '-';
@@ -1413,7 +1436,7 @@ export default function KlienciPage() {
                         )}
                         {aktywnaBlokada && (
                           <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-2 py-0.5 rounded border border-rose-200 inline-block w-fit whitespace-nowrap">
-                            ⚠️ Zablokowane: {aktywnaBlokada.blokadaOd ? `od ${aktywnaBlokada.blokadaOd} ` : ''}do {aktywnaBlokada.blokadaDo}
+                            ⚠️ Zablokowane: {client.blokadaDo || (client.karnetyKlubowicza && client.karnetyKlubowicza[0]?.blokadaDo)}
                           </span>
                         )}
                       </div>
