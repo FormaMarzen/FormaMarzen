@@ -13,7 +13,16 @@ export default function SchedulePage() {
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
   const [rodzajeZajec, setRodzajeZajec] = useState<any[]>([]);
   
-  const [appRole, setAppRole] = useState<'admin' | 'klubowicz'>('admin');
+  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('admin');
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
+
+  const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
+    setToastMessage({ text, type });
+    setTimeout(() => setToastMessage(null), 4000);
+  };
   
   const [activeMenuClassId, setActiveMenuClassId] = useState<string | null>(null);
   const [historyModalClass, setHistoryModalClass] = useState<any | null>(null);
@@ -49,6 +58,7 @@ export default function SchedulePage() {
   const [zapisyNaZajecia, setZapisyNaZajecia] = useState<{ [key: string]: any[] }>({});
 
   const [dostepniKlienci, setDostepniKlienci] = useState<any[]>([]);
+  const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [listaTrenerow, setListaTrenerow] = useState<any[]>([]);
   const [isSearchingClient, setIsSearchingClient] = useState(false);
   const [searchClientQuery, setSearchClientQuery] = useState('');
@@ -62,7 +72,7 @@ export default function SchedulePage() {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
-  // STAN NADRZĘDNYCH ZASAD ZAPISÓW (OGÓLNE + PER TRENING/KARNET)
+  // STAN NADRZĘDNYCH ZASAD ZAPISÓW
   const [bookingRules, setBookingRules] = useState<any>({
     cancel_deadline_minutes: 90,
     booking_cutoff_minutes: null,
@@ -70,15 +80,218 @@ export default function SchedulePage() {
     expired_pass_grace_days: 15,
     max_daily_bookings: null,
     max_daily_same_type_bookings: 1,
+    min_participants: null,
+    auto_cancel_deadline_minutes: null,
     cancel_deadline_per_class: {},
     booking_cutoff_per_class: {},
     booking_window_per_pass: {},
     expired_pass_grace_per_pass: {},
+    min_participants_per_class: {},
+    auto_cancel_deadline_per_class: {},
   });
+
+  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB I ZWROTU WEJŚĆ
+  const processAutoCancellations = async (
+    classes: any[],
+    jednorazowe: any[],
+    signupsMap: { [key: string]: any[] },
+    overridesMap: { [key: string]: any },
+    rules: any,
+    days: any[]
+  ) => {
+    const now = new Date();
+    let hasChanges = false;
+
+    for (const col of days) {
+      const stdDnia = classes
+        .filter((item: any) => item.days && item.days[col.key])
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const jednorazDnia = jednorazowe
+        .filter((item: any) => item.displayDate === col.date)
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const allClasses = [...stdDnia, ...jednorazDnia];
+
+      for (const cls of allClasses) {
+        if (cls.isOdwołane || cls.isUsunięte) continue;
+
+        const trainingName = cls.title || '';
+        const minRequired = rules.min_participants_per_class?.[trainingName] !== undefined
+          ? rules.min_participants_per_class[trainingName]
+          : rules.min_participants;
+        
+        const deadlineMins = rules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
+          ? rules.auto_cancel_deadline_per_class[trainingName]
+          : rules.auto_cancel_deadline_minutes;
+
+        if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
+          const [dStr, mStr] = col.date.split('/');
+          const classYear = col.fullDate ? col.fullDate.getFullYear() : now.getFullYear();
+          const [sh = '00', sm = '00'] = (cls.start || '00:00').split(':');
+          const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+          const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+          if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+            const classSignups = signupsMap[cls.classKey] || [];
+            const activeSignups = classSignups.filter((s: any) => s.status === 'zapisany');
+
+            if (activeSignups.length < minRequired) {
+              hasChanges = true;
+              
+              // 1. Zapisujemy odwołanie w bazie
+              await supabase.from('nadpisania_zajec').upsert({
+                class_key: cls.classKey,
+                start: cls.start,
+                end: cls.end,
+                trainer: cls.trainer,
+                limit: cls.limit,
+                is_odwolane: true,
+                is_usuniete: false
+              });
+
+              // 2. Wypisujemy wszystkich uczestników i zwracamy wejścia
+              for (const participant of classSignups) {
+                const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
+                if (clientData) {
+                  let parsedKarnety = [];
+                  if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+                  else if (typeof clientData.karnetyKlubowicza === 'string') {
+                    try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+                  }
+
+                  const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+                  if (passIndex !== -1) {
+                    const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+                    const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                    parsedKarnety[passIndex] = {
+                      ...parsedKarnety[passIndex],
+                      pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                    };
+                    await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
+                  }
+
+                  await supabase.from('transakcje').insert([{
+                    klient_id: participant.id,
+                    typ_operacji: 'zajecia_wypis',
+                    class_key: cls.classKey,
+                    opis: `Automatyczne odwołanie zajęć "${cls.title}" (${col.date} ${cls.start}) z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono 1 wejście.`
+                  }]);
+                }
+              }
+
+              // 3. Usuwamy wpisy z tabeli zapisy_zajec
+              await supabase.from('zapisy_zajec').delete().eq('class_key', cls.classKey);
+
+              // 4. Logujemy zdarzenie w booking_logs
+              await supabase.from('booking_logs').insert([{
+                action_type: 'CLASS_AUTO_CANCELLED',
+                status: 'SUCCESS',
+                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób i zwrócono wejścia.`,
+                rule_applied: 'min_participants_auto_cancel',
+                payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
+              }]);
+            }
+          }
+        }
+      }
+    }
+
+    return hasChanges;
+  };
+
+  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ W WIDOKU
+  const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
+    if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
+    
+    const trainingName = classItem.title || '';
+    const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
+      ? bookingRules.min_participants_per_class[trainingName]
+      : bookingRules.min_participants;
+    
+    const deadlineMins = bookingRules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
+      ? bookingRules.auto_cancel_deadline_per_class[trainingName]
+      : bookingRules.auto_cancel_deadline_minutes;
+
+    if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
+      const [dStr, mStr] = displayDate.split('/');
+      const classYear = currentDate ? currentDate.getFullYear() : new Date().getFullYear();
+      const [sh = '00', sm = '00'] = (classItem.start || '00:00').split(':');
+      const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+      const now = new Date();
+      const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+      if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+        const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
+        if (activeCount < minRequired) {
+          return {
+            isAutoCancelled: true,
+            reason: `ODWOŁANE (Brak min. ${minRequired} os. na ${deadlineMins} min przed)`
+          };
+        }
+      }
+    }
+    return { isAutoCancelled: false, reason: '' };
+  };
+
+  // WERYFIKACJA URODZIN KLUBOWICZA W DNIU TRENINGU
+  const isBirthdayOnDate = (birthDateStr?: string, classDisplayDate?: string, classIsoDate?: string) => {
+    if (!birthDateStr) return false;
+    let bDay: number | null = null;
+    let bMonth: number | null = null;
+
+    if (birthDateStr.includes('-')) {
+      const parts = birthDateStr.split('-');
+      if (parts.length === 3) {
+        bMonth = parseInt(parts[1], 10);
+        bDay = parseInt(parts[2], 10);
+      }
+    } else if (birthDateStr.includes('.')) {
+      const parts = birthDateStr.split('.');
+      if (parts.length >= 2) {
+        bDay = parseInt(parts[0], 10);
+        bMonth = parseInt(parts[1], 10);
+      }
+    } else if (birthDateStr.includes('/')) {
+      const parts = birthDateStr.split('/');
+      if (parts.length >= 2) {
+        bDay = parseInt(parts[0], 10);
+        bMonth = parseInt(parts[1], 10);
+      }
+    }
+
+    if (bDay === null || bMonth === null || isNaN(bDay) || isNaN(bMonth)) return false;
+
+    let cDay: number | null = null;
+    let cMonth: number | null = null;
+
+    if (classDisplayDate && classDisplayDate.includes('/')) {
+      const parts = classDisplayDate.split('/');
+      cDay = parseInt(parts[0], 10);
+      cMonth = parseInt(parts[1], 10);
+    } else if (classIsoDate && classIsoDate.includes('-')) {
+      const parts = classIsoDate.split('-');
+      cMonth = parseInt(parts[1], 10);
+      cDay = parseInt(parts[2], 10);
+    }
+
+    if (cDay === null || cMonth === null || isNaN(cDay) || isNaN(cMonth)) return false;
+
+    return bDay === cDay && bMonth === cMonth;
+  };
 
   // GŁÓWNA FUNKCJA POBIERANIA DANYCH Z SUPABASE
   const loadDataFromSupabase = async () => {
     // 0. Pobierz nadrzędne zasady zapisów z bazy
+    let parsedRules = { ...bookingRules };
     const { data: rulesData } = await supabase
       .from('club_booking_rules')
       .select('*')
@@ -87,19 +300,44 @@ export default function SchedulePage() {
       .maybeSingle();
 
     if (rulesData) {
-      setBookingRules({
+      parsedRules = {
         cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
         booking_cutoff_minutes: rulesData.booking_cutoff_minutes ?? null,
         booking_window_days: rulesData.booking_window_days ?? 14,
         expired_pass_grace_days: rulesData.expired_pass_grace_days ?? 15,
         max_daily_bookings: rulesData.max_daily_bookings ?? null,
         max_daily_same_type_bookings: rulesData.max_daily_same_type_bookings ?? 1,
+        min_participants: rulesData.min_participants ?? null,
+        auto_cancel_deadline_minutes: rulesData.auto_cancel_deadline_minutes ?? null,
         cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
         booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
         booking_window_per_pass: rulesData.booking_window_per_pass || {},
         expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
-      });
+        min_participants_per_class: rulesData.min_participants_per_class || {},
+        auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
+      };
+      setBookingRules(parsedRules);
       setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
+    }
+
+    // Role detection
+    const { data: { session } } = await supabase.auth.getSession();
+    const userEmail = session?.user?.email;
+    
+    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+    if (trenerzyData) setListaTrenerow(trenerzyData);
+
+    if (userEmail === 'maciejklaput@gmail.com') {
+      setAppRole('admin');
+    } else {
+      const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
+      if (trenerObj) {
+        setAppRole('trener');
+      } else {
+        const savedRole = localStorage.getItem('forma_marzen_app_role');
+        if (savedRole === 'admin' || savedRole === 'klubowicz') setAppRole(savedRole);
+        else setAppRole('klubowicz');
+      }
     }
 
     // 1. Definicje karnetów
@@ -114,6 +352,10 @@ export default function SchedulePage() {
           ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
         };
       });
+      setDostepneKarnety(karnetyDefData.map((k: any) => ({
+        ...k,
+        cena: k.cena_brutto || k.cena || '0.00'
+      })));
     }
 
     // 2. Klienci
@@ -129,9 +371,13 @@ export default function SchedulePage() {
           parsedKarnety = c.karnetyklubowicza;
         }
 
-        // Auto-naprawa wejść dla karnetów
         parsedKarnety = parsedKarnety.map((k: any) => {
-          if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+          const lowerName = (k.nazwa || '').toLowerCase();
+          const isTimePass = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy');
+          if (isTimePass) {
+            k.pozostaloWejsc = null;
+            k.poczatkoweWejsc = null;
+          } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa === k.nazwa);
             if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
               const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
@@ -149,20 +395,27 @@ export default function SchedulePage() {
           lastName: c.Nazwisko || c.lastName || '',
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
+          birthDate: c.Urodziny || c.birthDate || '',
           wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
           pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'OPEN'),
           expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
           avatar: c.avatarUrl || c.avatar || null,
+          blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
+          powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
           karnetyKlubowicza: parsedKarnety
         };
       });
       setDostepniKlienci(parsedKlienci);
+      if (userEmail && userEmail !== 'maciejklaput@gmail.com') {
+        const myUser = parsedKlienci.find((c: any) => c.email === userEmail);
+        if (myUser) setCurrentUser(myUser);
+      }
     }
 
     // 3. Zapisy na zajęcia
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
+    const grouped: { [key: string]: any[] } = {};
     if (zapisyData) {
-      const grouped: { [key: string]: any[] } = {};
       zapisyData.forEach((z: any) => {
         if (!grouped[z.class_key]) grouped[z.class_key] = [];
         grouped[z.class_key].push({
@@ -176,8 +429,8 @@ export default function SchedulePage() {
 
     // 4. Nadpisania zajęć (edycje, odwołania, usunięcia)
     const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
+    const nadpisaniaMap: { [key: string]: any } = {};
     if (nadpisaniaData) {
-      const nadpisaniaMap: { [key: string]: any } = {};
       nadpisaniaData.forEach((n: any) => {
         nadpisaniaMap[n.class_key] = {
           start: n.start,
@@ -204,8 +457,9 @@ export default function SchedulePage() {
 
     // 6. Zajęcia jednorazowe/duplikowane
     const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
+    let mappedJednorazowe: any[] = [];
     if (jednorazoweData) {
-      setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
+      mappedJednorazowe = jednorazoweData.map((j: any) => ({
         id: j.id,
         title: j.title || j.nazwa,
         start: j.start_time || j.start,
@@ -217,22 +471,15 @@ export default function SchedulePage() {
         isJednorazowe: true,
         isOdwołane: false,
         isUsunięte: false
-      })));
+      }));
+      setJednorazoweZajecia(mappedJednorazowe);
     }
 
-    // 7. Trenerzy
-    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
-    if (trenerzyData) {
-      setListaTrenerow(trenerzyData);
-      if (trenerzyData.length > 0) {
-        setDupTrainer(trenerzyData[0].imie_nazwisko);
-      }
-    }
-
-    // 8. Szablony grafiku stałego
+    // 7. Szablony grafiku stałego
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
+    let mappedSzablony: any[] = [];
     if (szablonyData) {
-      setZapisaneZajecia(szablonyData.map((s: any) => ({
+      mappedSzablony = szablonyData.map((s: any) => ({
         id: s.id,
         title: s.title || s.nazwa,
         start: s.start || s.start_time,
@@ -242,13 +489,46 @@ export default function SchedulePage() {
         days: s.days || {},
         isOdwołane: false,
         isUsunięte: false
-      })));
+      }));
+      setZapisaneZajecia(mappedSzablony);
     }
 
-    // 9. Rodzaje zajęć
+    // 8. Rodzaje zajęć
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) {
       setRodzajeZajec(rodzajeData);
+    }
+
+    // 9. Dni bieżącego widoku
+    const currentMon = getMonday(currentDate || new Date());
+    const activeDays = Array.from({ length: 5 }).map((_, index) => {
+      const dayDate = new Date(currentMon);
+      dayDate.setDate(currentMon.getDate() + index);
+      const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
+      const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+      const dayStr = String(dayDate.getDate()).padStart(2, '0');
+      const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
+      return {
+        day: dayNames[index],
+        key: keys[index],
+        date: `${dayStr}/${monthStr}`,
+        isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`,
+        fullDate: dayDate
+      };
+    });
+
+    // Uruchomienie weryfikacji automatycznego odwoływania zajęć
+    const changesOccurred = await processAutoCancellations(
+      mappedSzablony,
+      mappedJednorazowe,
+      grouped,
+      nadpisaniaMap,
+      parsedRules,
+      activeDays
+    );
+
+    if (changesOccurred) {
+      loadDataFromSupabase();
     }
   };
 
@@ -268,17 +548,10 @@ export default function SchedulePage() {
 
     loadDataFromSupabase();
 
-    if (typeof window !== 'undefined') {
-      const savedRole = localStorage.getItem('forma_marzen_app_role');
-      if (savedRole === 'klubowicz' || savedRole === 'admin') {
-        setAppRole(savedRole);
-      }
-    }
+    const handleStorageChange = () => loadDataFromSupabase();
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
-
-  if (!isMounted || !currentDate || !calendarViewDate) {
-    return <div className="p-8 text-center text-slate-500 font-bold text-xs">Ładowanie grafiku zajęć...</div>;
-  }
 
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
@@ -340,7 +613,7 @@ export default function SchedulePage() {
     return new Date(dCopy.setDate(diff));
   };
 
-  const currentMonday = getMonday(currentDate);
+  const currentMonday = currentDate ? getMonday(currentDate) : getMonday(new Date());
   const today = new Date();
 
   const daysList = Array.from({ length: 5 }).map((_, index) => {
@@ -370,27 +643,31 @@ export default function SchedulePage() {
   });
 
   const handlePrevWeek = () => {
+    if (!currentDate) return;
     const newDate = new Date(currentDate);
     newDate.setDate(currentDate.getDate() - 7);
     setCurrentDate(newDate);
   };
 
   const handleNextWeek = () => {
+    if (!currentDate) return;
     const newDate = new Date(currentDate);
     newDate.setDate(currentDate.getDate() + 7);
     setCurrentDate(newDate);
   };
 
   const nextMonth = () => {
+    if (!calendarViewDate) return;
     setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
   };
 
   const prevMonth = () => {
+    if (!calendarViewDate) return;
     setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1));
   };
 
-  const year = calendarViewDate.getFullYear();
-  const month = calendarViewDate.getMonth();
+  const year = calendarViewDate ? calendarViewDate.getFullYear() : new Date().getFullYear();
+  const month = calendarViewDate ? calendarViewDate.getMonth() : new Date().getMonth();
   const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7;
   const totalDays = new Date(year, month + 1, 0).getDate();
 
@@ -410,7 +687,7 @@ export default function SchedulePage() {
   const handleSaveMultiDayEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!multiDayTitle.trim()) {
-      alert("Podaj nazwę wydarzenia!");
+      showToast("Podaj nazwę wydarzenia!", 'warning');
       return;
     }
 
@@ -424,10 +701,11 @@ export default function SchedulePage() {
 
     if (error) {
       console.error("Błąd dodawania wydarzenia:", error);
-      alert("Nie udało się zapisać wydarzenia!");
+      showToast("Nie udało się zapisać wydarzenia: " + error.message, 'error');
       return;
     }
 
+    // Zwrot wejść i usunięcie zapisów w trakcie wydarzenia
     for (const col of daysList) {
       if (col.isoDate >= multiDayFrom && col.isoDate <= multiDayTo) {
         const standardoweDnia = zapisaneZajecia
@@ -443,6 +721,37 @@ export default function SchedulePage() {
 
         for (const item of zajeciaDnia) {
           const classKey = `${item.id}_${col.date}`;
+          const zapisani = zapisyNaZajecia[classKey] || [];
+          
+          for (const u of zapisani) {
+            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
+            if (clientData) {
+              let parsedKarnety = [];
+              if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+              else if (typeof clientData.karnetyKlubowicza === 'string') {
+                try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+              }
+
+              const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+              if (passIndex !== -1) {
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                parsedKarnety[passIndex] = {
+                  ...parsedKarnety[passIndex],
+                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                };
+                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
+              }
+
+              await supabase.from('transakcje').insert([{
+                klient_id: u.id,
+                typ_operacji: 'zajecia_wypis',
+                class_key: classKey,
+                opis: `Wypisano z zajęć "${item.title}" (${col.date}) z powodu wydarzenia "${multiDayTitle}". Zwrócono 1 wejście.`
+              }]);
+            }
+          }
+
           await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
         }
       }
@@ -451,19 +760,21 @@ export default function SchedulePage() {
     setIsMultiDayModalOpen(false);
     setMultiDayTitle('OBÓZ W WAŁCZU');
     loadDataFromSupabase();
+    showToast(`Pomyślnie dodano wydarzenie "${multiDayTitle.toUpperCase()}"!`);
   };
 
   const handleDeleteMultiDayEvent = async (id: number) => {
     if (confirm("Czy na pewno chcesz usunąć to wydarzenie kilkudniowe? Zajęcia zostaną przywrócone bez zapisanych użytkowników.")) {
       await supabase.from('wydarzenia_kilkudniowe').delete().eq('id', id);
       loadDataFromSupabase();
+      showToast("Wydarzenie zostało usunięte.");
     }
   };
 
   const handleZapiszKlientaDoZajec = async (klient: any) => {
     if (!selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) {
-      alert("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!");
+      showToast("Nie można zapisać uczestnika na odwołane lub usunięte zajęcia!", 'error');
       return;
     }
 
@@ -488,13 +799,13 @@ export default function SchedulePage() {
           rule_applied: 'absence_ban',
           payload: { klient_id: klient.id, class_key: classKey }
         }]);
-        alert(`Nie można zapisać klienta! ${errReason}`);
+        showToast(`Nie można zapisać klienta! ${errReason}`, 'error');
         return;
       }
     }
 
     if (aktualni.some(k => k.id === klient.id)) {
-      alert("Ten klient jest już zapisany na te zajęcia!");
+      showToast("Ten klient jest już zapisany na te zajęcia!", 'info');
       return;
     }
 
@@ -513,7 +824,7 @@ export default function SchedulePage() {
         rule_applied: 'booking_window_per_pass',
         payload: { klient_id: klient.id, class_key: classKey, pass: passName, window_days: bookingWindowDays }
       }]);
-      alert(`Nie można zapisać! ${reason}`);
+      showToast(`Nie można zapisać! ${reason}`, 'error');
       return;
     }
 
@@ -534,7 +845,7 @@ export default function SchedulePage() {
           rule_applied: 'booking_cutoff_per_class',
           payload: { klient_id: klient.id, class_key: classKey, training: trainingName, cutoff: cutoffMinutes }
         }]);
-        alert(`Nie można zapisać! ${reason}`);
+        showToast(`Nie można zapisać! ${reason}`, 'error');
         return;
       }
     }
@@ -554,7 +865,7 @@ export default function SchedulePage() {
           rule_applied: 'expired_pass_grace_per_pass',
           payload: { klient_id: klient.id, class_key: classKey, pass: passName, grace_days: graceDays }
         }]);
-        alert(`Nie można zapisać! ${reason}`);
+        showToast(`Nie można zapisać! ${reason}`, 'error');
         return;
       }
     }
@@ -587,7 +898,7 @@ export default function SchedulePage() {
           rule_applied: 'max_daily_same_type_bookings',
           payload: { klient_id: klient.id, class_key: classKey, same_type_limit: maxSameType }
         }]);
-        alert(`Nie można zapisać! ${reason}`);
+        showToast(`Nie można zapisać! ${reason}`, 'error');
         return;
       }
     }
@@ -632,7 +943,7 @@ export default function SchedulePage() {
         rule_applied: 'max_daily_bookings',
         payload: { klient_id: klient.id, class_key: classKey, daily_limit: dailyLimit }
       }]);
-      alert(`Nie można zapisać! ${reason}`);
+      showToast(`Nie można zapisać! ${reason}`, 'error');
       return;
     }
 
@@ -650,7 +961,7 @@ export default function SchedulePage() {
 
     if (error) {
       console.error("Błąd zapisu na zajęcia:", error);
-      alert(`Nie udało się zapisać: ${error.message}`);
+      showToast(`Nie udało się zapisać: ${error.message}`, 'error');
       return;
     }
 
@@ -690,6 +1001,7 @@ export default function SchedulePage() {
     setIsSearchingClient(false);
     setSearchClientQuery('');
     loadDataFromSupabase();
+    showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}!`);
   };
 
   const handlePotwierdzWypisanie = async () => {
@@ -706,7 +1018,7 @@ export default function SchedulePage() {
 
     if (error) {
       console.error("Błąd wypisywania z zajęć:", error);
-      alert(`Nie udało się wypisać: ${error.message}`);
+      showToast(`Nie udało się wypisać: ${error.message}`, 'error');
       return;
     }
 
@@ -790,6 +1102,7 @@ export default function SchedulePage() {
     setClientToUnregister(null);
     setBlokadaZapisow(false);
     loadDataFromSupabase();
+    showToast(`Wypisano ${clientToUnregister.firstName} ${clientToUnregister.lastName}.`);
   };
 
   const toggleObecny = async (klientId: number) => {
@@ -833,7 +1146,7 @@ export default function SchedulePage() {
       }).eq('id', existing.id);
       
       if (error) {
-        alert("Błąd aktualizacji edycji: " + error.message);
+        showToast("Błąd aktualizacji edycji: " + error.message, 'error');
         return;
       }
     } else {
@@ -848,7 +1161,7 @@ export default function SchedulePage() {
       }]);
 
       if (error) {
-        alert("Błąd zapisu edycji: " + error.message);
+        showToast("Błąd zapisu edycji: " + error.message, 'error');
         return;
       }
     }
@@ -861,13 +1174,13 @@ export default function SchedulePage() {
 
     setEditClassModalData(null);
     loadDataFromSupabase();
-    alert("Zajęcia w tym dniu zostały zaktualizowane!");
+    showToast("Zajęcia w tym dniu zostały zaktualizowane!");
   };
 
   const handleSaveDuplicateClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dupPlan) {
-      alert("Wybierz rodzaj zajęć / plan treningowy!");
+      showToast("Wybierz rodzaj zajęć / plan treningowy!", 'warning');
       return;
     }
 
@@ -892,12 +1205,12 @@ export default function SchedulePage() {
 
     if (error) {
       console.error("Błąd dodawania zajęć jednorazowych:", error);
-      alert("Nie udało się zapisać zajęć!");
+      showToast("Nie udało się zapisać zajęć: " + error.message, 'error');
       return;
     }
 
     setDuplicateModalData(null);
-    alert(`Pomyślnie dodano zajęcia "${dupPlan}" na dzień ${dupDate}!`);
+    showToast(`Pomyślnie dodano zajęcia "${dupPlan}" na dzień ${dupDate}!`);
     loadDataFromSupabase();
   };
 
@@ -912,6 +1225,35 @@ export default function SchedulePage() {
     setActiveMenuClassId(null);
 
     if (nextOdwołaneState) {
+      const zapisani = zapisyNaZajecia[classKey] || [];
+      for (const u of zapisani) {
+        const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
+        if (clientData) {
+          let parsedKarnety = [];
+          if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+          else if (typeof clientData.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+          }
+
+          const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+          if (passIndex !== -1) {
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            parsedKarnety[passIndex] = {
+              ...parsedKarnety[passIndex],
+              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+            };
+            await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
+          }
+
+          await supabase.from('transakcje').insert([{
+            klient_id: u.id,
+            typ_operacji: 'zajecia_wypis',
+            class_key: classKey,
+            opis: `Odwołano zajęcia "${item.title}" (${displayDate}). Wypisano uczestnika i zwrócono 1 wejście.`
+          }]);
+        }
+      }
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
@@ -927,7 +1269,7 @@ export default function SchedulePage() {
         is_usuniete: item.isUsunięte || false
       }).eq('id', existing.id);
       
-      if (error) alert("Błąd aktualizacji: " + error.message);
+      if (error) showToast("Błąd aktualizacji: " + error.message, 'error');
     } else {
       const { error } = await supabase.from('nadpisania_zajec').insert([{
         class_key: classKey,
@@ -939,7 +1281,7 @@ export default function SchedulePage() {
         is_usuniete: item.isUsunięte || false
       }]);
       
-      if (error) alert("Błąd zapisu: " + error.message);
+      if (error) showToast("Błąd zapisu: " + error.message, 'error');
     }
 
     await supabase.from('transakcje').insert([{
@@ -949,6 +1291,7 @@ export default function SchedulePage() {
     }]);
 
     loadDataFromSupabase();
+    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały przywrócone.");
   };
 
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
@@ -962,6 +1305,35 @@ export default function SchedulePage() {
     setActiveMenuClassId(null);
 
     if (nextUsunięteState) {
+      const zapisani = zapisyNaZajecia[classKey] || [];
+      for (const u of zapisani) {
+        const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
+        if (clientData) {
+          let parsedKarnety = [];
+          if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+          else if (typeof clientData.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+          }
+
+          const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+          if (passIndex !== -1) {
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            parsedKarnety[passIndex] = {
+              ...parsedKarnety[passIndex],
+              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+            };
+            await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
+          }
+
+          await supabase.from('transakcje').insert([{
+            klient_id: u.id,
+            typ_operacji: 'zajecia_wypis',
+            class_key: classKey,
+            opis: `Usunięto zajęcia "${item.title}" (${displayDate}). Wypisano uczestnika i zwrócono 1 wejście.`
+          }]);
+        }
+      }
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
@@ -977,7 +1349,7 @@ export default function SchedulePage() {
         is_usuniete: nextUsunięteState
       }).eq('id', existing.id);
       
-      if (error) alert("Błąd aktualizacji: " + error.message);
+      if (error) showToast("Błąd aktualizacji: " + error.message, 'error');
     } else {
       const { error } = await supabase.from('nadpisania_zajec').insert([{
         class_key: classKey,
@@ -989,7 +1361,7 @@ export default function SchedulePage() {
         is_usuniete: nextUsunięteState
       }]);
       
-      if (error) alert("Błąd zapisu: " + error.message);
+      if (error) showToast("Błąd zapisu: " + error.message, 'error');
     }
 
     await supabase.from('transakcje').insert([{
@@ -999,11 +1371,34 @@ export default function SchedulePage() {
     }]);
 
     loadDataFromSupabase();
+    showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały przywrócone.");
   };
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-4 pb-24 relative font-sans antialiased text-slate-800">
       
+      {/* POWIADOMIENIA TOAST */}
+      {toastMessage && (
+        <div
+          className={`fixed bottom-6 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-2xl border flex items-center gap-3 transition-all duration-300 animate-in fade-in slide-in-from-bottom-5 ${
+            toastMessage.type === 'success'
+              ? 'bg-slate-900 text-emerald-300 border-emerald-500/50'
+              : toastMessage.type === 'error'
+              ? 'bg-slate-900 text-rose-300 border-rose-500/50'
+              : toastMessage.type === 'warning'
+              ? 'bg-slate-900 text-amber-300 border-amber-500/50'
+              : 'bg-slate-900 text-sky-300 border-sky-500/50'
+          }`}
+        >
+          <span className="text-lg">
+            {toastMessage.type === 'success' && '✅'}
+            {toastMessage.type === 'error' && '🚫'}
+            {toastMessage.type === 'warning' && '⚠️'}
+            {toastMessage.type === 'info' && 'ℹ️'}
+          </span>
+          <p className="text-xs font-bold tracking-wide text-white">{toastMessage.text}</p>
+        </div>
+      )}
+
       {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
         <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
@@ -1088,7 +1483,7 @@ export default function SchedulePage() {
             {Array.from({ length: totalDays }).map((_, idx) => {
               const dayNum = idx + 1;
               const thisDate = new Date(year, month, dayNum);
-              const isSelected = currentDate.getDate() === dayNum && currentDate.getMonth() === month && currentDate.getFullYear() === year;
+              const isSelected = currentDate ? currentDate.getDate() === dayNum && currentDate.getMonth() === month && currentDate.getFullYear() === year : false;
 
               return (
                 <button
@@ -1184,17 +1579,22 @@ export default function SchedulePage() {
                   const liczbaKrzesełko = Math.max(0, zapisaniWszyscy.length - limitZajec);
                   const isFull = zapisaniWszyscy.length >= limitZajec;
 
-                  const topColor = getTopBorderColor(item.title, item.isOdwołane, item.isUsunięte);
+                  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ
+                  const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisaniWszyscy);
+                  const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
+
+                  const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
                   const isMenuOpen = activeMenuClassId === classKey;
 
                   return (
                     <div 
                       key={`${item.id}_${col.date}_${classIdx}`}
                       onClick={() => {
-                        if (item.isOdwołane || item.isUsunięte) return;
+                        if (isClassCancelled || item.isUsunięte) return;
                         setSelectedClass({
                           ...item,
                           displayDate: col.date,
+                          isoDate: col.isoDate,
                           durationText
                         });
                         setIsSearchingClient(false);
@@ -1202,7 +1602,7 @@ export default function SchedulePage() {
                       }}
                       style={{ borderTopWidth: '5px', borderTopStyle: 'solid', borderTopColor: topColor }}
                       className={`bg-white border rounded-2xl p-4 space-y-3 shadow-sm transition-all relative ${
-                        item.isOdwołane || item.isUsunięte ? 'border-rose-200 opacity-90' : 'border-sky-100 hover:border-sky-300 cursor-pointer'
+                        isClassCancelled || item.isUsunięte ? 'border-rose-200 opacity-90' : 'border-sky-100 hover:border-sky-300 cursor-pointer'
                       }`}
                     >
                       <div className="flex justify-between items-start">
@@ -1226,7 +1626,7 @@ export default function SchedulePage() {
                                 <button onClick={() => { openHistoryModal(item, col.date); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">
                                   🕒 Pokaż historię
                                 </button>
-                                <button onClick={() => { alert("Wyślij wiadomość"); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">
+                                <button onClick={() => { showToast("Moduł wysyłania wiadomości wkrótce dostępny.", 'info'); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2.5 cursor-pointer">
                                   ✉️ Wyślij wiadomość
                                 </button>
                                 <button onClick={() => { 
@@ -1284,13 +1684,13 @@ export default function SchedulePage() {
 
                       </div>
 
-                      {item.isOdwołane ? (
-                        <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
-                          ODWOŁANE
-                        </div>
-                      ) : item.isUsunięte ? (
+                      {item.isUsunięte ? (
                         <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200">
                           USUNIĘTE
+                        </div>
+                      ) : isClassCancelled ? (
+                        <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200 leading-tight">
+                          {autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : 'ODWOŁANE'}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1398,12 +1798,21 @@ export default function SchedulePage() {
                       portfelColorClass = 'text-rose-600 font-bold';
                     }
 
+                    const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
+
                     return (
                       <div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
                         
                         <div className="flex items-start justify-between">
                           <div>
-                            <h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
+                              {hasBirthdayToday && (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm" title="Dzisiaj ma urodziny!">
+                                  🎂 <span>Urodziny!</span>
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
                               <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
                               <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
@@ -1481,16 +1890,23 @@ export default function SchedulePage() {
                         portfelColorClass = 'text-rose-600 font-bold';
                       }
 
+                      const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
+
                       return (
                         <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
                           
                           <div className="flex items-start justify-between">
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <h4 className="font-black text-slate-900 text-sm">{osoba.firstName} {osoba.lastName}</h4>
                                 <span className="bg-blue-200 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded">
                                   #{idx + 1}
                                 </span>
+                                {hasBirthdayToday && (
+                                  <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm" title="Dzisiaj ma urodziny!">
+                                    🎂 <span>Urodziny!</span>
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
                                 <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
@@ -1597,7 +2013,7 @@ export default function SchedulePage() {
 
               <div className="flex justify-end pt-2">
                 <button 
-                  onClick={() => setSelectedClass(null)}
+                  onClick={() => setSelectedClass(null)} 
                   className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
                 >
                   Zamknij
@@ -1701,7 +2117,7 @@ export default function SchedulePage() {
               </div>
 
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900 text-[11px]">
-                ⚠️ W wybranym zakresie dat wszystkie zajęcia zostaną automatycznie oznaczone jako odwołane z powodu obozu/wydarzenia.
+                ⚠️ W wybranym zakresie dat wszystkie zajęcia zostaną automatycznie oznaczone jako odwołane z powodu obozu/wydarzenia, a uczestnikom zostaną zwrócone wejścia.
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
