@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from '../app/raporty/klienci/supabase'; 
 
@@ -14,7 +14,7 @@ type Regulation = {
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const pathname = usePathname() || '';
+  const nextPathname = usePathname() || '';
   
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
@@ -25,33 +25,63 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Dokładna i elastyczna weryfikacja ścieżek publicznych
-  const isPublicPath = 
-    pathname === '/login' || 
-    pathname.startsWith('/login') ||
-    pathname === '/rejestracja' || 
-    pathname.startsWith('/rejestracja') || 
-    pathname === '/grafik-publiczny' || 
-    pathname.startsWith('/grafik-publiczny');
+  // Funkcja sprawdzająca czy jakakolwiek ścieżka jest publiczna
+  const checkIsPublic = (path: string) => {
+    if (!path) return false;
+    const cleanPath = path.toLowerCase().trim();
+    return (
+      cleanPath === '/login' ||
+      cleanPath.startsWith('/login') ||
+      cleanPath === '/rejestracja' ||
+      cleanPath.startsWith('/rejestracja') ||
+      cleanPath === '/grafik-publiczny' ||
+      cleanPath.startsWith('/grafik-publiczny')
+    );
+  };
+
+  // Sprawdzamy z usePathname lub awaryjnie z window.location
+  const isPublicPath = useMemo(() => {
+    if (typeof window !== 'undefined') {
+      return checkIsPublic(nextPathname) || checkIsPublic(window.location.pathname);
+    }
+    return checkIsPublic(nextPathname);
+  }, [nextPathname]);
 
   useEffect(() => {
-    // Jeżeli jesteśmy na trasie publicznej, całkowicie pomijamy sprawdzanie sesji i przekierowania
+    // 1. Jeśli jesteśmy na ścieżce publicznej, natychmiast autoryzujemy i nie wykonujemy żadnych przekierowań
     if (isPublicPath) {
       setIsChecking(false);
       setIsAuthorized(true);
       return;
     }
 
+    let isMounted = true;
+
     const checkAuthAndRegulations = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
+      // Podwójne zabezpieczenie przed przekierowaniem
+      const currentBrowserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
+      if (checkIsPublic(currentBrowserPath)) {
+        if (isMounted) {
+          setIsChecking(false);
+          setIsAuthorized(true);
+        }
+        return;
+      }
+
       if (!session) {
-        router.push('/login');
+        if (isMounted) {
+          setIsChecking(false);
+          router.push('/login');
+        }
         return;
       } 
       
-      setUserId(session.user.id);
-      setUserEmail(session.user.email ?? null);
+      if (isMounted) {
+        setUserId(session.user.id);
+        setUserEmail(session.user.email ?? null);
+      }
       
       // 1. Sprawdzamy czy to administrator (admini nie muszą akceptować regulaminów)
       let isAdmin = false;
@@ -92,24 +122,33 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
             return acceptedDate < forceDate; 
           });
 
-          setPendingRegulations(toAccept);
+          if (isMounted) {
+            setPendingRegulations(toAccept);
+          }
         }
       }
       
-      setIsAuthorized(true);
-      setIsChecking(false);
+      if (isMounted) {
+        setIsAuthorized(true);
+        setIsChecking(false);
+      }
     };
     
     checkAuthAndRegulations();
 
+    // Listener zmian sesji Supabase
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session && !isPublicPath) {
+      const currentBrowserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
+      if (!session && !checkIsPublic(currentBrowserPath)) {
         router.push('/login');
       }
     });
 
-    return () => authListener.subscription.unsubscribe();
-  }, [pathname, router, isPublicPath]);
+    return () => {
+      isMounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, [nextPathname, router, isPublicPath]);
 
   // Funkcja do obsługi kliknięcia "Akceptuję" na zablokowanym ekranie
   const handleAccept = async (slug: string) => {
@@ -134,7 +173,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     setIsAccepting(false);
   };
 
-  // Dla ścieżek publicznych natychmiast renderujemy dzieci bez blokad
+  // DLA ŚCIEŻEK PUBLICZNYCH NATYCHMIAST RENDERUJEMY ZAWARTOŚĆ
   if (isPublicPath) {
     return <>{children}</>;
   }
@@ -148,7 +187,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // EKRAN BLOKADY (App Blocker)
+  // EKRAN BLOKADY REGULAMINU (App Blocker)
   if (pendingRegulations.length > 0) {
     const currentReg = pendingRegulations[0]; 
     
@@ -196,6 +235,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // STANDARDOWY ZWROT
+  // STANDARDOWY ZWROT DLA ZALOGOWANYCH
   return <>{children}</>;
 }
