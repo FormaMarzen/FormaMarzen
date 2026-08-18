@@ -105,7 +105,125 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ PRZY BRAKU MINIMALNEJ FREKWENCJI
+  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB I ZWROTU WEJŚĆ
+  const processAutoCancellations = async (
+    classes: any[],
+    jednorazowe: any[],
+    signupsMap: { [key: string]: any[] },
+    overridesMap: { [key: string]: any },
+    rules: any,
+    days: any[]
+  ) => {
+    const now = new Date();
+    let hasChanges = false;
+
+    for (const col of days) {
+      const stdDnia = classes
+        .filter((item: any) => item.days && item.days[col.key])
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const jednorazDnia = jednorazowe
+        .filter((item: any) => item.displayDate === col.date)
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const allClasses = [...stdDnia, ...jednorazDnia];
+
+      for (const cls of allClasses) {
+        if (cls.isOdwołane || cls.isUsunięte) continue;
+
+        const trainingName = cls.title || '';
+        const minRequired = rules.min_participants_per_class?.[trainingName] !== undefined
+          ? rules.min_participants_per_class[trainingName]
+          : rules.min_participants;
+        
+        const deadlineMins = rules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
+          ? rules.auto_cancel_deadline_per_class[trainingName]
+          : rules.auto_cancel_deadline_minutes;
+
+        if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
+          const [dStr, mStr] = col.date.split('/');
+          const classYear = col.fullDate ? col.fullDate.getFullYear() : now.getFullYear();
+          const [sh = '00', sm = '00'] = (cls.start || '00:00').split(':');
+          const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+          const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+          if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+            const classSignups = signupsMap[cls.classKey] || [];
+            const activeSignups = classSignups.filter((s: any) => s.status === 'zapisany');
+
+            if (activeSignups.length < minRequired) {
+              hasChanges = true;
+              
+              // 1. Zapisujemy odwołanie w bazie
+              await supabase.from('nadpisania_zajec').upsert({
+                class_key: cls.classKey,
+                start: cls.start,
+                end: cls.end,
+                trainer: cls.trainer,
+                limit: cls.limit,
+                is_odwolane: true,
+                is_usuniete: false
+              });
+
+              // 2. Wypisujemy wszystkich uczestników i zwracamy im wejścia
+              for (const participant of classSignups) {
+                const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
+                if (clientData) {
+                  let parsedKarnety = [];
+                  if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+                  else if (typeof clientData.karnetyKlubowicza === 'string') {
+                    try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+                  }
+
+                  const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+                  if (passIndex !== -1) {
+                    const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+                    const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                    parsedKarnety[passIndex] = {
+                      ...parsedKarnety[passIndex],
+                      pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                    };
+                    await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
+                  }
+
+                  await supabase.from('transakcje').insert([{
+                    klient_id: participant.id,
+                    typ_operacji: 'zajecia_wypis',
+                    class_key: cls.classKey,
+                    opis: `Automatyczne odwołanie zajęć "${cls.title}" (${col.date} ${cls.start}) z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono 1 wejście.`
+                  }]);
+                }
+              }
+
+              // 3. Usuwamy wpisy z tabeli zapisy_zajec
+              await supabase.from('zapisy_zajec').delete().eq('class_key', cls.classKey);
+
+              // 4. Logujemy zdarzenie
+              await supabase.from('booking_logs').insert([{
+                action_type: 'CLASS_AUTO_CANCELLED',
+                status: 'SUCCESS',
+                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób i zwrócono wejścia.`,
+                rule_applied: 'min_participants_auto_cancel',
+                payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
+              }]);
+            }
+          }
+        }
+      }
+    }
+
+    return hasChanges;
+  };
+
+  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ W WIDOKU
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     
@@ -266,7 +384,17 @@ export default function DashboardPage() {
     setProfileManualDiscountInput(client.discount ? String(client.discount).replace(/[^0-9.]/g, '') : '');
   };
 
+  const getMonday = (d: Date) => {
+    const dCopy = new Date(d);
+    const day = dCopy.getDay();
+    if (day === 6) { dCopy.setDate(dCopy.getDate() + 2); } else if (day === 0) { dCopy.setDate(dCopy.getDate() + 1); }
+    const currentDayOfWeek = dCopy.getDay();
+    const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
+    return new Date(dCopy.setDate(diff));
+  };
+
   const loadData = async () => {
+    let parsedRules = { ...bookingRules };
     const { data: rulesData } = await supabase
       .from('club_booking_rules')
       .select('*')
@@ -275,7 +403,7 @@ export default function DashboardPage() {
       .maybeSingle();
 
     if (rulesData) {
-      setBookingRules({
+      parsedRules = {
         cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
         booking_cutoff_minutes: rulesData.booking_cutoff_minutes ?? null,
         booking_window_days: rulesData.booking_window_days ?? 14,
@@ -290,7 +418,8 @@ export default function DashboardPage() {
         expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
         min_participants_per_class: rulesData.min_participants_per_class || {},
         auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
-      });
+      };
+      setBookingRules(parsedRules);
       setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
     }
 
@@ -332,6 +461,90 @@ export default function DashboardPage() {
         ...k,
         cena: k.cena_brutto || k.cena || '0.00'
       })));
+    }
+
+    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
+    let mappedSzablony: any[] = [];
+    if (szablonyData) {
+      mappedSzablony = szablonyData.map((s: any) => ({
+        ...s,
+        title: s.title || s.nazwa,
+        start: s.start || s.start_time,
+        end: s.end || s.end_time,
+        limit: s.limit || s.limit_miejsc,
+        trainer: s.trainer || s.prowadzacy,
+        days: s.days || {}
+      }));
+      setZapisaneZajecia(mappedSzablony);
+    }
+
+    const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
+    let mappedJednorazowe: any[] = [];
+    if (jednorazoweData) {
+      mappedJednorazowe = jednorazoweData.map((j: any) => ({
+        ...j,
+        title: j.title || j.nazwa,
+        start: j.start_time || j.start,
+        end: j.end_time || j.end,
+        limit: j.limit_miejsc || j.limit,
+        trainer: j.trainer || j.prowadzacy,
+        displayDate: j.display_date,
+        fullDateStr: j.full_date_str
+      }));
+      setJednorazoweZajecia(mappedJednorazowe);
+    }
+
+    const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
+    const nadpisaniaMap: { [key: string]: any } = {};
+    if (nadpisaniaData) {
+      nadpisaniaData.forEach((n: any) => {
+        nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
+      });
+      setNadpisaneZajeciaDni(nadpisaniaMap);
+    }
+
+    const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
+    const groupedZapisy: { [key: string]: any[] } = {};
+    if (zapisyData) {
+      zapisyData.forEach((z: any) => {
+        if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
+        groupedZapisy[z.class_key].push({
+          ...z,
+          id: z.klient_id,
+          status: z.status,
+          obecny: z.obecny,
+          nieobecny: z.nieobecny
+        });
+      });
+      setZapisyNaZajecia(groupedZapisy);
+    }
+
+    // OBLICZANIE DNI BIEŻĄCEGO TYGODNIA
+    const currentMon = getMonday(selectedWeekDate);
+    const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
+      const dayDate = new Date(currentMon);
+      dayDate.setDate(currentMon.getDate() + index);
+      const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
+      const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+      const dayStr = String(dayDate.getDate()).padStart(2, '0');
+      const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
+      return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
+    });
+
+    // URUCHOMIENIE WERYFIKACJI AUTOODWOŁYWANIA ZAJĘĆ I ZWROTÓW WEJŚĆ
+    const changesOccurred = await processAutoCancellations(
+      mappedSzablony,
+      mappedJednorazowe,
+      groupedZapisy,
+      nadpisaniaMap,
+      parsedRules,
+      activeDashboardDays
+    );
+
+    if (changesOccurred) {
+      // Jeśli nastąpiło odwołanie, przeładuj dane z bazy
+      loadData();
+      return;
     }
 
     const { data: klienciData } = await supabase.from('klienci').select('*');
@@ -409,54 +622,7 @@ export default function DashboardPage() {
 
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) setRodzajeZajec(rodzajeData);
-    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
-    if (szablonyData) {
-      setZapisaneZajecia(szablonyData.map((s: any) => ({
-        ...s,
-        title: s.title || s.nazwa,
-        start: s.start || s.start_time,
-        end: s.end || s.end_time,
-        limit: s.limit || s.limit_miejsc,
-        trainer: s.trainer || s.prowadzacy,
-        days: s.days || {}
-      })));
-    }
-    const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
-    if (jednorazoweData) {
-      setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
-        ...j,
-        title: j.title || j.nazwa,
-        start: j.start_time || j.start,
-        end: j.end_time || j.end,
-        limit: j.limit_miejsc || j.limit,
-        trainer: j.trainer || j.prowadzacy,
-        displayDate: j.display_date,
-        fullDateStr: j.full_date_str
-      })));
-    }
-    const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
-    if (nadpisaniaData) {
-      const nadpisaniaMap: { [key: string]: any } = {};
-      nadpisaniaData.forEach((n: any) => {
-        nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
-      });
-      setNadpisaneZajeciaDni(nadpisaniaMap);
-    }
-    const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
-    if (zapisyData) {
-      const grouped: { [key: string]: any[] } = {};
-      zapisyData.forEach((z: any) => {
-        if (!grouped[z.class_key]) grouped[z.class_key] = [];
-        grouped[z.class_key].push({
-          ...z,
-          id: z.klient_id,
-          status: z.status,
-          obecny: z.obecny,
-          nieobecny: z.nieobecny
-        });
-      });
-      setZapisyNaZajecia(grouped);
-    }
+    
     const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
     if (wydarzeniaData) {
       setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
@@ -467,7 +633,7 @@ export default function DashboardPage() {
     loadData();
     window.addEventListener('storage', loadData);
     return () => window.removeEventListener('storage', loadData);
-  }, []);
+  }, [selectedWeekDate]);
 
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
     const safePayload = { ...payload };
@@ -1993,15 +2159,6 @@ export default function DashboardPage() {
     return getEarliestExpirationDate(a).localeCompare(getEarliestExpirationDate(b));
   });
 
-  const getMonday = (d: Date) => {
-    const dCopy = new Date(d);
-    const day = dCopy.getDay();
-    if (day === 6) { dCopy.setDate(dCopy.getDate() + 2); } else if (day === 0) { dCopy.setDate(dCopy.getDate() + 1); }
-    const currentDayOfWeek = dCopy.getDay();
-    const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
-    return new Date(dCopy.setDate(diff));
-  };
-  
   const today = new Date();
   const currentMonday = getMonday(selectedWeekDate);
   const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
