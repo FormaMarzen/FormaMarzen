@@ -411,6 +411,13 @@ export default function RootLayout({
         <title>Forma Marzeń</title>
         <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
         
+        {/* Open Graph Meta Tags for Social Media Preview */}
+        <meta property="og:title" content="Forma Marzeń" />
+        <meta property="og:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
+        <meta property="og:image" content="https://forma-marzen.vercel.app/logo.png" />
+        <meta property="og:url" content="https://forma-marzen.vercel.app" />
+        <meta property="og:type" content="website" />
+        
         <link rel="manifest" href="/manifest.json?v=2" />
         <meta name="theme-color" content="#0284c7" />
         <meta name="mobile-web-app-capable" content="yes" />
