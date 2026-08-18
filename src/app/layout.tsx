@@ -23,6 +23,7 @@ export default function RootLayout({
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [isMounted, setIsMounted] = useState(false);
 
+  const [currentClientId, setCurrentClientId] = useState<number | string | null>(null);
   const [profileName, setProfileName] = useState('Ładowanie...');
   const [profileEmail, setProfileEmail] = useState('');
   const [profilePhone, setProfilePhone] = useState('-');
@@ -43,7 +44,7 @@ export default function RootLayout({
     setIsMounted(true);
 
     const checkAuthAndRole = async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession();
       
       if (!session?.user) {
         if (!isPublicPage) {
@@ -56,46 +57,42 @@ export default function RootLayout({
         const userEmail = session.user.email || '';
         setProfileEmail(userEmail);
         
-        if (userEmail === 'maciejklaput@gmail.com') {
+        // Pobieramy dane klienta z bazy klienci
+        const { data: klientData } = await supabase
+          .from('klienci')
+          .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
+          .ilike('E-mail', userEmail.trim())
+          .maybeSingle();
+
+        if (klientData) {
+          const k = klientData as any;
+          setCurrentClientId(k.id);
+          if (k.Urodziny) setProfileBirth(k.Urodziny);
+          if (k['Numer tel.'] && k['Numer tel.'] !== '-') setProfilePhone(k['Numer tel.']);
+          if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+        }
+
+        if (userEmail.toLowerCase() === 'maciejklaput@gmail.com') {
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
         } else {
           const { data: trenerData } = await supabase
             .from('trenerzy')
             .select('*')
-            .eq('email', userEmail)
-            .single();
+            .ilike('email', userEmail.trim())
+            .maybeSingle();
 
           if (trenerData) {
             setAppRole('trener');
-            setProfileName(trenerData.imie_nazwisko || userEmail.split('@')[0]);
-            setProfilePhone(trenerData.telefon || '-');
-            
-            const { data: klientData } = await supabase
-              .from('klienci')
-              .select('Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
-              .eq('E-mail', userEmail)
-              .single();
-              
-            if (klientData) {
-              const k = klientData as any;
-              setProfileBirth(k.Urodziny || '');
-              if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+            setProfileName(trenerData.imie_nazwisko || (klientData ? `${(klientData as any).Imię} ${(klientData as any).Nazwisko}` : userEmail.split('@')[0]));
+            if (trenerData.telefon && trenerData.telefon !== '-') {
+              setProfilePhone(trenerData.telefon);
             }
           } else {
             setAppRole('klubowicz');
-            const { data: klientData } = await supabase
-              .from('klienci')
-              .select('Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
-              .eq('E-mail', userEmail)
-              .single();
-
             if (klientData) {
               const k = klientData as any;
               setProfileName(`${k.Imię} ${k.Nazwisko}`);
-              setProfilePhone(k['Numer tel.'] || '-');
-              setProfileBirth(k.Urodziny || '');
-              if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
             } else {
               setProfileName(userEmail.split('@')[0]);
             }
@@ -154,10 +151,14 @@ export default function RootLayout({
           
           setProfileAvatar(compressedDataUrl);
           
-          const { error } = await supabase
-            .from('klienci')
-            .update({ avatarUrl: compressedDataUrl })
-            .eq('E-mail', profileEmail);
+          let updateQuery = supabase.from('klienci').update({ avatarUrl: compressedDataUrl });
+          if (currentClientId) {
+            updateQuery = updateQuery.eq('id', currentClientId);
+          } else {
+            updateQuery = updateQuery.ilike('E-mail', profileEmail.trim());
+          }
+          
+          const { error } = await updateQuery;
             
           if (error) {
             console.error("Błąd zapisu awatara:", error);
@@ -265,7 +266,6 @@ export default function RootLayout({
     {
       title: "Konto Klubowicza",
       items: [
-        // Zakładka "Karnet" została pominięta dla trenera
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
@@ -780,14 +780,62 @@ export default function RootLayout({
                 <button 
                   type="button"
                   onClick={async () => {
-                    if (profileEmail && appRole === 'klubowicz') {
-                      await supabase.from('klienci').update({
+                    const cleanEmail = (profileEmail || '').trim();
+                    if (!cleanEmail) {
+                      alert("Brak adresu e-mail.");
+                      return;
+                    }
+
+                    // 1. Zapis po ID lub ilike E-mail
+                    let updateClientQuery = supabase
+                      .from('klienci')
+                      .update({
                         'Numer tel.': profilePhone,
                         Urodziny: profileBirth
-                      }).eq('E-mail', profileEmail);
+                      });
+
+                    if (currentClientId) {
+                      updateClientQuery = updateClientQuery.eq('id', currentClientId);
+                    } else {
+                      updateClientQuery = updateClientQuery.ilike('E-mail', cleanEmail);
                     }
-                    alert("Profil został zaktualizowany pomyślnie!");
+
+                    const { data: updatedClients, error: clientErr } = await updateClientQuery.select();
+
+                    if (clientErr) {
+                      console.error("Błąd zapisu profilu klienta:", clientErr);
+                      alert("Wystąpił błąd zapisu: " + clientErr.message);
+                      return;
+                    }
+
+                    if (!updatedClients || updatedClients.length === 0) {
+                      // Próba wyszukania klienta po adresie bez względu na wielkość liter
+                      const { data: existingClient } = await supabase
+                        .from('klienci')
+                        .select('id')
+                        .ilike('E-mail', cleanEmail)
+                        .maybeSingle();
+
+                      if (existingClient) {
+                        await supabase
+                          .from('klienci')
+                          .update({
+                            'Numer tel.': profilePhone,
+                            Urodziny: profileBirth
+                          })
+                          .eq('id', existingClient.id);
+                      }
+                    }
+
+                    // 2. Aktualizacja w tabeli trenerzy jeśli występuje
+                    await supabase
+                      .from('trenerzy')
+                      .update({ telefon: profilePhone })
+                      .ilike('email', cleanEmail);
+
+                    alert("Profil oraz data urodzin zostały zapisane pomyślnie!");
                     setIsProfileModalOpen(false);
+                    window.location.reload();
                   }}
                   className="bg-rose-950 hover:bg-rose-900 text-white font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
                 >

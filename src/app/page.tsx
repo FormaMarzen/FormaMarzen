@@ -93,6 +93,52 @@ export default function DashboardPage() {
     expired_pass_grace_per_pass: {},
   });
 
+  // WERYFIKACJA URODZIN KLUBOWICZA W DNIU TRENINGU
+  const isBirthdayOnDate = (birthDateStr?: string, classDisplayDate?: string, classIsoDate?: string) => {
+    if (!birthDateStr) return false;
+    let bDay: number | null = null;
+    let bMonth: number | null = null;
+
+    if (birthDateStr.includes('-')) {
+      const parts = birthDateStr.split('-');
+      if (parts.length === 3) {
+        bMonth = parseInt(parts[1], 10);
+        bDay = parseInt(parts[2], 10);
+      }
+    } else if (birthDateStr.includes('.')) {
+      const parts = birthDateStr.split('.');
+      if (parts.length >= 2) {
+        bDay = parseInt(parts[0], 10);
+        bMonth = parseInt(parts[1], 10);
+      }
+    } else if (birthDateStr.includes('/')) {
+      const parts = birthDateStr.split('/');
+      if (parts.length >= 2) {
+        bDay = parseInt(parts[0], 10);
+        bMonth = parseInt(parts[1], 10);
+      }
+    }
+
+    if (bDay === null || bMonth === null || isNaN(bDay) || isNaN(bMonth)) return false;
+
+    let cDay: number | null = null;
+    let cMonth: number | null = null;
+
+    if (classDisplayDate && classDisplayDate.includes('/')) {
+      const parts = classDisplayDate.split('/');
+      cDay = parseInt(parts[0], 10);
+      cMonth = parseInt(parts[1], 10);
+    } else if (classIsoDate && classIsoDate.includes('-')) {
+      const parts = classIsoDate.split('-');
+      cMonth = parseInt(parts[1], 10);
+      cDay = parseInt(parts[2], 10);
+    }
+
+    if (cDay === null || cMonth === null || isNaN(cDay) || isNaN(cMonth)) return false;
+
+    return bDay === cDay && bMonth === cMonth;
+  };
+
   // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI)
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
@@ -286,7 +332,7 @@ export default function DashboardPage() {
           gender: c.płeć || c.gender || '',
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
-          birthDate: c.birthDate || '',
+          birthDate: c.Urodziny || c.birthDate || '',
           blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
           powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
           karnetyKlubowicza: parsedKarnety,
@@ -1986,7 +2032,7 @@ export default function DashboardPage() {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
               // pomijamy
             } else {
-              const [sh = '00', sm = '00'] = (classInfo.start || '00:00').split(':');
+              const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
               const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
 
               // WYŚWIETLAMY TYLKO ZAJĘCIA, KTÓRE SIĘ JESZCZE NIE ODBYŁY (USUWA MINIONE Z PANELU AKTYWNYCH)
@@ -2884,11 +2930,20 @@ export default function DashboardPage() {
                       ? `${osoba.firstName} ${osoba.lastName}`
                       : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
 
+                    const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
+
                     return (
                       <div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
                         <div className="flex items-start justify-between">
                           <div>
-                            <h4 className="font-black text-slate-900 text-sm">{displayName}</h4>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="font-black text-slate-900 text-sm">{displayName}</h4>
+                              {hasBirthdayToday && (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm" title="Dzisiaj ma urodziny!">
+                                  🎂 <span>Urodziny!</span>
+                                </span>
+                              )}
+                            </div>
                             {canSeeThisPersonDetails && (
                               <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
                                 <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
@@ -2989,15 +3044,22 @@ export default function DashboardPage() {
                         ? `${osoba.firstName} ${osoba.lastName}`
                         : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
 
+                      const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
+
                       return (
                         <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
                           <div className="flex items-start justify-between">
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <h4 className="font-black text-slate-900 text-sm">{displayName}</h4>
                                 <span className="bg-blue-200 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded">
                                   #{idx + 1}
                                 </span>
+                                {hasBirthdayToday && (
+                                  <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm" title="Dzisiaj ma urodziny!">
+                                    🎂 <span>Urodziny!</span>
+                                  </span>
+                                )}
                               </div>
                               {canSeeThisPersonDetails && (
                                 <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">

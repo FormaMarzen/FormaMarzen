@@ -2711,3 +2711,4 @@ export default function KlienciPage() {
     </div>
   );
 }
+
