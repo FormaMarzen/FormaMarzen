@@ -29,11 +29,15 @@ interface BookingRules {
   expired_pass_grace_days: number;
   max_daily_bookings: number | null;
   max_daily_same_type_bookings: number;
+  min_participants: number | null;
+  auto_cancel_deadline_minutes: number | null;
   // Mapy indywidualne (klucz: nazwa treningu / karnetu)
   cancel_deadline_per_class: Record<string, number>;
   booking_cutoff_per_class: Record<string, number | null>;
   booking_window_per_pass: Record<string, number>;
   expired_pass_grace_per_pass: Record<string, number>;
+  min_participants_per_class: Record<string, number | null>;
+  auto_cancel_deadline_per_class: Record<string, number | null>;
   updated_at?: string;
 }
 
@@ -53,10 +57,14 @@ const DEFAULT_RULES: BookingRules = {
   expired_pass_grace_days: 15,
   max_daily_bookings: null,
   max_daily_same_type_bookings: 1,
+  min_participants: null,
+  auto_cancel_deadline_minutes: null,
   cancel_deadline_per_class: {},
   booking_cutoff_per_class: {},
   booking_window_per_pass: {},
   expired_pass_grace_per_pass: {},
+  min_participants_per_class: {},
+  auto_cancel_deadline_per_class: {},
 };
 
 export default function ZasadyZapisowPage() {
@@ -113,6 +121,8 @@ export default function ZasadyZapisowPage() {
           booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
           booking_window_per_pass: rulesData.booking_window_per_pass || {},
           expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
+          min_participants_per_class: rulesData.min_participants_per_class || {},
+          auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
         };
         setRules(parsedRules);
         setFormData(parsedRules);
@@ -161,31 +171,35 @@ export default function ZasadyZapisowPage() {
     try {
       setSaving(true);
       let res;
+      const payloadToSave = {
+        cancel_deadline_minutes: formData.cancel_deadline_minutes,
+        booking_cutoff_minutes: formData.booking_cutoff_minutes,
+        booking_window_days: formData.booking_window_days,
+        expired_pass_grace_days: formData.expired_pass_grace_days,
+        max_daily_bookings: formData.max_daily_bookings,
+        max_daily_same_type_bookings: formData.max_daily_same_type_bookings,
+        min_participants: formData.min_participants,
+        auto_cancel_deadline_minutes: formData.auto_cancel_deadline_minutes,
+        cancel_deadline_per_class: formData.cancel_deadline_per_class,
+        booking_cutoff_per_class: formData.booking_cutoff_per_class,
+        booking_window_per_pass: formData.booking_window_per_pass,
+        expired_pass_grace_per_pass: formData.expired_pass_grace_per_pass,
+        min_participants_per_class: formData.min_participants_per_class,
+        auto_cancel_deadline_per_class: formData.auto_cancel_deadline_per_class,
+        updated_at: new Date().toISOString(),
+      };
+
       if (rules.id) {
         res = await supabase
           .from('club_booking_rules')
-          .update({
-            cancel_deadline_minutes: formData.cancel_deadline_minutes,
-            booking_cutoff_minutes: formData.booking_cutoff_minutes,
-            booking_window_days: formData.booking_window_days,
-            expired_pass_grace_days: formData.expired_pass_grace_days,
-            max_daily_bookings: formData.max_daily_bookings,
-            max_daily_same_type_bookings: formData.max_daily_same_type_bookings,
-            cancel_deadline_per_class: formData.cancel_deadline_per_class,
-            booking_cutoff_per_class: formData.booking_cutoff_per_class,
-            booking_window_per_pass: formData.booking_window_per_pass,
-            expired_pass_grace_per_pass: formData.expired_pass_grace_per_pass,
-            updated_at: new Date().toISOString(),
-          })
+          .update(payloadToSave)
           .eq('id', rules.id)
           .select()
           .single();
       } else {
         res = await supabase
           .from('club_booking_rules')
-          .insert([{
-            ...formData,
-          }])
+          .insert([payloadToSave])
           .select()
           .single();
       }
@@ -196,7 +210,7 @@ export default function ZasadyZapisowPage() {
         {
           action_type: 'RULES_UPDATED',
           status: 'SUCCESS',
-          reason: 'Zaktualizowano nadrzędne reguły i listy treningów/karnetów',
+          reason: 'Zaktualizowano nadrzędne reguły, limity oraz warunki autoodwoływania',
           rule_applied: 'ZASADY_ZAPISOW',
           payload: formData,
         },
@@ -264,7 +278,7 @@ export default function ZasadyZapisowPage() {
             📋 ZASADY ZAPISÓW
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            Ustalaj nadrzędne limity i czasy dla każdego treningu oraz każdego rodzaju karnetu osobno.
+            Ustalaj nadrzędne limity, czasy anulowania oraz warunki minimalnej frekwencji dla każdego treningu i karnetu.
           </p>
         </div>
 
@@ -395,6 +409,67 @@ export default function ZasadyZapisowPage() {
                   <span className="text-xs font-black text-slate-800 bg-white px-3 py-1 rounded-xl border border-slate-200">
                     {formatMinutes(val)}
                   </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* SEKCJA NOWA: AUTOMATYCZNE ODWOŁYWANIE PRZY BRAKU MINIMALNEJ LICZBY OSÓB */}
+        <div className="space-y-4 pt-6 border-t border-slate-100">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-purple-50 text-purple-700 rounded-xl border border-purple-100">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-xs font-black text-slate-900 uppercase tracking-widest">
+                  Automatyczne odwoływanie zajęć (Min. frekwencja)
+                </h2>
+                <p className="text-[11px] text-slate-400 font-medium">Minimalna liczba klubowiczów oraz czas weryfikacji kompletu przed startem treningu.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-black text-purple-950 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200">
+                Min. osób: {rules.min_participants ?? 'Brak'}
+              </span>
+              <span className="text-[11px] font-black text-purple-950 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200">
+                Weryfikacja: {formatMinutes(rules.auto_cancel_deadline_minutes)}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {rodzajeZajec.map((trening) => {
+              const minOs = rules.min_participants_per_class?.[trening.nazwa] !== undefined
+                ? rules.min_participants_per_class[trening.nazwa]
+                : rules.min_participants;
+              const cutMins = rules.auto_cancel_deadline_per_class?.[trening.nazwa] !== undefined
+                ? rules.auto_cancel_deadline_per_class[trening.nazwa]
+                : rules.auto_cancel_deadline_minutes;
+
+              return (
+                <div
+                  key={trening.id}
+                  className="flex items-center justify-between p-3.5 bg-slate-50/70 border border-slate-200/60 rounded-2xl hover:bg-slate-50 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: trening.kolor || '#9333ea' }}
+                    />
+                    <span className="text-xs font-bold text-slate-800">{trening.nazwa}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-black text-purple-950 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
+                      👥 {minOs ? `Min: ${minOs}` : 'Brak'}
+                    </span>
+                    <span className="text-[11px] font-black text-slate-800 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
+                      ⏱️ {formatMinutes(cutMins)}
+                    </span>
+                  </div>
                 </div>
               );
             })}
@@ -641,11 +716,102 @@ export default function ZasadyZapisowPage() {
                 </div>
               </div>
 
-              {/* 3. Okno zapisu z wyprzedzeniem */}
+              {/* 3. NOWA SEKCJA: Automatyczne odwołanie zajęć (Min. frekwencja) */}
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b pb-2 gap-2">
+                  <h4 className="font-black text-purple-950 uppercase tracking-wider">
+                    3. Automatyczne odwołanie przy braku minimalnej liczby osób
+                  </h4>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-500 font-bold">Domyślna min. liczba osób:</span>
+                      <input
+                        type="number"
+                        placeholder="Brak"
+                        value={formData.min_participants ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData({ ...formData, min_participants: val === '' ? null : parseInt(val) });
+                        }}
+                        className="w-16 bg-slate-50 border border-slate-300 rounded-lg px-2 py-1 font-bold text-center"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-500 font-bold">Czas weryfikacji (min):</span>
+                      <input
+                        type="number"
+                        placeholder="Brak"
+                        value={formData.auto_cancel_deadline_minutes ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData({ ...formData, auto_cancel_deadline_minutes: val === '' ? null : parseInt(val) });
+                        }}
+                        className="w-20 bg-slate-50 border border-slate-300 rounded-lg px-2 py-1 font-bold text-center"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {rodzajeZajec.map((trening) => (
+                    <div key={trening.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: trening.kolor || '#9333ea' }}
+                        />
+                        <span className="font-bold text-slate-800">{trening.nazwa}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-slate-500 font-bold block mb-0.5">Min. osób:</label>
+                          <input
+                            type="number"
+                            placeholder={formData.min_participants ? String(formData.min_participants) : 'Brak'}
+                            value={formData.min_participants_per_class?.[trening.nazwa] ?? ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFormData({
+                                ...formData,
+                                min_participants_per_class: {
+                                  ...formData.min_participants_per_class,
+                                  [trening.nazwa]: val === '' ? null : parseInt(val),
+                                },
+                              });
+                            }}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 font-bold text-center text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-500 font-bold block mb-0.5">Czas (min):</label>
+                          <input
+                            type="number"
+                            placeholder={formData.auto_cancel_deadline_minutes ? String(formData.auto_cancel_deadline_minutes) : 'Brak'}
+                            value={formData.auto_cancel_deadline_per_class?.[trening.nazwa] ?? ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFormData({
+                                ...formData,
+                                auto_cancel_deadline_per_class: {
+                                  ...formData.auto_cancel_deadline_per_class,
+                                  [trening.nazwa]: val === '' ? null : parseInt(val),
+                                },
+                              });
+                            }}
+                            className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 font-bold text-center text-xs"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 4. Okno zapisu z wyprzedzeniem */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between border-b pb-2">
                   <h4 className="font-black text-emerald-950 uppercase tracking-wider">
-                    3. Okno zapisu z wyprzedzeniem (w dniach)
+                    4. Okno zapisu z wyprzedzeniem (w dniach)
                   </h4>
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-slate-500 font-bold">Wartość domyślna:</span>
@@ -682,11 +848,11 @@ export default function ZasadyZapisowPage() {
                 </div>
               </div>
 
-              {/* 4. Dni na zapis po wygaśnięciu karnetu */}
+              {/* 5. Dni na zapis po wygaśnięciu karnetu */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between border-b pb-2">
                   <h4 className="font-black text-indigo-950 uppercase tracking-wider">
-                    4. Dni na zapis po wygaśnięciu karnetu (Karencja w dniach)
+                    5. Dni na zapis po wygaśnięciu karnetu (Karencja w dniach)
                   </h4>
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-slate-500 font-bold">Wartość domyślna:</span>
@@ -723,10 +889,10 @@ export default function ZasadyZapisowPage() {
                 </div>
               </div>
 
-              {/* 5. Limit zajęć jednego typu dziennie do wyboru */}
+              {/* 6. Limit zajęć jednego typu dziennie do wyboru */}
               <div className="space-y-3 pt-2">
                 <h4 className="font-black text-slate-900 uppercase tracking-wider border-b pb-2">
-                  5. Nadrzędne Limity Dzienne
+                  6. Nadrzędne Limity Dzienne
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   
@@ -871,10 +1037,17 @@ export default function ZasadyZapisowPage() {
               <div className="p-4 bg-sky-50 rounded-2xl border border-sky-100 space-y-2">
                 <h4 className="font-black text-sky-950 uppercase">Indywidualne Ustawienia Treningów i Karnetów</h4>
                 <p>
-                  Możesz zdefiniować inny czas wypisu i inną blokadę startu dla każdego treningu z osobna.
+                  Możesz zdefiniować inny czas wypisu, blokadę startu oraz minimalną liczbę uczestników dla każdego treningu z osobna.
                 </p>
                 <p>
                   Podobnie okno zapisu w przód oraz okres karencji po wygaśnięciu można różnicować w zależności od typu posiadanego karnetu.
+                </p>
+              </div>
+
+              <div className="p-4 bg-purple-50 rounded-2xl border border-purple-100 space-y-1">
+                <h4 className="font-black text-purple-950 uppercase">Automatyczne Odwoływanie</h4>
+                <p>
+                  Jeśli do ustalonego czasu przed zajęciami nie zgłosi się minimalna liczba osób, system może automatycznie anulować sesję i zwolnić blokady.
                 </p>
               </div>
 
