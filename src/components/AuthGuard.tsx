@@ -15,32 +15,7 @@ type Regulation = {
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname() || '';
-
-  const getIsPublic = () => {
-    if (typeof window !== 'undefined') {
-      const browserPath = window.location.pathname.toLowerCase();
-      if (
-        browserPath.includes('/grafik-publiczny') || 
-        browserPath.includes('/login') || 
-        browserPath.includes('/rejestracja')
-      ) {
-        return true;
-      }
-    }
-    const cleanPath = (pathname || '').toLowerCase();
-    return (
-      cleanPath.includes('/grafik-publiczny') || 
-      cleanPath.includes('/login') || 
-      cleanPath.includes('/rejestracja')
-    );
-  };
-
-  const isPublicPath = getIsPublic();
-
-  if (isPublicPath) {
-    return <>{children}</>;
-  }
-
+  
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
@@ -49,8 +24,30 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
+  // Bezpieczna funkcja sprawdzająca ścieżki publiczne (uwzględnia okno przeglądarki od razu)
+  const checkIsPublic = () => {
+    let currentPath = pathname;
+    if (typeof window !== 'undefined') {
+      currentPath = window.location.pathname;
+    }
+    const lowerPath = (currentPath || '').toLowerCase();
+    return (
+      lowerPath === '/login' || 
+      lowerPath.startsWith('/rejestracja') || 
+      lowerPath === '/grafik-publiczny' || 
+      lowerPath.startsWith('/grafik-publiczny')
+    );
+  };
+
+  const isPublicPath = checkIsPublic();
+
+  // Jeśli to ścieżka publiczna, natychmiast przepuszczamy dzieci bez czekania na logikę autoryzacji
+  if (isPublicPath) {
+    return <>{children}</>;
+  }
+
   useEffect(() => {
-    if (getIsPublic()) {
+    if (checkIsPublic()) {
       setIsChecking(false);
       setIsAuthorized(true);
       return;
@@ -61,7 +58,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     const checkAuthAndRegulations = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
-      if (getIsPublic()) {
+      if (checkIsPublic()) {
         if (isMounted) {
           setIsChecking(false);
           setIsAuthorized(true);
@@ -77,20 +74,19 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         return;
       } 
       
-      const email = session.user.email || '';
       if (isMounted) {
         setUserId(session.user.id);
-        setUserEmail(email);
+        setUserEmail(session.user.email ?? null);
       }
       
       let isAdmin = false;
-      if (email.toLowerCase() === 'maciejklaput@gmail.com') {
+      if (session.user.email?.toLowerCase() === 'maciejklaput@gmail.com') {
         isAdmin = true;
       } else {
         const { data: clientData } = await supabase
           .from('klienci')
           .select('rola, role')
-          .ilike('E-mail', email.trim())
+          .ilike('E-mail', (session.user.email || '').trim())
           .maybeSingle();
         const role = clientData?.rola || clientData?.role || session.user.user_metadata?.role;
         isAdmin = (role === 'admin' || role === 'administrator');
@@ -133,7 +129,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     checkAuthAndRegulations();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session && !getIsPublic()) {
+      if (!session && !checkIsPublic()) {
         router.push('/login');
       }
     });
@@ -142,7 +138,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       isMounted = false;
       authListener.subscription.unsubscribe();
     };
-  }, [router, pathname]);
+  }, [pathname, router]);
 
   const handleAccept = async (slug: string) => {
     if (!userId) return;
