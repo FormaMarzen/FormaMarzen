@@ -13,58 +13,38 @@ type Regulation = {
 };
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const nextPathname = usePathname() || '';
+  const pathname = usePathname() || '';
   
+  // Natychmiastowe sprawdzenie ścieżki publicznej na górze komponentu
+  const browserPath = typeof window !== 'undefined' ? window.location.pathname : '';
+  const isPublicPath = 
+    pathname === '/grafik-publiczny' || pathname.startsWith('/grafik-publiczny') ||
+    browserPath === '/grafik-publiczny' || browserPath.startsWith('/grafik-publiczny') ||
+    pathname === '/login' || pathname.startsWith('/login') ||
+    browserPath === '/login' || browserPath.startsWith('/login') ||
+    pathname === '/rejestracja' || pathname.startsWith('/rejestracja') ||
+    browserPath === '/rejestracja' || browserPath.startsWith('/rejestracja');
+
+  // Jeśli to ścieżka publiczna, renderujemy od razu bez żadnych efektów i przekierowań!
+  if (isPublicPath) {
+    return <>{children}</>;
+  }
+
+  const router = useRouter();
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   
-  // Stan przechowujący regulaminy, które muszą zostać natychmiast zaakceptowane
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Funkcja sprawdzająca czy ścieżka jest publiczna
-  const checkIsPublic = (path: string) => {
-    if (!path) return false;
-    const cleanPath = path.toLowerCase().trim();
-    return (
-      cleanPath === '/login' ||
-      cleanPath.startsWith('/login') ||
-      cleanPath === '/rejestracja' ||
-      cleanPath.startsWith('/rejestracja') ||
-      cleanPath === '/grafik-publiczny' ||
-      cleanPath.startsWith('/grafik-publiczny')
-    );
-  };
-
-  // Bezpieczne sprawdzenie ścieżki (uwzględnia window.location, zapobiegając błędowi null z usePathname)
-  const currentPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
-  const isPublicPath = checkIsPublic(currentPath) || checkIsPublic(nextPathname);
-
   useEffect(() => {
-    // Jeżeli jesteśmy na trasie publicznej, natychmiast przerywamy weryfikację
-    if (isPublicPath) {
-      setIsChecking(false);
-      setIsAuthorized(true);
-      return;
-    }
-
     let isMounted = true;
 
     const checkAuthAndRegulations = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
-      const browserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
-      if (checkIsPublic(browserPath)) {
-        if (isMounted) {
-          setIsChecking(false);
-          setIsAuthorized(true);
-        }
-        return;
-      }
-
       if (!session) {
         if (isMounted) {
           setIsChecking(false);
@@ -78,7 +58,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         setUserEmail(session.user.email ?? null);
       }
       
-      // 1. Sprawdzamy czy to administrator (admini nie muszą akceptować regulaminów)
       let isAdmin = false;
       if (session.user.email === 'maciejklaput@gmail.com') {
         isAdmin = true;
@@ -93,21 +72,18 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       }
 
       if (!isAdmin) {
-        // 2. Pobieramy regulaminy, które mają ustawione force_accept_date
         const { data: forcedRegs } = await supabase
           .from('regulations')
           .select('*')
           .not('force_accept_date', 'is', null);
 
         if (forcedRegs && forcedRegs.length > 0) {
-          // 3. Pobieramy akceptacje tego konkretnego użytkownika - sortujemy po dacie malejąco (NAJNOWSZE PIERWSZE)
           const { data: userAcceptances } = await supabase
             .from('regulation_acceptances')
             .select('*')
             .eq('user_id', session.user.id)
             .order('accepted_at', { ascending: false });
 
-          // 4. Filtrujemy te, które wymagają (ponownej) akceptacji
           const toAccept = forcedRegs.filter(reg => {
             const acceptance = userAcceptances?.find(a => a.regulation_slug === reg.slug);
             if (!acceptance) return true;
@@ -131,10 +107,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     
     checkAuthAndRegulations();
 
-    // Listener zmian sesji Supabase
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      const browserPath = typeof window !== 'undefined' ? window.location.pathname : nextPathname;
-      if (!session && !checkIsPublic(browserPath)) {
+      if (!session) {
         router.push('/login');
       }
     });
@@ -143,9 +117,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       isMounted = false;
       authListener.subscription.unsubscribe();
     };
-  }, [nextPathname, router, isPublicPath]);
+  }, [router]);
 
-  // Funkcja do obsługi kliknięcia "Akceptuję" na zablokowanym ekranie
   const handleAccept = async (slug: string) => {
     if (!userId) return;
     setIsAccepting(true);
@@ -168,12 +141,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     setIsAccepting(false);
   };
 
-  // DLA ŚCIEŻEK PUBLICZNYCH NATYCHMIAST RENDERUJEMY ZAWARTOŚĆ BEZ SPRAWDZANIA SESJI
-  if (isPublicPath) {
-    return <>{children}</>;
-  }
-
-  // EKRAN ŁADOWANIA (Weryfikacja dostępu)
   if (isChecking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-400 font-bold uppercase tracking-wider text-xs">
@@ -182,7 +149,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // EKRAN BLOKADY REGULAMINU (App Blocker)
   if (pendingRegulations.length > 0) {
     const currentReg = pendingRegulations[0]; 
     
@@ -230,6 +196,5 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // STANDARDOWY ZWROT DLA ZALOGOWANYCH
   return <>{children}</>;
 }
