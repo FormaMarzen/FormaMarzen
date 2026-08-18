@@ -14,7 +14,7 @@ type Regulation = {
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = usePathname() || '';
   
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
@@ -25,74 +25,78 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Dodano obsługę trasy publicznego grafiku obok logowania i rejestracji
+  // Dokładna i elastyczna weryfikacja ścieżek publicznych
   const isPublicPath = 
     pathname === '/login' || 
-    pathname?.startsWith('/rejestracja') || 
+    pathname.startsWith('/login') ||
+    pathname === '/rejestracja' || 
+    pathname.startsWith('/rejestracja') || 
     pathname === '/grafik-publiczny' || 
-    pathname?.startsWith('/grafik-publiczny');
+    pathname.startsWith('/grafik-publiczny');
 
   useEffect(() => {
+    // Jeżeli jesteśmy na trasie publicznej, całkowicie pomijamy sprawdzanie sesji i przekierowania
+    if (isPublicPath) {
+      setIsChecking(false);
+      setIsAuthorized(true);
+      return;
+    }
+
     const checkAuthAndRegulations = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
-      if (!session && !isPublicPath) {
+      if (!session) {
         router.push('/login');
         return;
       } 
       
-      if (session && !isPublicPath) {
-        setUserId(session.user.id);
-        setUserEmail(session.user.email ?? null);
-        
-        // 1. Sprawdzamy czy to administrator (admini nie muszą akceptować regulaminów)
-        let isAdmin = false;
-        if (session.user.email === 'maciejklaput@gmail.com') {
-          isAdmin = true;
-        } else {
-          const { data: clientData } = await supabase
-            .from('klienci')
-            .select('rola, role')
-            .eq('id', session.user.id)
-            .single();
-          const role = clientData?.rola || clientData?.role || session.user.user_metadata?.role;
-          isAdmin = (role === 'admin' || role === 'administrator');
-        }
+      setUserId(session.user.id);
+      setUserEmail(session.user.email ?? null);
+      
+      // 1. Sprawdzamy czy to administrator (admini nie muszą akceptować regulaminów)
+      let isAdmin = false;
+      if (session.user.email === 'maciejklaput@gmail.com') {
+        isAdmin = true;
+      } else {
+        const { data: clientData } = await supabase
+          .from('klienci')
+          .select('rola, role')
+          .eq('id', session.user.id)
+          .single();
+        const role = clientData?.rola || clientData?.role || session.user.user_metadata?.role;
+        isAdmin = (role === 'admin' || role === 'administrator');
+      }
 
-        if (!isAdmin) {
-          // 2. Pobieramy regulaminy, które mają ustawione force_accept_date
-          const { data: forcedRegs } = await supabase
-            .from('regulations')
+      if (!isAdmin) {
+        // 2. Pobieramy regulaminy, które mają ustawione force_accept_date
+        const { data: forcedRegs } = await supabase
+          .from('regulations')
+          .select('*')
+          .not('force_accept_date', 'is', null);
+
+        if (forcedRegs && forcedRegs.length > 0) {
+          // 3. Pobieramy akceptacje tego konkretnego użytkownika - sortujemy po dacie malejąco (NAJNOWSZE PIERWSZE)
+          const { data: userAcceptances } = await supabase
+            .from('regulation_acceptances')
             .select('*')
-            .not('force_accept_date', 'is', null);
+            .eq('user_id', session.user.id)
+            .order('accepted_at', { ascending: false });
 
-          if (forcedRegs && forcedRegs.length > 0) {
-            // 3. Pobieramy akceptacje tego konkretnego użytkownika - sortujemy po dacie malejąco (NAJNOWSZE PIERWSZE)
-            const { data: userAcceptances } = await supabase
-              .from('regulation_acceptances')
-              .select('*')
-              .eq('user_id', session.user.id)
-              .order('accepted_at', { ascending: false });
+          // 4. Filtrujemy te, które wymagają (ponownej) akceptacji
+          const toAccept = forcedRegs.filter(reg => {
+            const acceptance = userAcceptances?.find(a => a.regulation_slug === reg.slug);
+            if (!acceptance) return true;
+            
+            const forceDate = new Date(reg.force_accept_date).getTime();
+            const acceptedDate = new Date(acceptance.accepted_at).getTime();
+            return acceptedDate < forceDate; 
+          });
 
-            // 4. Filtrujemy te, które wymagają (ponownej) akceptacji
-            const toAccept = forcedRegs.filter(reg => {
-              // find() teraz znajdzie najnowszą akceptację, ponieważ posortowaliśmy tablicę malejąco
-              const acceptance = userAcceptances?.find(a => a.regulation_slug === reg.slug);
-              if (!acceptance) return true; // Brak jakiejkolwiek akceptacji
-              
-              // Sprawdzamy, czy NAJNOWSZA data akceptacji jest starsza niż data wymuszenia
-              const forceDate = new Date(reg.force_accept_date).getTime();
-              const acceptedDate = new Date(acceptance.accepted_at).getTime();
-              return acceptedDate < forceDate; 
-            });
-
-            setPendingRegulations(toAccept);
-          }
+          setPendingRegulations(toAccept);
         }
-        
-        setIsAuthorized(true);
       }
       
+      setIsAuthorized(true);
       setIsChecking(false);
     };
     
@@ -121,7 +125,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       }]);
 
     if (!error) {
-      // Usuwamy zaakceptowany regulamin z kolejki "do akceptacji"
       setPendingRegulations(prev => prev.filter(r => r.slug !== slug));
     } else {
       console.error(error);
@@ -131,8 +134,13 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     setIsAccepting(false);
   };
 
+  // Dla ścieżek publicznych natychmiast renderujemy dzieci bez blokad
+  if (isPublicPath) {
+    return <>{children}</>;
+  }
+
   // EKRAN ŁADOWANIA (Weryfikacja dostępu)
-  if (isChecking && !isPublicPath) {
+  if (isChecking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-400 font-bold uppercase tracking-wider text-xs">
         Weryfikacja dostępu...
@@ -141,7 +149,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   // EKRAN BLOKADY (App Blocker)
-  if (pendingRegulations.length > 0 && !isPublicPath) {
+  if (pendingRegulations.length > 0) {
     const currentReg = pendingRegulations[0]; 
     
     return (
