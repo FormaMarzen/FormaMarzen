@@ -16,7 +16,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname() || '';
 
-  // Natychmiastowe sprawdzenie ścieżki (uwzględnia okno przeglądarki od razu przy starcie)
   const getIsPublic = () => {
     if (typeof window !== 'undefined') {
       const browserPath = window.location.pathname.toLowerCase();
@@ -28,7 +27,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         return true;
       }
     }
-    const cleanPath = pathname.toLowerCase();
+    const cleanPath = (pathname || '').toLowerCase();
     return (
       cleanPath.includes('/grafik-publiczny') || 
       cleanPath.includes('/login') || 
@@ -38,7 +37,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   const isPublicPath = getIsPublic();
 
-  // Jeśli to ścieżka publiczna, renderujemy zawartość NATYCHMIAST bez żadnych sprawdzarek
   if (isPublicPath) {
     return <>{children}</>;
   }
@@ -52,7 +50,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [isAccepting, setIsAccepting] = useState(false);
 
   useEffect(() => {
-    // Podwójne zabezpieczenie wewnątrz useEffect
     if (getIsPublic()) {
       setIsChecking(false);
       setIsAuthorized(true);
