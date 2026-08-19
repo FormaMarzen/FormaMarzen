@@ -2087,7 +2087,7 @@ export default function DashboardPage() {
         status: 'SUCCESS',
         reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
         rule_applied: 'waitlist_auto_promote',
-        payload: { klient_id:制作: pierwszaRezerwa.id, class_key: classKey }
+        payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
       }]);
     }
 
