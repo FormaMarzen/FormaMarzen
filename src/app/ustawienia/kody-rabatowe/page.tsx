@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../../raporty/klienci/supabase'; // Upewnij się, że ścieżka jest poprawna
+import { supabase } from '../../raporty/klienci/supabase'; 
 
 type KodRabatowy = {
   id: string;
@@ -13,12 +13,13 @@ type KodRabatowy = {
   limit_na_osobe: number;
   data_zakonczenia: string | null;
   wszystkie_karnety: boolean;
-  wszystkie_produkty: boolean;
+  wybrane_karnety: string[];
   wykorzystano_ogolnie: number;
 };
 
 export default function KodyRabatowePage() {
   const [kody, setKody] = useState<KodRabatowy[]>([]);
+  const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -33,12 +34,13 @@ export default function KodyRabatowePage() {
     limit_na_osobe: '1',
     data_zakonczenia: '',
     wszystkie_karnety: true,
-    wszystkie_produkty: true,
+    wybrane_karnety: [] as string[],
     aktywny: true,
   });
 
   useEffect(() => {
     fetchKody();
+    fetchKarnety();
   }, []);
 
   const fetchKody = async () => {
@@ -51,9 +53,25 @@ export default function KodyRabatowePage() {
     if (error) {
       console.error('Błąd pobierania kodów:', error);
     } else {
-      setKody(data || []);
+      // Mapowanie w celu zapewnienia, że wybrane_karnety to zawsze tablica
+      const parsedData = (data || []).map(kod => ({
+        ...kod,
+        wybrane_karnety: kod.wybrane_karnety || []
+      }));
+      setKody(parsedData);
     }
     setIsLoading(false);
+  };
+
+  const fetchKarnety = async () => {
+    const { data, error } = await supabase
+      .from('karnety')
+      .select('id, nazwa')
+      .order('nazwa', { ascending: true });
+    
+    if (!error && data) {
+      setDostepneKarnety(data);
+    }
   };
 
   const openSidebar = (kod?: KodRabatowy) => {
@@ -67,7 +85,7 @@ export default function KodyRabatowePage() {
         limit_na_osobe: kod.limit_na_osobe.toString(),
         data_zakonczenia: kod.data_zakonczenia || '',
         wszystkie_karnety: kod.wszystkie_karnety,
-        wszystkie_produkty: kod.wszystkie_produkty,
+        wybrane_karnety: kod.wybrane_karnety || [],
         aktywny: kod.aktywny,
       });
     } else {
@@ -80,11 +98,22 @@ export default function KodyRabatowePage() {
         limit_na_osobe: '1',
         data_zakonczenia: '',
         wszystkie_karnety: true,
-        wszystkie_produkty: true,
+        wybrane_karnety: [],
         aktywny: true,
       });
     }
     setIsSidebarOpen(true);
+  };
+
+  const handleToggleKarnet = (nazwaKarnetu: string) => {
+    setFormData(prev => {
+      const currentList = prev.wybrane_karnety;
+      if (currentList.includes(nazwaKarnetu)) {
+        return { ...prev, wybrane_karnety: currentList.filter(n => n !== nazwaKarnetu) };
+      } else {
+        return { ...prev, wybrane_karnety: [...currentList, nazwaKarnetu] };
+      }
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -99,7 +128,7 @@ export default function KodyRabatowePage() {
       limit_na_osobe: parseInt(formData.limit_na_osobe) || 1,
       data_zakonczenia: formData.data_zakonczenia || null,
       wszystkie_karnety: formData.wszystkie_karnety,
-      wszystkie_produkty: formData.wszystkie_produkty,
+      wybrane_karnety: formData.wszystkie_karnety ? [] : formData.wybrane_karnety,
       aktywny: formData.aktywny,
     };
 
@@ -226,14 +255,14 @@ export default function KodyRabatowePage() {
             <div className="flex items-center justify-between p-4 bg-white border-b border-slate-200 shrink-0">
               <button 
                 onClick={() => setIsSidebarOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-700 transition-colors"
+                className="p-2 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
               >
                 ✕
               </button>
               <button 
                 onClick={handleSave}
                 disabled={isSaving}
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-6 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 uppercase tracking-wider disabled:opacity-50"
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-6 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 uppercase tracking-wider disabled:opacity-50 cursor-pointer"
               >
                 <span>💾</span> {isSaving ? 'Zapisywanie...' : 'Zapisz'}
               </button>
@@ -350,19 +379,29 @@ export default function KodyRabatowePage() {
                   </label>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-700">Obejmuje wszystkie produkty w sklepie?</span>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      className="sr-only peer"
-                      checked={formData.wszystkie_produkty}
-                      onChange={(e) => setFormData({...formData, wszystkie_produkty: e.target.checked})}
-                    />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
-                  </label>
-                </div>
-
+                {/* Rozwijana lista dostępnych karnetów z bazy */}
+                {!formData.wszystkie_karnety && (
+                  <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2 max-h-48 overflow-y-auto">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-200 mb-2">
+                      Zaznacz karnety objęte promocją:
+                    </div>
+                    {dostepneKarnety.length === 0 ? (
+                      <div className="text-xs text-slate-500 italic">Brak zdefiniowanych karnetów.</div>
+                    ) : (
+                      dostepneKarnety.map((karnet) => (
+                        <label key={karnet.id} className="flex items-center gap-2.5 py-1.5 px-2 hover:bg-white rounded-lg cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                          <input 
+                            type="checkbox"
+                            checked={formData.wybrane_karnety.includes(karnet.nazwa)}
+                            onChange={() => handleToggleKarnet(karnet.nazwa)}
+                            className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                          />
+                          <span className="font-semibold text-slate-800 text-xs">{karnet.nazwa}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                )}
               </section>
 
             </div>

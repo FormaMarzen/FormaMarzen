@@ -60,6 +60,13 @@ export default function KarnetyPage() {
       return;
     }
 
+    const currentPassName = isExtendModalOpen ? passToExtend?.nazwa : selectedBuyPass;
+
+    if (!currentPassName) {
+      setDiscountCodeStatus({ type: 'error', message: 'Najpierw wybierz karnet' });
+      return;
+    }
+
     const { data, error } = await supabase
       .from('kody_rabatowe')
       .select('*')
@@ -84,6 +91,14 @@ export default function KarnetyPage() {
     if (data.limit_ogolny > 0 && data.wykorzystano_ogolnie >= data.limit_ogolny) {
        setDiscountCodeStatus({ type: 'error', message: 'Limit użyć tego kodu został wyczerpany' });
        return;
+    }
+
+    // SPRAWDZENIE CZY KOD OBOWIĄZUJE NA WYBRANY KARNET
+    if (!data.wszystkie_karnety && Array.isArray(data.wybrane_karnety)) {
+      if (!data.wybrane_karnety.includes(currentPassName)) {
+        setDiscountCodeStatus({ type: 'error', message: `Ten kod rabatowy nie obejmuje karnetu: ${currentPassName}` });
+        return;
+      }
     }
 
     setAppliedDiscountCode(data);
@@ -1626,7 +1641,10 @@ export default function KarnetyPage() {
                     <select
                       required
                       value={selectedBuyPass}
-                      onChange={(e) => setSelectedBuyPass(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedBuyPass(e.target.value);
+                        resetDiscountState();
+                      }}
                       className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer text-slate-800"
                     >
                       <option value="" disabled>-- Wybierz karnet --</option>
