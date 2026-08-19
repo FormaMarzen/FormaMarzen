@@ -12,7 +12,7 @@ export default function KarnetyPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
   
-  // NOWOCZESNY SYSTEM POWIADOMIEŃ (TOAST)
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST (JAK NA STRONIE GŁÓWNEJ)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -613,7 +613,7 @@ export default function KarnetyPage() {
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
-      showToast(`Błąd aktualizacji: ${updateError.message}`, 'error');
+      showToast(`Błąd aktualizacji bazy danych: ${updateError.message}`, 'error');
       return;
     }
 
@@ -2110,19 +2110,26 @@ export default function KarnetyPage() {
           );
         })()}
 
-        {/* NOWOCZESNE POWIADOMIENIE TOAST NA DOLE EKRANU */}
+        {/* NOWOCZESNE POWIADOMIENIE TOAST DOKŁADNIE JAK NA STRONIE GŁÓWNEJ */}
         {toast && (
-          <div className="fixed bottom-6 right-6 z-[100] max-w-sm w-full animate-in fade-in slide-in-from-bottom-5 duration-300">
-            <div className={`p-4 rounded-2xl shadow-2xl border flex items-center gap-3 text-xs font-black uppercase tracking-wider backdrop-blur-md ${
-              toast.type === 'success' ? 'bg-emerald-950/90 text-emerald-200 border-emerald-500/30' :
-              toast.type === 'error' ? 'bg-rose-950/90 text-rose-200 border-rose-500/30' :
-              'bg-slate-900/90 text-sky-200 border-sky-500/30'
+          <div className="fixed bottom-6 right-6 z-[100] animate-in fade-in slide-in-from-bottom-5 duration-300 pointer-events-none">
+            <div className={`px-5 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border ${
+              toast.type === 'error'
+                ? 'bg-slate-900 border-rose-500/30 text-white'
+                : toast.type === 'info'
+                ? 'bg-slate-900 border-sky-500/30 text-white'
+                : 'bg-slate-900 border-slate-800 text-white'
             }`}>
-              <span className="text-xl">
-                {toast.type === 'success' ? '✅' : toast.type === 'error' ? '⚠️' : 'ℹ️'}
+              <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
+                toast.type === 'error' ? 'bg-rose-600 text-white' :
+                toast.type === 'info' ? 'bg-sky-600 text-white' :
+                'bg-emerald-600 text-white'
+              }`}>
+                {toast.type === 'error' ? '✕' : toast.type === 'info' ? 'ℹ' : '✓'}
+              </div>
+              <span className="text-xs sm:text-sm font-semibold text-white pr-2">
+                {toast.message}
               </span>
-              <div className="flex-1">{toast.message}</div>
-              <button onClick={() => setToast(null)} className="text-slate-400 hover:text-white cursor-pointer ml-2">✕</button>
             </div>
           </div>
         )}
@@ -2319,7 +2326,7 @@ export default function KarnetyPage() {
                       placeholder="np. 8%, 23%, ZW"
                       value={stawkaVat}
                       onChange={(e) => setStawkaVat(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
                     />
                   </div>
                 </div>
@@ -2521,17 +2528,24 @@ export default function KarnetyPage() {
 
       {/* NOWOCZESNE POWIADOMIENIE TOAST DLA ADMINA */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-[100] max-w-sm w-full animate-in fade-in slide-in-from-bottom-5 duration-300">
-          <div className={`p-4 rounded-2xl shadow-2xl border flex items-center gap-3 text-xs font-black uppercase tracking-wider backdrop-blur-md ${
-            toast.type === 'success' ? 'bg-emerald-950/90 text-emerald-200 border-emerald-500/30' :
-            toast.type === 'error' ? 'bg-rose-950/90 text-rose-200 border-rose-500/30' :
-            'bg-slate-900/90 text-sky-200 border-sky-500/30'
+        <div className="fixed bottom-6 right-6 z-[100] animate-in fade-in slide-in-from-bottom-5 duration-300 pointer-events-none">
+          <div className={`px-5 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border ${
+            toast.type === 'error'
+              ? 'bg-slate-900 border-rose-500/30 text-white'
+              : toast.type === 'info'
+              ? 'bg-slate-900 border-sky-500/30 text-white'
+              : 'bg-slate-900 border-slate-800 text-white'
           }`}>
-            <span className="text-xl">
-              {toast.type === 'success' ? '✅' : toast.type === 'error' ? '⚠️' : 'ℹ️'}
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
+              toast.type === 'error' ? 'bg-rose-600 text-white' :
+              toast.type === 'info' ? 'bg-sky-600 text-white' :
+              'bg-emerald-600 text-white'
+            }`}>
+              {toast.type === 'error' ? '✕' : toast.type === 'info' ? 'ℹ' : '✓'}
+            </div>
+            <span className="text-xs sm:text-sm font-semibold text-white pr-2">
+              {toast.message}
             </span>
-            <div className="flex-1">{toast.message}</div>
-            <button onClick={() => setToast(null)} className="text-slate-400 hover:text-white cursor-pointer ml-2">✕</button>
           </div>
         </div>
       )}
