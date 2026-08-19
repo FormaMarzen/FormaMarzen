@@ -12,6 +12,16 @@ export default function KarnetyPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
   
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ (TOAST)
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(null);
+    }, 4000);
+  };
+
   // Stany dla strefy klubowicza (klient przeglądający swój karnet)
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
@@ -327,9 +337,7 @@ export default function KarnetyPage() {
           let meta: Record<string, any> = {};
           try {
             meta = JSON.parse(item.inne_ustawienia || '{}');
-          } catch (e) {
-            console.log("Brak dodatkowych ustawień dla:", item.nazwa);
-          }
+          } catch (e) {}
 
           return {
             id: item.id,
@@ -605,7 +613,7 @@ export default function KarnetyPage() {
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
-      alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
+      showToast(`Błąd aktualizacji: ${updateError.message}`, 'error');
       return;
     }
 
@@ -630,7 +638,7 @@ export default function KarnetyPage() {
       wallet: nowyStanPortfelaStr
     });
     
-    alert(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony za kwotę ${cenaStr}.`);
+    showToast(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony za kwotę ${cenaStr}.`, 'success');
     setIsExtendModalOpen(false);
     resetDiscountState();
     loadData();
@@ -796,7 +804,7 @@ export default function KarnetyPage() {
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
-      alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
+      showToast(`Błąd aktualizacji: ${updateError.message}`, 'error');
       return;
     }
 
@@ -820,7 +828,7 @@ export default function KarnetyPage() {
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
     });
-    alert(`Gratulacje! Zakupiono karnet za kwotę ${cenaStr} (Ważny do: ${nowaDataWygasnieciaStr}).`);
+    showToast(`Gratulacje! Aktywowano karnet za kwotę ${cenaStr}.`, 'success');
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
     resetDiscountState();
@@ -1054,7 +1062,7 @@ export default function KarnetyPage() {
       historiaZawieszenGlobalna: updatedGlobalHistory
     });
 
-    alert(`Pomyślnie zapisano zawieszenie. System automatycznie wypisał Cię z zajęć w wybranym okresie.`);
+    showToast(`Pomyślnie zawieszono karnet na okres ${requestedDays} dni.`, 'success');
     setIsSuspendModalOpen(false);
     setSuspendStartDate('');
     setSuspendEndDate('');
@@ -1136,7 +1144,7 @@ export default function KarnetyPage() {
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
     if (updateError) {
-      alert(`Błąd aktualizacji bazy danych: ${updateError.message}`);
+      showToast(`Błąd aktualizacji: ${updateError.message}`, 'error');
       return;
     }
 
@@ -1146,7 +1154,7 @@ export default function KarnetyPage() {
       historiaZawieszenGlobalna: updatedGlobalHistory
     });
 
-    alert(`Karnet odwieszony! Zużyto ${actualDays} dni z limitu. Data ważności przedłużona do: ${nowaDataWygasnieciaStr}`);
+    showToast(`Karnet odwieszony! Zużyto ${actualDays} dni z limitu. Data ważności przedłużona do: ${nowaDataWygasnieciaStr}`, 'success');
     setIsUnsuspendModalOpen(false);
   };
 
@@ -1156,6 +1164,217 @@ export default function KarnetyPage() {
   });
 
   const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd);
+
+  const handleClientSuspendSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !currentUser.karnetyKlubowicza || currentUser.karnetyKlubowicza.length === 0) return;
+    
+    let sOd = clientSuspendStartDate || todayStr;
+    let sDo = clientSuspendEndDate;
+    if (clientSuspendMode === 'days') {
+      sOd = todayStr;
+      const dni = parseInt(clientSuspendDays || '0', 10);
+      if (dni <= 0) { showToast("Liczba dni musi być większa od zera!", 'error'); return; }
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + dni);
+      sDo = endDate.toISOString().split('T')[0];
+    }
+    
+    if (sOd < todayStr) {
+      showToast("Data rozpoczęcia zawieszenia nie może być w przeszłości!", 'error');
+      return;
+    }
+    if (sDo < sOd) {
+      showToast("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!", 'error');
+      return;
+    }
+
+    const requestedDays = getDaysBetween(sOd, sDo);
+    const targetKarnet = currentUser.karnetyKlubowicza[0];
+    const isContract = targetKarnet.isContract12M;
+
+    if (isContract) {
+      const daysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
+      if (requestedDays > daysLeft) {
+        showToast(`Przekroczono limit zawieszenia. Pozostało Ci ${daysLeft} dni z rocznej puli 30 dni.`, 'error');
+        return;
+      }
+    } else {
+      if (requestedDays > 14) {
+        showToast("Jednorazowe zawieszenie nie może być dłuższe niż 14 dni.", 'error');
+        return;
+      }
+
+      const startObj = new Date(sOd);
+      const month = startObj.getMonth(); 
+      const year = startObj.getFullYear();
+      const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
+
+      if (month === 8) {
+        const usedInVacation = globalHistory.some((susp: any) => {
+          const hStart = new Date(susp.od);
+          return hStart.getFullYear() === year && (hStart.getMonth() === 6 || hStart.getMonth() === 7);
+        });
+        if (usedInVacation) {
+          showToast("Jeśli karnet był zawieszany w wakacje, nie można go zawiesić we wrześniu.", 'error');
+          return;
+        }
+      }
+
+      const isVacation = (month === 6 || month === 7); 
+      const quarter = Math.floor(month / 3) + 1;
+      let sumDays = 0;
+      let countSusp = 0;
+
+      globalHistory.forEach((susp: any) => {
+        const hStart = new Date(susp.od);
+        if (isVacation && hStart.getFullYear() === year && hStart.getMonth() === month) {
+          sumDays += (susp.status === 'aktywne' ? susp.planowane_dni : susp.dni);
+          countSusp++;
+        } else if (!isVacation && hStart.getFullYear() === year && Math.floor(hStart.getMonth() / 3) + 1 === quarter && hStart.getMonth() !== 6 && hStart.getMonth() !== 7) {
+          sumDays += (susp.status === 'aktywne' ? susp.planowane_dni : susp.dni);
+          countSusp++;
+        }
+      });
+
+      if (isVacation && countSusp >= 1) {
+        showToast("Wykorzystano limit zawieszeń wakacyjnych (1 raz w miesiącu).", 'error');
+        return;
+      }
+      if (!isVacation && countSusp >= 2) {
+        showToast("Wykorzystano limit 2 zawieszeń w bieżącym kwartale.", 'error');
+        return;
+      }
+      if (sumDays + requestedDays > 14) {
+        showToast(`Pozostało tylko ${14 - sumDays} dni zawieszenia w tym okresie.`, 'error');
+        return;
+      }
+    }
+
+    const updatedKarnetyList = currentUser.karnetyKlubowicza.map((k: any, idx: number) => {
+      if (idx === 0) {
+        return { ...k, zawieszonyOd: sOd, zawieszonyDo: sDo, statusTekst: `Zawieszony (od ${sOd} do ${sDo})` };
+      }
+      return k;
+    });
+
+    const newGlobalSuspension = {
+      id: Date.now(),
+      karnetId: targetKarnet.id,
+      karnetNazwa: targetKarnet.nazwa,
+      isContract: isContract || false,
+      od: sOd,
+      planowane_do: sDo,
+      do: '-',
+      planowane_dni: requestedDays,
+      dni: 0,
+      status: 'aktywne',
+      utworzono: new Date().toISOString()
+    };
+
+    const updatedGlobalHistory = [...(currentUser.historiaZawieszenGlobalna || []), newGlobalSuspension];
+
+    const dbPayload: any = {
+      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory
+    };
+
+    const { error } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+    if (error) {
+      showToast("Błąd podczas zawieszania: " + error.message, 'error');
+      return;
+    }
+
+    await handleAutoWypiszPoZawieszeniu(currentUser.id, sOd, sDo, targetKarnet.nazwa);
+
+    setCurrentUser({
+      ...currentUser,
+      karnetyKlubowicza: updatedKarnetyList,
+      historiaZawieszenGlobalna: updatedGlobalHistory
+    });
+
+    showToast(`Twój karnet został pomyślnie zawieszony na ${requestedDays} dni!`, 'success');
+    setIsClientSuspendModalOpen(false);
+  };
+
+  const handleClientOdwiesKarnet = async (karnetTarget: any) => {
+    if (!currentUser || !karnetTarget.zawieszonyOd) return;
+    const dzisiaj = new Date();
+    const start = new Date(karnetTarget.zawieszonyOd);
+    dzisiaj.setHours(0, 0, 0, 0); start.setHours(0, 0, 0, 0);
+    const plannedEnd = new Date(karnetTarget.zawieszonyDo);
+    plannedEnd.setHours(0,0,0,0);
+
+    let actualEnd = dzisiaj;
+    if (dzisiaj < start) actualEnd = start;
+    else if (dzisiaj > plannedEnd) actualEnd = plannedEnd;
+
+    let actualDays = 0;
+    if (dzisiaj >= start) {
+      actualDays = getDaysBetween(karnetTarget.zawieszonyOd, actualEnd.toISOString().split('T')[0]);
+    }
+    
+    let nowaDataWygasnieciaStr = karnetTarget.waznyDo;
+    if (actualDays > 0 && karnetTarget.waznyDo) {
+      const parts = karnetTarget.waznyDo.split('-');
+      if (parts.length === 3) {
+        const oldExpDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        oldExpDate.setDate(oldExpDate.getDate() + actualDays);
+        nowaDataWygasnieciaStr = `${oldExpDate.getFullYear()}-${String(oldExpDate.getMonth() + 1).padStart(2, '0')}-${String(oldExpDate.getDate()).padStart(2, '0')}`;
+      }
+    }
+
+    let updatedSuspensionDaysLeft = karnetTarget.contractSuspensionDaysLeft;
+    if (karnetTarget.isContract12M) {
+      const currentPool = karnetTarget.contractSuspensionDaysLeft !== undefined ? karnetTarget.contractSuspensionDaysLeft : 30;
+      updatedSuspensionDaysLeft = Math.max(0, currentPool - actualDays);
+    }
+
+    const updatedGlobalHistory = (currentUser.historiaZawieszenGlobalna || []).map((susp: any) => {
+      if (susp.status === 'aktywne' && susp.karnetId?.toString() === karnetTarget.id?.toString()) {
+        return {
+          ...susp,
+          do: actualEnd.toISOString().split('T')[0],
+          dni: actualDays,
+          status: 'zakończone'
+        };
+      }
+      return susp;
+    });
+
+    const updatedKarnetyList = currentUser.karnetyKlubowicza.map((k: any) => {
+      if (k.id === karnetTarget.id) {
+        return { 
+          ...k, 
+          waznyDo: nowaDataWygasnieciaStr, 
+          statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
+          zawieszonyOd: null, 
+          zawieszonyDo: null, 
+          contractSuspensionDaysLeft: updatedSuspensionDaysLeft
+        };
+      }
+      return k;
+    });
+
+    const dbPayload: any = {
+      karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
+      historiaZawieszenGlobalna: typeof currentUser.historiaZawieszenGlobalna === 'string' ? JSON.stringify(updatedGlobalHistory) : updatedGlobalHistory
+    };
+
+    const { error } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+    if (error) {
+      showToast("Błąd podczas odwieszania: " + error.message, 'error');
+      return;
+    }
+
+    setCurrentUser({
+      ...currentUser,
+      karnetyKlubowicza: updatedKarnetyList,
+      historiaZawieszenGlobalna: updatedGlobalHistory
+    });
+
+    showToast(`Karnet został odwieszony! Ważność przedłużona o ${actualDays} dni.`, 'success');
+  };
 
   // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
   const handleSave = async (e: React.FormEvent) => {
@@ -1227,10 +1446,10 @@ export default function KarnetyPage() {
 
       loadData(); 
       setIsModalOpen(false);
+      showToast("Zapisano pomyślnie!", 'success');
       
     } catch (error: any) {
-      console.error("Szczegóły błędu bazy danych:", error);
-      alert(`Błąd zapisu: ${error.message || ''} | Code: ${error.code || ''}`);
+      showToast(`Błąd zapisu: ${error.message || ''}`, 'error');
     }
   };
 
@@ -1240,9 +1459,9 @@ export default function KarnetyPage() {
         const { error } = await supabase.from('karnety').delete().eq('id', id);
         if (error) throw error;
         loadData();
+        showToast("Usunięto pomyślnie!", 'success');
       } catch (error: any) {
-        console.error("Błąd podczas usuwania:", error);
-        alert(`Nie udało się usunąć: ${error.message || JSON.stringify(error)}`);
+        showToast(`Nie udało się usunąć: ${error.message}`, 'error');
       }
     }
   };
@@ -1256,7 +1475,7 @@ export default function KarnetyPage() {
     const effectiveDiscount = getEffectiveDiscount(currentUser);
 
     return (
-      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-24 font-sans antialiased">
+      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-24 font-sans antialiased relative">
         
         {/* BANER INFORMACYJNY O AKTYWNYM RABACIE */}
         {effectiveDiscount.percent > 0 && (
@@ -1425,7 +1644,7 @@ export default function KarnetyPage() {
                 <button 
                   onClick={() => {
                     if (activePassesForSuspend.length === 0) {
-                      alert('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić.');
+                      showToast('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić.', 'info');
                       return;
                     }
                     setPassToSuspendId(activePassesForSuspend[0].id.toString());
@@ -1772,7 +1991,7 @@ export default function KarnetyPage() {
                       <div className="font-black uppercase tracking-wider text-[11px]">Kalkulacja umowy 12 miesięcy:</div>
                       <div className="text-[11px] space-y-1">
                         <div className="flex justify-between">
-                          <span>Wyrównanie za bieżący m-c ({contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni):</span>
+                          <span>Wyrównanie za bieżący m-c ({contractInfo.remainingDays}/{contractInfo.totalDaysInMonth} dni):</span>
                           <strong>{contractInfo.proRataFirstMonth.toFixed(2)} PLN</strong>
                         </div>
                         <div className="flex justify-between text-slate-500">
@@ -1836,7 +2055,7 @@ export default function KarnetyPage() {
                         </div>
                       )}
                       <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                        <span>Do zapłaty dzisiaj:</span>
+                        <span>Do zapłaty:</span>
                         <span className="text-emerald-700 font-bold">{discountedPrice.toFixed(2)} PLN</span>
                       </div>
                     </div>
@@ -1890,13 +2109,31 @@ export default function KarnetyPage() {
             </div>
           );
         })()}
+
+        {/* NOWOCZESNE POWIADOMIENIE TOAST NA DOLE EKRANU */}
+        {toast && (
+          <div className="fixed bottom-6 right-6 z-[100] max-w-sm w-full animate-in fade-in slide-in-from-bottom-5 duration-300">
+            <div className={`p-4 rounded-2xl shadow-2xl border flex items-center gap-3 text-xs font-black uppercase tracking-wider backdrop-blur-md ${
+              toast.type === 'success' ? 'bg-emerald-950/90 text-emerald-200 border-emerald-500/30' :
+              toast.type === 'error' ? 'bg-rose-950/90 text-rose-200 border-rose-500/30' :
+              'bg-slate-900/90 text-sky-200 border-sky-500/30'
+            }`}>
+              <span className="text-xl">
+                {toast.type === 'success' ? '✅' : toast.type === 'error' ? '⚠️' : 'ℹ️'}
+              </span>
+              <div className="flex-1">{toast.message}</div>
+              <button onClick={() => setToast(null)} className="text-slate-400 hover:text-white cursor-pointer ml-2">✕</button>
+            </div>
+          </div>
+        )}
+
       </div>
     );
   }
 
   // PANEL ADMINISTRATORA / TRENERA (Zarządzanie cennikiem karnetów)
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased">
+    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased relative">
       
       {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
@@ -2278,6 +2515,23 @@ export default function KarnetyPage() {
 
             </form>
 
+          </div>
+        </div>
+      )}
+
+      {/* NOWOCZESNE POWIADOMIENIE TOAST DLA ADMINA */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[100] max-w-sm w-full animate-in fade-in slide-in-from-bottom-5 duration-300">
+          <div className={`p-4 rounded-2xl shadow-2xl border flex items-center gap-3 text-xs font-black uppercase tracking-wider backdrop-blur-md ${
+            toast.type === 'success' ? 'bg-emerald-950/90 text-emerald-200 border-emerald-500/30' :
+            toast.type === 'error' ? 'bg-rose-950/90 text-rose-200 border-rose-500/30' :
+            'bg-slate-900/90 text-sky-200 border-sky-500/30'
+          }`}>
+            <span className="text-xl">
+              {toast.type === 'success' ? '✅' : toast.type === 'error' ? '⚠️' : 'ℹ️'}
+            </span>
+            <div className="flex-1">{toast.message}</div>
+            <button onClick={() => setToast(null)} className="text-slate-400 hover:text-white cursor-pointer ml-2">✕</button>
           </div>
         </div>
       )}
