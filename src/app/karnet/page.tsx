@@ -39,7 +39,84 @@ export default function KarnetyPage() {
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [passToExtend, setPassToExtend] = useState<any>(null);
 
+  // KODY RABATOWE
+  const [discountCodeInput, setDiscountCodeInput] = useState('');
+  const [appliedDiscountCode, setAppliedDiscountCode] = useState<any>(null);
+  const [discountCodeStatus, setDiscountCodeStatus] = useState({ type: '', message: '' });
+
   const todayStr = new Date().toISOString().split('T')[0];
+
+  const resetDiscountState = () => {
+    setDiscountCodeInput('');
+    setAppliedDiscountCode(null);
+    setDiscountCodeStatus({ type: '', message: '' });
+  };
+
+  const handleApplyDiscountCode = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    setDiscountCodeStatus({ type: 'loading', message: 'Sprawdzanie kodu...' });
+    if (!discountCodeInput.trim()) {
+      setDiscountCodeStatus({ type: 'error', message: 'Wpisz kod rabatowy' });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('kody_rabatowe')
+      .select('*')
+      .ilike('kod', discountCodeInput.trim())
+      .maybeSingle();
+
+    if (error || !data) {
+      setDiscountCodeStatus({ type: 'error', message: 'Nieprawidłowy lub nieistniejący kod' });
+      return;
+    }
+
+    if (!data.aktywny) {
+      setDiscountCodeStatus({ type: 'error', message: 'Ten kod jest nieaktywny' });
+      return;
+    }
+
+    if (data.data_zakonczenia && new Date(data.data_zakonczenia) < new Date(new Date().setHours(0,0,0,0))) {
+      setDiscountCodeStatus({ type: 'error', message: 'Ten kod stracił ważność' });
+      return;
+    }
+
+    if (data.limit_ogolny > 0 && data.wykorzystano_ogolnie >= data.limit_ogolny) {
+       setDiscountCodeStatus({ type: 'error', message: 'Limit użyć tego kodu został wyczerpany' });
+       return;
+    }
+
+    setAppliedDiscountCode(data);
+    setDiscountCodeStatus({ type: 'success', message: `Zastosowano rabat: ${data.wartosc_znizki}${data.typ_znizki === 'procentowa' ? '%' : ' PLN'}` });
+  };
+
+  const calculateFinalPrice = (basePriceNum: number, userEffectiveDiscount: any, appliedCode: any) => {
+    let finalPrice = basePriceNum;
+    let appliedLabel = '';
+    
+    if (appliedCode) {
+      if (appliedCode.typ_znizki === 'procentowa') {
+        finalPrice = basePriceNum * (1 - appliedCode.wartosc_znizki / 100);
+        appliedLabel = `(-${appliedCode.wartosc_znizki}% kod: ${appliedCode.kod})`;
+      } else {
+        finalPrice = basePriceNum - appliedCode.wartosc_znizki;
+        appliedLabel = `(-${appliedCode.wartosc_znizki} PLN kod: ${appliedCode.kod})`;
+      }
+    } else if (userEffectiveDiscount.percent > 0) {
+      finalPrice = basePriceNum * (1 - userEffectiveDiscount.percent / 100);
+      appliedLabel = userEffectiveDiscount.label;
+    }
+
+    if (finalPrice < 0) finalPrice = 0;
+    return { finalPrice, appliedLabel };
+  };
+
+  const incrementCodeUsage = async (codeId: string) => {
+    const { data } = await supabase.from('kody_rabatowe').select('wykorzystano_ogolnie').eq('id', codeId).single();
+    if (data) {
+      await supabase.from('kody_rabatowe').update({ wykorzystano_ogolnie: (data.wykorzystano_ogolnie || 0) + 1 }).eq('id', codeId);
+    }
+  };
 
   // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI + CYKLE W JSON)
   const calculateContinuityDiscount = (client: any) => {
@@ -375,7 +452,6 @@ export default function KarnetyPage() {
     });
   }
 
-  // Globalna historia zawieszeń wyciągnięta z konta klienta
   const globalSuspensions = currentUser?.historiaZawieszenGlobalna || [];
   const allSuspensions = globalSuspensions.map((susp: any) => ({
     ...susp,
@@ -390,7 +466,7 @@ export default function KarnetyPage() {
   });
 
   // =========================================================================
-  // PRZEDŁUŻENIE KARNETU: AKTUALIZUJE DATĘ WYGAŚNIĘCIA ISTNIEJĄCEGO KARNETU
+  // PRZEDŁUŻENIE KARNETU Z OBSŁUGĄ KODÓW RABATOWYCH
   // =========================================================================
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -415,9 +491,7 @@ export default function KarnetyPage() {
     const nextCykl = currentCykl + 1;
 
     const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const cenaWartosc = effectiveDiscount.percent > 0 
-      ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
-      : basePriceNum;
+    const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
     
     let updatedKarnetyList = [...karnetyList];
@@ -458,7 +532,7 @@ export default function KarnetyPage() {
           staraWaznosc: k.waznyDo,
           nowaWaznosc: nowaDataWygasnieciaStr,
           cena: cenaStr,
-          rabat: effectiveDiscount.label
+          rabat: appliedLabel
         }];
 
         return {
@@ -467,7 +541,7 @@ export default function KarnetyPage() {
           cena: cenaStr,
           cykl: nextCykl,
           historiaPrzedluzen: nowaHistoria,
-          znizkaProcentowa: effectiveDiscount.label,
+          znizkaProcentowa: appliedLabel,
           statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
           pozostaloWejsc: updatedRemaining,
           poczatkoweWejsc: updatedInitial
@@ -503,8 +577,12 @@ export default function KarnetyPage() {
         klient_id: currentUser.id,
         typ_operacji: 'zakup_karnetu',
         kwota: -cenaWartosc,
-        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${effectiveDiscount.label ? ` ${effectiveDiscount.label}` : ''}`
+        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`
       }]);
+    }
+
+    if (appliedDiscountCode) {
+      await incrementCodeUsage(appliedDiscountCode.id);
     }
     
     setCurrentUser({
@@ -517,10 +595,11 @@ export default function KarnetyPage() {
     
     alert(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony za kwotę ${cenaStr}.`);
     setIsExtendModalOpen(false);
+    resetDiscountState();
     loadData();
   };
 
-  // ZAKUP NOWEGO KARNETU Z UWZGLĘDNIENIEM RABATU
+  // ZAKUP NOWEGO KARNETU Z UWZGLĘDNIENIEM KODU RABATOWEGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -543,9 +622,7 @@ export default function KarnetyPage() {
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     
     const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const cenaWartosc = effectiveDiscount.percent > 0 
-      ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
-      : basePriceNum;
+    const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
 
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
@@ -579,7 +656,7 @@ export default function KarnetyPage() {
             staraWaznosc: k.waznyDo,
             nowaWaznosc: nowaDataWygasnieciaStr,
             cena: cenaStr,
-            rabat: effectiveDiscount.label
+            rabat: appliedLabel
           }];
 
           return {
@@ -588,7 +665,7 @@ export default function KarnetyPage() {
             cena: cenaStr,
             cykl: nextCykl,
             historiaPrzedluzen: nowaHistoria,
-            znizkaProcentowa: effectiveDiscount.label,
+            znizkaProcentowa: appliedLabel,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
@@ -621,7 +698,7 @@ export default function KarnetyPage() {
         pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
         cena: cenaStr,
         cykl: nextCykl,
-        znizkaProcentowa: effectiveDiscount.label,
+        znizkaProcentowa: appliedLabel,
         rata: '1 / 1',
         statusTekst: statusTekst,
         blokadaDo: null,
@@ -659,8 +736,12 @@ export default function KarnetyPage() {
         klient_id: currentUser.id,
         typ_operacji: 'zakup_karnetu',
         kwota: -cenaWartosc,
-        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}${effectiveDiscount.label ? ` ${effectiveDiscount.label}` : ''}`
+        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`
       }]);
+    }
+
+    if (appliedDiscountCode) {
+      await incrementCodeUsage(appliedDiscountCode.id);
     }
 
     setCurrentUser({
@@ -673,6 +754,7 @@ export default function KarnetyPage() {
     alert(`Gratulacje! Zakupiono karnet za kwotę ${cenaStr} (Ważny do: ${nowaDataWygasnieciaStr}).`);
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
+    resetDiscountState();
     loadData();
   };
 
@@ -1176,14 +1258,14 @@ export default function KarnetyPage() {
                          </button>
                       ) : (
                         <button 
-                          onClick={() => { setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
                           className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
                         >
                           <span className="text-sm">🕒</span> PRZEDŁUŻ
                         </button>
                       )}
                       <button 
-                        onClick={() => { setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
+                        onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
                         className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer"
                       >
                         $ KUP KARNET
@@ -1197,7 +1279,7 @@ export default function KarnetyPage() {
 
           <div className="mt-4 flex flex-wrap gap-3">
             <button 
-              onClick={() => { setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
+              onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
               className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-sm transition-colors cursor-pointer flex items-center gap-2"
             >
               <span className="text-lg leading-none rounded-full bg-white/20 w-4 h-4 flex items-center justify-center">+</span> DOKUP DODATKOWY KARNET
@@ -1442,18 +1524,52 @@ export default function KarnetyPage() {
           const effectiveDiscount = getEffectiveDiscount(currentUser);
           const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
           const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
-          const finalPrice = effectiveDiscount.percent > 0 ? basePrice * (1 - effectiveDiscount.percent / 100) : basePrice;
+          const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
 
           return (
             <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
                 <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                   <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Przedłuż karnet</h3>
-                  <button onClick={() => setIsExtendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+                  <button onClick={() => { setIsExtendModalOpen(false); resetDiscountState(); }} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
                 </div>
                 <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
                   <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900">
                     Przedłużasz karnet: <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
+                  </div>
+
+                  <div className="space-y-1 mt-2">
+                    <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        value={discountCodeInput} 
+                        onChange={(e) => setDiscountCodeInput(e.target.value.toUpperCase())}
+                        placeholder="Wpisz kod"
+                        className="flex-1 bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-blue-500 uppercase font-bold"
+                        disabled={!!appliedDiscountCode}
+                      />
+                      {!appliedDiscountCode ? (
+                        <button 
+                          onClick={handleApplyDiscountCode}
+                          className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
+                        >
+                          Zastosuj
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={(e) => { e.preventDefault(); resetDiscountState(); }}
+                          className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
+                        >
+                          Usuń
+                        </button>
+                      )}
+                    </div>
+                    {discountCodeStatus.message && (
+                       <div className={`text-[10px] font-bold mt-1 ${discountCodeStatus.type === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {discountCodeStatus.message}
+                       </div>
+                    )}
                   </div>
                   
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
@@ -1461,10 +1577,10 @@ export default function KarnetyPage() {
                       <span>Cena katalogowa:</span>
                       <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                     </div>
-                    {effectiveDiscount.percent > 0 && (
+                    {appliedLabel && (
                       <div className="flex justify-between text-emerald-700 font-bold">
-                        <span>Rabat {effectiveDiscount.label}:</span>
-                        <span>-{effectiveDiscount.percent}% (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
+                        <span>Naliczony rabat:</span>
+                        <span>{appliedLabel} (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
                       </div>
                     )}
                     <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
@@ -1474,7 +1590,7 @@ export default function KarnetyPage() {
                   </div>
 
                   <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                    <button type="button" onClick={() => setIsExtendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                    <button type="button" onClick={() => { setIsExtendModalOpen(false); resetDiscountState(); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
                       Anuluj
                     </button>
                     <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
@@ -1492,16 +1608,14 @@ export default function KarnetyPage() {
           const effectiveDiscount = getEffectiveDiscount(currentUser);
           const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
           const basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
-          const discountedPrice = effectiveDiscount.percent > 0 
-            ? basePrice * (1 - effectiveDiscount.percent / 100) 
-            : basePrice;
+          const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
 
           return (
             <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
                 <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                   <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🎟️ Kup / Dodaj karnet</h3>
-                  <button onClick={() => setIsBuyPassModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+                  <button onClick={() => { setIsBuyPassModalOpen(false); resetDiscountState(); }} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
                 </div>
                 <form onSubmit={handleBuyPassSubmit} className="space-y-4 text-xs">
                   <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
@@ -1531,15 +1645,51 @@ export default function KarnetyPage() {
                   </div>
 
                   {selectedBuyPass && selectedPassDef && (
+                    <div className="space-y-1 mt-2">
+                      <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          value={discountCodeInput} 
+                          onChange={(e) => setDiscountCodeInput(e.target.value.toUpperCase())}
+                          placeholder="Wpisz kod"
+                          className="flex-1 bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-blue-500 uppercase font-bold"
+                          disabled={!!appliedDiscountCode}
+                        />
+                        {!appliedDiscountCode ? (
+                          <button 
+                            onClick={handleApplyDiscountCode}
+                            className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
+                          >
+                            Zastosuj
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={(e) => { e.preventDefault(); resetDiscountState(); }}
+                            className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
+                          >
+                            Usuń
+                          </button>
+                        )}
+                      </div>
+                      {discountCodeStatus.message && (
+                         <div className={`text-[10px] font-bold mt-1 ${discountCodeStatus.type === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {discountCodeStatus.message}
+                         </div>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedBuyPass && selectedPassDef && (
                     <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                       <div className="flex justify-between text-slate-600">
                         <span>Cena katalogowa:</span>
                         <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                       </div>
-                      {effectiveDiscount.percent > 0 && (
+                      {appliedLabel && (
                         <div className="flex justify-between text-emerald-700 font-bold">
-                          <span>Naliczony rabat {effectiveDiscount.label}:</span>
-                          <span>-{effectiveDiscount.percent}% (-{(basePrice - discountedPrice).toFixed(2)} PLN)</span>
+                          <span>Naliczony rabat:</span>
+                          <span>{appliedLabel} (-{(basePrice - discountedPrice).toFixed(2)} PLN)</span>
                         </div>
                       )}
                       <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
@@ -1585,7 +1735,7 @@ export default function KarnetyPage() {
                     </div>
                   )}
                   <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                    <button type="button" onClick={() => setIsBuyPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                    <button type="button" onClick={() => { setIsBuyPassModalOpen(false); resetDiscountState(); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
                       Anuluj
                     </button>
                     <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
