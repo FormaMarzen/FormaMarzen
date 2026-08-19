@@ -205,7 +205,6 @@ export default function RootLayout({
         { href: '/raporty/transakcje', label: 'Transakcje', icon: '💳' },
         { href: '/raporty/klienci', label: 'Klienci', icon: '👥' },
         { href: '/raporty/zajecia-i-zapisy', label: 'Zajęcia i zapisy', icon: '🏋️' },
-        { href: '/raporty/inwentaryzacja', label: 'Inwentaryzacja', icon: '📦' },
         { href: '/raporty/automatyczne-zapisy', label: 'Automatyczne zapisy', icon: '⚡' },
         { href: '/raporty/trenerzy', label: 'Trenerzy', icon: '🧢' },
       ]
@@ -228,7 +227,6 @@ export default function RootLayout({
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
         { href: '/ustawienia/integracja-www', label: 'Integracja WWW', icon: '🌐' },
         { href: '/ustawienia/platnosci-online', label: 'Płatności online', icon: '💳' },
-        { href: '/ustawienia/wysylka-wiadomosci', label: 'Wysyłka wiadomości', icon: '✉️' },
         { href: '/ustawienia/kody-rabatowe', label: 'Kody rabatowe', icon: '🏷️' },
         { href: '/ustawienia/program-ambasador', label: 'Program ambasador', icon: '⭐' },
         { href: '/ustawienia/zespol', label: 'Zespół', icon: '👨‍👧‍👦' },
