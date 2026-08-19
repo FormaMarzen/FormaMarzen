@@ -81,7 +81,8 @@ export default function RootLayout({
           if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
         }
 
-        if (userEmail.toLowerCase() === 'maciejklaput@gmail.com') {
+        const cleanEmail = userEmail.toLowerCase().trim();
+        if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
         } else {
@@ -196,6 +197,7 @@ export default function RootLayout({
         { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
+        { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
       ]
     },
@@ -251,6 +253,7 @@ export default function RootLayout({
       items: [
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
+        { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
       ]
     },
     {
@@ -278,6 +281,7 @@ export default function RootLayout({
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
+        { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
