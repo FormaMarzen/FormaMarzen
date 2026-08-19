@@ -1,36 +1,83 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function OgloszeniaPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [ogloszenia, setOgloszenia] = useState<any[]>([]);
   const [karnetyBaza, setKarnetyBaza] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Stan modalu dodawania / edycji ogłoszenia
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | string | null>(null);
   const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().split('T')[0]);
   const [dateTo, setDateTo] = useState('2026-09-06');
   const [targetType, setTargetType] = useState('Wszystkich');
   const [selectedPasses, setSelectedPasses] = useState<string[]>([]);
   const [content, setContent] = useState('');
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedOgloszenia = localStorage.getItem('forma_marzen_ogloszenia');
-      if (savedOgloszenia) {
-        try { setOgloszenia(JSON.parse(savedOgloszenia)); } catch (e) {}
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(null);
+    }, 4000);
+  };
+
+  // POBIERANIE DANYCH Z SUPABASE
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      // 1. Pobieranie ogłoszeń z Supabase
+      const { data: ogloszeniaData, error: ogloszeniaError } = await supabase
+        .from('ogloszenia')
+        .select('*')
+        .order('id', { ascending: false });
+
+      if (ogloszeniaError) {
+        console.error("Błąd pobierania ogłoszeń:", ogloszeniaError);
+      } else if (ogloszeniaData) {
+        const parsedOgloszenia = ogloszeniaData.map((o: any) => {
+          let tArray = ['Wszystkich'];
+          if (Array.isArray(o.target_array)) {
+            tArray = o.target_array;
+          } else if (typeof o.target_array === 'string') {
+            try { tArray = JSON.parse(o.target_array); } catch (e) { tArray = [o.target_array]; }
+          } else if (o.targetArray) {
+            tArray = Array.isArray(o.targetArray) ? o.targetArray : [o.targetArray];
+          }
+
+          return {
+            id: o.id,
+            dateFrom: o.date_from || o.dateFrom || '',
+            dateTo: o.date_to || o.dateTo || '',
+            target: o.target || 'Wszystkich',
+            targetArray: tArray,
+            content: o.content || o.tresc || '',
+            isVisible: o.is_visible !== undefined ? o.is_visible : (o.isVisible !== undefined ? o.isVisible : true),
+            createdAt: o.created_at || o.createdAt || new Date().toISOString()
+          };
+        });
+        setOgloszenia(parsedOgloszenia);
       }
 
-      const savedKarnety = localStorage.getItem('forma_marzen_karnety');
-      if (savedKarnety) {
-        try {
-          const parsed = JSON.parse(savedKarnety);
-          if (Array.isArray(parsed)) {
-            setKarnetyBaza(parsed.map(k => k.nazwa || k));
-          }
-        } catch (e) {}
+      // 2. Pobieranie listy karnetów z bazy cennika
+      const { data: karnetyData } = await supabase
+        .from('karnety')
+        .select('nazwa')
+        .order('nazwa', { ascending: true });
+
+      if (karnetyData && karnetyData.length > 0) {
+        setKarnetyBaza(karnetyData.map((k: any) => k.nazwa));
       } else {
         setKarnetyBaza([
           'OPEN',
@@ -41,7 +88,15 @@ export default function OgloszeniaPage() {
           'OGÓLNOROZWOJOWE I ROZCIĄGANIE - umowa 12 miesięcy'
         ]);
       }
+    } catch (err) {
+      console.error("Błąd sieci:", err);
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
 
   const handleOpenAddModal = () => {
@@ -69,10 +124,10 @@ export default function OgloszeniaPage() {
     setIsModalOpen(true);
   };
 
-  const handleSaveOgloszenie = (e: React.FormEvent) => {
+  const handleSaveOgloszenie = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!content.trim()) {
-      alert("Treść ogłoszenia nie może być pusta!");
+      showToast("Treść ogłoszenia nie może być pusta!", 'error');
       return;
     }
 
@@ -80,64 +135,72 @@ export default function OgloszeniaPage() {
       ? 'Wszystkich' 
       : selectedPasses.length > 0 ? selectedPasses.join(', ') : 'Wszystkich';
 
-    let zaktualizowane = [];
+    const targetArr = targetType === 'Wszystkich' ? ['Wszystkich'] : selectedPasses;
 
-    if (editingId !== null) {
-      zaktualizowane = ogloszenia.map(o => {
-        if (o.id === editingId) {
-          return {
-            ...o,
-            dateFrom,
-            dateTo,
-            target: targetText,
-            targetArray: targetType === 'Wszystkich' ? ['Wszystkich'] : selectedPasses,
-            content,
-            isVisible: true
-          };
-        }
-        return o;
-      });
-    } else {
-      const noweOgloszenie = {
-        id: Date.now(),
-        dateFrom,
-        dateTo,
-        target: targetText,
-        targetArray: targetType === 'Wszystkich' ? ['Wszystkich'] : selectedPasses,
-        content,
-        isVisible: true,
-        createdAt: new Date().toISOString()
-      };
-      zaktualizowane = [noweOgloszenie, ...ogloszenia];
-    }
+    const payload = {
+      date_from: dateFrom,
+      date_to: dateTo,
+      target: targetText,
+      target_array: targetArr,
+      content: content,
+      is_visible: true
+    };
 
-    setOgloszenia(zaktualizowane);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('forma_marzen_ogloszenia', JSON.stringify(zaktualizowane));
-    }
+    try {
+      if (editingId !== null) {
+        const { error } = await supabase
+          .from('ogloszenia')
+          .update(payload)
+          .eq('id', editingId);
 
-    setIsModalOpen(false);
-  };
+        if (error) throw error;
+        showToast("Zaktualizowano ogłoszenie!", 'success');
+      } else {
+        const { error } = await supabase
+          .from('ogloszenia')
+          .insert([payload]);
 
-  const handleToggleVisibility = (id: number) => {
-    const zaktualizowane = ogloszenia.map(o => {
-      if (o.id === id) {
-        return { ...o, isVisible: !o.isVisible };
+        if (error) throw error;
+        showToast("Dodano nowe ogłoszenie!", 'success');
       }
-      return o;
-    });
-    setOgloszenia(zaktualizowane);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('forma_marzen_ogloszenia', JSON.stringify(zaktualizowane));
+
+      setIsModalOpen(false);
+      loadData();
+    } catch (error: any) {
+      console.error("Błąd zapisu ogłoszenia:", error);
+      showToast(`Błąd zapisu: ${error.message || ''}`, 'error');
     }
   };
 
-  const handleDeleteOgloszenie = (id: number) => {
+  const handleToggleVisibility = async (ogloszenie: any) => {
+    const newVisibility = !ogloszenie.isVisible;
+    try {
+      const { error } = await supabase
+        .from('ogloszenia')
+        .update({ is_visible: newVisibility })
+        .eq('id', ogloszenie.id);
+
+      if (error) throw error;
+      showToast(newVisibility ? "Ogłoszenie jest teraz widoczne" : "Ukryto ogłoszenie", 'info');
+      loadData();
+    } catch (error: any) {
+      showToast(`Błąd zmiany widoczności: ${error.message}`, 'error');
+    }
+  };
+
+  const handleDeleteOgloszenie = async (id: number | string) => {
     if (confirm("Czy na pewno chcesz usunąć to ogłoszenie?")) {
-      const zaktualizowane = ogloszenia.filter(o => o.id !== id);
-      setOgloszenia(zaktualizowane);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('forma_marzen_ogloszenia', JSON.stringify(zaktualizowane));
+      try {
+        const { error } = await supabase
+          .from('ogloszenia')
+          .delete()
+          .eq('id', id);
+
+        if (error) throw error;
+        showToast("Usunięto ogłoszenie!", 'success');
+        loadData();
+      } catch (error: any) {
+        showToast(`Błąd usuwania: ${error.message}`, 'error');
       }
     }
   };
@@ -151,7 +214,7 @@ export default function OgloszeniaPage() {
   const niewidoczneOgloszenia = filteredOgloszenia.filter(o => o.isVisible === false);
 
   return (
-    <div className="max-w-[1600px] mx-auto space-y-8 pb-24 relative">
+    <div className="max-w-[1600px] mx-auto space-y-8 pb-24 relative font-sans antialiased">
       
       {/* GÓRNY PASEK AKCJI */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
@@ -160,7 +223,7 @@ export default function OgloszeniaPage() {
         </h1>
         <button 
           onClick={handleOpenAddModal}
-          className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm w-fit cursor-pointer"
+          className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm w-fit cursor-pointer uppercase"
         >
           <span>+</span> DODAJ OGŁOSZENIE
         </button>
@@ -175,131 +238,139 @@ export default function OgloszeniaPage() {
             placeholder="Wyszukaj ogłoszenie..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-sky-50/50 border border-sky-200 rounded-xl pl-9 pr-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
+            className="w-full bg-sky-50/50 border border-sky-200 rounded-xl pl-9 pr-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors font-medium"
           />
         </div>
       </div>
 
-      {/* SEKCJA: AKTYWNE OGŁOSZENIA */}
-      {aktywneOgloszenia.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Aktywne ogłoszenia</h3>
-          <div className="space-y-4">
-            {aktywneOgloszenia.map((ogloszenie) => (
-              <div key={ogloszenie.id} className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm space-y-3 relative hover:border-sky-300 transition-colors">
-                <div className="flex justify-between items-start border-b border-sky-50 pb-3">
-                  <div className="space-y-1 text-xs">
-                    <div className="font-bold text-slate-700">
-                      Widoczny od dnia: <span className="font-mono text-sky-900">{ogloszenie.dateFrom}</span> do dnia: <span className="font-mono text-sky-900">{ogloszenie.dateTo}</span>
+      {isLoading ? (
+        <div className="p-12 text-center text-slate-400 font-bold uppercase text-xs">
+          Ładowanie ogłoszeń z chmury...
+        </div>
+      ) : (
+        <>
+          {/* SEKCJA: AKTYWNE OGŁOSZENIA */}
+          {aktywneOgloszenia.length > 0 && (
+            <div className="space-y-4">
+              <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Aktywne ogłoszenia</h3>
+              <div className="space-y-4">
+                {aktywneOgloszenia.map((ogloszenie) => (
+                  <div key={ogloszenie.id} className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm space-y-3 relative hover:border-sky-300 transition-colors">
+                    <div className="flex justify-between items-start border-b border-sky-50 pb-3">
+                      <div className="space-y-1 text-xs">
+                        <div className="font-bold text-slate-700">
+                          Widoczny od dnia: <span className="font-mono text-sky-900">{ogloszenie.dateFrom}</span> do dnia: <span className="font-mono text-sky-900">{ogloszenie.dateTo}</span>
+                        </div>
+                        <div className="text-slate-500">
+                          Widoczne dla: <strong className="text-slate-800">{ogloszenie.target}</strong>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                          AKTYWNE NA GÓRZE
+                        </span>
+                        
+                        <button 
+                          onClick={() => handleToggleVisibility(ogloszenie)}
+                          className="p-1.5 text-slate-500 hover:text-amber-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                          title="Ukryj ogłoszenie"
+                        >
+                          👁️‍🗨️
+                        </button>
+
+                        <button 
+                          onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Usuń ogłoszenie"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
-                    <div className="text-slate-500">
-                      Widoczne dla: <strong className="text-slate-800">{ogloszenie.target}</strong>
+
+                    <div className="text-xs text-slate-800 whitespace-pre-wrap bg-sky-50/30 p-3.5 rounded-xl border border-sky-100/60 leading-relaxed">
+                      {ogloszenie.content}
                     </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-                  <div className="flex items-center gap-3">
-                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
-                      AKTYWNE NA GÓRZE
-                    </span>
+          {/* SEKCJA: NIEWIDOCZNE OGŁOSZENIA */}
+          {niewidoczneOgloszenia.length > 0 && (
+            <div className="space-y-4 pt-4">
+              <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Niewidoczne ogłoszenia</h3>
+              <div className="space-y-4">
+                {niewidoczneOgloszenia.map((ogloszenie) => (
+                  <div key={ogloszenie.id} className="bg-slate-200/80 border border-slate-300 rounded-2xl p-5 shadow-sm space-y-3 relative overflow-hidden">
                     
-                    <button 
-                      onClick={() => handleToggleVisibility(ogloszenie.id)}
-                      className="p-1.5 text-slate-500 hover:text-amber-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-                      title="Ukryj ogłoszenie (wyłącz wyświetlanie u użytkowników)"
-                    >
-                      👁️‍🗨️
-                    </button>
-
-                    <button 
-                      onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                      title="Usuń ogłoszenie"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-
-                <div className="text-xs text-slate-800 whitespace-pre-wrap bg-sky-50/30 p-3.5 rounded-xl border border-sky-100/60 leading-relaxed">
-                  {ogloszenie.content}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* SEKCJA: NIEWIDOCZNE OGŁOSZENIA */}
-      {niewidoczneOgloszenia.length > 0 && (
-        <div className="space-y-4 pt-4">
-          <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Niewidoczne ogłoszenia</h3>
-          <div className="space-y-4">
-            {niewidoczneOgloszenia.map((ogloszenie) => (
-              <div key={ogloszenie.id} className="bg-slate-200/80 border border-slate-300 rounded-2xl p-5 shadow-sm space-y-3 relative overflow-hidden">
-                
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
-                  <span className="text-7xl">👁️‍🗨️</span>
-                </div>
-
-                <div className="flex justify-between items-start border-b border-slate-300 pb-3 relative z-10">
-                  <div className="space-y-1 text-xs">
-                    <div className="font-bold text-slate-700">
-                      Widoczny od dnia: <span className="font-mono text-slate-900">{ogloszenie.dateFrom}</span> do dnia: <span className="font-mono text-slate-900">{ogloszenie.dateTo}</span>
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+                      <span className="text-7xl">👁️‍🗨️</span>
                     </div>
-                    <div className="text-slate-600">
-                      Widoczne dla: <strong className="text-slate-900">{ogloszenie.target}</strong>
+
+                    <div className="flex justify-between items-start border-b border-slate-300 pb-3 relative z-10">
+                      <div className="space-y-1 text-xs">
+                        <div className="font-bold text-slate-700">
+                          Widoczny od dnia: <span className="font-mono text-slate-900">{ogloszenie.dateFrom}</span> do dnia: <span className="font-mono text-slate-900">{ogloszenie.dateTo}</span>
+                        </div>
+                        <div className="text-slate-600">
+                          Widoczne dla: <strong className="text-slate-900">{ogloszenie.target}</strong>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <button 
+                          onClick={() => handleOpenEditModal(ogloszenie)}
+                          className="p-1.5 text-rose-900 hover:text-rose-950 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer"
+                          title="Edytuj i włącz wyświetlanie ogłoszenia"
+                        >
+                          👁️
+                        </button>
+
+                        <button 
+                          onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
+                          className="p-1.5 text-slate-500 hover:text-rose-700 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer"
+                          title="Usuń ogłoszenie"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-slate-800 whitespace-pre-wrap bg-white/60 p-3.5 rounded-xl border border-slate-300/60 leading-relaxed relative z-10">
+                      {ogloszenie.content}
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-3">
-                    <button 
-                      onClick={() => handleOpenEditModal(ogloszenie)}
-                      className="p-1.5 text-rose-900 hover:text-rose-950 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer"
-                      title="Edytuj i włącz wyświetlanie ogłoszenia"
-                    >
-                      👁️
-                    </button>
-
-                    <button 
-                      onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
-                      className="p-1.5 text-slate-500 hover:text-rose-700 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer"
-                      title="Usuń ogłoszenie"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-
-                <div className="text-xs text-slate-800 whitespace-pre-wrap bg-white/60 p-3.5 rounded-xl border border-slate-300/60 leading-relaxed relative z-10">
-                  {ogloszenie.content}
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+          )}
 
-      {/* STAN PUSTY */}
-      {filteredOgloszenia.length === 0 && (
-        <div className="bg-white border border-sky-200 rounded-2xl p-12 text-center shadow-sm space-y-4 flex flex-col items-center justify-center">
-          <div className="w-20 h-20 bg-sky-50 rounded-full border border-sky-100 flex items-center justify-center text-3xl shadow-inner">
-            📢
-          </div>
-          <div className="space-y-1 max-w-md">
-            <h3 className="font-bold text-slate-900 text-sm">Brak ogłoszeń</h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Nie masz jeszcze żadnych ogłoszeń. Utwórz pierwsze ogłoszenie, aby poinformować klientów.
-            </p>
-          </div>
-          <div className="pt-2">
-            <button 
-              onClick={handleOpenAddModal}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-3 rounded-xl text-xs tracking-wider uppercase transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
-            >
-              <span>+</span> Dodaj ogłoszenie
-            </button>
-          </div>
-        </div>
+          {/* STAN PUSTY */}
+          {filteredOgloszenia.length === 0 && (
+            <div className="bg-white border border-sky-200 rounded-2xl p-12 text-center shadow-sm space-y-4 flex flex-col items-center justify-center">
+              <div className="w-20 h-20 bg-sky-50 rounded-full border border-sky-100 flex items-center justify-center text-3xl shadow-inner">
+                📢
+              </div>
+              <div className="space-y-1 max-w-md">
+                <h3 className="font-bold text-slate-900 text-sm">Brak ogłoszeń</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Nie masz jeszcze żadnych ogłoszeń. Utwórz pierwsze ogłoszenie, aby poinformować klientów.
+                </p>
+              </div>
+              <div className="pt-2">
+                <button 
+                  onClick={handleOpenAddModal}
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-3 rounded-xl text-xs tracking-wider uppercase transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  <span>+</span> Dodaj ogłoszenie
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* MODAL DODAWANIA / EDYCJI OGŁOSZENIA */}
@@ -308,8 +379,11 @@ export default function OgloszeniaPage() {
           <div className="bg-white h-full max-w-xl w-full p-8 shadow-2xl flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200">
             
             <div className="space-y-8">
-              {/* Nagłówek modalu z samym przyciskiem zamknięcia (zgodnie ze zrzutem) */}
+              {/* Nagłówek modalu */}
               <div className="flex items-center justify-between border-b border-sky-100 pb-4">
+                <h3 className="font-black text-sm text-sky-950 uppercase">
+                  {editingId !== null ? 'Edycja ogłoszenia' : 'Nowe ogłoszenie'}
+                </h3>
                 <button onClick={() => setIsModalOpen(false)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
               </div>
 
@@ -347,7 +421,7 @@ export default function OgloszeniaPage() {
                       setTargetType(e.target.value);
                       if (e.target.value === 'Wszystkich') setSelectedPasses([]);
                     }}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer"
                   >
                     <option value="Wszystkich">Wszystkich</option>
                     <option value="Wybrane">Wybrane karnety</option>
@@ -394,7 +468,7 @@ export default function OgloszeniaPage() {
                     placeholder="Wpisz treść ogłoszenia widocznego dla klientów..."
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-4 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm leading-relaxed resize-none"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-4 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm leading-relaxed resize-none font-medium"
                   />
                 </div>
               </div>
@@ -418,6 +492,30 @@ export default function OgloszeniaPage() {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* NOWOCZESNY TOAST */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[100] animate-in fade-in slide-in-from-bottom-5 duration-300 pointer-events-none">
+          <div className={`px-5 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border ${
+            toast.type === 'error'
+              ? 'bg-slate-900 border-rose-500/30 text-white'
+              : toast.type === 'info'
+              ? 'bg-slate-900 border-sky-500/30 text-white'
+              : 'bg-slate-900 border-slate-800 text-white'
+          }`}>
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
+              toast.type === 'error' ? 'bg-rose-600 text-white' :
+              toast.type === 'info' ? 'bg-sky-600 text-white' :
+              'bg-emerald-600 text-white'
+            }`}>
+              {toast.type === 'error' ? '✕' : toast.type === 'info' ? 'ℹ' : '✓'}
+            </div>
+            <span className="text-xs sm:text-sm font-semibold text-white pr-2">
+              {toast.message}
+            </span>
           </div>
         </div>
       )}

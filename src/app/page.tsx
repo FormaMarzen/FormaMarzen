@@ -37,6 +37,7 @@ export default function DashboardPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentTrenerProfile, setCurrentTrenerProfile] = useState<any>(null);
+  const [ogloszeniaList, setOgloszeniaList] = useState<any[]>([]);
   
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
   const [profileClient, setProfileClient] = useState<any | null>(null);
@@ -446,6 +447,37 @@ export default function DashboardPage() {
       setWszystkieTransakcje(tData);
     }
 
+    // POBIERANIE OGŁOSZEŃ Z SUPABASE
+    const { data: ogloszeniaData } = await supabase
+      .from('ogloszenia')
+      .select('*')
+      .order('id', { ascending: false });
+
+    if (ogloszeniaData) {
+      const parsedOgloszenia = ogloszeniaData.map((o: any) => {
+        let tArray = ['Wszystkich'];
+        if (Array.isArray(o.target_array)) {
+          tArray = o.target_array;
+        } else if (typeof o.target_array === 'string') {
+          try { tArray = JSON.parse(o.target_array); } catch (e) { tArray = [o.target_array]; }
+        } else if (o.targetArray) {
+          tArray = Array.isArray(o.targetArray) ? o.targetArray : [o.targetArray];
+        }
+
+        return {
+          id: o.id,
+          dateFrom: o.date_from || o.dateFrom || '',
+          dateTo: o.date_to || o.dateTo || '',
+          target: o.target || 'Wszystkich',
+          targetArray: tArray,
+          content: o.content || o.tresc || '',
+          isVisible: o.is_visible !== undefined ? o.is_visible : (o.isVisible !== undefined ? o.isVisible : true),
+          createdAt: o.created_at || o.createdAt || ''
+        };
+      });
+      setOgloszeniaList(parsedOgloszenia);
+    }
+
     const { data: karnetyDefData } = await supabase.from('karnety').select('*');
     let ustrukturyzowaneKarnetyDef: any[] = [];
     if (karnetyDefData) {
@@ -542,7 +574,6 @@ export default function DashboardPage() {
     );
 
     if (changesOccurred) {
-      // Jeśli nastąpiło odwołanie, przeładuj dane z bazy
       loadData();
       return;
     }
@@ -1416,7 +1447,6 @@ export default function DashboardPage() {
     setIsEditProfileInfoOpen(false);
     showToast("Dane profilu zostały zaktualizowane.");
   };
-
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -2057,7 +2087,7 @@ export default function DashboardPage() {
         status: 'SUCCESS',
         reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
         rule_applied: 'waitlist_auto_promote',
-        payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
+        payload: { klient_id:制作: pierwszaRezerwa.id, class_key: classKey }
       }]);
     }
 
@@ -2282,9 +2312,32 @@ export default function DashboardPage() {
     });
   }
 
+  // FILTROWANIE AKTYWNYCH OGŁOSZEŃ DLA ZALOGOWANEGO UŻYTKOWNIKA
+  const userPassNames = (currentUser?.karnetyKlubowicza || []).map((k: any) => k.nazwa);
+  if (currentUser?.pass && !userPassNames.includes(currentUser.pass)) {
+    userPassNames.push(currentUser.pass);
+  }
+
+  const activeOgloszeniaForUser = ogloszeniaList.filter((o: any) => {
+    if (o.isVisible === false) return false;
+    if (o.dateFrom && o.dateFrom > todayStr) return false;
+    if (o.dateTo && o.dateTo < todayStr) return false;
+    
+    if (o.target === 'Wszystkich' || (Array.isArray(o.targetArray) && o.targetArray.includes('Wszystkich'))) {
+      return true;
+    }
+    
+    if (Array.isArray(o.targetArray) && o.targetArray.length > 0) {
+      return o.targetArray.some((targetPass: string) => userPassNames.includes(targetPass));
+    }
+    
+    return true;
+  });
+
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
@@ -2308,6 +2361,39 @@ export default function DashboardPage() {
             {toastMessage.type === 'info' && 'ℹ️'}
           </span>
           <p className="text-xs font-bold tracking-wide text-white">{toastMessage.text}</p>
+        </div>
+      )}
+
+      {/* SEKCJA: OGŁOSZENIA KLUBU Z SUPABASE */}
+      {['klubowicz', 'trener'].includes(appRole) && activeOgloszeniaForUser.length > 0 && (
+        <div className="space-y-3">
+          {activeOgloszeniaForUser.map((ogloszenie: any) => (
+            <div
+              key={ogloszenie.id}
+              className="bg-gradient-to-r from-sky-950 via-slate-900 to-slate-950 text-white rounded-3xl p-5 sm:p-6 shadow-md border border-sky-800/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in zoom-in-95"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-sky-800/40 border border-sky-700/60 flex items-center justify-center text-2xl shrink-0 shadow-inner">
+                  📢
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase tracking-wider shadow-sm">
+                      Ogłoszenie
+                    </span>
+                    {ogloszenie.target && ogloszenie.target !== 'Wszystkich' && (
+                      <span className="bg-sky-900/80 text-sky-200 text-[10px] font-bold px-2.5 py-0.5 rounded-md border border-sky-700/80">
+                        Dotyczy: {ogloszenie.target}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs sm:text-sm font-medium text-slate-100 whitespace-pre-wrap leading-relaxed">
+                    {ogloszenie.content}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -2574,7 +2660,6 @@ export default function DashboardPage() {
 
         </div>
       )}
-
       {/* SEKCJA: GRAFIK ZAJĘĆ */}
       <section className="space-y-4">
         <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
@@ -2804,6 +2889,7 @@ export default function DashboardPage() {
           })}
         </div>
       </section>
+
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
@@ -3717,6 +3803,7 @@ export default function DashboardPage() {
                     </div>
                   </div>
                 </div>
+
                 {/* SEKCJA: KARNETY KLUBOWICZA W PROFILU */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
