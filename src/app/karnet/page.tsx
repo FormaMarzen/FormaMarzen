@@ -133,7 +133,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI + CYKLE W JSON)
+  // KALKULACJA RABATU SYSTEMOWEGO
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -187,7 +187,6 @@ export default function KarnetyPage() {
     };
   };
 
-  // POMOCNIK DO WYCIĄGANIA EFEKTYWNEGO RABATU KLIENTA (RĘCZNY NADRZĘDNY > SYSTEMOWY)
   const getEffectiveDiscount = (client: any) => {
     if (!client) return { percent: 0, label: '', type: 'none' };
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
@@ -199,6 +198,28 @@ export default function KarnetyPage() {
       return { percent: continuityInfo.percent, label: `(-${continuityInfo.percent}% ciągłość)`, type: 'system' };
     }
     return { percent: 0, label: '', type: 'none' };
+  };
+
+  // POMOCNIK: OBLICZANIE PRO-RATA DLA PIERWSZEGO MIESIĄCA UMOWY 12M
+  const calculateContractProRata = (baseMonthlyPrice: number) => {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    const totalDaysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const currentDay = today.getDate();
+    const remainingDays = totalDaysInMonth - currentDay + 1;
+    const proRataFirstMonth = (baseMonthlyPrice / totalDaysInMonth) * remainingDays;
+    const endOfFirstMonth = new Date(currentYear, currentMonth + 1, 0);
+    const endOfFirstMonthStr = `${endOfFirstMonth.getFullYear()}-${String(endOfFirstMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfFirstMonth.getDate()).padStart(2, '0')}`;
+    const endOfContract = new Date(currentYear, currentMonth + 13, 0);
+    const endOfContractStr = `${endOfContract.getFullYear()}-${String(endOfContract.getMonth() + 1).padStart(2, '0')}-${String(endOfContract.getDate()).padStart(2, '0')}`;
+    return {
+      remainingDays,
+      totalDaysInMonth,
+      proRataFirstMonth: Math.round(proRataFirstMonth * 100) / 100,
+      endOfFirstMonthStr,
+      endOfContractStr
+    };
   };
 
   // 1. POBIERANIE DANYCH Z SUPABASE (Karnety + Rodzaje Zajęć + Użytkownik)
@@ -321,6 +342,7 @@ export default function KarnetyPage() {
             dostepnyOnline: item.sprzedaz_online,
             wUzyciu: item.wUzyciu || 0,
             ilosc_wejsc: item.ilosc_wejsc || meta.ilosc_wejsc || null,
+            isContract12M: item.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true,
             ...meta 
           };
         });
@@ -614,7 +636,7 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // ZAKUP NOWEGO KARNETU Z UWZGLĘDNIENIEM KODU RABATOWEGO
+  // ZAKUP NOWEGO KARNETU Z UWZGLĘDNIENIEM KODU RABATOWEGO I UMOWY 12M
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -635,9 +657,18 @@ export default function KarnetyPage() {
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+    const isContract = defKarnetu?.isContract12M || defKarnetu?.typKarnetu === 'Umowa 12 miesięcy';
+    
+    let calculatedFirstPayment = basePriceNum;
+    let contractInfo: any = null;
+
+    if (isContract) {
+      contractInfo = calculateContractProRata(basePriceNum);
+      calculatedFirstPayment = contractInfo.proRataFirstMonth;
+    }
     
     const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
+    const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
 
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
@@ -647,8 +678,32 @@ export default function KarnetyPage() {
 
     let nowaDataWygasnieciaStr = '';
     let nextCykl = (karnetyList.length || 0) + 1;
+    let statusTekst = '';
 
-    if (isTimeBased && existingPassIndex !== -1) {
+    if (isContract) {
+        nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
+        statusTekst = `Umowa 12M (Rata 0/12 - wyrównanie do końca m-ca: ${contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni)`;
+        
+        const nowyKarnetObj = {
+          id: Date.now(),
+          nazwa: selectedBuyPass,
+          waznyDo: nowaDataWygasnieciaStr,
+          pozostaloWejsc: limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null,
+          cena: cenaStr,
+          cykl: nextCykl,
+          znizkaProcentowa: appliedLabel,
+          rata: '0 / 12',
+          statusTekst: statusTekst,
+          isContract12M: true,
+          contractSuspensionDaysLeft: 30,
+          blokadaDo: null,
+          powodBlokady: null,
+          zawieszonyOd: null,
+          zawieszonyDo: null
+        };
+        updatedKarnetyList.push(nowyKarnetObj);
+
+    } else if (isTimeBased && existingPassIndex !== -1 && !isContract) {
       nextCykl = (updatedKarnetyList[existingPassIndex].cykl || updatedKarnetyList.length || 1) + 1;
 
       updatedKarnetyList = updatedKarnetyList.map((k, index) => {
@@ -702,7 +757,7 @@ export default function KarnetyPage() {
       const day = String(dataWygasniecia.getDate()).padStart(2, '0');
       nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
 
-      const statusTekst = activationMode === 'after' 
+      statusTekst = activationMode === 'after' 
         ? `Oczekujący (Ważny od: ${maxDateStr} do: ${nowaDataWygasnieciaStr})`
         : `Ważny do: ${nowaDataWygasnieciaStr}`;
 
@@ -723,7 +778,6 @@ export default function KarnetyPage() {
       };
       updatedKarnetyList.push(nowyKarnetObj);
     }
-
     const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
@@ -847,7 +901,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA)
+  // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA) - Z UWZGLĘDNIENIEM UMÓW 12M
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -867,15 +921,11 @@ export default function KarnetyPage() {
     }
 
     const requestedDays = getDaysBetween(suspendStartDate, suspendEndDate);
-    if (requestedDays > 14) {
-      setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
-      return;
-    }
-
     const karnetIndex = karnetyList.findIndex((k: any) => k.id.toString() === passToSuspendId.toString());
     if (karnetIndex === -1) return;
     
     const targetKarnet = karnetyList[karnetIndex];
+    const isContract = targetKarnet.isContract12M;
 
     if (targetKarnet.waznyDo) {
       if (suspendStartDate > targetKarnet.waznyDo) {
@@ -889,59 +939,74 @@ export default function KarnetyPage() {
     const year = startObj.getFullYear();
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
 
-    if (month === 8) {
-      const usedInVacation = globalHistory.some((susp: any) => {
-        const hStart = new Date(susp.od);
-        const hMonth = hStart.getMonth();
-        return hStart.getFullYear() === year && (hMonth === 6 || hMonth === 7);
-      });
-      if (usedInVacation) {
-        setSuspendError('Zgodnie z regulaminem, jeśli karnet był zawieszany w wakacje (lipiec/sierpień), nie możesz zawiesić go we wrześniu.');
-        return;
-      }
-    }
-
-    const isVacation = (month === 6 || month === 7); 
-    const quarter = Math.floor(month / 3) + 1;
-
-    let sumDaysInPeriod = 0;
-    let countSuspensionsInPeriod = 0;
-
-    if (isVacation) {
-      globalHistory.forEach((susp: any) => {
-        const hStart = new Date(susp.od);
-        if (hStart.getFullYear() === year && hStart.getMonth() === month) {
-          const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
-          sumDaysInPeriod += daysToCount;
-          countSuspensionsInPeriod += 1;
-        }
-      });
-      if (countSuspensionsInPeriod >= 1) {
-        setSuspendError(`Wygasł limit ilościowy zawieszeń (1/miesiąc) na miesiąc wakacyjny (${month === 6 ? 'Lipiec' : 'Sierpień'}).`);
-        return;
-      }
-      if (sumDaysInPeriod + requestedDays > 14) {
-        setSuspendError(`W tym miesiącu wakacyjnym pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni.`);
+    if (isContract) {
+      // ZASADY ZAWIESZANIA UMÓW 12 MIESIĘCY
+      const daysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
+      if (requestedDays > daysLeft) {
+        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${daysLeft} dni z rocznej puli 30 dni.`);
         return;
       }
     } else {
-      globalHistory.forEach((susp: any) => {
-        const hStart = new Date(susp.od);
-        const hMonth = hStart.getMonth();
-        const hQuarter = Math.floor(hMonth / 3) + 1;
-        if (hStart.getFullYear() === year && hQuarter === quarter && hMonth !== 6 && hMonth !== 7) {
-          const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
-          sumDaysInPeriod += daysToCount;
-          countSuspensionsInPeriod += 1;
-        }
-      });
-      if (countSuspensionsInPeriod >= 2) {
-        setSuspendError('Wykorzystano już 2 dostępne zawieszenia w tym kwartale.');
+      // ZASADY ZAWIESZANIA STANDARDOWYCH KARNETÓW
+      if (requestedDays > 14) {
+        setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
         return;
       }
-      if (sumDaysInPeriod + requestedDays > 14) {
-        setSuspendError(`W tym kwartale pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni zawieszenia (Limit to 14 na kwartał).`);
-        return;
+
+      if (month === 8) {
+        const usedInVacation = globalHistory.some((susp: any) => {
+          const hStart = new Date(susp.od);
+          const hMonth = hStart.getMonth();
+          return hStart.getFullYear() === year && (hMonth === 6 || hMonth === 7);
+        });
+        if (usedInVacation) {
+          setSuspendError('Zgodnie z regulaminem, jeśli karnet był zawieszany w wakacje (lipiec/sierpień), nie możesz zawiesić go we wrześniu.');
+          return;
+        }
+      }
+
+      const isVacation = (month === 6 || month === 7); 
+      const quarter = Math.floor(month / 3) + 1;
+
+      let sumDaysInPeriod = 0;
+      let countSuspensionsInPeriod = 0;
+
+      if (isVacation) {
+        globalHistory.forEach((susp: any) => {
+          const hStart = new Date(susp.od);
+          if (hStart.getFullYear() === year && hStart.getMonth() === month) {
+            const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
+            sumDaysInPeriod += daysToCount;
+            countSuspensionsInPeriod += 1;
+          }
+        });
+        if (countSuspensionsInPeriod >= 1) {
+          setSuspendError(`Wygasł limit ilościowy zawieszeń (1/miesiąc) na miesiąc wakacyjny (${month === 6 ? 'Lipiec' : 'Sierpień'}).`);
+          return;
+        }
+        if (sumDaysInPeriod + requestedDays > 14) {
+          setSuspendError(`W tym miesiącu wakacyjnym pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni.`);
+          return;
+        }
+      } else {
+        globalHistory.forEach((susp: any) => {
+          const hStart = new Date(susp.od);
+          const hMonth = hStart.getMonth();
+          const hQuarter = Math.floor(hMonth / 3) + 1;
+          if (hStart.getFullYear() === year && hQuarter === quarter && hMonth !== 6 && hMonth !== 7) {
+            const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
+            sumDaysInPeriod += daysToCount;
+            countSuspensionsInPeriod += 1;
+          }
+        });
+        if (countSuspensionsInPeriod >= 2) {
+          setSuspendError('Wykorzystano już 2 dostępne zawieszenia w tym kwartale.');
+          return;
+        }
+        if (sumDaysInPeriod + requestedDays > 14) {
+          setSuspendError(`W tym kwartale pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni zawieszenia (Limit to 14 na kwartał).`);
+          return;
+        }
       }
     }
 
@@ -963,7 +1028,8 @@ export default function KarnetyPage() {
       planowane_dni: requestedDays,
       dni: 0,
       status: 'aktywne',
-      utworzono: new Date().toISOString()
+      utworzono: new Date().toISOString(),
+      isContract: isContract || false
     };
 
     const updatedGlobalHistory = [...globalHistory, newGlobalSuspension];
@@ -994,7 +1060,7 @@ export default function KarnetyPage() {
     setSuspendEndDate('');
   };
 
-  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA)
+  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA) - Z UWZGLĘDNIENIEM UMÓW 12M
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -1033,6 +1099,12 @@ export default function KarnetyPage() {
       }
     }
 
+    let updatedSuspensionDaysLeft = targetKarnet.contractSuspensionDaysLeft;
+    if (targetKarnet.isContract12M) {
+      const currentPool = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
+      updatedSuspensionDaysLeft = Math.max(0, currentPool - actualDays);
+    }
+
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
     const updatedGlobalHistory = globalHistory.map((susp: any) => {
       if (susp.status === 'aktywne' && susp.karnetId?.toString() === targetKarnet.id?.toString()) {
@@ -1052,6 +1124,7 @@ export default function KarnetyPage() {
       zawieszonyOd: null,
       zawieszonyDo: null,
       waznyDo: nowaDataWygasnieciaStr,
+      contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
       statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
     };
 
@@ -1091,8 +1164,11 @@ export default function KarnetyPage() {
 
     let wyliczonaDlugosc = '';
     let dodanaIloscWejsc = null;
+    const isContract = typKarnetu === 'Umowa 12 miesięcy';
 
-    if (typKarnetu === 'Na czas') {
+    if (isContract) {
+      wyliczonaDlugosc = 'Umowa 12 miesięcy (Cykliczna)';
+    } else if (typKarnetu === 'Na czas') {
       wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
     } else {
       dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
@@ -1125,6 +1201,7 @@ export default function KarnetyPage() {
       kupInnyKarnet,
       opis,
       obrazekUrl, 
+      isContract12M: isContract,
       wUzyciu: 0
     };
 
@@ -1214,9 +1291,11 @@ export default function KarnetyPage() {
               karnetyList.map((karnet: any) => {
                 let isExpiring = false;
                 let isPending = karnet.statusTekst?.includes('Oczekujący');
-                let isSuspended = !!karnet.zawieszonyOd;
+                let isSuspendedLocal = !!karnet.zawieszonyOd;
+                const isContract = karnet.isContract12M;
+                const suspensionDaysLeft = karnet.contractSuspensionDaysLeft !== undefined ? karnet.contractSuspensionDaysLeft : 30;
 
-                if (!isPending && !isSuspended) {
+                if (!isPending && !isSuspendedLocal) {
                   if (karnet.waznyDo) {
                     const todayDate = new Date();
                     todayDate.setHours(0, 0, 0, 0);
@@ -1231,7 +1310,7 @@ export default function KarnetyPage() {
                 }
 
                 let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
-                if (isSuspended) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
+                if (isSuspendedLocal) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
                 else if (isPending) statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; 
                 else if (isExpiring) statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; 
 
@@ -1241,6 +1320,11 @@ export default function KarnetyPage() {
                       <div className="space-y-3">
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
+                          {isContract && (
+                            <span className="bg-amber-500/20 text-amber-900 text-[10px] font-black px-2.5 py-0.5 rounded-md border border-amber-300 uppercase">
+                              Umowa 12M
+                            </span>
+                          )}
                           {karnet.znizkaProcentowa && (
                             <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded border border-emerald-200">
                               {karnet.znizkaProcentowa}
@@ -1259,12 +1343,17 @@ export default function KarnetyPage() {
                               Cena: {karnet.cena}
                             </span>
                           )}
+                          {isContract && (
+                            <span className="bg-sky-50 text-sky-800 font-bold px-3 py-1 rounded-full text-xs border border-sky-200">
+                              Pozostało zawieszenia: <strong className="text-sky-950">{suspensionDaysLeft} dni</strong>
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
                     
                     <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
-                      {isSuspended ? (
+                      {isSuspendedLocal ? (
                          <button 
                            onClick={() => { setPassToUnsuspendId(karnet.id.toString()); setIsUnsuspendModalOpen(true); }}
                            className="bg-slate-800 border border-slate-900 text-white hover:bg-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
@@ -1272,12 +1361,14 @@ export default function KarnetyPage() {
                            <span className="text-sm">🔓</span> ODWIEŚ KARNET
                          </button>
                       ) : (
-                        <button 
-                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
-                          className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                        >
-                          <span className="text-sm">🕒</span> PRZEDŁUŻ
-                        </button>
+                        !isContract && (
+                          <button 
+                            onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                            className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                          >
+                            <span className="text-sm">🕒</span> PRZEDŁUŻ
+                          </button>
+                        )
                       )}
                       <button 
                         onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
@@ -1318,7 +1409,7 @@ export default function KarnetyPage() {
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex-1 text-center sm:text-left">
                 <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
-                <p className="text-xs text-slate-500 mt-1">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
+                <p className="text-xs text-slate-500 mt-1">Dla umów 12M masz 30 dni w roku. Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
               </div>
               {suspendedPasses.length > 0 ? (
                  <button 
@@ -1376,7 +1467,7 @@ export default function KarnetyPage() {
                         return (
                           <tr key={idx} className="hover:bg-slate-50 transition-colors">
                             <td className="py-3 px-4 font-medium text-slate-500">{formattedCreated}</td>
-                            <td className="py-3 px-4 font-bold text-slate-800">{susp.karnetNazwa}</td>
+                            <td className="py-3 px-4 font-bold text-slate-800">{susp.karnetNazwa} {susp.isContract ? '(Umowa 12M)' : ''}</td>
                             <td className="py-3 px-4 text-slate-600">
                               <span className="font-semibold">{susp.od}</span> <span className="text-slate-400">do</span> <span className="font-semibold">{susp.status === 'aktywne' ? susp.planowane_do : susp.do}</span>
                             </td>
@@ -1421,10 +1512,11 @@ export default function KarnetyPage() {
               </div>
               
               <div className="bg-sky-50/80 p-5 rounded-2xl border border-sky-100 space-y-3 text-xs text-sky-900">
-                <p className="font-bold">Limity zawieszeń obowiązują globalnie dla Twojego konta klubowicza:</p>
+                <p className="font-bold">Limity zawieszeń obowiązują dla Twoich karnetów:</p>
                 <ul className="list-disc pl-4 space-y-2 font-medium">
-                  <li><strong>Standardowy kwartał:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy).</li>
-                  <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu 1 raz w miesiącu (do 14 dni). Uwaga: jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
+                  <li><strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni zawieszenia</strong> w ciągu całego roku trwania umowy.</li>
+                  <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy).</li>
+                  <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Uwaga: jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
                   <li><strong>Odwieszenie:</strong> Karnet możesz odwiesić w dowolnym momencie przed czasem, a niewykorzystane dni zostaną automatycznie doliczone do daty ważności.</li>
                 </ul>
               </div>
@@ -1491,7 +1583,9 @@ export default function KarnetyPage() {
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
                   >
                     {activePassesForSuspend.map((k: any) => (
-                      <option key={k.id} value={k.id.toString()}>{k.nazwa} (Ważny do {k.waznyDo})</option>
+                      <option key={k.id} value={k.id.toString()}>
+                        {k.nazwa} {k.isContract12M ? `(Umowa 12M - Pula: ${k.contractSuspensionDaysLeft ?? 30} dni)` : `(Ważny do ${k.waznyDo})`}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -1622,8 +1716,18 @@ export default function KarnetyPage() {
         {isBuyPassModalOpen && (() => {
           const effectiveDiscount = getEffectiveDiscount(currentUser);
           const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
-          const basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
-          const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
+          const isContract = selectedPassDef?.isContract12M || selectedPassDef?.typKarnetu === 'Umowa 12 miesięcy';
+          
+          let basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
+          let calculatedFirstPayment = basePrice;
+          let contractInfo: any = null;
+
+          if (isContract) {
+            contractInfo = calculateContractProRata(basePrice);
+            calculatedFirstPayment = contractInfo.proRataFirstMonth;
+          }
+
+          const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
 
           return (
             <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -1655,12 +1759,33 @@ export default function KarnetyPage() {
                           : k.cena;
                         return (
                           <option key={k.id} value={k.nazwa}>
-                            {k.nazwa} (Cena: {kFinalPrice} PLN {effectiveDiscount.percent > 0 ? `| Rabat ${effectiveDiscount.percent}%` : ''})
+                            {k.nazwa} (Cena: {kFinalPrice} PLN {k.isContract12M ? '• Umowa 12M' : ''} {effectiveDiscount.percent > 0 ? `| Rabat ${effectiveDiscount.percent}%` : ''})
                           </option>
                         );
                       })}
                     </select>
                   </div>
+
+                  {/* Szczegóły rozliczenia pro-rata dla umów 12 miesięcy */}
+                  {selectedBuyPass && isContract && contractInfo && (
+                    <div className="bg-sky-50 p-4 rounded-xl border border-sky-200 space-y-2 text-sky-950">
+                      <div className="font-black uppercase tracking-wider text-[11px]">Kalkulacja umowy 12 miesięcy:</div>
+                      <div className="text-[11px] space-y-1">
+                        <div className="flex justify-between">
+                          <span>Wyrównanie za bieżący m-c ({contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni):</span>
+                          <strong>{contractInfo.proRataFirstMonth.toFixed(2)} PLN</strong>
+                        </div>
+                        <div className="flex justify-between text-slate-500">
+                          <span>Miesięczna opłata od 1. dnia kolejnego m-ca:</span>
+                          <span>{basePrice.toFixed(2)} PLN / m-c</span>
+                        </div>
+                        <div className="flex justify-between text-slate-500">
+                          <span>Okres pełnej umowy (12 cykli):</span>
+                          <span>do {contractInfo.endOfContractStr}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {selectedBuyPass && selectedPassDef && (
                     <div className="space-y-1 mt-2">
@@ -1701,23 +1826,23 @@ export default function KarnetyPage() {
                   {selectedBuyPass && selectedPassDef && (
                     <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                       <div className="flex justify-between text-slate-600">
-                        <span>Cena katalogowa:</span>
-                        <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
+                        <span>Płatność początkowa:</span>
+                        <span className="font-bold">{calculatedFirstPayment.toFixed(2)} PLN</span>
                       </div>
                       {appliedLabel && (
                         <div className="flex justify-between text-emerald-700 font-bold">
                           <span>Naliczony rabat:</span>
-                          <span>{appliedLabel} (-{(basePrice - discountedPrice).toFixed(2)} PLN)</span>
+                          <span>{appliedLabel} (-{(calculatedFirstPayment - discountedPrice).toFixed(2)} PLN)</span>
                         </div>
                       )}
                       <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                        <span>Do zapłaty:</span>
+                        <span>Do zapłaty dzisiaj:</span>
                         <span className="text-emerald-700 font-bold">{discountedPrice.toFixed(2)} PLN</span>
                       </div>
                     </div>
                   )}
 
-                  {currentUser?.karnetyKlubowicza?.length > 0 && (
+                  {currentUser?.karnetyKlubowicza?.length > 0 && !isContract && (
                     <div className="space-y-2 pt-2 border-t border-sky-100">
                       <label className="font-bold text-slate-700 block mt-2">Kiedy karnet ma zacząć obowiązywać?</label>
                       <div className="space-y-2">
@@ -1810,7 +1935,7 @@ export default function KarnetyPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-sky-100 text-xs">
-              {karnety.map((item) => (
+              {karnety.map((item: any) => (
                 <tr key={item.id} className="hover:bg-sky-50/40 transition-colors">
                   <td className="py-4 px-4 text-center">
                     {item.obrazekUrl ? (
@@ -1824,7 +1949,12 @@ export default function KarnetyPage() {
                     )}
                   </td>
                   <td className="py-4 px-4">
-                    <div className="font-bold text-slate-900 text-sm">{item.nazwa}</div>
+                    <div className="font-bold text-slate-900 text-sm">
+                      {item.nazwa}
+                      {item.isContract12M && (
+                        <span className="ml-2 bg-amber-100 text-amber-900 text-[9px] px-2 py-0.5 rounded font-black uppercase inline-block">Umowa 12M</span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-slate-400">Utworzony: {item.utworzony}</div>
                   </td>
                   <td className="py-4 px-4 font-bold text-slate-800">
@@ -1966,6 +2096,7 @@ export default function KarnetyPage() {
                   >
                     <option value="Na czas">Na czas</option>
                     <option value="Na ilość treningów">Na ilość treningów</option>
+                    <option value="Umowa 12 miesięcy">Umowa 12 miesięcy</option>
                   </select>
                 </div>
 
@@ -1993,7 +2124,7 @@ export default function KarnetyPage() {
                       </select>
                     </div>
                   </div>
-                ) : (
+                ) : typKarnetu === 'Na ilość treningów' ? (
                   <div className="bg-sky-50/60 p-4 rounded-2xl border border-sky-200 space-y-4">
                     <div className="space-y-1">
                       <label className="font-bold text-slate-800 block">Ilość treningów *</label>
@@ -2044,6 +2175,14 @@ export default function KarnetyPage() {
                         </div>
                       )}
                     </div>
+                  </div>
+                ) : (
+                  <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200 text-amber-900 space-y-2">
+                    <p className="font-bold text-sm">Karnet na umowę cykliczną (12 miesięcy)</p>
+                    <p className="text-[11px] leading-relaxed font-medium">
+                      Wybór tej opcji oznacza, że karnet podlega pod zasady rozliczeń ratalnych z uwzględnieniem wyrównania za bieżący miesiąc (pro-rata). 
+                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na zawieszenie. System przy zakupie wyliczy stawkę automatycznie.
+                    </p>
                   </div>
                 )}
               </div>

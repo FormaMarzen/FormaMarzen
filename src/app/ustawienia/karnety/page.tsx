@@ -34,7 +34,7 @@ export default function KarnetyPage() {
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
       } else {
-        const trenerObj = trenerzyData?.find(t => t.email === userEmail);
+        const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
         if (trenerObj) {
           setAppRole('trener');
         } else {
@@ -93,6 +93,7 @@ export default function KarnetyPage() {
             dostepnyOnline: item.sprzedaz_online,
             wUzyciu: item.wUzyciu || 0,
             ilosc_wejsc: item.ilosc_wejsc || meta.ilosc_wejsc || null,
+            isContract12M: item.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true,
             ...meta 
           };
         });
@@ -369,8 +370,11 @@ export default function KarnetyPage() {
 
     let wyliczonaDlugosc = '';
     let dodanaIloscWejsc = null;
+    const isContract = typKarnetu === 'Umowa 12 miesięcy';
 
-    if (typKarnetu === 'Na czas') {
+    if (isContract) {
+      wyliczonaDlugosc = 'Umowa 12 miesięcy (Cykliczna)';
+    } else if (typKarnetu === 'Na czas') {
       wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
     } else {
       dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
@@ -403,6 +407,7 @@ export default function KarnetyPage() {
       kupInnyKarnet,
       opis,
       obrazekUrl, 
+      isContract12M: isContract,
       wUzyciu: 0
     };
 
@@ -677,7 +682,12 @@ export default function KarnetyPage() {
                     )}
                   </td>
                   <td className="py-4 px-4">
-                    <div className="font-bold text-slate-900 text-sm">{item.nazwa}</div>
+                    <div className="font-bold text-slate-900 text-sm">
+                      {item.nazwa}
+                      {item.isContract12M && (
+                        <span className="ml-2 bg-amber-100 text-amber-900 text-[9px] px-2 py-0.5 rounded font-black uppercase inline-block">Umowa 12M</span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-slate-400">Utworzony: {item.utworzony}</div>
                   </td>
                   <td className="py-4 px-4 font-bold text-slate-800">
@@ -822,10 +832,19 @@ export default function KarnetyPage() {
                   >
                     <option value="Na czas">Na czas</option>
                     <option value="Na ilość treningów">Na ilość treningów</option>
+                    <option value="Umowa 12 miesięcy">Umowa 12 miesięcy</option>
                   </select>
                 </div>
 
-                {typKarnetu === 'Na czas' ? (
+                {typKarnetu === 'Umowa 12 miesięcy' ? (
+                  <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200 text-amber-900 space-y-2">
+                    <p className="font-bold text-sm">Karnet na umowę cykliczną (12 miesięcy)</p>
+                    <p className="text-[11px] leading-relaxed font-medium">
+                      Wybór tej opcji oznacza, że karnet podlega pod zasady rozliczeń ratalnych z uwzględnieniem wyrównania za bieżący miesiąc (pro-rata). 
+                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na zawieszenie. System przy zakupie wyliczy stawkę automatycznie.
+                    </p>
+                  </div>
+                ) : typKarnetu === 'Na czas' ? (
                   <div className="grid grid-cols-2 gap-3 bg-sky-50/60 p-4 rounded-2xl border border-sky-200">
                     <div className="space-y-1">
                       <label className="font-bold text-slate-800 block">Ilość *</label>
