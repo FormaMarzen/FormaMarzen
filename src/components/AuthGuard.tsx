@@ -24,12 +24,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Sprawdzanie ścieżek publicznych (strona główna / jest chroniona i wymaga logowania)
-  const checkIsPublic = () => {
-    let currentPath = pathname;
-    if (typeof window !== 'undefined') {
-      currentPath = window.location.pathname;
-    }
+  // Sprawdzanie ścieżek publicznych bez odwoływania się do obiektu window (zapobiega błędom hydratacji)
+  const checkIsPublic = (currentPath: string) => {
     const lowerPath = (currentPath || '').toLowerCase();
     return (
       lowerPath === '/login' || 
@@ -39,25 +35,15 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const isPublicPath = checkIsPublic();
+  const isPublicPath = checkIsPublic(pathname);
 
-  if (isPublicPath) {
-    return <>{children}</>;
-  }
-
+  // Wszystkie Hooki MUSZĄ być wywołane przed jakimkolwiek instrukcją 'return' zwracającą komponent
   useEffect(() => {
-    if (checkIsPublic()) {
-      setIsChecking(false);
-      setIsAuthorized(true);
-      return;
-    }
-
     let isMounted = true;
 
     const checkAuthAndRegulations = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (checkIsPublic()) {
+      // Jeśli ścieżka jest publiczna, zwalniamy blokadę isChecking, ale nie przerywamy cyklu Hooka
+      if (isPublicPath) {
         if (isMounted) {
           setIsChecking(false);
           setIsAuthorized(true);
@@ -65,6 +51,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const { data: { session } } = await supabase.auth.getSession();
+      
       if (!session) {
         if (isMounted) {
           setIsChecking(false);
@@ -128,7 +116,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     checkAuthAndRegulations();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session && !checkIsPublic()) {
+      if (!session && !checkIsPublic(pathname)) {
         router.push('/login');
       }
     });
@@ -137,7 +125,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       isMounted = false;
       authListener.subscription.unsubscribe();
     };
-  }, [pathname, router]);
+  }, [pathname, isPublicPath, router]);
 
   const handleAccept = async (slug: string) => {
     if (!userId) return;
@@ -160,6 +148,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     
     setIsAccepting(false);
   };
+
+  // Dopiero tutaj, po wszystkich Hookach, możemy warunkowo zwracać widoki
+  if (isPublicPath) {
+    return <>{children}</>;
+  }
 
   if (isChecking) {
     return (

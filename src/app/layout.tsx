@@ -38,27 +38,16 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Bezpieczne sprawdzenie ścieżki publicznej (zapobiega błędom SSR/hydration na Vercel)
-  const getIsPublicPage = () => {
-    if (typeof window !== 'undefined') {
-      const browserPath = window.location.pathname.toLowerCase();
-      if (
-        browserPath.includes('/login') || 
-        browserPath.includes('/rejestracja') || 
-        browserPath.includes('/grafik-publiczny')
-      ) {
-        return true;
-      }
-    }
+  // Ujednolicona, bezpieczna dla SSR weryfikacja ścieżki publicznej (bez użycia window.location)
+  const isPublicPage = (() => {
     const cleanPath = (pathname || '').toLowerCase();
     return (
-      cleanPath.includes('/login') || 
-      cleanPath.includes('/rejestracja') || 
-      cleanPath.includes('/grafik-publiczny')
+      cleanPath === '/login' || 
+      cleanPath.startsWith('/rejestracja') || 
+      cleanPath === '/grafik-publiczny' || 
+      cleanPath.startsWith('/grafik-publiczny')
     );
-  };
-
-  const isPublicPage = getIsPublicPage();
+  })();
 
   useEffect(() => {
     setIsMounted(true);
@@ -67,7 +56,7 @@ export default function RootLayout({
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session?.user) {
-        if (!getIsPublicPage()) {
+        if (!isPublicPage) {
           router.push('/login');
         }
         return;
@@ -132,11 +121,11 @@ export default function RootLayout({
       }
     };
 
-    if (!getIsPublicPage()) {
+    if (!isPublicPage) {
       checkAuthAndRole();
       fetchKarnetyFromSupabase();
     }
-  }, [pathname, router]);
+  }, [pathname, isPublicPage, router]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
