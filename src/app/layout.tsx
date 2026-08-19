@@ -7,6 +7,7 @@ import "./globals.css";
 
 import AuthGuard from "../components/AuthGuard";
 import { supabase } from "./raporty/klienci/supabase";
+import ClubChat from "../components/ClubChat";
 
 export default function RootLayout({
   children,
@@ -597,6 +598,9 @@ export default function RootLayout({
             </>
           )}
         </AuthGuard>
+
+        {/* KOMPONENT CZATU KLUBOWICZÓW */}
+        {!isPublicPage && <ClubChat />}
 
         {/* MODAL DODAJ KLUBOWICZA */}
         {isAddClientModalOpen && (
