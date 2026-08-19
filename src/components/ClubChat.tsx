@@ -7,9 +7,12 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
+
 export default function ClubChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
+  const [secondaryUserId, setSecondaryUserId] = useState<number | string | null>(null);
   const [currentUserName, setCurrentUserName] = useState<string>("");
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
 
@@ -30,13 +33,13 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages]);
 
-  // 1. Identyfikacja zalogowanego użytkownika i pobranie listy klubowiczów
+  // 1. Identyfikacja użytkownika (obsługa wielu e-maili administratora i kont powiązanych)
   useEffect(() => {
     const initUser = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      const userEmail = session?.user?.email;
+      const userEmail = (session?.user?.email || "").toLowerCase().trim();
 
       if (!userEmail) return;
 
@@ -44,25 +47,35 @@ export default function ClubChat() {
       if (klienciData) {
         const enriched = klienciData.map((c: any) => ({
           id: c.id,
+          firstName: c.Imię || c.firstName || "",
+          lastName: c.Nazwisko || c.lastName || "",
           name: `${c.Imię || c.firstName || ""} ${c.Nazwisko || c.lastName || ""}`.trim() || c["E-mail"] || "Klubowicz",
-          email: c["E-mail"] || c.email || "",
+          email: (c["E-mail"] || c.email || "").toLowerCase().trim(),
           avatar: c.avatarUrl || c.avatar || null,
         }));
 
         setKlienci(enriched);
 
-        const myProfile = enriched.find(
-          (c: any) => c.email.toLowerCase().trim() === userEmail.toLowerCase().trim()
-        );
+        const myProfile = enriched.find((c: any) => c.email === userEmail);
 
-        if (myProfile) {
-          setCurrentUserId(myProfile.id);
-          setCurrentUserName(myProfile.name);
-          setCurrentUserAvatar(myProfile.avatar);
-        } else if (userEmail.toLowerCase() === "maciejklaput@gmail.com") {
+        if (ADMIN_EMAILS.includes(userEmail)) {
           setCurrentUserId(999999999);
           setCurrentUserName("Maciej Kłaput (Admin)");
           setCurrentUserAvatar(null);
+
+          // Powiąż ID klienta Macieja z bazy (jeśli istnieje dla któregoś z jego e-maili)
+          const maciejClient = enriched.find(
+            (c: any) =>
+              ADMIN_EMAILS.includes(c.email) ||
+              c.name.toLowerCase().includes("maciej kłaput")
+          );
+          if (maciejClient) {
+            setSecondaryUserId(maciejClient.id);
+          }
+        } else if (myProfile) {
+          setCurrentUserId(myProfile.id);
+          setCurrentUserName(myProfile.name);
+          setCurrentUserAvatar(myProfile.avatar);
         }
       }
     };
@@ -70,20 +83,31 @@ export default function ClubChat() {
     initUser();
   }, []);
 
-  // 2. Pobieranie wiadomości i zliczanie nieprzeczytanych
+  // 2. Pobieranie wiadomości uwzględniające ID admina oraz powiązane konta
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
-    const { data, error } = await supabase
-      .from("czat_wiadomosci")
-      .select("*")
-      .or(`nadawca_id.eq.${currentUserId},odbiorca_id.eq.${currentUserId}`)
-      .order("created_at", { ascending: true });
+    let query = supabase.from("czat_wiadomosci").select("*");
+
+    if (secondaryUserId) {
+      query = query.or(
+        `nadawca_id.eq.${currentUserId},odbiorca_id.eq.${currentUserId},nadawca_id.eq.${secondaryUserId},odbiorca_id.eq.${secondaryUserId}`
+      );
+    } else {
+      query = query.or(`nadawca_id.eq.${currentUserId},odbiorca_id.eq.${currentUserId}`);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: true });
 
     if (!error && data) {
       setMessages(data);
+      const effectiveIds = [
+        String(currentUserId),
+        secondaryUserId ? String(secondaryUserId) : null,
+      ].filter(Boolean);
+
       const unread = data.filter(
-        (m: any) => String(m.odbiorca_id) === String(currentUserId) && !m.przeczytana
+        (m: any) => effectiveIds.includes(String(m.odbiorca_id)) && !m.przeczytana
       ).length;
       setUnreadCount(unread);
     }
@@ -94,7 +118,6 @@ export default function ClubChat() {
 
     fetchMessages();
 
-    // Subskrypcja Realtime
     const channel = supabase
       .channel("realtime-czat")
       .on(
@@ -109,31 +132,34 @@ export default function ClubChat() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUserId]);
+  }, [currentUserId, secondaryUserId]);
 
-  // 3. Oznaczanie wiadomości jako przeczytane po otwarciu czatu z daną osobą
+  // 3. Oznaczanie wiadomości jako przeczytane
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
+        const targetId = secondaryUserId || currentUserId;
         await supabase
           .from("czat_wiadomosci")
           .update({ przeczytana: true })
           .eq("nadawca_id", selectedUser.id)
-          .eq("odbiorca_id", currentUserId);
+          .eq("odbiorca_id", targetId);
 
         fetchMessages();
       };
       markAsRead();
     }
-  }, [isOpen, selectedUser, currentUserId]);
+  }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
   // 4. Wysyłanie nowej wiadomości
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !selectedUser || !currentUserId) return;
 
+    const senderId = secondaryUserId || currentUserId;
+
     const payload = {
-      nadawca_id: currentUserId,
+      nadawca_id: senderId,
       nadawca_nazwa: currentUserName,
       nadawca_avatar: currentUserAvatar,
       odbiorca_id: selectedUser.id,
@@ -151,25 +177,67 @@ export default function ClubChat() {
 
   if (!currentUserId) return null;
 
-  // Filtrowanie rozmowy z aktywnym rozmówcą
+  const effectiveIds = [
+    String(currentUserId),
+    secondaryUserId ? String(secondaryUserId) : null,
+  ].filter(Boolean);
+
+  // Filtrowanie aktywnej konwersacji
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
-    return (
-      (String(m.nadawca_id) === String(currentUserId) && String(m.odbiorca_id) === String(selectedUser.id)) ||
-      (String(m.nadawca_id) === String(selectedUser.id) && String(m.odbiorca_id) === String(currentUserId))
-    );
+    const isSenderMe = effectiveIds.includes(String(m.nadawca_id));
+    const isReceiverMe = effectiveIds.includes(String(m.odbiorca_id));
+    const isTargetThem =
+      String(m.nadawca_id) === String(selectedUser.id) ||
+      String(m.odbiorca_id) === String(selectedUser.id);
+
+    return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
-  const filteredUsers = klienci
-    .filter((k: any) => String(k.id) !== String(currentUserId))
-    .filter((k: any) => k.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Zbieranie ID osób, z którymi prowadzono historię
+  const chattedUserIds = new Set<string | number>();
+  messages.forEach((m: any) => {
+    if (effectiveIds.includes(String(m.nadawca_id))) {
+      chattedUserIds.add(m.odbiorca_id);
+    } else if (effectiveIds.includes(String(m.odbiorca_id))) {
+      chattedUserIds.add(m.nadawca_id);
+    }
+  });
+
+  // Filtrowanie listy kontaktów:
+  // - Bez wpisania tekstu: tylko osoby z historii.
+  // - Po wpisaniu: szukanie po nazwisku LUB imieniu + pierwszej literze nazwiska.
+  const displayedUsers = klienci
+    .filter((k: any) => !effectiveIds.includes(String(k.id)))
+    .filter((k: any) => {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) {
+        return chattedUserIds.has(k.id);
+      }
+
+      const fName = (k.firstName || "").toLowerCase();
+      const lName = (k.lastName || "").toLowerCase();
+
+      if (lName.startsWith(q)) {
+        return true;
+      }
+
+      const parts = q.split(/\s+/);
+      if (parts.length >= 2) {
+        const typedFirst = parts[0];
+        const typedLastInitial = parts[1];
+        if (fName.startsWith(typedFirst) && lName.startsWith(typedLastInitial)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
 
   return (
     <div className="fixed bottom-6 right-6 z-[120] font-sans antialiased">
-      {/* OKNO CZATU */}
       {isOpen && (
         <div className="bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[390px] h-[520px] mb-4 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-5">
-          {/* NAGŁÓWEK OKNA */}
           <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shadow-sm">
             <div className="flex items-center gap-3">
               {selectedUser ? (
@@ -214,14 +282,13 @@ export default function ClubChat() {
             </button>
           </div>
 
-          {/* WIDOK 1: LISTA I WYSZUKIWARKA KLUBOWICZÓW */}
           {!selectedUser ? (
             <div className="flex-1 flex flex-col overflow-hidden p-4 space-y-3 bg-slate-50/50">
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs">🔍</span>
                 <input
                   type="text"
-                  placeholder="Szukaj po imieniu i nazwisku..."
+                  placeholder="Szukaj: imię + litera nazwiska lub nazwisko..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
@@ -229,11 +296,11 @@ export default function ClubChat() {
               </div>
 
               <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                {filteredUsers.map((user: any) => {
+                {displayedUsers.map((user: any) => {
                   const userUnread = messages.filter(
                     (m: any) =>
                       String(m.nadawca_id) === String(user.id) &&
-                      String(m.odbiorca_id) === String(currentUserId) &&
+                      effectiveIds.includes(String(m.odbiorca_id)) &&
                       !m.przeczytana
                   ).length;
 
@@ -253,7 +320,7 @@ export default function ClubChat() {
                         </div>
                         <div>
                           <div className="font-bold text-xs text-slate-900 group-hover:text-sky-950">{user.name}</div>
-                          <div className="text-[10px] text-slate-400">{user.email || "Klubowicz"}</div>
+                          <div className="text-[10px] text-slate-400">Klubowicz</div>
                         </div>
                       </div>
 
@@ -266,20 +333,19 @@ export default function ClubChat() {
                   );
                 })}
 
-                {filteredUsers.length === 0 && (
-                  <div className="py-12 text-center text-slate-400 text-xs">
-                    Nie znaleziono klubowicza.
+                {displayedUsers.length === 0 && (
+                  <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+                    <div>Brak konwersacji.</div>
+                    <p className="text-[10px]">Wpisz nazwisko lub imię i pierwszą literę nazwiska w wyszukiwarce powyżej.</p>
                   </div>
                 )}
               </div>
             </div>
           ) : (
-            /* WIDOK 2: OKNO ROZMOWY */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
-              {/* WIADOMOŚCI */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {activeChatMessages.map((msg: any) => {
-                  const isMe = String(msg.nadawca_id) === String(currentUserId);
+                  const isMe = effectiveIds.includes(String(msg.nadawca_id));
                   const time = msg.created_at
                     ? new Date(msg.created_at).toLocaleTimeString("pl-PL", {
                         hour: "2-digit",
@@ -316,7 +382,6 @@ export default function ClubChat() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* FORMULARZ WYSYŁANIA */}
               <form
                 onSubmit={handleSendMessage}
                 className="p-3 bg-white border-t border-slate-200 flex items-center gap-2"
@@ -341,7 +406,6 @@ export default function ClubChat() {
         </div>
       )}
 
-      {/* PŁYWAJĄCY DYMEK W PRAWYM DOLNYM ROGU */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="w-14 h-14 rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-2xl flex items-center justify-center text-2xl transition-transform hover:scale-105 cursor-pointer relative border-2 border-amber-400"
