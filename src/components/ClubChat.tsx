@@ -235,6 +235,52 @@ export default function ClubChat() {
       return false;
     });
 
+  // Pomocnicza funkcja renderująca treść wiadomości ze specjalnym stylem dla odznak i wyzwań
+  const renderMessageContent = (tresc: string, isMe: boolean) => {
+    const isBadgeNotification = tresc.includes("🎖️") || tresc.includes("odznakę klubową");
+    const isChallengeNotification = tresc.includes("⚔️") || tresc.includes("Rzuciłem Ci wyzwanie");
+
+    if (isBadgeNotification) {
+      return (
+        <div className="bg-gradient-to-br from-amber-50 to-amber-100/80 border-2 border-amber-400/80 rounded-2xl p-3.5 shadow-sm text-slate-900 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🏆</span>
+            <span className="font-black text-[11px] uppercase tracking-wider text-amber-900">
+              Odznaka Klubowa
+            </span>
+          </div>
+          <p className="text-xs leading-relaxed font-medium text-slate-800">{tresc}</p>
+        </div>
+      );
+    }
+
+    if (isChallengeNotification) {
+      return (
+        <div className="bg-gradient-to-br from-slate-900 to-slate-950 border-2 border-amber-500 rounded-2xl p-3.5 shadow-sm text-white space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">⚔️</span>
+            <span className="font-black text-[11px] uppercase tracking-wider text-amber-400">
+              Nowe Wyzwanie Head-to-Head
+            </span>
+          </div>
+          <p className="text-xs leading-relaxed text-slate-200">{tresc}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed shadow-sm ${
+          isMe
+            ? "bg-slate-900 text-white rounded-br-none"
+            : "bg-white text-slate-800 border border-slate-200 rounded-bl-none"
+        }`}
+      >
+        {tresc}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed bottom-6 right-6 z-[120] font-sans antialiased">
       {isOpen && (
@@ -347,6 +393,7 @@ export default function ClubChat() {
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {activeChatMessages.map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
+                  const isSpecial = msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️");
                   const time = msg.created_at
                     ? new Date(msg.created_at).toLocaleTimeString("pl-PL", {
                         hour: "2-digit",
@@ -366,17 +413,9 @@ export default function ClubChat() {
                   return (
                     <div
                       key={msg.id}
-                      className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
+                      className={`flex flex-col ${isSpecial ? "items-center w-full my-1" : isMe ? "items-end" : "items-start"}`}
                     >
-                      <div
-                        className={`max-w-[78%] p-3 rounded-2xl text-xs leading-relaxed shadow-sm ${
-                          isMe
-                            ? "bg-slate-900 text-white rounded-br-none"
-                            : "bg-white text-slate-800 border border-slate-200 rounded-bl-none"
-                        }`}
-                      >
-                        {msg.tresc}
-                      </div>
+                      {renderMessageContent(msg.tresc, isMe)}
                       
                       <div className="flex items-center gap-2 mt-1 px-1">
                         <span className="text-[9px] text-slate-400 font-mono">{time}</span>
