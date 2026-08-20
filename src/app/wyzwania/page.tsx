@@ -18,6 +18,7 @@ export default function WyzwaniaPage() {
   const [odznaki, setOdznaki] = useState<any[]>([]);
   const [odznakiHistoria, setOdznakiHistoria] = useState<any[]>([]);
   const [wszystkieOdznaki, setWszystkieOdznaki] = useState<any[]>([]);
+  const [wszystkiePrzydzieloneOdznaki, setWszystkiePrzydzieloneOdznaki] = useState<any[]>([]);
   const [dyscyplinyList, setDyscyplinyList] = useState<any[]>([]);
   const [rankingList, setRankingList] = useState<any[]>([]);
   
@@ -27,6 +28,7 @@ export default function WyzwaniaPage() {
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
   const [challengeToResolve, setChallengeToResolve] = useState<any | null>(null);
   const [selectedWinnerId, setSelectedWinnerId] = useState<any | null>(null);
+  const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
   
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
@@ -91,6 +93,7 @@ export default function WyzwaniaPage() {
           await fetchWyzwania();
           await fetchOdznaki(myId);
           await fetchAllOdznakiDef();
+          await fetchWszystkiePrzydzieloneOdznaki();
           await fetchHistoriaOdznak();
           await fetchDyscypliny();
           await fetchRanking(enriched);
@@ -119,7 +122,7 @@ export default function WyzwaniaPage() {
   const fetchOdznaki = async (userId: any) => {
     const { data } = await supabase
       .from("klub_odznaki_klubowicze")
-      .select(`id, przyznano_at, klient_id, klub_odznaki_definicje (nazwa, opis, ikona)`)
+      .select(`id, przyznano_at, klient_id, klub_odznaki_definicje (id, nazwa, opis, ikona)`)
       .eq("klient_id", userId);
     if (data) setOdznaki(data);
   };
@@ -127,6 +130,13 @@ export default function WyzwaniaPage() {
   const fetchAllOdznakiDef = async () => {
     const { data } = await supabase.from("klub_odznaki_definicje").select("*");
     if (data) setWszystkieOdznaki(data);
+  };
+
+  const fetchWszystkiePrzydzieloneOdznaki = async () => {
+    const { data } = await supabase
+      .from("klub_odznaki_klubowicze")
+      .select(`id, przyznano_at, klient_id, odznaka_id, klub_odznaki_definicje (id, nazwa, opis, ikona)`);
+    if (data) setWszystkiePrzydzieloneOdznaki(data);
   };
 
   const fetchHistoriaOdznak = async () => {
@@ -165,6 +175,7 @@ export default function WyzwaniaPage() {
     if (!error) {
       alert("Odznaka przyznana pomyślnie!");
       fetchHistoriaOdznak();
+      fetchWszystkiePrzydzieloneOdznaki();
     } else {
       alert("Błąd przyznawania: " + error.message);
     }
@@ -327,6 +338,19 @@ export default function WyzwaniaPage() {
     return found ? found.name : "Klubowicz";
   };
 
+  // Helper dla członków z odznakami
+  const membersWithBadges = klienci
+    .filter((k: any) => String(k.id) !== String(currentUserId))
+    .map((k: any) => {
+      const userBadges = wszystkiePrzydzieloneOdznaki.filter((item: any) => String(item.klient_id) === String(k.id));
+      return {
+        ...k,
+        badgesCount: userBadges.length,
+        badges: userBadges
+      };
+    })
+    .filter((k: any) => k.badgesCount > 0);
+
   if (isLoading) return <div className="p-8 text-center text-sky-900 font-bold animate-pulse">Ładowanie modułu wyzwań...</div>;
 
   return (
@@ -352,26 +376,26 @@ export default function WyzwaniaPage() {
       {/* ZAKŁADKI */}
       <div className="flex rounded-2xl bg-white p-1 border border-sky-100 text-xs font-bold shadow-sm max-w-xl">
         <button
-          onClick={() => setActiveTab('aktywne')}
+          onClick={() => { setActiveTab('aktywne'); setSelectedMemberForComparison(null); }}
           className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'aktywne' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Pojedynki ⚔️
         </button>
         <button
-          onClick={() => setActiveTab('odznaki')}
+          onClick={() => { setActiveTab('odznaki'); setSelectedMemberForComparison(null); }}
           className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'odznaki' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Gablota odznak 🏆
         </button>
         <button
-          onClick={() => setActiveTab('ranking')}
+          onClick={() => { setActiveTab('ranking'); setSelectedMemberForComparison(null); }}
           className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'ranking' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Ranking 🌍
         </button>
         {userRole === 'admin' && (
           <button
-            onClick={() => setActiveTab('admin')}
+            onClick={() => { setActiveTab('admin'); setSelectedMemberForComparison(null); }}
             className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'admin' ? 'bg-rose-600 text-white font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Admin 🛠️
@@ -382,7 +406,6 @@ export default function WyzwaniaPage() {
       {/* ZAWARTOŚĆ ZAKŁADKI: WYZWANIA (POJEDYNKI) */}
       {activeTab === 'aktywne' && (
         <div className="space-y-8">
-          {/* Aktywne wyzwania (Kafelki) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {wyzwania.filter(w => w.status !== 'zweryfikowane' && w.status !== 'odrzucone').map((w: any) => {
               const przeciwnikName = getClientName(w.przeciwnik_id);
@@ -413,18 +436,8 @@ export default function WyzwaniaPage() {
 
                   {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
                     <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
-                      <button
-                        onClick={() => handleUpdateStatus(w.id, 'aktywne')}
-                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
-                      >
-                        Przyjmij wyzwanie
-                      </button>
-                      <button
-                        onClick={() => handleUpdateStatus(w.id, 'odrzucone')}
-                        className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
-                      >
-                        Odrzuć
-                      </button>
+                      <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Przyjmij wyzwanie</button>
+                      <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Odrzuć</button>
                     </div>
                   )}
                 </div>
@@ -432,7 +445,6 @@ export default function WyzwaniaPage() {
             })}
           </div>
 
-          {/* Zakończone wyzwania (Skompresowana tabela) */}
           <div className="pt-6 border-t border-sky-100">
             <h3 className="font-black text-xs uppercase text-slate-400 mb-4 px-2">Zakończone wyzwania</h3>
             <div className="bg-white rounded-3xl border border-sky-100 overflow-hidden shadow-sm">
@@ -468,24 +480,176 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: ODZNAKI */}
+      {/* ZAWARTOŚĆ ZAKŁADKI: GABLOTA ODZNAK */}
       {activeTab === 'odznaki' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {odznaki.map((o: any) => (
-            <div key={o.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/50 flex items-center justify-center text-3xl shadow-inner">{o.klub_odznaki_definicje?.ikona || '🏆'}</div>
-              <div>
-                <h4 className="font-black text-xs uppercase text-slate-900 tracking-wider">{o.klub_odznaki_definicje?.nazwa}</h4>
-                <p className="text-[10px] text-slate-500 mt-0.5">{o.klub_odznaki_definicje?.opis}</p>
-                <div className="text-[9px] text-slate-400 font-mono mt-2 italic">Zdobyto: {new Date(o.przyznano_at).toLocaleDateString('pl-PL')}</div>
+        <div className="space-y-8">
+          {selectedMemberForComparison ? (
+            // EKRAN PORÓWNANIA ODZNAK (Wzór z Garmin Connect)
+            <div className="bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 text-white space-y-8 shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <button 
+                  onClick={() => setSelectedMemberForComparison(null)}
+                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-colors cursor-pointer flex items-center gap-2"
+                >
+                  ← Wróć do gabloty
+                </button>
+                <h2 className="text-sm font-black uppercase tracking-wider text-slate-300">Porównanie odznak</h2>
+                <div className="w-20"></div>
+              </div>
+
+              {/* Nagłówek z awatarami i punktami */}
+              <div className="grid grid-cols-2 gap-6 text-center items-center py-4 bg-slate-950/40 rounded-3xl p-6 border border-slate-800/80">
+                {/* Użytkownik (Ty) */}
+                <div className="flex flex-col items-center space-y-3">
+                  {currentUserAvatar ? (
+                    <img src={currentUserAvatar} alt={currentUserName} className="w-20 h-20 rounded-full object-cover border-2 border-amber-500 shadow-md" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-full bg-amber-500 text-slate-950 font-black text-2xl flex items-center justify-center shadow-md">
+                      {currentUserName.charAt(0)}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-black text-sm text-white">{currentUserName}</div>
+                    <div className="text-xs text-amber-400 font-bold mt-1 flex items-center justify-center gap-1">
+                      <span>🏆</span> {odznaki.length} odznak
+                    </div>
+                  </div>
+                </div>
+
+                {/* Wybrany klubowicz */}
+                <div className="flex flex-col items-center space-y-3">
+                  {selectedMemberForComparison.avatar ? (
+                    <img src={selectedMemberForComparison.avatar} alt={selectedMemberForComparison.name} className="w-20 h-20 rounded-full object-cover border-2 border-sky-400 shadow-md" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-full bg-sky-500 text-white font-black text-2xl flex items-center justify-center shadow-md">
+                      {selectedMemberForComparison.name.charAt(0)}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-black text-sm text-white">{selectedMemberForComparison.name}</div>
+                    <div className="text-xs text-sky-400 font-bold mt-1 flex items-center justify-center gap-1">
+                      <span>🏆</span> {selectedMemberForComparison.badges.length} odznak
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lista wszystkich definicji odznak i porównanie */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">Wszystkie odznaki w klubie</h3>
+                <div className="space-y-3">
+                  {wszystkieOdznaki.map((def: any) => {
+                    const userHasIt = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
+                    const memberHasIt = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
+
+                    return (
+                      <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0">
+                            {def.ikona || '🏆'}
+                          </div>
+                          <div>
+                            <h4 className="font-black text-xs uppercase text-white tracking-wider">{def.nazwa}</h4>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{def.opis}</p>
+                          </div>
+                        </div>
+
+                        {/* Status posiadania odznaki przez obie osoby */}
+                        <div className="flex items-center gap-4 shrink-0">
+                          {/* Ty */}
+                          <div className="flex flex-col items-center">
+                            {userHasIt ? (
+                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold" title="Posiadasz tę odznakę">
+                                ✓
+                              </div>
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500 text-xs" title="Brak odznaki">
+                                -
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Klubowicz */}
+                          <div className="flex flex-col items-center">
+                            {memberHasIt ? (
+                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold" title="Klubowicz posiada tę odznakę">
+                                ✓
+                              </div>
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500 text-xs" title="Klubowicz nie ma odznaki">
+                                -
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          ))}
-          {odznaki.length === 0 && (
-            <div className="col-span-full bg-white rounded-3xl p-12 text-center border-2 border-dashed border-sky-100 text-slate-400 text-xs space-y-2">
-              <div className="text-3xl">🏆</div>
-              <div className="font-bold text-slate-700">Brak zdobytych odznak</div>
-              <p>Bierz udział w wyzwaniach i treningach, aby zapełnić swoją gablotę!</p>
+          ) : (
+            // STANDARDOWY WIDOK GABLODY (Twoje na górze + Lista osób poniżej)
+            <div className="space-y-8">
+              {/* Sekcja 1: Twoje trofea */}
+              <div className="space-y-4">
+                <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoja gablota odznak</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {odznaki.map((o: any) => (
+                    <div key={o.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex items-center gap-4">
+                      <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/50 flex items-center justify-center text-3xl shadow-inner">{o.klub_odznaki_definicje?.ikona || '🏆'}</div>
+                      <div>
+                        <h4 className="font-black text-xs uppercase text-slate-900 tracking-wider">{o.klub_odznaki_definicje?.nazwa}</h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{o.klub_odznaki_definicje?.opis}</p>
+                        <div className="text-[9px] text-slate-400 font-mono mt-2 italic">Zdobyto: {new Date(o.przyznano_at).toLocaleDateString('pl-PL')}</div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {odznaki.length === 0 && (
+                    <div className="col-span-full bg-white rounded-3xl p-12 text-center border-2 border-dashed border-sky-100 text-slate-400 text-xs space-y-2">
+                      <div className="text-3xl">🏆</div>
+                      <div className="font-bold text-slate-700">Brak zdobytych odznak</div>
+                      <p>Bierz udział w wyzwaniach i treningach, aby zapełnić swoją gablotę!</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Sekcja 2: Lista osób z odznakami (kliknięcie otwiera porównanie) */}
+              <div className="space-y-4 pt-6 border-t border-sky-100">
+                <h3 className="font-black text-xs uppercase text-slate-400 px-2">Klubowiches z odznakami (Kliknij, aby porównać)</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {membersWithBadges.map((member: any) => (
+                    <div 
+                      key={member.id} 
+                      onClick={() => setSelectedMemberForComparison(member)}
+                      className="bg-white rounded-3xl p-5 border border-sky-100 shadow-sm flex items-center justify-between hover:border-amber-400 transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-3">
+                        {member.avatar ? (
+                          <img src={member.avatar} alt={member.name} className="w-12 h-12 rounded-full object-cover border border-sky-200" />
+                        ) : (
+                          <div className="w-12 h-12 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-sm">
+                            {member.name.charAt(0)}
+                          </div>
+                        )}
+                        <div>
+                          <div className="font-bold text-xs text-slate-900 group-hover:text-amber-600 transition-colors">{member.name}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">{member.badgesCount} zdobytych odznak</div>
+                        </div>
+                      </div>
+                      <span className="text-xs font-black bg-amber-50 text-amber-700 px-3 py-1.5 rounded-xl group-hover:bg-amber-500 group-hover:text-slate-950 transition-all">Porównaj ➔</span>
+                    </div>
+                  ))}
+
+                  {membersWithBadges.length === 0 && (
+                    <div className="col-span-full bg-white rounded-3xl p-8 text-center border border-sky-100 text-slate-400 text-xs italic">
+                      Brak innych klubowiczów z odznakami.
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -543,6 +707,7 @@ export default function WyzwaniaPage() {
         <div className="bg-white rounded-3xl p-6 border border-rose-100 shadow-sm space-y-6">
           <div className="flex gap-2 text-xs font-bold border-b border-rose-100 pb-4">
             <button onClick={() => setAdminSubTab('wyzwania')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'wyzwania' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Wyzwania</button>
+            <button onClick={() => setAdminSubTab('odznaki')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'odznaki' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Historia Odznak</button>
             <button onClick={() => setAdminSubTab('dyscypliny')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'dyscypliny' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Dyscypliny</button>
           </div>
           
@@ -569,6 +734,25 @@ export default function WyzwaniaPage() {
                  </td>
                </tr>)}</tbody>
              </table>
+          )}
+
+          {adminSubTab === 'odznaki' && (
+            <div className="space-y-6">
+              <h3 className="font-black text-xs text-rose-950 uppercase">Przyznaj odznakę ręcznie:</h3>
+              <div className="flex flex-col sm:flex-row gap-2">
+                 <select id="user-select" className="p-3 border border-rose-200 rounded-xl w-full text-xs font-bold">
+                   {klienci.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
+                 </select>
+                 <select id="badge-select" className="p-3 border border-rose-200 rounded-xl w-full text-xs font-bold">
+                   {wszystkieOdznaki.map(o => <option key={o.id} value={o.id}>{o.nazwa}</option>)}
+                 </select>
+                 <button onClick={() => {
+                   const userId = (document.getElementById('user-select') as HTMLSelectElement).value;
+                   const badgeId = (document.getElementById('badge-select') as HTMLSelectElement).value;
+                   assignBadge(userId, badgeId);
+                 }} className="bg-rose-600 hover:bg-rose-700 text-white px-6 py-3 rounded-xl text-xs font-black transition-colors cursor-pointer">Przyznaj</button>
+              </div>
+            </div>
           )}
 
           {adminSubTab === 'dyscypliny' && (
