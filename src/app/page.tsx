@@ -193,6 +193,66 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
+  // SILNIK PROGRAMOWANIA TRENINGÓW I CYKLICZNEJ ROTACJI JEDNOSTEK TRENINGOWYCH
+  const getProgrammedWorkout = (classItem: any, isoDate?: string, displayDate?: string) => {
+    if (!classItem || !classItem.title) return null;
+    const matchedRodzaj = rodzajeZajec.find((r: any) => (r.nazwa || '').trim().toLowerCase() === (classItem.title || '').trim().toLowerCase());
+    if (!matchedRodzaj || !matchedRodzaj.programowanieTreningow || !Array.isArray(matchedRodzaj.programowanieList) || matchedRodzaj.programowanieList.length === 0) {
+      return null;
+    }
+    const list = matchedRodzaj.programowanieList;
+    if (list.length === 0) return null;
+
+    const dayKeys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+    const weeklySlots: { key: string; dayIndex: number; start: string }[] = [];
+    
+    zapisaneZajecia
+      .filter((z: any) => (z.title || '').trim().toLowerCase() === (classItem.title || '').trim().toLowerCase())
+      .forEach((z: any) => {
+        dayKeys.forEach((k, dIdx) => {
+          if (z.days && z.days[k]) {
+            weeklySlots.push({ key: k, dayIndex: dIdx, start: z.start || '00:00' });
+          }
+        });
+      });
+
+    weeklySlots.sort((a, b) => {
+      if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
+      return (a.start || '').localeCompare(b.start || '');
+    });
+
+    let targetDate: Date;
+    if (isoDate && isoDate.includes('-')) {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      targetDate = new Date(y, m - 1, d);
+    } else if (displayDate && displayDate.includes('/')) {
+      const [d, m] = displayDate.split('/').map(Number);
+      const y = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      targetDate = new Date(y, m - 1, d);
+    } else {
+      targetDate = new Date();
+    }
+
+    const baseDate = new Date(2026, 0, 5); // Poniedziałek, 5 stycznia 2026 jako baza cyklu
+    const diffMs = targetDate.getTime() - baseDate.getTime();
+    const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
+    const dayOfWeek = targetDate.getDay();
+    const currentDayIdx = dayOfWeek >= 1 && dayOfWeek <= 5 ? dayOfWeek - 1 : 0;
+
+    const slotsCount = weeklySlots.length > 0 ? weeklySlots.length : 1;
+    const currentSlotIndex = weeklySlots.findIndex(s => s.dayIndex === currentDayIdx && s.start === classItem.start);
+    const safeSlotIdx = currentSlotIndex >= 0 ? currentSlotIndex : (currentDayIdx % slotsCount);
+
+    const totalStep = Math.max(0, (diffWeeks * slotsCount) + safeSlotIdx);
+    const workoutIndex = totalStep % list.length;
+    
+    return {
+      index: workoutIndex + 1,
+      total: list.length,
+      workout: list[workoutIndex]
+    };
+  };
+
   // SILNIK AUTOMATYCZNEGO WYPISYWANIA Z LISTY REZERWOWEJ PO UPŁYWIE CZASU DOSTĘPNOŚCI KLUBOWICZA
   const processWaitlistCutoffs = async (
     classes: any[],
@@ -242,18 +302,15 @@ export default function DashboardPage() {
             ? Number(wMember.waitlist_cutoff_minutes) 
             : 30;
 
-          // Jeśli czas do zajęć jest mniejszy lub równy niż zadeklarowany czas gotowości klubowicza
           if (diffMinutes <= cutoffMin && diffMinutes >= 0) {
             hasChanges = true;
 
-            // 1. Usunięcie wpisu z listy rezerwowej w Supabase
             await supabase
               .from('zapisy_zajec')
               .delete()
               .eq('class_key', cls.classKey)
               .eq('klient_id', wMember.id);
 
-            // 2. Zwrot wejścia jeśli to karnet ilościowy
             const { data: clientData } = await supabase.from('klienci').select('*').eq('id', wMember.id).maybeSingle();
             if (clientData) {
               let parsedKarnety = [];
@@ -281,14 +338,12 @@ export default function DashboardPage() {
               }]);
             }
 
-            // 3. Wysłanie powiadomienia Push
             await sendPushNotification(wMember.id, {
               title: `Zwolniono miejsce na liście rezerwowej: ${cls.title}`,
               body: `Zostałeś automatycznie wypisany z listy rezerwowej treningu ${cls.title} (${col.date} ${cls.start}), ponieważ do zajęć zostało mniej niż ${cutoffMin} min. Zwrócono wejście.`,
               url: '/'
             });
 
-            // 4. Log do bazy
             await supabase.from('booking_logs').insert([{
               action_type: 'WAITLIST_CUTOFF_EXPIRED',
               status: 'SUCCESS',
@@ -361,7 +416,6 @@ export default function DashboardPage() {
             if (activeSignups.length < minRequired) {
               hasChanges = true;
               
-              // 1. Zapisujemy odwołanie w bazie
               await supabase.from('nadpisania_zajec').upsert({
                 class_key: cls.classKey,
                 start: cls.start,
@@ -372,7 +426,6 @@ export default function DashboardPage() {
                 is_usuniete: false
               });
 
-              // 2. Wypisujemy wszystkich uczestników i zwracamy im wejścia
               const participantIds: number[] = [];
               for (const participant of classSignups) {
                 participantIds.push(participant.id);
@@ -404,7 +457,6 @@ export default function DashboardPage() {
                 }
               }
 
-              // WYSYŁAMY POWIADOMIENIE PUSH O ODWOŁANIU TRENINGU
               if (participantIds.length > 0) {
                 await sendPushNotification(participantIds, {
                   title: `Odwołano trening: ${cls.title}`,
@@ -413,10 +465,8 @@ export default function DashboardPage() {
                 });
               }
 
-              // 3. Usuwamy wpisy z tabeli zapisy_zajec
               await supabase.from('zapisy_zajec').delete().eq('class_key', cls.classKey);
 
-              // 4. Logujemy zdarzenie
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
@@ -513,7 +563,7 @@ export default function DashboardPage() {
     return bDay === cDay && bMonth === cMonth;
   };
 
-  // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO (PROGRESJA DO 25% + ZASADA 1 DNIA CIĄGŁOŚCI)
+  // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -561,7 +611,6 @@ export default function DashboardPage() {
     };
   };
 
-  // POMOCNIK DO WYCIĄGANIA EFEKTYWNEGO RABATU KLIENTA (RĘCZNY > SYSTEMOWY)
   const getEffectiveDiscount = (client: any) => {
     if (!client) return { percent: 0, label: '', type: 'none' };
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
@@ -656,7 +705,6 @@ export default function DashboardPage() {
       setWszystkieTransakcje(tData);
     }
 
-    // POBIERANIE OGŁOSZEŃ Z SUPABASE
     const { data: ogloszeniaData } = await supabase
       .from('ogloszenia')
       .select('*')
@@ -744,7 +792,6 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    // POBIERANIE ZAPISÓW Z CHRONOLOGICZNYM SORTOWANIEM (ZACHOWANIE KOLEJKI KRZESEŁKA I LIMITU MINUT)
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const groupedZapisy: { [key: string]: any[] } = {};
     if (zapisyData) {
@@ -767,7 +814,6 @@ export default function DashboardPage() {
       setZapisyNaZajecia(groupedZapisy);
     }
 
-    // OBLICZANIE DNI BIEŻĄCEGO TYGODNIA
     const currentMon = getMonday(selectedWeekDate);
     const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
       const dayDate = new Date(currentMon);
@@ -779,7 +825,6 @@ export default function DashboardPage() {
       return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
     });
 
-    // 1. URUCHOMIENIE WERYFIKACJI AUTO-WYPISU Z KRZESEŁKA (JEŚLI MINĄŁ CZAS GOTOWOŚCI)
     const waitlistCutoffChanges = await processWaitlistCutoffs(
       mappedSzablony,
       mappedJednorazowe,
@@ -788,7 +833,6 @@ export default function DashboardPage() {
       activeDashboardDays
     );
 
-    // 2. URUCHOMIENIE WERYFIKACJI AUTOODWOŁYWANIA ZAJĘĆ
     const changesOccurred = await processAutoCancellations(
       mappedSzablony,
       mappedJednorazowe,
@@ -878,8 +922,26 @@ export default function DashboardPage() {
         }
       }
     }
+
+    // POBIERANIE I PARSOWANIE USTAWIEŃ RODZAJÓW ZAJĘĆ (PROGRAMOWANIE TRENINGÓW)
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
-    if (rodzajeData) setRodzajeZajec(rodzajeData);
+    if (rodzajeData) {
+      const parsedRodzaje = rodzajeData.map((item: any) => {
+        let parsedUstawienia: any = {};
+        try {
+          parsedUstawienia = typeof item.ustawienia === 'string' ? JSON.parse(item.ustawienia) : (item.ustawienia || {});
+        } catch(e) {
+          parsedUstawienia = {};
+        }
+        return {
+          id: item.id,
+          nazwa: item.nazwa || '',
+          kolor: item.kolor || '#7bc043',
+          ...parsedUstawienia
+        };
+      });
+      setRodzajeZajec(parsedRodzaje);
+    }
     
     const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
     if (wydarzeniaData) {
@@ -930,7 +992,6 @@ export default function DashboardPage() {
     }
   };
 
-  // AUTOMATYCZNE WYPISYWANIE PO ZABLOKOWANIU (TYLKO PRZYSZŁE ZAJĘCIA)
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -1459,7 +1520,6 @@ export default function DashboardPage() {
     showToast("Karnet został zaktualizowany!");
   };
 
-  // CAŁKOWITE USUNIĘCIE KARNETU + AUTOMATYCZNE WYPISANIE Z PRZYSZŁYCH ZAJĘĆ
   const handleConfirmDeletePass = async (passId: number) => {
     if (!profileClient) return;
     if (!confirm("Czy na pewno chcesz usunąć ten karnet? Klient zostanie automatycznie wypisany ze wszystkich przyszłych zajęć.")) return;
@@ -1467,7 +1527,6 @@ export default function DashboardPage() {
     const now = new Date();
     let cancelledCount = 0;
     
-    // 1. Pobieramy rezerwacje klienta i usuwamy te, które są w przyszłości
     const { data: userSignups } = await supabase
       .from('zapisy_zajec')
       .select('*')
@@ -1501,7 +1560,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 2. Czyścimy zapisy nadchodzące w obiekcie klienta
     let updatedNadchodzace = profileClient.zapisyNadchodzace;
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -1517,7 +1575,6 @@ export default function DashboardPage() {
       });
     }
 
-    // 3. Usuwamy karnet z profilu
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
     const updatedClient = { 
       ...profileClient, 
@@ -1533,7 +1590,6 @@ export default function DashboardPage() {
 
     await updateSupabaseClient(updatedClient, dbPayload);
 
-    // 4. Rejestrujemy transakcje i logi
     if (cancelledCount > 0) {
       await supabase.from('transakcje').insert([{
         klient_id: profileClient.id,
@@ -1557,7 +1613,6 @@ export default function DashboardPage() {
       : "Karnet został usunięty."
     );
   };
-
   const handleConfirmSuspendPass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !suspendPassTarget) return;
@@ -1810,13 +1865,10 @@ export default function DashboardPage() {
     }
   };
 
-  // =========================================================================
   // GŁÓWNA LOGIKA ZAPISU KLUBOWICZA ZE STRONY GŁÓWNEJ
-  // =========================================================================
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
-    // 0. BLOKADA: WERYFIKACJA POSIADANIA AKTYWNEGO KARNETU
     const karnetyUzytkownika = currentUser.karnetyKlubowicza || [];
     const dzisiajDateObj = new Date();
     dzisiajDateObj.setHours(0, 0, 0, 0);
@@ -1846,7 +1898,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // Weryfikacja automatycznego odwołania
     const classKeyCurrent = `${selectedClass.id}_${selectedClass.displayDate}`;
     const zapisaniCurrent = zapisyNaZajecia[classKeyCurrent] || [];
     const autoCancelStatus = checkClassAutoCancellation(selectedClass, selectedClass.displayDate, zapisaniCurrent);
@@ -1856,7 +1907,6 @@ export default function DashboardPage() {
       return; 
     }
     
-    // 1. Zadłużenie w portfelu
     const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
     if (walletVal < 0) { 
       showToast("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać.", 'error'); 
@@ -1866,7 +1916,6 @@ export default function DashboardPage() {
     const now = new Date();
     const dzisiajData = todayStr;
 
-    // 2. Blokady konta lub karnetu
     const clientBanDate = currentUser.blokadaDo || currentUser.blokada_do;
     const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
     const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
@@ -1893,7 +1942,6 @@ export default function DashboardPage() {
     const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
     const calcClassDateStr = `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-    // 3. Zawieszenie karnetu
     const isPassSuspended = (currentUser.karnetyKlubowicza || []).some((k: any) => {
       if (k.zawieszonyOd) {
          const sOd = k.zawieszonyOd;
@@ -1915,7 +1963,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // 4. Okno zapisu w przód (per-karnet)
     const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
       ? currentUser.karnetyKlubowicza[0].nazwa
       : (currentUser.pass || 'OPEN');
@@ -1937,7 +1984,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // 5. Blokada zapisów przed startem zajęć (per-trening)
     const trainingName = selectedClass.title || '';
     const cutoffMinutes = bookingRules.booking_cutoff_per_class?.[trainingName] !== undefined
       ? bookingRules.booking_cutoff_per_class[trainingName]
@@ -1960,7 +2006,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 6. Karencja po wygaśnięciu karnetu (per-karnet)
     if (currentUser.expiresDate) {
       const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
       const expDate = new Date(currentUser.expiresDate);
@@ -1981,7 +2026,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 7. Limit zajęć jednego typu dziennie
     const maxSameType = bookingRules.max_daily_same_type_bookings ?? 1;
     if (maxSameType < 999) {
       let sameTypeCount = 0;
@@ -2014,7 +2058,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 8. Limit wszystkich zajęć dziennie
     let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
       ? bookingRules.max_daily_bookings
       : Infinity;
@@ -2059,7 +2102,6 @@ export default function DashboardPage() {
     const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
     const isWaitlistTarget = glownaCount >= limitZajec;
 
-    // JEŚLI BRAKUJE MIEJSC – OTWIERAMY MODAL WYBORU CZASU WYPISU Z KRZESEŁKA
     if (isWaitlistTarget) {
       setSelectedWaitlistCutoff(30);
       setIsWaitlistModalOpen(true);
@@ -2077,7 +2119,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // Zużycie wejścia dla karnetu ilościowego
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -2113,7 +2154,6 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
-  // POTWIERDZENIE ZAPISU NA KRZESEŁKO Z WYBRANYM LOKALNYM LUB GLOBALNYM CZASEM GOTOWOŚCI
   const handleConfirmWaitlistSignup = async (cutoffMinutes: number) => {
     if (!currentUser || !selectedClass) return;
 
@@ -2130,7 +2170,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // Zużycie wejścia
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -2168,9 +2207,6 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
-  // =========================================================================
-  // GŁÓWNA LOGIKA WYPISANIA KLUBOWICZA ZE SZTYWNĄ BLOKADĄ I INTELIGENTNYM AWANSEM
-  // =========================================================================
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -2183,7 +2219,6 @@ export default function DashboardPage() {
     const now = new Date();
     const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-    // SZTYWNA BLOKADA WYPISANIA PO PRZEKROCZENIU MINIMALNEGO CZASU
     if (diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
       showToast(`Nie możesz się wypisać! Minimalny czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
       return;
@@ -2239,7 +2274,6 @@ export default function DashboardPage() {
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    // INTELIGENTNY AWANS: WYBIERAMY PIERWSZĄ OSOBĘ Z KRZESEŁKA, KTÓREJ LIMIT GOTOWOŚCI NIE WYGASŁ
     if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
       const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
         const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
@@ -2271,7 +2305,6 @@ export default function DashboardPage() {
           payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
         }]);
 
-        // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
         await sendPushNotification(kandydatDoAwansu.id, {
           title: 'Zwolniło się miejsce!',
           body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
@@ -2299,7 +2332,6 @@ export default function DashboardPage() {
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] ?? bookingRules.cancel_deadline_minutes ?? 90;
     const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-    // SZTYWNA BLOKADA WYPISANIA PO CZASIE
     if (diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
       showToast(`Nie możesz się wypisać! Czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
       return;
@@ -2370,7 +2402,6 @@ export default function DashboardPage() {
           payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
         }]);
 
-        // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
         await sendPushNotification(kandydatDoAwansu.id, {
           title: 'Zwolniło się miejsce!',
           body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${title} (${startStr})!`,
@@ -2534,7 +2565,6 @@ export default function DashboardPage() {
         payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
       }]);
 
-      // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
       await sendPushNotification(pierwszaRezerwa.id, {
         title: 'Zwolniło się miejsce!',
         body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
@@ -2743,6 +2773,9 @@ export default function DashboardPage() {
               const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
 
               if (classStartDateTime >= now) {
+                const targetIso = `${now.getFullYear()}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                const progWorkout = getProgrammedWorkout(classInfo, targetIso, dateStr);
+
                 myUpcomingClasses.push({
                   ...classInfo,
                   classKey,
@@ -2750,7 +2783,8 @@ export default function DashboardPage() {
                   fullDateObj: new Date(now.getFullYear(), m - 1, d),
                   signupStatus: mojZapis.status || 'zapisany',
                   isKrzeselko: mojZapis.status === 'krzesełko',
-                  waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30
+                  waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30,
+                  programmedWorkout: progWorkout
                 });
               }
             }
@@ -2764,7 +2798,6 @@ export default function DashboardPage() {
     });
   }
 
-  // FILTROWANIE AKTYWNYCH OGŁOSZEŃ DLA ZALOGOWANEGO UŻYTKOWNIKA
   const userPassNames = (currentUser?.karnetyKlubowicza || []).map((k: any) => k.nazwa);
   if (currentUser?.pass && !userPassNames.includes(currentUser.pass)) {
     userPassNames.push(currentUser.pass);
@@ -2988,7 +3021,7 @@ export default function DashboardPage() {
               {myUpcomingClasses.length > 0 && (
                 <div className="flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
                   <div className="w-[45%]">Data</div>
-                  <div className="w-[40%]">Zajęcia</div>
+                  <div className="w-[40%]">Zajęcia i plan</div>
                   <div className="w-[15%] text-right pr-2">Wypisz</div>
                 </div>
               )}
@@ -3021,6 +3054,18 @@ export default function DashboardPage() {
                             </span>
                           )}
                         </div>
+                        {cls.programmedWorkout && (
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            <span className="bg-amber-100 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded border border-amber-300">
+                              Trening {cls.programmedWorkout.index}/{cls.programmedWorkout.total}: {cls.programmedWorkout.workout.tytul}
+                            </span>
+                            {cls.programmedWorkout.workout.opis && (
+                              <span className="text-[10px] text-slate-500 truncate max-w-[200px]" title={cls.programmedWorkout.workout.opis}>
+                                ({cls.programmedWorkout.workout.opis})
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
                       </div>
                       <div className="w-[15%] flex justify-end items-center pr-1">
@@ -3220,6 +3265,9 @@ export default function DashboardPage() {
                       const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
                       const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
                       const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
+                      
+                      // POBIERAMY ZAPROGRAMOWANĄ JEDNOSTKĘ DLA TEGO TRENINGU
+                      const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
 
                       return (
                         <div
@@ -3234,7 +3282,8 @@ export default function DashboardPage() {
                               ...item,
                               displayDate: col.date,
                               isoDate: col.isoDate, 
-                              durationText
+                              durationText,
+                              programmedWorkout: progInfo
                             });
                             setIsSearchingClient(false);
                             setSearchClientQuery('');
@@ -3259,6 +3308,21 @@ export default function DashboardPage() {
                               </span>
                             )}
                           </div>
+
+                          {/* BOKS ZAPROGRAMOWANEGO TRENINGU W KALENDARZU */}
+                          {progInfo && !isClassCancelled && !item.isUsunięte && (
+                            <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-1.5 text-[10px] space-y-0.5 shadow-2xs">
+                              <div className="flex items-center justify-between text-amber-950 font-black">
+                                <span className="truncate">🏋️ {progInfo.workout.tytul}</span>
+                                <span className="bg-amber-200 text-amber-900 px-1 py-0.2 rounded text-[9px] font-mono shrink-0 ml-1">#{progInfo.index}/{progInfo.total}</span>
+                              </div>
+                              {progInfo.workout.opis && (
+                                <div className="text-slate-600 text-[9px] line-clamp-2 leading-tight">
+                                  {progInfo.workout.opis}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           
                           {item.isUsunięte ? (
                             <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200">
@@ -3340,7 +3404,6 @@ export default function DashboardPage() {
           })}
         </div>
       </section>
-
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
@@ -3654,7 +3717,7 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* MODAL: ZARZĄDZANIE UCZESTNIKAMI ZAJĘĆ */}
+      {/* MODAL: ZARZĄDZANIE UCZESTNIKAMI ZAJĘĆ (Z WIDOKIEM PROGRAMOWANEGO TRENINGU) */}
       {selectedClass && (() => {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
         const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
@@ -3666,7 +3729,6 @@ export default function DashboardPage() {
           return nameA.localeCompare(nameB);
         };
 
-        // ROZDZIELENIE UCZESTNIKÓW NA LISTĘ GŁÓWNĄ I LISTĘ REZERWOWĄ (KRZESEŁKO)
         const glownaNieposortowana = zapisaniWszyscy.filter(u => u.status === 'zapisany');
         const listaGlowna = [...glownaNieposortowana].sort(sortAlfabet);
         const listaKrzesełko = zapisaniWszyscy.filter(u => u.status === 'krzesełko');
@@ -3706,6 +3768,31 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
+
+              {/* WYRÓŻNIONA KARTA PROGRAMOWANIA TRENINGÓW W MODALU */}
+              {selectedClass.programmedWorkout && (
+                <div className="bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-white border-2 border-amber-300 rounded-2xl p-4 shadow-sm space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-amber-950 uppercase tracking-wider flex items-center gap-2">
+                      <span className="text-base">🏋️</span>
+                      <span>Plan jednostki: {selectedClass.programmedWorkout.workout.tytul}</span>
+                    </span>
+                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider shadow-xs">
+                      Trening #{selectedClass.programmedWorkout.index} z {selectedClass.programmedWorkout.total}
+                    </span>
+                  </div>
+                  {selectedClass.programmedWorkout.workout.opis ? (
+                    <p className="text-xs font-medium text-slate-700 whitespace-pre-wrap leading-relaxed pt-1">
+                      {selectedClass.programmedWorkout.workout.opis}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] italic text-slate-400">
+                      Brak szczegółowego opisu dla tej jednostki treningowej.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-3">
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -4011,7 +4098,7 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* NOWY MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ (KRZESEŁKO) */}
+      {/* MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ (KRZESEŁKO) */}
       {isWaitlistModalOpen && selectedClass && (
         <div className="fixed inset-0 bg-slate-950/70 z-[70] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -4264,9 +4351,8 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                {/* SEKCJA RABATÓW: RĘCZNY (NADRZĘDNY) ORAZ SYSTEMOWY (CIĄGŁOŚĆ) */}
+                {/* SEKCJA RABATÓW */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* BOKS 1: RABAT RĘCZNY (NADRZĘDNY) */}
                   <div className="bg-white border-2 border-amber-300/80 rounded-2xl p-4 shadow-sm space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -4308,7 +4394,6 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  {/* BOKS 2: RABAT SYSTEMOWY (CIĄGŁOŚĆ KARNETU) */}
                   <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -5232,4 +5317,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
