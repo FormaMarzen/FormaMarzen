@@ -230,6 +230,7 @@ export default function ClubChat() {
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
+      // Konto systemowe jest zawsze dostępne na liście kontaktów
       if (Number(k.id) === SYSTEM_ID) return true;
 
       const q = searchQuery.trim().toLowerCase();
@@ -263,6 +264,7 @@ export default function ClubChat() {
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
 
+    // Styl dla życzeń urodzinowych
     if (isBirthdayNotification) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
@@ -282,6 +284,7 @@ export default function ClubChat() {
       );
     }
 
+    // Styl dla ogólnych powiadomień systemowych/odznak
     if (isBadgeNotification || isSystemSender) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
@@ -301,6 +304,7 @@ export default function ClubChat() {
       );
     }
 
+    // Styl dla wyzwań
     if (isChallengeNotification) {
       return (
         <div className="w-full bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-amber-500 rounded-3xl p-4 shadow-md text-white space-y-2">

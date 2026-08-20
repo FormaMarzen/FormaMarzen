@@ -5,6 +5,7 @@ import { supabase } from '../raporty/klienci/supabase';
 
 // GLOBALNA BLOKADA (Zabezpieczenie przed podwójnym renderowaniem React Strict Mode)
 let globalCreatingLock = false;
+const SYSTEM_CHAT_ID = 5000;
 
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
@@ -63,34 +64,35 @@ export default function KarnetyPage() {
   };
 
   // =========================================================================
-  // 🎂 OBSŁUGA RABATU URODZINOWEGO (20% PRZEZ 5 DNI OD DNIA URODZIN)
+  // 🎂 NIEZAWODNA OBSŁUGA URODZIN (20% RABATU PRZEZ 5 DNI OD DNIA URODZIN)
   // =========================================================================
   const checkBirthdayStatus = (birthDateStr: string | null | undefined) => {
     if (!birthDateStr) return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
 
+    const cleanStr = String(birthDateStr).trim();
     let bMonth = -1;
     let bDay = -1;
 
-    if (birthDateStr.includes('-')) {
-      const parts = birthDateStr.split('-');
+    const delimiter = cleanStr.includes('-') ? '-' : cleanStr.includes('.') ? '.' : cleanStr.includes('/') ? '/' : null;
+
+    if (delimiter) {
+      const parts = cleanStr.split(delimiter);
       if (parts.length >= 3) {
         if (parts[0].length === 4) {
+          // Format RRRR-MM-DD
           bMonth = parseInt(parts[1], 10) - 1;
           bDay = parseInt(parts[2], 10);
         } else {
-          bMonth = parseInt(parts[1], 10) - 1;
+          // Format DD-MM-RRRR lub DD.MM.RRRR
           bDay = parseInt(parts[0], 10);
+          bMonth = parseInt(parts[1], 10) - 1;
         }
-      }
-    } else if (birthDateStr.includes('.')) {
-      const parts = birthDateStr.split('.');
-      if (parts.length >= 3) {
-        bMonth = parseInt(parts[1], 10) - 1;
-        bDay = parseInt(parts[0], 10);
       }
     }
 
-    if (bMonth < 0 || isNaN(bMonth) || isNaN(bDay)) return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
+    if (bMonth < 0 || isNaN(bMonth) || isNaN(bDay)) {
+      return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
+    }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -102,6 +104,7 @@ export default function KarnetyPage() {
     const diffTime = today.getTime() - thisYearBirthday.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
 
+    // Rabat aktywny od dnia urodzin (dzień 0) przez kolejne 4 dni (łącznie 5 dni: 0,1,2,3,4)
     if (diffDays >= 0 && diffDays < 5) {
       return {
         isBirthdayWindow: true,
@@ -113,33 +116,34 @@ export default function KarnetyPage() {
     return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
   };
 
-  // 💬 WYSYŁANIE WIADOMOŚCI URODZINOWEJ NA CZACIE
+  // 💬 WYSYŁANIE WIADOMOŚCI URODZINOWEJ NA CZAT DO TABELI czat_wiadomosci
   const sendBirthdayChatMessage = async (client: any) => {
     if (!client || !client.id) return;
     const currentYear = new Date().getFullYear();
     const lastSentYear = client.ostatnie_zyczenia_rok || client.urodziny_wiadomosc_rok;
 
-    if (lastSentYear === currentYear) return;
+    if (Number(lastSentYear) === currentYear) return;
 
     const birthdayMessage = `🎂 Wszystkiego najlepszego z okazji urodzin od całego zespołu FORMA MARZEŃ! 🎉 Z tej okazji przygotowaliśmy dla Ciebie specjalny prezent: 20% rabatu na zakup lub przedłużenie dowolnego karnetu. Rabat jest aktywny przez 5 dni i nalicza się automatycznie w Twoim panelu!`;
 
     try {
-      await supabase.from('wiadomosci').insert([{
-        klient_id: client.id,
-        nadawca: 'FORMA MARZEŃ',
-        nadawca_typ: 'klub',
+      await supabase.from('czat_wiadomosci').insert([{
+        nadawca_id: SYSTEM_CHAT_ID,
+        nadawca_nazwa: 'Forma Marzeń (System)',
+        nadawca_avatar: null,
+        odbiorca_id: client.id,
         tresc: birthdayMessage,
         przeczytana: false,
+        przeczytana_at: null,
         created_at: new Date().toISOString()
       }]);
     } catch (e) {
-      console.log("Opcjonalna tabela wiadomosci:", e);
+      console.log("Błąd zapisu wiadomości urodzinowej:", e);
     }
 
     try {
       await supabase.from('klienci').update({
-        ostatnie_zyczenia_rok: currentYear,
-        urodziny_wiadomosc_rok: currentYear
+        ostatnie_zyczenia_rok: currentYear
       }).eq('id', client.id);
     } catch (e) {}
   };
@@ -283,9 +287,9 @@ export default function KarnetyPage() {
 
   // EFEKTYWNY RABAT Z UWZGLĘDNIENIEM: URODZIN (20%), CIĄGŁOŚCI, UMOWY 12M I RABATÓW RĘCZNYCH
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false) => {
-    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0 };
+    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0 };
     
-    const bStatus = checkBirthdayStatus(client.birthDate || client.Data_urodzenia || client['Data urodzenia'] || client.data_urodzenia);
+    const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia']);
     const birthdayDiscountVal = bStatus.isBirthdayWindow ? 20 : 0;
 
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
@@ -322,7 +326,7 @@ export default function KarnetyPage() {
       };
     }
 
-    return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0 };
+    return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0 };
   };
 
   // POMOCNIK: OBLICZANIE PRO-RATA DLA PIERWSZEGO MIESIĄCA UMOWY 12M
@@ -392,7 +396,7 @@ export default function KarnetyPage() {
               lastName: c.Nazwisko || '',
               email: c['E-mail'] || c.email || '',
               discount: c.discount || '',
-              birthDate: c['Data urodzenia'] || c.Data_urodzenia || c.data_urodzenia || c.urodziny || null,
+              birthDate: c.Urodziny || c.urodziny || c['Data urodzenia'] || c.Data_urodzenia || c.data_urodzenia || null,
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
@@ -417,6 +421,7 @@ export default function KarnetyPage() {
                "Numer tel.": '-',
                Portfel: '0.00 PLN',
                discount: '',
+               Urodziny: null,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -1631,7 +1636,7 @@ export default function KarnetyPage() {
   // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU Z POWIADOMIENIAMI I RABATAMI
   if (appRole === 'klubowicz' && currentUser) {
     const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const birthdayStatus = checkBirthdayStatus(currentUser.birthDate);
+    const birthdayStatus = checkBirthdayStatus(currentUser.birthDate || currentUser.Urodziny);
 
     return (
       <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in pb-24 font-sans antialiased relative">
