@@ -9,6 +9,18 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Pomocnik do konwersji klucza VAPID
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export default function DashboardPage() {
   const nowLocal = new Date();
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
@@ -20,6 +32,77 @@ export default function DashboardPage() {
   const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW
+  const sendPushNotification = async (clientIds: number | number[], payload: { title: string; body: string; url?: string }) => {
+    try {
+      const ids = Array.isArray(clientIds) ? clientIds : [clientIds];
+      if (ids.length === 0) return;
+
+      const { data: clients } = await supabase
+        .from('klienci')
+        .select('id, push_subscription')
+        .in('id', ids);
+
+      if (!clients || clients.length === 0) return;
+
+      const subscriptions = clients
+        .map(c => {
+          if (!c.push_subscription) return null;
+          try {
+            return typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      if (subscriptions.length === 0) return;
+
+      await fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscriptions,
+          payload
+        })
+      });
+    } catch (err) {
+      console.error('Błąd podczas wysyłania powiadomienia push:', err);
+    }
+  };
+
+  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
+  const subscribeToPushNotifications = async (klientId: number) => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (!subscription) {
+        const publicVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+        if (!publicVapidKey) return;
+
+        const convertedVapidKey = urlBase64ToUint8Array(publicVapidKey);
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: convertedVapidKey
+        });
+      }
+
+      if (subscription) {
+        const subStr = JSON.stringify(subscription);
+        await supabase.from('klienci').update({ push_subscription: subStr }).eq('id', klientId);
+      }
+    } catch (err) {
+      console.warn('Nie udało się zarejestrować powiadomień Push:', err);
+    }
   };
 
   const [salesPeriod, setSalesPeriod] = useState('Dziś');
@@ -106,7 +189,7 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB I ZWROTU WEJŚĆ
+  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB, ZWROTU WEJŚĆ I POWIADOMIEŃ PUSH
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -175,7 +258,9 @@ export default function DashboardPage() {
               });
 
               // 2. Wypisujemy wszystkich uczestników i zwracamy im wejścia
+              const participantIds: number[] = [];
               for (const participant of classSignups) {
+                participantIds.push(participant.id);
                 const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
                 if (clientData) {
                   let parsedKarnety = [];
@@ -202,6 +287,15 @@ export default function DashboardPage() {
                     opis: `Automatyczne odwołanie zajęć "${cls.title}" (${col.date} ${cls.start}) z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono 1 wejście.`
                   }]);
                 }
+              }
+
+              // WYSYŁAMY POWIADOMIENIE PUSH O ODWOŁANIU TRENINGU
+              if (participantIds.length > 0) {
+                await sendPushNotification(participantIds, {
+                  title: `Odwołano trening: ${cls.title}`,
+                  body: `Trening ${cls.title} w dniu ${col.date} o godz. ${cls.start} został odwołany z powodu zbyt małej liczby uczestników. Zwrócono wejście.`,
+                  url: '/'
+                });
               }
 
               // 3. Usuwamy wpisy z tabeli zapisy_zajec
@@ -316,9 +410,9 @@ export default function DashboardPage() {
     let isContinuous = false;
     for (const k of karnety) {
       if (k.waznyDo) {
-        const exp = new Date(k.waznyDo);
-        exp.setHours(0, 0, 0, 0);
-        const diffDays = Math.floor((today.getTime() - exp.getTime()) / (1000 * 60 * 60 * 24));
+        const expDate = new Date(k.waznyDo);
+        expDate.setHours(0, 0, 0, 0);
+        const diffDays = Math.floor((today.getTime() - expDate.getTime()) / (1000 * 60 * 60 * 24));
         
         if (diffDays <= 1) {
           if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
@@ -641,7 +735,10 @@ export default function DashboardPage() {
       setKlienciList(enriched);
       if (userEmail && userEmail !== 'maciejklaput@gmail.com') {
         const myUser = enriched.find((c: any) => c.email === userEmail);
-        if (myUser) setCurrentUser(myUser);
+        if (myUser) {
+          setCurrentUser(myUser);
+          subscribeToPushNotifications(myUser.id);
+        }
       }
       if (profileClient) {
         const currentActive = enriched.find((c: any) => c.id === profileClient.id);
@@ -1880,7 +1977,7 @@ export default function DashboardPage() {
   };
 
   // =========================================================================
-  // GŁÓWNA LOGIKA WYPISANIA KLUBOWICZA ZE SZTYWNĄ BLOKADĄ PO CZASIE
+  // GŁÓWNA LOGIKA WYPISANIA KLUBOWICZA ZE SZTYWNĄ BLOKADĄ PO CZASIE I POWIADOMIENIEM O AWANSIE
   // =========================================================================
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
@@ -1974,6 +2071,13 @@ export default function DashboardPage() {
         rule_applied: 'waitlist_auto_promote',
         payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
       }]);
+
+      // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
+      await sendPushNotification(pierwszaRezerwa.id, {
+        title: 'Zwolniło się miejsce!',
+        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
+        url: '/'
+      });
     }
 
     showToast("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
@@ -2052,6 +2156,13 @@ export default function DashboardPage() {
         rule_applied: 'waitlist_auto_promote',
         payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
       }]);
+
+      // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
+      await sendPushNotification(pierwszaRezerwa.id, {
+        title: 'Zwolniło się miejsce!',
+        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${title} (${startStr})!`,
+        url: '/'
+      });
     }
 
     showToast("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
@@ -2206,6 +2317,13 @@ export default function DashboardPage() {
         rule_applied: 'waitlist_auto_promote',
         payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
       }]);
+
+      // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
+      await sendPushNotification(pierwszaRezerwa.id, {
+        title: 'Zwolniło się miejsce!',
+        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
+        url: '/'
+      });
     }
 
     if (blokadaZapisow) {
@@ -2267,9 +2385,8 @@ export default function DashboardPage() {
     setClientToMarkAbsent(null); setBlokadaZapisow(false); loadData();
     showToast(`Oznaczono nieobecność dla ${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName}.`);
   };
-
-  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
-    if (isOdwolane || isUsuniete) return '#fda4af';
+  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsunięte: boolean) => {
+    if (isOdwolane || isUsunięte) return '#fda4af';
     if (!title) return '#0284c7';
     const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
     if (found && found.kolor) return found.kolor;
@@ -2305,6 +2422,7 @@ export default function DashboardPage() {
     };
     return getEarliestExpirationDate(a).localeCompare(getEarliestExpirationDate(b));
   });
+
   const today = new Date();
   const currentMonday = getMonday(selectedWeekDate);
   const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
@@ -3665,6 +3783,7 @@ export default function DashboardPage() {
           </div>
         );
       })()}
+
       {/* MODAL: AKCJE KLUBOWICZA W TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">

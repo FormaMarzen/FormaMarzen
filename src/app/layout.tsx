@@ -53,6 +53,13 @@ export default function RootLayout({
   useEffect(() => {
     setIsMounted(true);
 
+    // Rejestracja Service Workera dla powiadomień Push
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.error('Service Worker registration failed:', err);
+      });
+    }
+
     const checkAuthAndRole = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       
