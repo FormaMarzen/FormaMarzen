@@ -26,7 +26,7 @@ export default function WyzwaniaPage() {
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
   const [challengeToResolve, setChallengeToResolve] = useState<any | null>(null);
   const [selectedWinnerId, setSelectedWinnerId] = useState<any | null>(null);
-
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
@@ -196,7 +196,7 @@ export default function WyzwaniaPage() {
   // 6. Otwieranie modalu wyboru zwycięzcy
   const openWinnerModal = (challenge: any) => {
     setChallengeToResolve(challenge);
-    setSelectedWinnerId(challenge.tworca_id); // Domyślnie zaznaczamy twórcę
+    setSelectedWinnerId(challenge.tworca_id); 
     setIsWinnerModalOpen(true);
   };
 
@@ -214,12 +214,12 @@ export default function WyzwaniaPage() {
       .eq("id", challengeToResolve.id);
 
     if (!error) {
-      alert("Zwycięzca został wybrany i wyzwanie zatwierdzone!");
+      alert("Wynik zatwierdzony!");
       setIsWinnerModalOpen(false);
       setChallengeToResolve(null);
       fetchWyzwania();
     } else {
-      alert("Błąd podczas zapisywania zwycięzcy: " + error.message);
+      alert("Błąd: " + error.message);
     }
   };
 
@@ -348,64 +348,80 @@ export default function WyzwaniaPage() {
 
       {/* ZAWARTOŚĆ ZAKŁADKI: WYZWANIA */}
       {activeTab === 'aktywne' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {wyzwania.filter(w => w.status !== 'zakonczone').map((w: any) => {
-            const przeciwnikName = getClientName(w.przeciwnik_id);
-            const tworcaName = getClientName(w.tworca_id);
+        <div className="space-y-8">
+          {/* Aktywne wyzwania (Kafelki) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {wyzwania.filter(w => w.status !== 'zweryfikowane' && w.status !== 'odrzucone').map((w: any) => {
+              const przeciwnikName = getClientName(w.przeciwnik_id);
+              const tworcaName = getClientName(w.tworca_id);
 
-            return (
-              <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full ${
-                      w.status === 'zweryfikowane' ? 'bg-emerald-500 text-white' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {w.status}
-                    </span>
-                    <h3 className="font-black text-sm text-slate-900 mt-2">{w.dyscyplina}</h3>
-                    <p className="text-xs text-slate-600 mt-1">{w.opis}</p>
+              return (
+                <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">{w.status}</span>
+                      <h3 className="font-black text-sm text-slate-900 mt-2">{w.dyscyplina}</h3>
+                      <p className="text-xs text-slate-600 mt-1">{w.opis}</p>
+                    </div>
+                    <span className="text-2xl">🎯</span>
                   </div>
-                  <span className="text-2xl">🎯</span>
+
+                  <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
+                    <div>
+                      <div className="text-[10px] text-slate-400 font-bold uppercase">Rzucający</div>
+                      <div className="font-bold text-slate-800">{tworcaName}</div>
+                    </div>
+                    <span className="font-black text-amber-500 text-sm">VS</span>
+                    <div className="text-right">
+                      <div className="text-[10px] text-slate-400 font-bold uppercase">Przeciwnik</div>
+                      <div className="font-bold text-slate-800">{przeciwnikName}</div>
+                    </div>
+                  </div>
+
+                  {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
+                    <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
+                      <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Przyjmij wyzwanie</button>
+                      <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Odrzuć</button>
+                    </div>
+                  )}
                 </div>
+              );
+            })}
+          </div>
 
-                <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
-                  <div>
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Rzucający</div>
-                    <div className="font-bold text-slate-800">{tworcaName}</div>
-                  </div>
-                  <span className="font-black text-amber-500 text-sm">VS</span>
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Przeciwnik</div>
-                    <div className="font-bold text-slate-800">{przeciwnikName}</div>
-                  </div>
-                </div>
-
-                {w.zwyciezca_id && (
-                  <div className="bg-amber-50 text-amber-900 p-3 rounded-2xl text-xs font-bold flex items-center justify-between border border-amber-200">
-                    <span>🏆 Zwycięzca:</span>
-                    <span className="font-black">{getClientName(w.zwyciezca_id)}</span>
-                  </div>
-                )}
-
-                {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
-                  <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
-                    <button
-                      onClick={() => handleUpdateStatus(w.id, 'aktywne')}
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
-                    >
-                      Przyjmij wyzwanie
-                    </button>
-                    <button
-                      onClick={() => handleUpdateStatus(w.id, 'odrzucone')}
-                      className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
-                    >
-                      Odrzuć
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {/* Zakończone wyzwania (Skompresowana tabela) */}
+          <div className="pt-6 border-t border-sky-100">
+            <h3 className="font-black text-xs uppercase text-slate-400 mb-4 px-2">Zakończone wyzwania</h3>
+            <div className="bg-white rounded-3xl border border-sky-100 overflow-hidden shadow-sm">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="border-b border-sky-100 text-slate-400 uppercase font-bold text-[10px] bg-slate-50">
+                    <th className="py-3 px-4">Dyscyplina</th>
+                    <th className="py-3 px-4">Uczestnicy</th>
+                    <th className="py-3 px-4">Zwycięzca</th>
+                    <th className="py-3 px-4 text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {wyzwania.filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone').map((w: any) => (
+                    <tr key={w.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <td className="py-3 px-4 font-bold text-slate-900">{w.dyscyplina}</td>
+                      <td className="py-3 px-4 text-slate-600">{getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}</td>
+                      <td className="py-3 px-4 font-bold text-amber-600">{w.zwyciezca_id ? getClientName(w.zwyciezca_id) : "-"}</td>
+                      <td className="py-3 px-4 text-right">
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${w.status === 'zweryfikowane' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {w.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {wyzwania.filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone').length === 0 && (
+                    <tr><td colSpan={4} className="py-6 text-center text-slate-400 italic">Brak zakończonych wyzwań.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
@@ -422,14 +438,6 @@ export default function WyzwaniaPage() {
               </div>
             </div>
           ))}
-
-          {odznaki.length === 0 && (
-            <div className="col-span-full bg-white rounded-3xl p-12 text-center border-2 border-dashed border-sky-100 text-slate-400 text-xs space-y-2">
-              <div className="text-3xl">🏆</div>
-              <div className="font-bold text-slate-700">Brak zdobytych odznak</div>
-              <p>Bierz udział w wyzwaniach i treningach, aby zapełnić swoją gablotę!</p>
-            </div>
-          )}
         </div>
       )}
 
@@ -438,7 +446,6 @@ export default function WyzwaniaPage() {
         <div className="bg-white rounded-3xl p-6 border border-rose-100 shadow-sm space-y-6">
           <div className="flex gap-2 text-xs font-bold border-b border-rose-100 pb-4">
             <button onClick={() => setAdminSubTab('wyzwania')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'wyzwania' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Wyzwania</button>
-            <button onClick={() => setAdminSubTab('odznaki')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'odznaki' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Historia Odznak</button>
             <button onClick={() => setAdminSubTab('dyscypliny')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'dyscypliny' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Dyscypliny</button>
           </div>
           
@@ -458,7 +465,7 @@ export default function WyzwaniaPage() {
                  </td>
                  <td className="py-4 px-2 text-slate-600">{w.status}</td>
                  <td className="py-4 px-2 text-right flex gap-2 justify-end">
-                    {w.status !== 'zweryfikowane' && (
+                    {w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && (
                       <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors">Zatwierdź</button>
                     )}
                     <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
@@ -469,7 +476,7 @@ export default function WyzwaniaPage() {
 
           {adminSubTab === 'dyscypliny' && (
              <div className="space-y-4">
-               <h3 className="font-black text-xs uppercase text-slate-900">Zarządzaj dyscyplinami (dodaj, edytuj, usuń):</h3>
+               <h3 className="font-black text-xs uppercase text-slate-900">Zarządzaj dyscyplinami:</h3>
                <div className="flex gap-2">
                   <input value={newDyscyplina} onChange={(e) => setNewDyscyplina(e.target.value)} placeholder="Nowa dyscyplina..." className="p-3 border rounded-xl flex-1 text-xs font-bold" />
                   <button onClick={handleAddDyscyplina} className="bg-slate-900 text-white px-5 py-3 rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800">Dodaj</button>
@@ -497,25 +504,6 @@ export default function WyzwaniaPage() {
                  ))}
                </div>
              </div>
-          )}
-
-          {adminSubTab === 'odznaki' && (
-            <div className="space-y-6">
-              <h3 className="font-black text-xs text-rose-950 uppercase">Przyznaj odznakę ręcznie:</h3>
-              <div className="flex flex-col sm:flex-row gap-2">
-                 <select id="user-select" className="p-3 border border-rose-200 rounded-xl w-full text-xs font-bold">
-                   {klienci.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
-                 </select>
-                 <select id="badge-select" className="p-3 border border-rose-200 rounded-xl w-full text-xs font-bold">
-                   {wszystkieOdznaki.map(o => <option key={o.id} value={o.id}>{o.nazwa}</option>)}
-                 </select>
-                 <button onClick={() => {
-                   const userId = (document.getElementById('user-select') as HTMLSelectElement).value;
-                   const badgeId = (document.getElementById('badge-select') as HTMLSelectElement).value;
-                   assignBadge(userId, badgeId);
-                 }} className="bg-rose-600 hover:bg-rose-700 text-white px-6 py-3 rounded-xl text-xs font-black transition-colors cursor-pointer">Przyznaj</button>
-              </div>
-            </div>
           )}
         </div>
       )}
