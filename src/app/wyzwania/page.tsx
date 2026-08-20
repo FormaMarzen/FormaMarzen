@@ -22,6 +22,7 @@ export default function WyzwaniaPage() {
   const [wszystkiePrzydzieloneOdznaki, setWszystkiePrzydzieloneOdznaki] = useState<any[]>([]);
   const [dyscyplinyList, setDyscyplinyList] = useState<any[]>([]);
   const [rankingList, setRankingList] = useState<any[]>([]);
+  const [badgeRankingList, setBadgeRankingList] = useState<any[]>([]);
   
   // Stan interfejsu
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -114,15 +115,16 @@ export default function WyzwaniaPage() {
         if (myId) {
           setCurrentUserId(myId);
 
-          await Promise.all([
+          const [assignedBadgesData] = await Promise.all([
+            fetchWszystkiePrzydzieloneOdznakiDirect(),
             fetchWyzwania(),
             fetchOdznaki(myId),
             fetchAllOdznakiDef(),
-            fetchWszystkiePrzydzieloneOdznaki(),
             fetchHistoriaOdznak(),
             fetchDyscypliny(),
-            fetchRanking(enriched)
           ]);
+
+          await fetchRankings(enriched, assignedBadgesData);
         }
       } catch (error) {
         console.error("Błąd podczas ładowania modułu wyzwań:", error);
@@ -161,11 +163,19 @@ export default function WyzwaniaPage() {
     if (data) setWszystkieOdznaki(data);
   };
 
-  const fetchWszystkiePrzydzieloneOdznaki = async () => {
+  const fetchWszystkiePrzydzieloneOdznakiDirect = async () => {
     const { data } = await supabase
       .from("klub_odznaki_klubowicze")
       .select(`id, przyznano_at, klient_id, odznaka_id, klub_odznaki_definicje (id, nazwa, opis, ikona, punkty, kategoria, warunek)`);
-    if (data) setWszystkiePrzydzieloneOdznaki(data);
+    if (data) {
+      setWszystkiePrzydzieloneOdznaki(data);
+      return data;
+    }
+    return [];
+  };
+
+  const fetchWszystkiePrzydzieloneOdznaki = async () => {
+    return await fetchWszystkiePrzydzieloneOdznakiDirect();
   };
 
   const fetchHistoriaOdznak = async () => {
@@ -173,16 +183,19 @@ export default function WyzwaniaPage() {
     if (data) setOdznakiHistoria(data);
   };
 
-  const fetchRanking = async (clientsData: any[]) => {
-    const { data } = await supabase.from("klub_wyzwania_historia").select("zwyciezca_id");
-    if (data && clientsData.length > 0) {
+  // Obliczanie obu rankingów: pojedynków oraz punktacji odznak
+  const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
+    const { data: challengesData } = await supabase.from("klub_wyzwania_historia").select("zwyciezca_id");
+    
+    // 1. Ranking pojedynków
+    if (challengesData && clientsData.length > 0) {
       const winsCount: { [key: string]: number } = {};
-      data.forEach((item: any) => {
+      challengesData.forEach((item: any) => {
         if (item.zwyciezca_id) {
           winsCount[item.zwyciezca_id] = (winsCount[item.zwyciezca_id] || 0) + 1;
         }
       });
-      const ranking = Object.keys(winsCount).map((clientId) => {
+      const winsRanking = Object.keys(winsCount).map((clientId) => {
         const client = clientsData.find((c: any) => String(c.id) === String(clientId));
         return {
           id: clientId,
@@ -191,7 +204,35 @@ export default function WyzwaniaPage() {
           wins: winsCount[clientId]
         };
       }).sort((a, b) => b.wins - a.wins);
-      setRankingList(ranking);
+      setRankingList(winsRanking);
+    }
+
+    // 2. Ranking odznak według punktów
+    const sourceBadges = badgesData || wszystkiePrzydzieloneOdznaki;
+    if (clientsData.length > 0 && sourceBadges) {
+      const badgeScores: { [key: string]: { points: number; count: number } } = {};
+      
+      sourceBadges.forEach((item: any) => {
+        const uId = String(item.klient_id);
+        const pts = Number(item.klub_odznaki_definicje?.punkty) || 1;
+        if (!badgeScores[uId]) {
+          badgeScores[uId] = { points: 0, count: 0 };
+        }
+        badgeScores[uId].points += pts;
+        badgeScores[uId].count += 1;
+      });
+
+      const bRanking = Object.keys(badgeScores).map((clientId) => {
+        const client = clientsData.find((c: any) => String(c.id) === String(clientId));
+        return {
+          id: clientId,
+          name: client ? client.name : "Klubowicz",
+          avatar: client ? client.avatar : null,
+          points: badgeScores[clientId].points,
+          count: badgeScores[clientId].count
+        };
+      }).sort((a, b) => b.points - a.points || b.count - a.count);
+      setBadgeRankingList(bRanking);
     }
   };
 
@@ -220,7 +261,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika przypisywania odznaki + wysyłanie powiadomienia z KONTA SYSTEMOWEGO (ID: 5000)
+  // 3. Logika przypisywania odznaki + powiadomienie z konta systemowego
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
@@ -247,8 +288,9 @@ export default function WyzwaniaPage() {
 
       alert("Odznaka przyznana pomyślnie, a powiadomienie systemowe zostało wysłane na czat klubowicza!");
       fetchHistoriaOdznak();
-      fetchWszystkiePrzydzieloneOdznaki();
+      const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
       if (currentUserId) fetchOdznaki(currentUserId);
+      fetchRankings(klienci, updated);
     } else {
       alert("Błąd przyznawania: " + error.message);
     }
@@ -309,7 +351,8 @@ export default function WyzwaniaPage() {
       setEditingBadgeId(null);
       fetchAllOdznakiDef();
       if (currentUserId) fetchOdznaki(currentUserId);
-      fetchWszystkiePrzydzieloneOdznaki();
+      const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
+      fetchRankings(klienci, updated);
     } else {
       alert("Błąd edycji odznaki: " + error.message);
     }
@@ -321,7 +364,8 @@ export default function WyzwaniaPage() {
     if (!error) {
       fetchAllOdznakiDef();
       if (currentUserId) fetchOdznaki(currentUserId);
-      fetchWszystkiePrzydzieloneOdznaki();
+      const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
+      fetchRankings(klienci, updated);
     } else {
       alert("Błąd usuwania odznaki: " + error.message);
     }
@@ -369,7 +413,7 @@ export default function WyzwaniaPage() {
     const { error } = await supabase.from("klub_wyzwania").delete().eq("id", challengeId);
     if (!error) {
       fetchWyzwania();
-      fetchRanking(klienci);
+      fetchRankings(klienci);
     } else {
       alert("Błąd usuwania wyzwania: " + error.message);
     }
@@ -400,7 +444,7 @@ export default function WyzwaniaPage() {
       setIsWinnerModalOpen(false);
       setChallengeToResolve(null);
       fetchWyzwania();
-      fetchRanking(klienci);
+      fetchRankings(klienci);
     } else {
       alert("Błąd: " + error.message);
     }
@@ -457,7 +501,7 @@ export default function WyzwaniaPage() {
 
     if (!error) {
       fetchWyzwania();
-      fetchRanking(klienci);
+      fetchRankings(klienci);
     } else {
       alert("Nie udało się zaktualizować statusu.");
     }
@@ -497,7 +541,7 @@ export default function WyzwaniaPage() {
     })
     .filter((k: any) => k.badgesCount > 0);
 
-  // Funkcja pomocnicza do renderowania grafiki/zdjęcia lub emoji odznaki
+  // Funkcja renderująca grafikę/zdjęcie lub emoji odznaki
   const renderBadgeGraphic = (iconStr: string | null | undefined, sizeClasses = "w-14 h-14", textClasses = "text-2xl") => {
     if (!iconStr) return <span className={textClasses}>🏆</span>;
     const isImage = iconStr.startsWith("http") || iconStr.startsWith("data:") || iconStr.startsWith("/") || iconStr.includes(".png") || iconStr.includes(".jpg") || iconStr.includes(".jpeg") || iconStr.includes(".svg") || iconStr.includes(".webp");
@@ -528,12 +572,10 @@ export default function WyzwaniaPage() {
       const aScore = (aUser ? 1 : 0) + (aMember ? 1 : 0);
       const bScore = (bUser ? 1 : 0) + (bMember ? 1 : 0);
 
-      // Najpierw te z największą liczbą zdobywców (2 -> 1 -> 0)
       if (bScore !== aScore) {
         return bScore - aScore;
       }
 
-      // Przy takim samym statusie, sortuj po punktach malejąco
       return (b.punkty || 0) - (a.punkty || 0);
     });
   };
@@ -672,7 +714,7 @@ export default function WyzwaniaPage() {
       {activeTab === 'odznaki' && (
         <div className="space-y-8">
           {selectedMemberForComparison ? (
-            // EKRAN PORÓWNANIA ODZNAK (Wzór z Garmin Connect z sortowaniem otrzymanych od góry)
+            // EKRAN PORÓWNANIA ODZNAK
             <div className="bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 text-white space-y-8 shadow-xl">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <button 
@@ -722,7 +764,7 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* Lista wszystkich definicji odznak posortowana z priorytetem dla otrzymanych */}
+              {/* Lista wszystkich definicji odznak */}
               <div className="space-y-4">
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">Wszystkie odznaki w klubie (Otrzymane na górze)</h3>
                 <div className="space-y-3">
@@ -749,7 +791,6 @@ export default function WyzwaniaPage() {
                           </div>
                         </div>
 
-                        {/* Status posiadania odznaki przez obie osoby */}
                         <div className="flex items-center gap-6 shrink-0">
                           <div className="flex flex-col items-center">
                             <span className="text-[9px] text-slate-500 mb-1">Ty</span>
@@ -775,7 +816,7 @@ export default function WyzwaniaPage() {
               </div>
             </div>
           ) : (
-            // STANDARDOWY WIDOK GABLODY (Twoje na górze + Lista osób poniżej)
+            // STANDARDOWY WIDOK GABLODY
             <div className="space-y-8">
               {/* Sekcja 1: Twoje trofea */}
               <div className="space-y-4">
@@ -849,49 +890,103 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: RANKING */}
+      {/* ZAWARTOŚĆ ZAKŁADKI: RANKINGI (OBOK SIEBIE) */}
       {activeTab === 'ranking' && (
-        <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
-          <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-            <span>🏆</span> Globalny Ranking Zwycięstw
-          </h3>
-          <p className="text-xs text-slate-500">Zestawienie klubowiczów z największą liczbą wygranych pojedynków w historii.</p>
-          
-          <div className="overflow-hidden rounded-2xl border border-sky-100">
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
-                  <th className="py-3 px-4">Miejsce</th>
-                  <th className="py-3 px-4">Klubowicz</th>
-                  <th className="py-3 px-4 text-right">Wygrane pojedynki</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rankingList.map((row, index) => (
-                  <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                    <td className="py-3 px-4 font-black text-slate-700">
-                      {index === 0 ? '🥇 1' : index === 1 ? '🥈 2' : index === 2 ? '🥉 3' : `#${index + 1}`}
-                    </td>
-                    <td className="py-3 px-4 font-bold text-slate-900 flex items-center gap-3">
-                      {row.avatar ? (
-                        <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
-                      ) : (
-                        <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-[10px]">
-                          {row.name.charAt(0)}
-                        </div>
-                      )}
-                      {row.name}
-                    </td>
-                    <td className="py-3 px-4 text-right font-black text-amber-600 text-sm">{row.wins} 🏆</td>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {/* TABELA 1: RANKING POJEDYNKÓW (ZWYCIĘSTWA) */}
+          <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
+            <div>
+              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <span>⚔️</span> Ranking Pojedynków Head-to-Head
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">Liczba wygranych pojedynków przeciwko innym klubowiczom.</p>
+            </div>
+            
+            <div className="overflow-hidden rounded-2xl border border-sky-100">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
+                    <th className="py-3 px-3.5 w-16">Miejsce</th>
+                    <th className="py-3 px-3">Klubowicz</th>
+                    <th className="py-3 px-3.5 text-right">Wygrane</th>
                   </tr>
-                ))}
-                {rankingList.length === 0 && (
-                  <tr>
-                    <td colSpan={3} className="py-8 text-center text-slate-400 italic">Brak danych w rankingu. Wygrywaj pojedynki, aby pojawić się na liście!</td>
+                </thead>
+                <tbody>
+                  {rankingList.map((row, index) => (
+                    <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <td className="py-3 px-3.5 font-black text-slate-700">
+                        {index === 0 ? '🥇 1' : index === 1 ? '🥈 2' : index === 2 ? '🥉 3' : `#${index + 1}`}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-slate-900 flex items-center gap-2.5">
+                        {row.avatar ? (
+                          <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
+                        ) : (
+                          <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-[10px]">
+                            {row.name.charAt(0)}
+                          </div>
+                        )}
+                        <span className="truncate max-w-[140px]">{row.name}</span>
+                      </td>
+                      <td className="py-3 px-3.5 text-right font-black text-amber-600 text-xs">{row.wins} ⚔️</td>
+                    </tr>
+                  ))}
+                  {rankingList.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="py-8 text-center text-slate-400 text-xs italic">Brak rozstrzygniętych pojedynków.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* TABELA 2: RANKING PUNKTACJI ODZNAK */}
+          <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
+            <div>
+              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <span>🏆</span> Ranking Punktowy Odznak
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">Suma punktów ze wszystkich zdobytych odznak klubowych.</p>
+            </div>
+            
+            <div className="overflow-hidden rounded-2xl border border-sky-100">
+              <table className="w-full text-xs text-left">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
+                    <th className="py-3 px-3.5 w-16">Miejsce</th>
+                    <th className="py-3 px-3">Klubowicz</th>
+                    <th className="py-3 px-3.5 text-right">Punkty (Odznaki)</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {badgeRankingList.map((row, index) => (
+                    <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                      <td className="py-3 px-3.5 font-black text-slate-700">
+                        {index === 0 ? '🥇 1' : index === 1 ? '🥈 2' : index === 2 ? '🥉 3' : `#${index + 1}`}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-slate-900 flex items-center gap-2.5">
+                        {row.avatar ? (
+                          <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
+                        ) : (
+                          <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-[10px]">
+                            {row.name.charAt(0)}
+                          </div>
+                        )}
+                        <span className="truncate max-w-[140px]">{row.name}</span>
+                      </td>
+                      <td className="py-3 px-3.5 text-right font-black text-amber-600 text-xs">
+                        {row.points} pkt <span className="text-[10px] text-slate-400 font-normal">({row.count} 🏆)</span>
+                      </td>
+                    </tr>
+                  ))}
+                  {badgeRankingList.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="py-8 text-center text-slate-400 text-xs italic">Brak zdobytych odznak w klubie.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
