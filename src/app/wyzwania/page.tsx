@@ -67,17 +67,21 @@ export default function WyzwaniaPage() {
         let myId: any = null;
         if (ADMIN_EMAILS.includes(userEmail)) {
           setUserRole('admin');
-          myId = 999999999;
-          setCurrentUserId(myId);
-          setCurrentUserName("Maciej Kłaput (Admin)");
+          if (myProfile) {
+            myId = myProfile.id;
+            setCurrentUserName(`${myProfile.name} (Admin)`);
+            setCurrentUserAvatar(myProfile.avatar);
+          } else {
+            setCurrentUserName("Maciej Kłaput (Admin)");
+          }
         } else if (myProfile) {
           myId = myProfile.id;
-          setCurrentUserId(myId);
           setCurrentUserName(myProfile.name);
           setCurrentUserAvatar(myProfile.avatar);
         }
 
         if (myId) {
+          setCurrentUserId(myId);
           await fetchWyzwania();
           await fetchOdznaki(myId);
           await fetchAllOdznakiDef();
