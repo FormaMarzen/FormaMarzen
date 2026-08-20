@@ -210,7 +210,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika przypisywania odznaki + wysyłanie powiadomienia na czat
+  // 3. Logika przypisywania odznaki + wysyłanie powiadomienia z KONTA SYSTEMOWEGO
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
@@ -218,25 +218,25 @@ export default function WyzwaniaPage() {
     }]);
 
     if (!error) {
-      // Pobieramy dane przypisanej odznaki do wiadomości czatu
       const badgeDef = wszystkieOdznaki.find((b: any) => String(b.id) === String(badgeId));
       const badgeName = badgeDef ? badgeDef.nazwa : "Klubowa";
       const badgePoints = badgeDef?.punkty ? ` (${badgeDef.punkty} pkt)` : "";
       
-      const chatNotification = `🎖️ Gratulacje! Trener przyznał Ci nową odznakę klubową: "${badgeName}"${badgePoints}! Zajrzyj do Gabloty Odznak, aby sprawdzić swoje trofeum 🏆.`;
+      const chatNotification = `🎖️ Gratulacje! Otrzymałeś nową odznakę klubową: "${badgeName}"${badgePoints}! Sprawdź swoją Gablotę Odznak 🏆.`;
 
+      // Wysłanie wiadomości z konta systemowego (ID: 999999999, Nazwa: Forma Marzeń)
       await supabase.from("czat_wiadomosci").insert([
         {
-          nadawca_id: currentUserId,
-          nadawca_nazwa: currentUserName,
-          nadawca_avatar: currentUserAvatar,
+          nadawca_id: 999999999,
+          nadawca_nazwa: "Forma Marzeń",
+          nadawca_avatar: null,
           odbiorca_id: userId,
           tresc: chatNotification,
           przeczytana: false
         }
       ]);
 
-      alert("Odznaka przyznana pomyślnie i powiadomienie wysłane na czat klubowicza!");
+      alert("Odznaka przyznana pomyślnie, a powiadomienie systemowe zostało wysłane na czat klubowicza!");
       fetchHistoriaOdznak();
       fetchWszystkiePrzydzieloneOdznaki();
       if (currentUserId) fetchOdznaki(currentUserId);
@@ -488,7 +488,7 @@ export default function WyzwaniaPage() {
     })
     .filter((k: any) => k.badgesCount > 0);
 
-  // Helper do renderowania grafiki/zdjęcia lub emoji odznaki
+  // Funkcja pomocnicza do renderowania grafiki/zdjęcia lub emoji odznaki
   const renderBadgeGraphic = (iconStr: string | null | undefined, sizeClasses = "w-14 h-14", textClasses = "text-2xl") => {
     if (!iconStr) return <span className={textClasses}>🏆</span>;
     const isImage = iconStr.startsWith("http") || iconStr.startsWith("data:") || iconStr.startsWith("/") || iconStr.includes(".png") || iconStr.includes(".jpg") || iconStr.includes(".jpeg") || iconStr.includes(".svg") || iconStr.includes(".webp");
@@ -1122,7 +1122,7 @@ export default function WyzwaniaPage() {
                      {editingIndex === i ? (
                        <div className="flex gap-2 flex-1 mr-2">
                          <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
-                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
+                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zapisz</button>
                          <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
                        </div>
                      ) : (
