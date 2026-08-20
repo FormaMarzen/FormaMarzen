@@ -72,6 +72,8 @@ export default function WyzwaniaPage() {
             setCurrentUserName(`${myProfile.name} (Admin)`);
             setCurrentUserAvatar(myProfile.avatar);
           } else {
+            // Zabezpieczenie przed brakiem rekordu admina w tabeli klienci (zapobiega błędom FK w Supabase)
+            myId = enriched.length > 0 ? enriched[0].id : 1;
             setCurrentUserName("Maciej Kłaput (Admin)");
           }
         } else if (myProfile) {
@@ -423,7 +425,7 @@ export default function WyzwaniaPage() {
                      {editingIndex === i ? (
                        <div className="flex gap-2 flex-1 mr-2">
                          <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
-                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
+                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zapisz</button>
                          <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
                        </div>
                      ) : (
