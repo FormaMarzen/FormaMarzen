@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
+const SYSTEM_ID = 5000;
 
 export default function WyzwaniaPage() {
   // Stan użytkownika
@@ -63,20 +64,23 @@ export default function WyzwaniaPage() {
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
-  // 1. Inicjalizacja użytkownika i pobranie danych
+  // 1. Zoptymalizowana równoległa inicjalizacja danych
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      const userEmail = (session?.user?.email || "").toLowerCase().trim();
+      try {
+        const [sessionRes, klienciRes] = await Promise.all([
+          supabase.auth.getSession(),
+          supabase.from("klienci").select("*")
+        ]);
 
-      if (!userEmail) {
-        setIsLoading(false);
-        return;
-      }
+        const userEmail = (sessionRes.data.session?.user?.email || "").toLowerCase().trim();
+        if (!userEmail) {
+          setIsLoading(false);
+          return;
+        }
 
-      const { data: klienciData } = await supabase.from("klienci").select("*");
-      if (klienciData) {
+        const klienciData = klienciRes.data || [];
         const enriched = klienciData.map((c: any) => ({
           id: c.id,
           firstName: c.Imię || c.firstName || "",
@@ -89,8 +93,8 @@ export default function WyzwaniaPage() {
         setKlienci(enriched);
 
         const myProfile = enriched.find((c: any) => c.email === userEmail);
-
         let myId: any = null;
+
         if (ADMIN_EMAILS.includes(userEmail)) {
           setUserRole('admin');
           if (myProfile) {
@@ -109,16 +113,22 @@ export default function WyzwaniaPage() {
 
         if (myId) {
           setCurrentUserId(myId);
-          await fetchWyzwania();
-          await fetchOdznaki(myId);
-          await fetchAllOdznakiDef();
-          await fetchWszystkiePrzydzieloneOdznaki();
-          await fetchHistoriaOdznak();
-          await fetchDyscypliny();
-          await fetchRanking(enriched);
+
+          await Promise.all([
+            fetchWyzwania(),
+            fetchOdznaki(myId),
+            fetchAllOdznakiDef(),
+            fetchWszystkiePrzydzieloneOdznaki(),
+            fetchHistoriaOdznak(),
+            fetchDyscypliny(),
+            fetchRanking(enriched)
+          ]);
         }
+      } catch (error) {
+        console.error("Błąd podczas ładowania modułu wyzwań:", error);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     };
 
     initData();
@@ -224,10 +234,9 @@ export default function WyzwaniaPage() {
       
       const chatNotification = `🎖️ Gratulacje! Otrzymałeś nową odznakę klubową: "${badgeName}"${badgePoints}! Sprawdź swoją Gablotę Odznak 🏆.`;
 
-      // Wysłanie wiadomości z konta systemowego (ID: 5000, Nazwa: Forma Marzeń)
       await supabase.from("czat_wiadomosci").insert([
         {
-          nadawca_id: 5000,
+          nadawca_id: SYSTEM_ID,
           nadawca_nazwa: "Forma Marzeń",
           nadawca_avatar: null,
           odbiorca_id: userId,
@@ -505,6 +514,30 @@ export default function WyzwaniaPage() {
     return <span className={textClasses}>{iconStr}</span>;
   };
 
+  // Priorytetowe sortowanie odznak do porównania: Otrzymane na górze
+  const getSortedBadgesForComparison = () => {
+    if (!selectedMemberForComparison) return wszystkieOdznaki;
+
+    return [...wszystkieOdznaki].sort((a, b) => {
+      const aUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
+      const aMember = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
+      
+      const bUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
+      const bMember = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
+
+      const aScore = (aUser ? 1 : 0) + (aMember ? 1 : 0);
+      const bScore = (bUser ? 1 : 0) + (bMember ? 1 : 0);
+
+      // Najpierw te z największą liczbą zdobywców (2 -> 1 -> 0)
+      if (bScore !== aScore) {
+        return bScore - aScore;
+      }
+
+      // Przy takim samym statusie, sortuj po punktach malejąco
+      return (b.punkty || 0) - (a.punkty || 0);
+    });
+  };
+
   if (isLoading) return <div className="p-8 text-center text-sky-900 font-bold animate-pulse">Ładowanie modułu wyzwań...</div>;
 
   return (
@@ -599,7 +632,7 @@ export default function WyzwaniaPage() {
             })}
           </div>
 
-          {/* Zakończone wyzwania (Skompresowana tabela) */}
+          {/* Zakończone wyzwania */}
           <div className="pt-6 border-t border-sky-100">
             <h3 className="font-black text-xs uppercase text-slate-400 mb-4 px-2">Zakończone wyzwania</h3>
             <div className="bg-white rounded-3xl border border-sky-100 overflow-hidden shadow-sm">
@@ -639,7 +672,7 @@ export default function WyzwaniaPage() {
       {activeTab === 'odznaki' && (
         <div className="space-y-8">
           {selectedMemberForComparison ? (
-            // EKRAN PORÓWNANIA ODZNAK (Wzór z Garmin Connect)
+            // EKRAN PORÓWNANIA ODZNAK (Wzór z Garmin Connect z sortowaniem otrzymanych od góry)
             <div className="bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 text-white space-y-8 shadow-xl">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <button 
@@ -689,11 +722,11 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* Lista wszystkich definicji odznak i porównanie */}
+              {/* Lista wszystkich definicji odznak posortowana z priorytetem dla otrzymanych */}
               <div className="space-y-4">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">Wszystkie odznaki w klubie</h3>
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">Wszystkie odznaki w klubie (Otrzymane na górze)</h3>
                 <div className="space-y-3">
-                  {wszystkieOdznaki.map((def: any) => {
+                  {getSortedBadgesForComparison().map((def: any) => {
                     const userHasIt = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
                     const memberHasIt = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
 
@@ -721,17 +754,17 @@ export default function WyzwaniaPage() {
                           <div className="flex flex-col items-center">
                             <span className="text-[9px] text-slate-500 mb-1">Ty</span>
                             {userHasIt ? (
-                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold">✓</div>
+                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold" title="Posiadasz tę odznakę">✓</div>
                             ) : (
-                              <div className="w-8 h-8 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-600 text-xs">-</div>
+                              <div className="w-8 h-8 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-600 text-xs" title="Brak odznaki">-</div>
                             )}
                           </div>
                           <div className="flex flex-col items-center">
                             <span className="text-[9px] text-slate-500 mb-1">Klubowicz</span>
                             {memberHasIt ? (
-                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold">✓</div>
+                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold" title="Klubowicz posiada tę odznakę">✓</div>
                             ) : (
-                              <div className="w-8 h-8 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-600 text-xs">-</div>
+                              <div className="w-8 h-8 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-600 text-xs" title="Brak odznaki">-</div>
                             )}
                           </div>
                         </div>
@@ -777,7 +810,7 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* Sekcja 2: Lista osób z odznakami (kliknięcie otwiera porównanie) */}
+              {/* Sekcja 2: Lista osób z odznakami */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <h3 className="font-black text-xs uppercase text-slate-400 px-2">Klubowicze z odznakami (Kliknij, aby porównać)</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -919,10 +952,9 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* 3. Podzakładka Admina: Katalog Odznak (Garmin) ze zdjęciami/grafikami */}
+          {/* 3. Podzakładka Admina: Katalog Odznak */}
           {adminSubTab === 'katalog_odznak' && (
             <div className="space-y-8">
-              {/* Formularz tworzenia nowej odznaki */}
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-900">Stwórz nową odznakę klubową (Własna grafika / Zdjęcie)</h3>
                 <form onSubmit={handleCreateBadgeDef} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -931,7 +963,6 @@ export default function WyzwaniaPage() {
                     <input type="text" value={newBadgeNazwa} onChange={(e) => setNewBadgeNazwa(e.target.value)} placeholder="np. Mistrz Wioślarstwa" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
                   </div>
                   
-                  {/* Wybór grafiki lub upload zdjęcia */}
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Grafika / Zdjęcie odznaki</label>
                     <div className="flex items-center gap-2">
@@ -998,14 +1029,12 @@ export default function WyzwaniaPage() {
                 </form>
               </div>
 
-              {/* Lista wszystkich odznak w katalogu z możliwością edycji i usuwania */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-900">Aktualne odznaki w katalogu klubowym ({wszystkieOdznaki.length}):</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {wszystkieOdznaki.map((def: any) => (
                     <div key={def.id} className="p-5 bg-white rounded-3xl border border-sky-100 shadow-sm space-y-3 flex flex-col justify-between">
                       {editingBadgeId === def.id ? (
-                        /* Formularz edycji odznaki in-line */
                         <div className="space-y-3">
                           <div>
                             <label className="text-[9px] font-bold text-slate-400 uppercase">Nazwa odznaki</label>
@@ -1075,7 +1104,6 @@ export default function WyzwaniaPage() {
                           </div>
                         </div>
                       ) : (
-                        /* Widok karty odznaki */
                         <>
                           <div className="flex items-start gap-4">
                             <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-3xl shadow-inner shrink-0 overflow-hidden">
