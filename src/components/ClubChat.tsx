@@ -259,12 +259,13 @@ export default function ClubChat() {
 
   // Renderowanie kart powiadomień: urodziny, odznaki, wyzwania i standardowe wiadomości
   const renderMessageContent = (msg: any, isMe: boolean) => {
-    const isBirthdayNotification = msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin");
-    const isBadgeNotification = msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową");
-    const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
+    
+    // Teraz sprawdzamy nie tylko treść, ale też czy nadawcą jest system
+    const isBirthdayNotification = isSystemSender && (msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin"));
+    const isBadgeNotification = isSystemSender && (msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową"));
+    const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
 
-    // Styl dla życzeń urodzinowych
     if (isBirthdayNotification) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
@@ -284,8 +285,7 @@ export default function ClubChat() {
       );
     }
 
-    // Styl dla ogólnych powiadomień systemowych/odznak
-    if (isBadgeNotification || isSystemSender) {
+    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification)) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
@@ -304,7 +304,6 @@ export default function ClubChat() {
       );
     }
 
-    // Styl dla wyzwań
     if (isChallengeNotification) {
       return (
         <div className="w-full bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-amber-500 rounded-3xl p-4 shadow-md text-white space-y-2">
