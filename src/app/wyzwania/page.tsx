@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
-const DYSYCYPLINY = [
+const DYSYCYPLINY_DEFAULT = [
   "Wioślarz 500m",
   "Burpees 3 min",
   "Wyciskanie sztangi (MAX)",
@@ -26,16 +26,19 @@ export default function WyzwaniaPage() {
   const [odznaki, setOdznaki] = useState<any[]>([]);
   const [odznakiHistoria, setOdznakiHistoria] = useState<any[]>([]);
   const [wszystkieOdznaki, setWszystkieOdznaki] = useState<any[]>([]);
+  const [dyscyplinyList, setDyscyplinyList] = useState<string[]>(DYSYCYPLINY_DEFAULT);
   
   // Stan interfejsu
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
-  const [dyscyplina, setDyscyplina] = useState(DYSYCYPLINY[0]);
+  const [dyscyplina, setDyscyplina] = useState(DYSYCYPLINY_DEFAULT[0]);
   const [opisWyzwania, setOpisWyzwania] = useState("");
+  const [newDyscyplina, setNewDyscyplina] = useState("");
 
   const [activeTab, setActiveTab] = useState<'aktywne' | 'odznaki' | 'admin'>('aktywne');
-  const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki'>('wyzwania');
+  const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
   // 1. Inicjalizacja użytkownika i pobranie danych
@@ -45,7 +48,10 @@ export default function WyzwaniaPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = (session?.user?.email || "").toLowerCase().trim();
 
-      if (!userEmail) return;
+      if (!userEmail) {
+        setIsLoading(false);
+        return;
+      }
 
       const { data: klienciData } = await supabase.from("klienci").select("*");
       if (klienciData) {
@@ -164,14 +170,14 @@ export default function WyzwaniaPage() {
 
     alert("Wyzwanie zostało pomyślnie wysłane!");
     setIsModalOpen(false);
-    setDyscyplina(DYSYCYPLINY[0]);
+    setDyscyplina(dyscyplinyList[0]);
     setOpisWyzwania("");
     setSelectedOpponent(null);
     setSearchQuery("");
     fetchWyzwania();
   };
 
-  // 5. Zmiana statusu wyzwania
+  // 5. Zmiana statusu wyzwania (w tym weryfikacja Admina)
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
     const { error } = await supabase
       .from("klub_wyzwania")
@@ -195,7 +201,6 @@ export default function WyzwaniaPage() {
       const fName = (k.firstName || "").toLowerCase();
       const lName = (k.lastName || "").toLowerCase();
 
-      // Szukaj po nazwisku LUB po (Imię + spacja + pierwsza litera nazwiska)
       const matchSurname = lName.startsWith(q);
       const matchNameInitial = fName.startsWith(q.split(' ')[0]) && (q.includes(' ') ? lName.startsWith(q.split(' ')[1]) : true);
       
@@ -216,6 +221,7 @@ export default function WyzwaniaPage() {
         <div>
           <h1 className="text-xl font-black text-slate-950 uppercase tracking-wider flex items-center gap-2">
             <span>⚔️</span> Wyzwania i Odznaki Klubowe
+            <button onClick={() => setIsInfoModalOpen(true)} className="text-[10px] bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full cursor-pointer hover:bg-sky-200">ℹ️ Info</button>
           </h1>
           <p className="text-xs text-slate-500 mt-1">Rzucaj wyzwania innym klubowiczom, rywalizuj w pojedynkach Head-to-Head i zbieraj trofea!</p>
         </div>
@@ -224,7 +230,7 @@ export default function WyzwaniaPage() {
           onClick={() => setIsModalOpen(true)}
           className="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-6 py-3.5 rounded-2xl transition-all shadow-lg uppercase tracking-wider flex items-center gap-2 cursor-pointer"
         >
-          <span>⚡</span> Rzuć wyzwanie
+          <span>⚡</span> Nowe wyzwanie
         </button>
       </div>
 
@@ -265,9 +271,7 @@ export default function WyzwaniaPage() {
                 <div className="flex items-start justify-between">
                   <div>
                     <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full ${
-                      w.status === 'aktywne' ? 'bg-emerald-100 text-emerald-800' :
-                      w.status === 'zakonczone' ? 'bg-slate-200 text-slate-700' :
-                      'bg-amber-100 text-amber-800'
+                      w.status === 'zweryfikowane' ? 'bg-emerald-500 text-white' : 'bg-amber-100 text-amber-800'
                     }`}>
                       {w.status}
                     </span>
@@ -308,14 +312,6 @@ export default function WyzwaniaPage() {
               </div>
             );
           })}
-
-          {wyzwania.filter(w => w.status !== 'zakonczone').length === 0 && (
-            <div className="col-span-full bg-white rounded-3xl p-12 text-center border-2 border-dashed border-sky-100 text-slate-400 text-xs space-y-2">
-              <div className="text-3xl">⚔️</div>
-              <div className="font-bold text-slate-700">Brak aktywnych wyzwań</div>
-              <p>Kliknij „Rzuć wyzwanie”, aby wyzwać klubowicza na pojedynek!</p>
-            </div>
-          )}
         </div>
       )}
 
@@ -349,6 +345,7 @@ export default function WyzwaniaPage() {
           <div className="flex gap-2 text-xs font-bold border-b border-rose-100 pb-4">
             <button onClick={() => setAdminSubTab('wyzwania')} className={`px-4 py-2 rounded-lg transition-colors ${adminSubTab === 'wyzwania' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Wyzwania</button>
             <button onClick={() => setAdminSubTab('odznaki')} className={`px-4 py-2 rounded-lg transition-colors ${adminSubTab === 'odznaki' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Historia Odznak</button>
+            <button onClick={() => setAdminSubTab('dyscypliny')} className={`px-4 py-2 rounded-lg transition-colors ${adminSubTab === 'dyscypliny' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Dyscypliny</button>
           </div>
           
           {adminSubTab === 'wyzwania' && (
@@ -363,18 +360,29 @@ export default function WyzwaniaPage() {
                <tbody>{wyzwania.map(w => <tr key={w.id} className="border-b border-slate-50">
                  <td className="py-4 px-2 font-bold text-slate-900">{w.dyscyplina}</td>
                  <td className="py-4 px-2 text-slate-600">{w.status}</td>
-                 <td className="py-4 px-2 text-right">
-                   <button onClick={() => supabase.from("klub_wyzwania").delete().eq('id', w.id).then(fetchWyzwania)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors">Usuń</button>
+                 <td className="py-4 px-2 text-right flex gap-2 justify-end">
+                    {w.status !== 'zweryfikowane' && <button onClick={() => handleUpdateStatus(w.id, 'zweryfikowane')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zatwierdź</button>}
+                    <button onClick={() => supabase.from("klub_wyzwania").delete().eq('id', w.id).then(fetchWyzwania)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
                  </td>
                </tr>)}</tbody>
              </table>
           )}
 
+          {adminSubTab === 'dyscypliny' && (
+             <div className="space-y-4">
+               <h3 className="font-black text-xs uppercase">Dodaj dyscyplinę:</h3>
+               <div className="flex gap-2">
+                  <input value={newDyscyplina} onChange={(e) => setNewDyscyplina(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs" />
+                  <button onClick={() => { setDyscyplinyList([...dyscyplinyList, newDyscyplina]); setNewDyscyplina(""); }} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold cursor-pointer">Dodaj</button>
+               </div>
+               <div className="space-y-1">{dyscyplinyList.map((d, i) => <div key={i} className="p-2 bg-slate-50 rounded-lg text-xs font-bold">{d}</div>)}</div>
+             </div>
+          )}
+
           {adminSubTab === 'odznaki' && (
             <div className="space-y-6">
-              <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100">
-                <h3 className="font-black text-xs text-rose-950 mb-3 uppercase tracking-wider">Przyznaj odznakę ręcznie:</h3>
-                <div className="flex flex-col sm:flex-row gap-2">
+              <h3 className="font-black text-xs text-rose-950 uppercase">Przyznaj odznakę ręcznie:</h3>
+              <div className="flex flex-col sm:flex-row gap-2">
                  <select id="user-select" className="p-3 border border-rose-200 rounded-xl w-full text-xs font-bold">
                    {klienci.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
                  </select>
@@ -386,22 +394,25 @@ export default function WyzwaniaPage() {
                    const badgeId = (document.getElementById('badge-select') as HTMLSelectElement).value;
                    assignBadge(userId, badgeId);
                  }} className="bg-rose-600 hover:bg-rose-700 text-white px-6 py-3 rounded-xl text-xs font-black transition-colors cursor-pointer">Przyznaj</button>
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="font-bold text-xs mb-3 text-slate-700 uppercase">Ostatnio przyznane:</h3>
-                <div className="space-y-2">
-                  {odznakiHistoria.map(h => (
-                    <div key={h.id} className="text-xs p-3 border border-slate-100 rounded-xl flex justify-between items-center bg-white">
-                      <span className="font-bold text-slate-900">{h.klienci?.Imię} {h.klienci?.Nazwisko}</span>
-                      <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">{h.klub_odznaki_definicje?.nazwa}</span>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* MODAL INSTRUKCJA */}
+      {isInfoModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white p-8 rounded-[2rem] max-w-sm w-full space-y-4 shadow-2xl">
+            <h3 className="font-black text-lg">Jak robić wyzwania?</h3>
+            <ul className="text-xs space-y-3 text-slate-700 list-decimal pl-4">
+              <li>Rzuć wyzwanie przeciwnikowi w aplikacji.</li>
+              <li>Jeśli wyzwanie odbywa się na treningu, <b>trener potwierdza wynik</b> bezpośrednio w klubie.</li>
+              <li>Jeśli wyzwanie to bieg/teren, <b>musisz przedstawić dowód</b> (np. zrzut ekranu z zegarka/aplikacji sportowej).</li>
+              <li>Administrator po sprawdzeniu dowodów zatwierdza wyzwanie i przyznaje status "Zweryfikowane".</li>
+            </ul>
+            <button onClick={() => setIsInfoModalOpen(false)} className="w-full bg-slate-900 text-white font-bold py-3 rounded-2xl text-xs cursor-pointer">Rozumiem</button>
+          </div>
         </div>
       )}
 
@@ -426,7 +437,7 @@ export default function WyzwaniaPage() {
             </div>
 
             <select value={dyscyplina} onChange={(e) => setDyscyplina(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold bg-white">
-               {DYSYCYPLINY.map(d => <option key={d} value={d}>{d}</option>)}
+               {dyscyplinyList.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
             <textarea placeholder="Dodatkowy opis..." value={opisWyzwania} onChange={(e) => setOpisWyzwania(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold h-20 resize-none" />
             
