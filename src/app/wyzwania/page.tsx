@@ -4,14 +4,6 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
-const DYSYCYPLINY_DEFAULT = [
-  "Wioślarz 500m",
-  "Burpees 3 min",
-  "Wyciskanie sztangi (MAX)",
-  "Najwięcej treningów w miesiącu",
-  "Bieg 5km",
-  "Plank (MAX czas)"
-];
 
 export default function WyzwaniaPage() {
   // Stan użytkownika
@@ -26,14 +18,14 @@ export default function WyzwaniaPage() {
   const [odznaki, setOdznaki] = useState<any[]>([]);
   const [odznakiHistoria, setOdznakiHistoria] = useState<any[]>([]);
   const [wszystkieOdznaki, setWszystkieOdznaki] = useState<any[]>([]);
-  const [dyscyplinyList, setDyscyplinyList] = useState<string[]>(DYSYCYPLINY_DEFAULT);
+  const [dyscyplinyList, setDyscyplinyList] = useState<any[]>([]);
   
   // Stan interfejsu
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
-  const [dyscyplina, setDyscyplina] = useState(DYSYCYPLINY_DEFAULT[0]);
+  const [dyscyplina, setDyscyplina] = useState("");
   const [opisWyzwania, setOpisWyzwania] = useState("");
   const [newDyscyplina, setNewDyscyplina] = useState("");
 
@@ -90,6 +82,7 @@ export default function WyzwaniaPage() {
           await fetchOdznaki(myId);
           await fetchAllOdznakiDef();
           await fetchHistoriaOdznak();
+          await fetchDyscypliny();
         }
       }
       setIsLoading(false);
@@ -102,6 +95,14 @@ export default function WyzwaniaPage() {
   const fetchWyzwania = async () => {
     const { data } = await supabase.from("klub_wyzwania").select("*").order("created_at", { ascending: false });
     if (data) setWyzwania(data);
+  };
+
+  const fetchDyscypliny = async () => {
+    const { data } = await supabase.from("klub_dyscypliny").select("*").order("nazwa");
+    if (data) {
+      setDyscyplinyList(data);
+      if (data.length > 0 && !dyscyplina) setDyscyplina(data[0].nazwa);
+    }
   };
 
   const fetchOdznaki = async (userId: any) => {
@@ -136,7 +137,43 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 4. Rzucenie nowego wyzwania (zapis do bazy + powiadomienie na czacie)
+  // 4. Zarządzanie dyscyplinami
+  const handleAddDyscyplina = async () => {
+    if (!newDyscyplina.trim()) return;
+    const { error } = await supabase.from("klub_dyscypliny").insert([{ nazwa: newDyscyplina.trim() }]);
+    if (!error) {
+      setNewDyscyplina("");
+      fetchDyscypliny();
+    } else {
+      alert("Błąd dodawania: " + error.message);
+    }
+  };
+
+  const handleUpdateDyscyplina = async (id: number, newName: string) => {
+    const { error } = await supabase.from("klub_dyscypliny").update({ nazwa: newName }).eq("id", id);
+    if (!error) {
+      setEditingIndex(null);
+      setEditText("");
+      fetchDyscypliny();
+    } else {
+      alert("Błąd edycji: " + error.message);
+    }
+  };
+
+  const handleDeleteDyscyplina = async (id: number) => {
+    if (dyscyplinyList.length <= 1) {
+      alert("Musisz zostawić przynajmniej jedną dyscyplinę.");
+      return;
+    }
+    const { error } = await supabase.from("klub_dyscypliny").delete().eq("id", id);
+    if (!error) {
+      fetchDyscypliny();
+    } else {
+      alert("Błąd usuwania: " + error.message);
+    }
+  };
+
+  // 5. Rzucenie nowego wyzwania
   const handleCreateChallenge = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
@@ -172,14 +209,13 @@ export default function WyzwaniaPage() {
 
     alert("Wyzwanie zostało pomyślnie wysłane!");
     setIsModalOpen(false);
-    setDyscyplina(dyscyplinyList[0]);
     setOpisWyzwania("");
     setSelectedOpponent(null);
     setSearchQuery("");
     fetchWyzwania();
   };
 
-  // 5. Zmiana statusu wyzwania (w tym weryfikacja Admina)
+  // 6. Zmiana statusu wyzwania
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
     const { error } = await supabase
       .from("klub_wyzwania")
@@ -190,33 +226,6 @@ export default function WyzwaniaPage() {
       fetchWyzwania();
     } else {
       alert("Nie udało się zaktualizować statusu.");
-    }
-  };
-
-  // 6. Zarządzanie dyscyplinami (Edycja, Usuwanie, Dodawanie)
-  const handleStartEdit = (index: number, val: string) => {
-    setEditingIndex(index);
-    setEditText(val);
-  };
-
-  const handleSaveEdit = (index: number) => {
-    if (!editText.trim()) return;
-    const updated = [...dyscyplinyList];
-    updated[index] = editText.trim();
-    setDyscyplinyList(updated);
-    setEditingIndex(null);
-    setEditText("");
-  };
-
-  const handleDeleteDyscyplina = (index: number) => {
-    if (dyscyplinyList.length <= 1) {
-      alert("Musisz zostawić przynajmniej jedną dyscyplinę.");
-      return;
-    }
-    const updated = dyscyplinyList.filter((_, i) => i !== index);
-    setDyscyplinyList(updated);
-    if (dyscyplina === dyscyplinyList[index]) {
-      setDyscyplina(updated[0]);
     }
   };
 
@@ -291,7 +300,6 @@ export default function WyzwaniaPage() {
       {activeTab === 'aktywne' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {wyzwania.filter(w => w.status !== 'zakonczone').map((w: any) => {
-            const isCreator = String(w.tworca_id) === String(currentUserId);
             const przeciwnikName = getClientName(w.przeciwnik_id);
             const tworcaName = getClientName(w.tworca_id);
 
@@ -402,24 +410,24 @@ export default function WyzwaniaPage() {
                <h3 className="font-black text-xs uppercase text-slate-900">Zarządzaj dyscyplinami (dodaj, edytuj, usuń):</h3>
                <div className="flex gap-2">
                   <input value={newDyscyplina} onChange={(e) => setNewDyscyplina(e.target.value)} placeholder="Nowa dyscyplina..." className="p-3 border rounded-xl flex-1 text-xs font-bold" />
-                  <button onClick={() => { if(newDyscyplina.trim()) { setDyscyplinyList([...dyscyplinyList, newDyscyplina.trim()]); setNewDyscyplina(""); } }} className="bg-slate-900 text-white px-5 py-3 rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800">Dodaj</button>
+                  <button onClick={handleAddDyscyplina} className="bg-slate-900 text-white px-5 py-3 rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800">Dodaj</button>
                </div>
                
                <div className="space-y-2 pt-2">
                  {dyscyplinyList.map((d, i) => (
-                   <div key={i} className="p-3 bg-slate-50 rounded-2xl flex items-center justify-between text-xs border border-slate-100">
+                   <div key={d.id} className="p-3 bg-slate-50 rounded-2xl flex items-center justify-between text-xs border border-slate-100">
                      {editingIndex === i ? (
                        <div className="flex gap-2 flex-1 mr-2">
                          <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
-                         <button onClick={() => handleSaveEdit(i)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
-                         <button onClick={() => setEditingIndex(null)} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
+                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
+                         <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
                        </div>
                      ) : (
                        <>
-                         <span className="font-bold text-slate-800">{d}</span>
+                         <span className="font-bold text-slate-800">{d.nazwa}</span>
                          <div className="flex gap-2">
-                           <button onClick={() => handleStartEdit(i, d)} className="text-sky-600 font-bold hover:underline cursor-pointer px-2 py-1">Edytuj</button>
-                           <button onClick={() => handleDeleteDyscyplina(i)} className="text-rose-600 font-bold hover:underline cursor-pointer px-2 py-1">Usuń</button>
+                           <button onClick={() => {setEditingIndex(i); setEditText(d.nazwa);}} className="text-sky-600 font-bold hover:underline cursor-pointer px-2 py-1">Edytuj</button>
+                           <button onClick={() => handleDeleteDyscyplina(d.id)} className="text-rose-600 font-bold hover:underline cursor-pointer px-2 py-1">Usuń</button>
                          </div>
                        </>
                      )}
@@ -487,7 +495,7 @@ export default function WyzwaniaPage() {
             </div>
 
             <select value={dyscyplina} onChange={(e) => setDyscyplina(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold bg-white">
-               {dyscyplinyList.map(d => <option key={d} value={d}>{d}</option>)}
+               {dyscyplinyList.map(d => <option key={d.id} value={d.nazwa}>{d.nazwa}</option>)}
             </select>
             <textarea placeholder="Dodatkowy opis..." value={opisWyzwania} onChange={(e) => setOpisWyzwania(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold h-20 resize-none" />
             
