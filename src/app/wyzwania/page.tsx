@@ -37,6 +37,10 @@ export default function WyzwaniaPage() {
   const [opisWyzwania, setOpisWyzwania] = useState("");
   const [newDyscyplina, setNewDyscyplina] = useState("");
 
+  // Stany edycji dyscyplin
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
+
   const [activeTab, setActiveTab] = useState<'aktywne' | 'odznaki' | 'admin'>('aktywne');
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
@@ -137,7 +141,6 @@ export default function WyzwaniaPage() {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
 
-    // A. Zapisz wyzwanie w tabeli wyzwań
     const { error: challengeErr } = await supabase
       .from("klub_wyzwania")
       .insert([
@@ -155,7 +158,6 @@ export default function WyzwaniaPage() {
       return;
     }
 
-    // B. Wyślij automatyczną wiadomość powiadamiającą na czat klubowiczów
     const chatMessage = `⚔️ Rzuciłem Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"! Wejdź w zakładkę Wyzwania i Odznaki, aby je przyjąć.`;
     await supabase.from("czat_wiadomosci").insert([
       {
@@ -191,7 +193,34 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 6. Wyszukiwanie przeciwnika
+  // 6. Zarządzanie dyscyplinami (Edycja, Usuwanie, Dodawanie)
+  const handleStartEdit = (index: number, val: string) => {
+    setEditingIndex(index);
+    setEditText(val);
+  };
+
+  const handleSaveEdit = (index: number) => {
+    if (!editText.trim()) return;
+    const updated = [...dyscyplinyList];
+    updated[index] = editText.trim();
+    setDyscyplinyList(updated);
+    setEditingIndex(null);
+    setEditText("");
+  };
+
+  const handleDeleteDyscyplina = (index: number) => {
+    if (dyscyplinyList.length <= 1) {
+      alert("Musisz zostawić przynajmniej jedną dyscyplinę.");
+      return;
+    }
+    const updated = dyscyplinyList.filter((_, i) => i !== index);
+    setDyscyplinyList(updated);
+    if (dyscyplina === dyscyplinyList[index]) {
+      setDyscyplina(updated[0]);
+    }
+  };
+
+  // 7. Wyszukiwanie przeciwnika
   const filteredOpponents = klienci
     .filter((k: any) => String(k.id) !== String(currentUserId))
     .filter((k: any) => {
@@ -221,7 +250,7 @@ export default function WyzwaniaPage() {
         <div>
           <h1 className="text-xl font-black text-slate-950 uppercase tracking-wider flex items-center gap-2">
             <span>⚔️</span> Wyzwania i Odznaki Klubowe
-            <button onClick={() => setIsInfoModalOpen(true)} className="text-[10px] bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full cursor-pointer hover:bg-sky-200">ℹ️ Info</button>
+            <button onClick={() => setIsInfoModalOpen(true)} className="text-[10px] bg-sky-100 text-sky-800 px-2.5 py-1 rounded-full cursor-pointer hover:bg-sky-200 transition-colors font-bold">ℹ️ Info</button>
           </h1>
           <p className="text-xs text-slate-500 mt-1">Rzucaj wyzwania innym klubowiczom, rywalizuj w pojedynkach Head-to-Head i zbieraj trofea!</p>
         </div>
@@ -343,9 +372,9 @@ export default function WyzwaniaPage() {
       {activeTab === 'admin' && userRole === 'admin' && (
         <div className="bg-white rounded-3xl p-6 border border-rose-100 shadow-sm space-y-6">
           <div className="flex gap-2 text-xs font-bold border-b border-rose-100 pb-4">
-            <button onClick={() => setAdminSubTab('wyzwania')} className={`px-4 py-2 rounded-lg transition-colors ${adminSubTab === 'wyzwania' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Wyzwania</button>
-            <button onClick={() => setAdminSubTab('odznaki')} className={`px-4 py-2 rounded-lg transition-colors ${adminSubTab === 'odznaki' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Historia Odznak</button>
-            <button onClick={() => setAdminSubTab('dyscypliny')} className={`px-4 py-2 rounded-lg transition-colors ${adminSubTab === 'dyscypliny' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Dyscypliny</button>
+            <button onClick={() => setAdminSubTab('wyzwania')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'wyzwania' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Wyzwania</button>
+            <button onClick={() => setAdminSubTab('odznaki')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'odznaki' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Historia Odznak</button>
+            <button onClick={() => setAdminSubTab('dyscypliny')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'dyscypliny' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Dyscypliny</button>
           </div>
           
           {adminSubTab === 'wyzwania' && (
@@ -370,12 +399,33 @@ export default function WyzwaniaPage() {
 
           {adminSubTab === 'dyscypliny' && (
              <div className="space-y-4">
-               <h3 className="font-black text-xs uppercase">Dodaj dyscyplinę:</h3>
+               <h3 className="font-black text-xs uppercase text-slate-900">Zarządzaj dyscyplinami (dodaj, edytuj, usuń):</h3>
                <div className="flex gap-2">
-                  <input value={newDyscyplina} onChange={(e) => setNewDyscyplina(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs" />
-                  <button onClick={() => { setDyscyplinyList([...dyscyplinyList, newDyscyplina]); setNewDyscyplina(""); }} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold cursor-pointer">Dodaj</button>
+                  <input value={newDyscyplina} onChange={(e) => setNewDyscyplina(e.target.value)} placeholder="Nowa dyscyplina..." className="p-3 border rounded-xl flex-1 text-xs font-bold" />
+                  <button onClick={() => { if(newDyscyplina.trim()) { setDyscyplinyList([...dyscyplinyList, newDyscyplina.trim()]); setNewDyscyplina(""); } }} className="bg-slate-900 text-white px-5 py-3 rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800">Dodaj</button>
                </div>
-               <div className="space-y-1">{dyscyplinyList.map((d, i) => <div key={i} className="p-2 bg-slate-50 rounded-lg text-xs font-bold">{d}</div>)}</div>
+               
+               <div className="space-y-2 pt-2">
+                 {dyscyplinyList.map((d, i) => (
+                   <div key={i} className="p-3 bg-slate-50 rounded-2xl flex items-center justify-between text-xs border border-slate-100">
+                     {editingIndex === i ? (
+                       <div className="flex gap-2 flex-1 mr-2">
+                         <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
+                         <button onClick={() => handleSaveEdit(i)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
+                         <button onClick={() => setEditingIndex(null)} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
+                       </div>
+                     ) : (
+                       <>
+                         <span className="font-bold text-slate-800">{d}</span>
+                         <div className="flex gap-2">
+                           <button onClick={() => handleStartEdit(i, d)} className="text-sky-600 font-bold hover:underline cursor-pointer px-2 py-1">Edytuj</button>
+                           <button onClick={() => handleDeleteDyscyplina(i)} className="text-rose-600 font-bold hover:underline cursor-pointer px-2 py-1">Usuń</button>
+                         </div>
+                       </>
+                     )}
+                   </div>
+                 ))}
+               </div>
              </div>
           )}
 
