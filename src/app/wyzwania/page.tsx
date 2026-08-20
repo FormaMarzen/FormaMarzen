@@ -199,7 +199,6 @@ export default function WyzwaniaPage() {
         return data.publicUrl;
       }
 
-      // Bezpieczny fallback do Base64, gdyby bucket w storage nie był skonfigurowany
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
@@ -211,14 +210,33 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika przypisywania odznaki
+  // 3. Logika przypisywania odznaki + wysyłanie powiadomienia na czat
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
       odznaka_id: badgeId
     }]);
+
     if (!error) {
-      alert("Odznaka przyznana pomyślnie!");
+      // Pobieramy dane przypisanej odznaki do wiadomości czatu
+      const badgeDef = wszystkieOdznaki.find((b: any) => String(b.id) === String(badgeId));
+      const badgeName = badgeDef ? badgeDef.nazwa : "Klubowa";
+      const badgePoints = badgeDef?.punkty ? ` (${badgeDef.punkty} pkt)` : "";
+      
+      const chatNotification = `🎖️ Gratulacje! Trener przyznał Ci nową odznakę klubową: "${badgeName}"${badgePoints}! Zajrzyj do Gabloty Odznak, aby sprawdzić swoje trofeum 🏆.`;
+
+      await supabase.from("czat_wiadomosci").insert([
+        {
+          nadawca_id: currentUserId,
+          nadawca_nazwa: currentUserName,
+          nadawca_avatar: currentUserAvatar,
+          odbiorca_id: userId,
+          tresc: chatNotification,
+          przeczytana: false
+        }
+      ]);
+
+      alert("Odznaka przyznana pomyślnie i powiadomienie wysłane na czat klubowicza!");
       fetchHistoriaOdznak();
       fetchWszystkiePrzydzieloneOdznaki();
       if (currentUserId) fetchOdznaki(currentUserId);
@@ -470,7 +488,7 @@ export default function WyzwaniaPage() {
     })
     .filter((k: any) => k.badgesCount > 0);
 
-  // Funkcja pomocnicza do renderowania grafiki/zdjęcia lub emoji odznaki
+  // Helper do renderowania grafiki/zdjęcia lub emoji odznaki
   const renderBadgeGraphic = (iconStr: string | null | undefined, sizeClasses = "w-14 h-14", textClasses = "text-2xl") => {
     if (!iconStr) return <span className={textClasses}>🏆</span>;
     const isImage = iconStr.startsWith("http") || iconStr.startsWith("data:") || iconStr.startsWith("/") || iconStr.includes(".png") || iconStr.includes(".jpg") || iconStr.includes(".jpeg") || iconStr.includes(".svg") || iconStr.includes(".webp");
