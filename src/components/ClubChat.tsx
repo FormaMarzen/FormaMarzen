@@ -217,6 +217,16 @@ export default function ClubChat() {
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
+  // SORTOWANIE DOMKÓW: Zbieranie czasu ostatniej wiadomości dla każdego kontaktu
+  const latestMessageMap = new Map();
+  messages.forEach((m: any) => {
+    const otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
+    const msgTime = new Date(m.created_at).getTime();
+    if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
+      latestMessageMap.set(otherId, msgTime);
+    }
+  });
+
   // Zbieranie ID osób z historią konwersacji
   const chattedUserIds = new Set<string | number>();
   messages.forEach((m: any) => {
@@ -255,6 +265,12 @@ export default function ClubChat() {
       }
 
       return k.name?.toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      // Sortowanie: najnowsza wiadomość na górze
+      const timeA = latestMessageMap.get(a.id) || 0;
+      const timeB = latestMessageMap.get(b.id) || 0;
+      return timeB - timeA;
     });
 
   // Renderowanie kart powiadomień: urodziny, odznaki, wyzwania i standardowe wiadomości
@@ -285,7 +301,7 @@ export default function ClubChat() {
       );
     }
 
-    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification)) {
+    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification && !isChallengeNotification)) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
@@ -476,8 +492,7 @@ export default function ClubChat() {
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {activeChatMessages.map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
-                  const isSys = Number(msg.nadawca_id) === SYSTEM_ID;
-                  const isSpecial = isSys || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂");
+                  const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂");
                   
                   const time = msg.created_at
                     ? new Date(msg.created_at).toLocaleTimeString("pl-PL", {
