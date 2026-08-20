@@ -230,7 +230,6 @@ export default function ClubChat() {
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
-      // Konto systemowe jest zawsze dostępne na liście kontaktów
       if (Number(k.id) === SYSTEM_ID) return true;
 
       const q = searchQuery.trim().toLowerCase();
@@ -257,13 +256,33 @@ export default function ClubChat() {
       return k.name?.toLowerCase().includes(q);
     });
 
-  // Pomocnicza funkcja renderująca treść wiadomości ze specjalnym stylem dla konta systemowego, odznak i wyzwań
+  // Renderowanie kart powiadomień: urodziny, odznaki, wyzwania i standardowe wiadomości
   const renderMessageContent = (msg: any, isMe: boolean) => {
-    const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
+    const isBirthdayNotification = msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin");
     const isBadgeNotification = msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową");
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
+    const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
 
-    if (isSystemSender || isBadgeNotification) {
+    if (isBirthdayNotification) {
+      return (
+        <div className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
+          <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl animate-bounce">🎂</span>
+              <span className="font-black text-[11px] uppercase tracking-wider text-rose-700">
+                Prezent Urodzinowy: -20%
+              </span>
+            </div>
+            <span className="text-[9px] bg-rose-500 text-white font-black px-2 py-0.5 rounded-full uppercase shadow-sm">
+              FORMA MARZEŃ
+            </span>
+          </div>
+          <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+        </div>
+      );
+    }
+
+    if (isBadgeNotification || isSystemSender) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
@@ -455,7 +474,7 @@ export default function ClubChat() {
                 {activeChatMessages.map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
                   const isSys = Number(msg.nadawca_id) === SYSTEM_ID;
-                  const isSpecial = isSys || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️");
+                  const isSpecial = isSys || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂");
                   
                   const time = msg.created_at
                     ? new Date(msg.created_at).toLocaleTimeString("pl-PL", {
@@ -499,7 +518,7 @@ export default function ClubChat() {
                     <div>👋 Rozpocznij rozmowę!</div>
                     <p className="text-[10px]">
                       {Number(selectedUser.id) === SYSTEM_ID
-                        ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach i wydarzeniach."
+                        ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, urodzinach i wydarzeniach."
                         : "Napisz pierwszą wiadomość do tego klubowicza."}
                     </p>
                   </div>
