@@ -72,7 +72,6 @@ export default function WyzwaniaPage() {
             setCurrentUserName(`${myProfile.name} (Admin)`);
             setCurrentUserAvatar(myProfile.avatar);
           } else {
-            // Zabezpieczenie przed brakiem rekordu admina w tabeli klienci (zapobiega błędom FK w Supabase)
             myId = enriched.length > 0 ? enriched[0].id : 1;
             setCurrentUserName("Maciej Kłaput (Admin)");
           }
@@ -179,7 +178,18 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 5. Rzucenie nowego wyzwania
+  // 5. Usuwanie wyzwania przez Admina
+  const handleDeleteWyzwanie = async (challengeId: number) => {
+    if (!confirm("Czy na pewno chcesz usunąć to wyzwanie?")) return;
+    const { error } = await supabase.from("klub_wyzwania").delete().eq("id", challengeId);
+    if (!error) {
+      fetchWyzwania();
+    } else {
+      alert("Błąd usuwania wyzwania: " + error.message);
+    }
+  };
+
+  // 6. Rzucenie nowego wyzwania
   const handleCreateChallenge = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
@@ -221,7 +231,7 @@ export default function WyzwaniaPage() {
     fetchWyzwania();
   };
 
-  // 6. Zmiana statusu wyzwania
+  // 7. Zmiana statusu wyzwania
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
     const { error } = await supabase
       .from("klub_wyzwania")
@@ -235,7 +245,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 7. Wyszukiwanie przeciwnika
+  // 8. Wyszukiwanie przeciwnika
   const filteredOpponents = klienci
     .filter((k: any) => String(k.id) !== String(currentUserId))
     .filter((k: any) => {
@@ -405,7 +415,7 @@ export default function WyzwaniaPage() {
                  <td className="py-4 px-2 text-slate-600">{w.status}</td>
                  <td className="py-4 px-2 text-right flex gap-2 justify-end">
                     {w.status !== 'zweryfikowane' && <button onClick={() => handleUpdateStatus(w.id, 'zweryfikowane')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zatwierdź</button>}
-                    <button onClick={() => supabase.from("klub_wyzwania").delete().eq('id', w.id).then(fetchWyzwania)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
+                    <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
                  </td>
                </tr>)}</tbody>
              </table>
@@ -426,7 +436,7 @@ export default function WyzwaniaPage() {
                        <div className="flex gap-2 flex-1 mr-2">
                          <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
                          <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zapisz</button>
-                         <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
+                         <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-bold cursor-pointer">Anuluj</button>
                        </div>
                      ) : (
                        <>
