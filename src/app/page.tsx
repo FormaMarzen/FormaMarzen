@@ -168,6 +168,10 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
+  // STAN WYBORU CZASU WYPISU Z KRZESEŁKA
+  const [isWaitlistModalOpen, setIsWaitlistModalOpen] = useState(false);
+  const [selectedWaitlistCutoff, setSelectedWaitlistCutoff] = useState<number>(30);
+
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
 
@@ -188,6 +192,117 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
+
+  // SILNIK AUTOMATYCZNEGO WYPISYWANIA Z LISTY REZERWOWEJ PO UPŁYWIE CZASU DOSTĘPNOŚCI KLUBOWICZA
+  const processWaitlistCutoffs = async (
+    classes: any[],
+    jednorazowe: any[],
+    signupsMap: { [key: string]: any[] },
+    overridesMap: { [key: string]: any },
+    days: any[]
+  ) => {
+    const now = new Date();
+    let hasChanges = false;
+
+    for (const col of days) {
+      const stdDnia = classes
+        .filter((item: any) => item.days && item.days[col.key])
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const jednorazDnia = jednorazowe
+        .filter((item: any) => item.displayDate === col.date)
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const allClasses = [...stdDnia, ...jednorazDnia];
+
+      for (const cls of allClasses) {
+        if (cls.isOdwołane || cls.isUsunięte) continue;
+
+        const classSignups = signupsMap[cls.classKey] || [];
+        const waitlistSignups = classSignups.filter((s: any) => s.status === 'krzesełko');
+
+        if (waitlistSignups.length === 0) continue;
+
+        const [dStr, mStr] = col.date.split('/');
+        const classYear = col.fullDate ? col.fullDate.getFullYear() : now.getFullYear();
+        const [sh = '00', sm = '00'] = (cls.start || '00:00').split(':');
+        const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+        const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+        for (const wMember of waitlistSignups) {
+          const cutoffMin = wMember.waitlist_cutoff_minutes !== undefined && wMember.waitlist_cutoff_minutes !== null 
+            ? Number(wMember.waitlist_cutoff_minutes) 
+            : 30;
+
+          // Jeśli czas do zajęć jest mniejszy lub równy niż zadeklarowany czas gotowości klubowicza
+          if (diffMinutes <= cutoffMin && diffMinutes >= 0) {
+            hasChanges = true;
+
+            // 1. Usunięcie wpisu z listy rezerwowej w Supabase
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', cls.classKey)
+              .eq('klient_id', wMember.id);
+
+            // 2. Zwrot wejścia jeśli to karnet ilościowy
+            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', wMember.id).maybeSingle();
+            if (clientData) {
+              let parsedKarnety = [];
+              if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+              else if (typeof clientData.karnetyKlubowicza === 'string') {
+                try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+              }
+
+              const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+              if (passIndex !== -1) {
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                parsedKarnety[passIndex] = {
+                  ...parsedKarnety[passIndex],
+                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                };
+                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', wMember.id);
+              }
+
+              await supabase.from('transakcje').insert([{
+                klient_id: wMember.id,
+                typ_operacji: 'zajecia_wypis',
+                class_key: cls.classKey,
+                opis: `Automatyczne zwolnienie z krzesełka "${cls.title}" (${col.date} ${cls.start}) - minął Twój wybrany czas gotowości (${cutoffMin} min przed startem). Zwrócono 1 wejście.`
+              }]);
+            }
+
+            // 3. Wysłanie powiadomienia Push
+            await sendPushNotification(wMember.id, {
+              title: `Zwolniono miejsce na liście rezerwowej: ${cls.title}`,
+              body: `Zostałeś automatycznie wypisany z listy rezerwowej treningu ${cls.title} (${col.date} ${cls.start}), ponieważ do zajęć zostało mniej niż ${cutoffMin} min. Zwrócono wejście.`,
+              url: '/'
+            });
+
+            // 4. Log do bazy
+            await supabase.from('booking_logs').insert([{
+              action_type: 'WAITLIST_CUTOFF_EXPIRED',
+              status: 'SUCCESS',
+              reason: `Klubowicz ID:${wMember.id} usunięty z listy rezerwowej ${cls.classKey} (upłynął limit ${cutoffMin} min).`,
+              rule_applied: 'waitlist_cutoff_auto_removal',
+              payload: { class_key: cls.classKey, klient_id: wMember.id, cutoff_minutes: cutoffMin }
+            }]);
+          }
+        }
+      }
+    }
+
+    return hasChanges;
+  };
 
   // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB, ZWROTU WEJŚĆ I POWIADOMIEŃ PUSH
   const processAutoCancellations = async (
@@ -629,7 +744,7 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    // POBIERANIE ZAPISÓW Z CHRONOLOGICZNYM SORTOWANIEM (ZACHOWANIE KOLEJKI KRZESEŁKA)
+    // POBIERANIE ZAPISÓW Z CHRONOLOGICZNYM SORTOWANIEM (ZACHOWANIE KOLEJKI KRZESEŁKA I LIMITU MINUT)
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const groupedZapisy: { [key: string]: any[] } = {};
     if (zapisyData) {
@@ -644,6 +759,7 @@ export default function DashboardPage() {
           ...z,
           id: z.klient_id,
           status: z.status || 'zapisany',
+          waitlist_cutoff_minutes: z.waitlist_cutoff_minutes !== undefined && z.waitlist_cutoff_minutes !== null ? Number(z.waitlist_cutoff_minutes) : 30,
           obecny: z.obecny,
           nieobecny: z.nieobecny
         });
@@ -663,7 +779,16 @@ export default function DashboardPage() {
       return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
     });
 
-    // URUCHOMIENIE WERYFIKACJI AUTOODWOŁYWANIA ZAJĘĆ I ZWROTÓW WEJŚĆ
+    // 1. URUCHOMIENIE WERYFIKACJI AUTO-WYPISU Z KRZESEŁKA (JEŚLI MINĄŁ CZAS GOTOWOŚCI)
+    const waitlistCutoffChanges = await processWaitlistCutoffs(
+      mappedSzablony,
+      mappedJednorazowe,
+      groupedZapisy,
+      nadpisaniaMap,
+      activeDashboardDays
+    );
+
+    // 2. URUCHOMIENIE WERYFIKACJI AUTOODWOŁYWANIA ZAJĘĆ
     const changesOccurred = await processAutoCancellations(
       mappedSzablony,
       mappedJednorazowe,
@@ -673,7 +798,7 @@ export default function DashboardPage() {
       activeDashboardDays
     );
 
-    if (changesOccurred) {
+    if (waitlistCutoffChanges || changesOccurred) {
       loadData();
       return;
     }
@@ -753,7 +878,6 @@ export default function DashboardPage() {
         }
       }
     }
-
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) setRodzajeZajec(rodzajeData);
     
@@ -1687,7 +1811,7 @@ export default function DashboardPage() {
   };
 
   // =========================================================================
-  // GŁÓWNA LOGIKA ZAPISU KLUBOWICZA ZE STRONY GŁÓWNEJ (ZASADY NADRZĘDNE)
+  // GŁÓWNA LOGIKA ZAPISU KLUBOWICZA ZE STRONY GŁÓWNEJ
   // =========================================================================
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
@@ -1930,16 +2054,22 @@ export default function DashboardPage() {
       showToast(`Nie możesz się zapisać! ${reason}`, 'error'); 
       return; 
     }
+
+    const limitZajec = selectedClass.limit || 12;
+    const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
+    const isWaitlistTarget = glownaCount >= limitZajec;
+
+    // JEŚLI BRAKUJE MIEJSC – OTWIERAMY MODAL WYBORU CZASU WYPISU Z KRZESEŁKA
+    if (isWaitlistTarget) {
+      setSelectedWaitlistCutoff(30);
+      setIsWaitlistModalOpen(true);
+      return;
+    }
     
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
-    // PRECYZYJNA WERYFIKACJA STATUSU ZAPISU (GŁÓWNY vs KRZESEŁKO)
-    const limitZajec = selectedClass.limit || 12;
-    const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
-    const statusZapisu = glownaCount >= limitZajec ? 'krzesełko' : 'zapisany';
-
     const { error } = await supabase.from('zapisy_zajec').insert([
-      { class_key: classKey, klient_id: currentUser.id, status: statusZapisu, obecny: false }
+      { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
     ]);
     
     if (error) { 
@@ -1961,31 +2091,85 @@ export default function DashboardPage() {
       }
     }
 
-    const oblozenieStr = `${glownaCount + (statusZapisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
-    const typWydarzenia = statusZapisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
+    const oblozenieStr = `${glownaCount + 1}/${limitZajec}`;
     
     await supabase.from('transakcje').insert([{ 
       klient_id: currentUser.id, 
       typ_operacji: 'zajecia_zapis', 
       class_key: classKey, 
-      opis: `${currentUser.firstName || 'Klubowicz'} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` 
+      opis: `${currentUser.firstName || 'Klubowicz'} - Zapisano na zajęcia. Obłożenie: ${oblozenieStr}` 
     }]);
 
     await supabase.from('booking_logs').insert([{
-      action_type: statusZapisu === 'krzesełko' ? 'WAITLIST_JOIN' : 'BOOKING_SUCCESS',
+      action_type: 'BOOKING_SUCCESS',
       status: 'SUCCESS',
-      reason: `${currentUser.firstName || 'Klubowicz'} zapisany do ${classKey} (${statusZapisu})`,
+      reason: `${currentUser.firstName || 'Klubowicz'} zapisany do ${classKey} (zapisany)`,
       rule_applied: 'VALIDATION_PASSED',
-      payload: { klient_id: currentUser.id, class_key: classKey, status: statusZapisu }
+      payload: { klient_id: currentUser.id, class_key: classKey, status: 'zapisany' }
     }]);
 
-    showToast(statusZapisu === 'krzesełko' ? "Zostałeś dopisany do listy rezerwowej (krzesełko)!" : "Zostałeś pomyślnie zapisany na zajęcia!");
+    showToast("Zostałeś pomyślnie zapisany na zajęcia!");
+    loadData();
+    setSelectedClass(null);
+  };
+
+  // POTWIERDZENIE ZAPISU NA KRZESEŁKO Z WYBRANYM LOKALNYM LUB GLOBALNYM CZASEM GOTOWOŚCI
+  const handleConfirmWaitlistSignup = async (cutoffMinutes: number) => {
+    if (!currentUser || !selectedClass) return;
+
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const limitZajec = selectedClass.limit || 12;
+    const aktualni = zapisyNaZajecia[classKey] || [];
+
+    const { error } = await supabase.from('zapisy_zajec').insert([
+      { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
+    ]);
+
+    if (error) {
+      showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
+      return;
+    }
+
+    // Zużycie wejścia
+    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    if (passIndex !== -1) {
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+      if (!isNaN(currentRemaining) && currentRemaining > 0) {
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: currentRemaining - 1
+        };
+        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+      }
+    }
+
+    const rezerwaCount = aktualni.filter((u: any) => u.status === 'krzesełko').length + 1;
+    const cutoffLabel = cutoffMinutes >= 60 ? `${cutoffMinutes / 60}h` : `${cutoffMinutes} min`;
+
+    await supabase.from('transakcje').insert([{ 
+      klient_id: currentUser.id, 
+      typ_operacji: 'zajecia_zapis', 
+      class_key: classKey, 
+      opis: `${currentUser.firstName || 'Klubowicz'} - Zapisano na listę rezerwową (krzesełko #${rezerwaCount}). Czas gotowości: ${cutoffLabel} przed startem.` 
+    }]);
+
+    await supabase.from('booking_logs').insert([{
+      action_type: 'WAITLIST_JOIN',
+      status: 'SUCCESS',
+      reason: `${currentUser.firstName || 'Klubowicz'} dopisany do krzesełka w ${classKey} (Limit: ${cutoffMinutes} min)`,
+      rule_applied: 'VALIDATION_PASSED',
+      payload: { klient_id: currentUser.id, class_key: classKey, status: 'krzesełko', cutoff_minutes: cutoffMinutes }
+    }]);
+
+    setIsWaitlistModalOpen(false);
+    showToast(`Dopisano do listy rezerwowej! System wypisze Cię automatycznie na ${cutoffLabel} przed startem, jeśli nie zwolni się miejsce.`);
     loadData();
     setSelectedClass(null);
   };
 
   // =========================================================================
-  // GŁÓWNA LOGIKA WYPISANIA KLUBOWICZA ZE SZTYWNĄ BLOKADĄ PO CZASIE I POWIADOMIENIEM O AWANSIE
+  // GŁÓWNA LOGIKA WYPISANIA KLUBOWICZA ZE SZTYWNĄ BLOKADĄ I INTELIGENTNYM AWANSEM
   // =========================================================================
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
@@ -2055,38 +2239,45 @@ export default function DashboardPage() {
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
+    // INTELIGENTNY AWANS: WYBIERAMY PIERWSZĄ OSOBĘ Z KRZESEŁKA, KTÓREJ LIMIT GOTOWOŚCI NIE WYGASŁ
     if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
-      const pierwszaRezerwa = rezerwaPoWypisie[0];
-      await supabase
-        .from('zapisy_zajec')
-        .update({ status: 'zapisany' })
-        .eq('class_key', classKey)
-        .eq('klient_id', pierwszaRezerwa.id);
+      const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
+        const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
+        return diffMinutes > cutoff;
+      }) || rezerwaPoWypisie[0];
 
-      const awansowanyKlient = klienciList.find(c => c.id === pierwszaRezerwa.id);
-      const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${pierwszaRezerwa.id}`;
+      if (kandydatDoAwansu) {
+        await supabase
+          .from('zapisy_zajec')
+          .update({ status: 'zapisany' })
+          .eq('class_key', classKey)
+          .eq('klient_id', kandydatDoAwansu.id);
 
-      await supabase.from('transakcje').insert([{
-        klient_id: pierwszaRezerwa.id,
-        typ_operacji: 'zajecia_awans_rezerwa',
-        class_key: classKey,
-        opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
-      }]);
+        const awansowanyKlient = klienciList.find(c => c.id === kandydatDoAwansu.id);
+        const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${kandydatDoAwansu.id}`;
 
-      await supabase.from('booking_logs').insert([{
-        action_type: 'WAITLIST_PROMOTED',
-        status: 'SUCCESS',
-        reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
-        rule_applied: 'waitlist_auto_promote',
-        payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
-      }]);
+        await supabase.from('transakcje').insert([{
+          klient_id: kandydatDoAwansu.id,
+          typ_operacji: 'zajecia_awans_rezerwa',
+          class_key: classKey,
+          opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
+        }]);
 
-      // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
-      await sendPushNotification(pierwszaRezerwa.id, {
-        title: 'Zwolniło się miejsce!',
-        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
-        url: '/'
-      });
+        await supabase.from('booking_logs').insert([{
+          action_type: 'WAITLIST_PROMOTED',
+          status: 'SUCCESS',
+          reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
+          rule_applied: 'waitlist_auto_promote',
+          payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
+        }]);
+
+        // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
+        await sendPushNotification(kandydatDoAwansu.id, {
+          title: 'Zwolniło się miejsce!',
+          body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
+          url: '/'
+        });
+      }
     }
 
     showToast("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
@@ -2149,37 +2340,43 @@ export default function DashboardPage() {
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
     if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
-      const pierwszaRezerwa = rezerwaPoWypisie[0];
-      await supabase
-        .from('zapisy_zajec')
-        .update({ status: 'zapisany' })
-        .eq('class_key', classKey)
-        .eq('klient_id', pierwszaRezerwa.id);
+      const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
+        const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
+        return diffMinutes > cutoff;
+      }) || rezerwaPoWypisie[0];
 
-      const awansowanyKlient = klienciList.find(c => c.id === pierwszaRezerwa.id);
-      const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${pierwszaRezerwa.id}`;
+      if (kandydatDoAwansu) {
+        await supabase
+          .from('zapisy_zajec')
+          .update({ status: 'zapisany' })
+          .eq('class_key', classKey)
+          .eq('klient_id', kandydatDoAwansu.id);
 
-      await supabase.from('transakcje').insert([{
-        klient_id: pierwszaRezerwa.id,
-        typ_operacji: 'zajecia_awans_rezerwa',
-        class_key: classKey,
-        opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
-      }]);
+        const awansowanyKlient = klienciList.find(c => c.id === kandydatDoAwansu.id);
+        const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${kandydatDoAwansu.id}`;
 
-      await supabase.from('booking_logs').insert([{
-        action_type: 'WAITLIST_PROMOTED',
-        status: 'SUCCESS',
-        reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
-        rule_applied: 'waitlist_auto_promote',
-        payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
-      }]);
+        await supabase.from('transakcje').insert([{
+          klient_id: kandydatDoAwansu.id,
+          typ_operacji: 'zajecia_awans_rezerwa',
+          class_key: classKey,
+          opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
+        }]);
 
-      // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
-      await sendPushNotification(pierwszaRezerwa.id, {
-        title: 'Zwolniło się miejsce!',
-        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${title} (${startStr})!`,
-        url: '/'
-      });
+        await supabase.from('booking_logs').insert([{
+          action_type: 'WAITLIST_PROMOTED',
+          status: 'SUCCESS',
+          reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
+          rule_applied: 'waitlist_auto_promote',
+          payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
+        }]);
+
+        // WYSŁANIE POWIADOMIENIA PUSH O AWANSIE Z KRZESEŁKA NA TRENING
+        await sendPushNotification(kandydatDoAwansu.id, {
+          title: 'Zwolniło się miejsce!',
+          body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${title} (${startStr})!`,
+          url: '/'
+        });
+      }
     }
 
     showToast("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
@@ -2257,7 +2454,7 @@ export default function DashboardPage() {
     const limitZajec = selectedClass.limit || 12;
     const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
     const statusZpisu = glownaCount >= limitZajec ? 'krzesełko' : 'zapisany';
-    const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: klient.id, status: statusZpisu, obecny: false }]);
+    const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: klient.id, status: statusZpisu, waitlist_cutoff_minutes: statusZpisu === 'krzesełko' ? 30 : null, obecny: false }]);
     if (error) { showToast(`Nie udało się zapisać: ${error.message}`, 'error'); return; }
 
     let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
@@ -2552,7 +2749,8 @@ export default function DashboardPage() {
                   displayDate: dateStr,
                   fullDateObj: new Date(now.getFullYear(), m - 1, d),
                   signupStatus: mojZapis.status || 'zapisany',
-                  isKrzeselko: mojZapis.status === 'krzesełko'
+                  isKrzeselko: mojZapis.status === 'krzesełko',
+                  waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30
                 });
               }
             }
@@ -2818,8 +3016,8 @@ export default function DashboardPage() {
                         <div className="flex items-center gap-1.5 truncate">
                           <span className="text-[12px] sm:text-[13px] font-bold text-slate-900 truncate">{cls.title}</span>
                           {cls.isKrzeselko && (
-                            <span className="bg-blue-100 text-blue-900 border border-blue-200 text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-0.5" title="Lista rezerwowa (Krzesełko)">
-                              🪑 Krzesełko
+                            <span className="bg-blue-100 text-blue-900 border border-blue-200 text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-0.5" title={`Lista rezerwowa (Wypis na ${cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes} min`} przed startem)`}>
+                              🪑 Krzesełko ({cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes}m`})
                             </span>
                           )}
                         </div>
@@ -3644,6 +3842,7 @@ export default function DashboardPage() {
                         : `${osoba.firstName} ${osoba.lastName ? osoba.lastName.charAt(0) + '.' : ''}`;
 
                       const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
+                      const cutoffMin = osobaZapisana.waitlist_cutoff_minutes || 30;
 
                       return (
                         <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
@@ -3664,6 +3863,7 @@ export default function DashboardPage() {
                                 <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
                                   <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
                                   <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+                                  <div><span className="font-bold text-slate-700">LIMIT WYPISU:</span> <strong className="text-blue-900">{cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin} min`} przed startem</strong></div>
                                   <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
                                   <div>
                                     <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
@@ -3682,7 +3882,7 @@ export default function DashboardPage() {
                           </div>
                           {canManageClass && (
                             <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
-                              <span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
+                              <span className="font-bold text-blue-800 text-[11px]">Wypis: {cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin}m`} przed</span>
                               <button
                                 onClick={() => setClientToUnregister(osoba)}
                                 className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
@@ -3810,6 +4010,81 @@ export default function DashboardPage() {
           </div>
         );
       })()}
+
+      {/* NOWY MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ (KRZESEŁKO) */}
+      {isWaitlistModalOpen && selectedClass && (
+        <div className="fixed inset-0 bg-slate-950/70 z-[70] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🪑</span>
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">Zapis na listę rezerwową</h3>
+              </div>
+              <button onClick={() => setIsWaitlistModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+            </div>
+            <div className="space-y-4 text-xs">
+              <div className="bg-sky-50 border border-sky-200/80 rounded-2xl p-4 text-slate-700 leading-relaxed">
+                <p className="font-bold text-sky-950 mb-1">Na ile przed rozpoczęciem treningu system ma Cię automatycznie wypisać?</p>
+                <p className="text-[11px] text-slate-500">
+                  Jeśli przed wybranym czasem nie zwolni się miejsce na liście głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="font-black text-slate-700 uppercase tracking-wider text-[10px] block">Wybierz czas gotowości / dojazdu:</label>
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    { minutes: 30, label: '30 minut przed startem', desc: 'Szybki dojazd' },
+                    { minutes: 45, label: '45 minut przed startem', desc: 'Standardowy czas' },
+                    { minutes: 60, label: '1 godzina (60 min) przed startem', desc: 'Optymalny czas' },
+                    { minutes: 90, label: '1,5 godziny (90 min) przed startem', desc: 'Większy zapas' },
+                    { minutes: 120, label: '2 godziny (120 min) przed startem', desc: 'Maksymalny zapas' },
+                  ].map((option) => (
+                    <label
+                      key={option.minutes}
+                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${
+                        selectedWaitlistCutoff === option.minutes
+                          ? 'bg-sky-100/70 border-sky-500 ring-2 ring-sky-200'
+                          : 'bg-slate-50/50 border-slate-200 hover:bg-sky-50/40 hover:border-sky-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="radio"
+                          name="waitlistCutoff"
+                          value={option.minutes}
+                          checked={selectedWaitlistCutoff === option.minutes}
+                          onChange={() => setSelectedWaitlistCutoff(option.minutes)}
+                          className="w-4 h-4 accent-sky-600 cursor-pointer"
+                        />
+                        <span className="font-bold text-slate-800 text-xs">{option.label}</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{option.desc}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t border-sky-100">
+                <button
+                  type="button"
+                  onClick={() => setIsWaitlistModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleConfirmWaitlistSignup(selectedWaitlistCutoff)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                >
+                  Potwierdź krzesełko
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: AKCJE KLUBOWICZA W TABELI */}
       {tableActionClient && (
