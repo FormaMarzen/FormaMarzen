@@ -433,7 +433,7 @@ export default function DashboardPage() {
     if (userEmail === 'maciejklaput@gmail.com') {
       setAppRole('admin');
     } else {
-      const trenerObj = trenerzyData?.find(t => t.email === userEmail);
+      const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
       if (trenerObj) {
         setAppRole('trener');
         setCurrentTrenerProfile(trenerObj);
@@ -1232,17 +1232,103 @@ export default function DashboardPage() {
     showToast("Karnet został zaktualizowany!");
   };
 
+  // CAŁKOWITE USUNIĘCIE KARNETU + AUTOMATYCZNE WYPISANIE Z PRZYSZŁYCH ZAJĘĆ
   const handleConfirmDeletePass = async (passId: number) => {
-    if (confirm("Czy na pewno chcesz usunąć ten karnet?")) {
-      if (!profileClient) return;
-      const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
-      const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') || 'Brak karnetu' };
-      const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
-      await updateSupabaseClient(updatedClient, dbPayload);
-      setEditingPassModal(null);
-      setIsGlobalPassMenuOpen(false);
-      showToast("Karnet został usunięty.");
+    if (!profileClient) return;
+    if (!confirm("Czy na pewno chcesz usunąć ten karnet? Klient zostanie automatycznie wypisany ze wszystkich przyszłych zajęć.")) return;
+    
+    const now = new Date();
+    let cancelledCount = 0;
+    
+    // 1. Pobieramy rezerwacje klienta i usuwamy te, które są w przyszłości
+    const { data: userSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('*')
+      .eq('klient_id', profileClient.id);
+
+    if (userSignups && userSignups.length > 0) {
+      for (const signup of userSignups) {
+        const parts = (signup.class_key || '').split('_');
+        const classId = parts[0];
+        const dateStr = parts[1];
+        if (dateStr) {
+          const [d, m] = dateStr.split('/').map(Number);
+          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+          const override = nadpisaneZajeciaDni[signup.class_key];
+          const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+
+          const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+          const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
+          const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+
+          if (classStartDateTime > now) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', profileClient.id);
+            cancelledCount++;
+          }
+        }
+      }
     }
+
+    // 2. Czyścimy zapisy nadchodzące w obiekcie klienta
+    let updatedNadchodzace = profileClient.zapisyNadchodzace;
+    if (typeof updatedNadchodzace === 'string') {
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+    }
+    if (Array.isArray(updatedNadchodzace)) {
+      updatedNadchodzace = updatedNadchodzace.filter((z: any) => {
+        if (!z.data) return false;
+        const [d, m] = z.data.includes('-') 
+          ? z.data.split('-').slice(1).reverse().map(Number) 
+          : (z.data.includes('/') ? z.data.split('/').map(Number) : [1, 1]);
+        const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+        return classDate < now;
+      });
+    }
+
+    // 3. Usuwamy karnet z profilu
+    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
+    const updatedClient = { 
+      ...profileClient, 
+      karnetyKlubowicza: uaktualnioneKarnety, 
+      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') || 'Brak karnetu',
+      zapisyNadchodzace: updatedNadchodzace
+    };
+    
+    const dbPayload: any = { 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      zapisyNadchodzace: updatedNadchodzace
+    };
+
+    await updateSupabaseClient(updatedClient, dbPayload);
+
+    // 4. Rejestrujemy transakcje i logi
+    if (cancelledCount > 0) {
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: 'zajecia_wypis',
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu usunięcia karnetu.`
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'PASS_DELETED_UNENROLLED',
+        status: 'SUCCESS',
+        reason: `Usunięto karnet dla ${profileClient.firstName} ${profileClient.lastName}. Wypisano z ${cancelledCount} przyszłych zajęć.`,
+        rule_applied: 'pass_deletion_cleanup',
+        payload: { klient_id: profileClient.id, cancelled_count: cancelledCount }
+      }]);
+    }
+
+    setEditingPassModal(null);
+    setIsGlobalPassMenuOpen(false);
+    showToast(cancelledCount > 0 
+      ? `Karnet usunięty. Wypisano z ${cancelledCount} przyszłych zajęć.` 
+      : "Karnet został usunięty."
+    );
   };
 
   const handleConfirmSuspendPass = async (e: React.FormEvent) => {
@@ -1447,6 +1533,7 @@ export default function DashboardPage() {
     setIsEditProfileInfoOpen(false);
     showToast("Dane profilu zostały zaktualizowane.");
   };
+
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -1502,6 +1589,36 @@ export default function DashboardPage() {
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
+    // 0. BLOKADA: WERYFIKACJA POSIADANIA AKTYWNEGO KARNETU
+    const karnetyUzytkownika = currentUser.karnetyKlubowicza || [];
+    const dzisiajDateObj = new Date();
+    dzisiajDateObj.setHours(0, 0, 0, 0);
+
+    const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
+      if (!k) return false;
+      if (k.waznyDo) {
+        const expDate = new Date(k.waznyDo);
+        expDate.setHours(23, 59, 59, 999);
+        if (expDate < dzisiajDateObj) return false;
+      }
+      if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+        if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
+      }
+      return true;
+    });
+
+    if (karnetyUzytkownika.length === 0 || !posiadaAktywnyKarnet) {
+      await supabase.from('booking_logs').insert([{
+        action_type: 'BOOKING_BLOCKED',
+        status: 'BLOCKED',
+        reason: `${currentUser.firstName || 'Klubowicz'}: Brak aktywnego karnetu na koncie.`,
+        rule_applied: 'no_active_pass',
+        payload: { klient_id: currentUser.id, class_id: selectedClass.id }
+      }]);
+      showToast("Nie możesz zapisać się na zajęcia! Nie posiadasz aktywnego karnetu. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
+      return;
+    }
+
     // Weryfikacja automatycznego odwołania
     const classKeyCurrent = `${selectedClass.id}_${selectedClass.displayDate}`;
     const zapisaniCurrent = zapisyNaZajecia[classKeyCurrent] || [];
@@ -2188,7 +2305,6 @@ export default function DashboardPage() {
     };
     return getEarliestExpirationDate(a).localeCompare(getEarliestExpirationDate(b));
   });
-
   const today = new Date();
   const currentMonday = getMonday(selectedWeekDate);
   const dashboardDays = Array.from({ length: 5 }).map((_, index) => {
@@ -2341,7 +2457,7 @@ export default function DashboardPage() {
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
-      {/* NOWOCZESNE POWIADOMIENIE TOAST (ZASTĘPUJE SYSTEMOWY ALERT) */}
+      {/* NOWOCZESNE POWIADOMIENIE TOAST */}
       {toastMessage && (
         <div
           className={`fixed bottom-6 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-2xl border flex items-center gap-3 transition-all duration-300 animate-in fade-in slide-in-from-bottom-5 ${
@@ -2708,7 +2824,6 @@ export default function DashboardPage() {
             const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
             const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
             
-            // Standardowe zajęcia dnia (z uwzględnieniem ukrywania usuniętych dla klubowicza)
             const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
               .filter((item: any) => item.days && item.days[col.key])
               .map((item: any) => {
@@ -2721,7 +2836,6 @@ export default function DashboardPage() {
                 return true;
               });
 
-            // Jednorazowe zajęcia dnia (z uwzględnieniem ukrywania usuniętych dla klubowicza)
             const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
               .filter((item: any) => item.displayDate === col.date)
               .filter((item: any) => {
@@ -2765,7 +2879,6 @@ export default function DashboardPage() {
                       const isPastEvent = isPastDay || isPastTime;
                       const isLockedForClient = ['klubowicz', 'trener'].includes(appRole) && isPastEvent;
 
-                      // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ
                       const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
                       const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
                       const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
@@ -3552,7 +3665,6 @@ export default function DashboardPage() {
           </div>
         );
       })()}
-
       {/* MODAL: AKCJE KLUBOWICZA W TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">

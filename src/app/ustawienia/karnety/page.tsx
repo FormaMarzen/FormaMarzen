@@ -211,7 +211,7 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // Automatyczne wypisywanie z zajęć w trakcie trwania zawieszenia
+  // Automatyczne wypisywanie z zajęć w trakcie trwania zawieszenia lub usunięcia karnetu
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -247,17 +247,30 @@ export default function KarnetyPage() {
       }
     }
 
-    if (cancelledCount > 0) {
-      const { data: klientData } = await supabase.from('klienci').select('karnetyKlubowicza').eq('id', klientId).single();
-      if (klientData) {
-        let updatedKarnety = klientData.karnetyKlubowicza;
-        if (typeof updatedKarnety === 'string') {
-          try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
-        }
-        if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
+    // Aktualizacja w tabeli klienci (karnety, zapisyNadchodzace, zapisyWypisy)
+    const { data: klientData } = await supabase.from('klienci').select('*').eq('id', klientId).single();
+    if (klientData) {
+      let updatedKarnety = klientData.karnetyKlubowicza;
+      if (typeof updatedKarnety === 'string') {
+        try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
+      }
+      if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
 
+      let updatedNadchodzace = klientData.zapisyNadchodzace;
+      if (typeof updatedNadchodzace === 'string') {
+        try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+      }
+      if (Array.isArray(updatedNadchodzace)) {
+        updatedNadchodzace = updatedNadchodzace.filter((z: any) => {
+          if (!z.data) return true;
+          const isAfterStart = z.data >= zawieszonyOd;
+          const isBeforeEnd = !zawieszonyDo || z.data <= zawieszonyDo;
+          return !(isAfterStart && isBeforeEnd);
+        });
+      }
+
+      if (cancelledCount > 0) {
         const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-        
         if (passIndex !== -1) {
           const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
           const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
@@ -265,14 +278,20 @@ export default function KarnetyPage() {
             ...updatedKarnety[passIndex],
             pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
           };
-          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
         }
       }
 
+      await supabase.from('klienci').update({ 
+        karnetyKlubowicza: updatedKarnety,
+        zapisyNadchodzace: updatedNadchodzace 
+      }).eq('id', klientId);
+    }
+
+    if (cancelledCount > 0) {
       await supabase.from('transakcje').insert([{
         klient_id: klientId,
         typ_operacji: 'zajecia_wypis',
-        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
+        opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia/aktualizacji karnetu. Zwrócono ${cancelledCount} wejść.`
       }]);
     }
   };
