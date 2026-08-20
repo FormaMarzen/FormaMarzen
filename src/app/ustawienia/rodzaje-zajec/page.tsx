@@ -74,8 +74,11 @@ export default function RodzajeZajecPage() {
   const [obrazekUrl, setObrazekUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Programowanie treningów
+  // Programowanie treningów i lista rotacyjna
   const [programowanieTreningow, setProgramowanieTreningow] = useState(false);
+  const [programowanieList, setProgramowanieList] = useState<any[]>([]);
+  const [newTreningTytul, setNewTreningTytul] = useState('');
+  const [newTreningOpis, setNewTreningOpis] = useState('');
 
   const handleOpenAdd = () => {
     setEditingId(null);
@@ -92,6 +95,9 @@ export default function RodzajeZajecPage() {
     setOpis('');
     setObrazekUrl(null);
     setProgramowanieTreningow(false);
+    setProgramowanieList([]);
+    setNewTreningTytul('');
+    setNewTreningOpis('');
     setIsModalOpen(true);
   };
 
@@ -110,6 +116,9 @@ export default function RodzajeZajecPage() {
     setOpis(item.opis || '');
     setObrazekUrl(item.obrazekUrl || null);
     setProgramowanieTreningow(item.programowanieTreningow || false);
+    setProgramowanieList(item.programowanieList || []);
+    setNewTreningTytul('');
+    setNewTreningOpis('');
     setIsModalOpen(true);
   };
 
@@ -164,6 +173,7 @@ export default function RodzajeZajecPage() {
       opis,
       obrazekUrl,
       programowanieTreningow,
+      programowanieList,
       etykiety: [] as string[]
     };
 
@@ -171,7 +181,9 @@ export default function RodzajeZajecPage() {
     if (niewidoczneWGrafiku) metaDane.etykiety.push('Niewidoczne w grafiku');
     if (autoOdwolanie) metaDane.etykiety.push(`Auto-odwołanie (< ${iloscKlubowiczow || 0} os.)`);
     if (rownyPodzial) metaDane.etykiety.push('Równy podział płci');
-    if (programowanieTreningow) metaDane.etykiety.push('Programowanie treningów');
+    if (programowanieTreningow) {
+      metaDane.etykiety.push(programowanieList.length > 0 ? `Programowanie (${programowanieList.length} treng.)` : 'Programowanie treningów');
+    }
     
     if (metaDane.etykiety.length === 0) metaDane.etykiety.push('Brak dodatkowych ustawień');
 
@@ -199,7 +211,7 @@ export default function RodzajeZajecPage() {
           
         if (error) throw error;
 
-        // Synchronizacja z nadrzędnymi zasadami zapisu (domyślny czas do wypisu oraz blokada przed startem dla nowego treningu)
+        // Synchronizacja z nadrzędnymi zasadami zapisu
         const { data: rulesData } = await supabase
           .from('club_booking_rules')
           .select('*')
@@ -561,6 +573,70 @@ export default function RodzajeZajecPage() {
                 </div>
                 
                 <ToggleRow label="Programowanie treningów:" state={programowanieTreningow} setState={setProgramowanieTreningow} />
+
+                {programowanieTreningow && (
+                  <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
+                    <div className="text-xs font-bold text-slate-700">Lista zaplanowanych treningów (rotacja):</div>
+                    
+                    {/* Formularz dodawania nowego treningu do listy */}
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                      <div className="text-[11px] font-bold text-slate-600 uppercase">Dodaj trening do rotacji</div>
+                      <input 
+                        type="text"
+                        placeholder="Nazwa treningu (np. Trening 1 - Klatka + Triceps)"
+                        value={newTreningTytul}
+                        onChange={(e) => setNewTreningTytul(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                      />
+                      <textarea 
+                        placeholder="Szczegóły / Partie / Ćwiczenia (opcjonalnie)"
+                        value={newTreningOpis}
+                        onChange={(e) => setNewTreningOpis(e.target.value)}
+                        rows={2}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!newTreningTytul.trim()) return;
+                          setProgramowanieList([...programowanieList, { id: Date.now().toString(), tytul: newTreningTytul.trim(), opis: newTreningOpis.trim() }]);
+                          setNewTreningTytul('');
+                          setNewTreningOpis('');
+                        }}
+                        className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                      >
+                        + Dodaj do listy treningów
+                      </button>
+                    </div>
+
+                    {/* Lista dodanych treningów */}
+                    <div className="space-y-2">
+                      {programowanieList.map((tr: any, idx: number) => (
+                        <div key={tr.id || idx} className="flex items-start justify-between bg-white border border-slate-200 p-3 rounded-xl shadow-sm text-xs">
+                          <div className="space-y-0.5">
+                            <div className="font-bold text-slate-800">#{idx + 1}. {tr.tytul}</div>
+                            {tr.opis && <div className="text-slate-500 text-[11px]">{tr.opis}</div>}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setProgramowanieList(programowanieList.filter((_, i) => i !== idx));
+                            }}
+                            className="text-rose-600 hover:text-rose-800 font-bold p-1 cursor-pointer"
+                            title="Usuń z listy"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      {programowanieList.length === 0 && (
+                        <div className="text-center py-4 text-slate-400 text-xs italic">
+                          Brak zdefiniowanych treningów w rotacji. Dodaj przynajmniej jeden powyżej.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
             </div>
