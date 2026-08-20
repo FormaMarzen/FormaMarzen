@@ -275,7 +275,7 @@ export default function WyzwaniaPage() {
     if (!error) {
       fetchWyzwania();
     } else {
-      alert("Nie udało się zaktualizować statusu.");
+      alert("Błąd: " + error.message);
     }
   };
 
@@ -380,8 +380,18 @@ export default function WyzwaniaPage() {
 
                   {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
                     <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
-                      <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Przyjmij wyzwanie</button>
-                      <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Odrzuć</button>
+                      <button
+                        onClick={() => handleUpdateStatus(w.id, 'aktywne')}
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                      >
+                        Przyjmij wyzwanie
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus(w.id, 'odrzucone')}
+                        className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                      >
+                        Odrzuć
+                      </button>
                     </div>
                   )}
                 </div>
