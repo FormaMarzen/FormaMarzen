@@ -261,6 +261,25 @@ export default function MojeWynikiPage() {
     }
   };
 
+  // Usuwanie pojedynczego wyniku klubowicza przez admina (Zabezpieczenie przed fałszywymi wynikami)
+  const handleDeleteWynikKlubowicza = async (wynikId: number) => {
+    const isConfirmed = window.confirm("Czy na pewno chcesz usunąć ten wynik klubowicza? (Zabezpieczenie przed fałszywym wynikiem)");
+    
+    if (isConfirmed) {
+      const { error } = await supabase
+        .from('wyniki_klubowiczow')
+        .delete()
+        .eq('id', wynikId);
+
+      if (error) {
+        alert("Błąd podczas usuwania wyniku: " + error.message);
+      } else {
+        alert("Wynik został pomyślnie usunięty!");
+        await fetchData();
+      }
+    }
+  };
+
   if (isLoading) {
     return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie wyników...</div>;
   }
@@ -458,7 +477,7 @@ export default function MojeWynikiPage() {
 
                     // Dynamiczne style dla poszczególnych miejsc
                     let wrapperClasses = "flex items-center justify-between p-3 rounded-xl transition-all duration-300 ";
-                    let textClasses = "font-bold text-sm truncate max-w-[120px] sm:max-w-[180px] ";
+                    let textClasses = "font-bold text-sm truncate max-w-[100px] sm:max-w-[150px] ";
                     let valueClasses = "font-black text-lg tracking-tighter ";
 
                     if (isTop1) {
@@ -487,7 +506,7 @@ export default function MojeWynikiPage() {
 
                     return (
                       <div key={wynik.id} className={wrapperClasses}>
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-3">
                           <div className="w-8 flex justify-center shrink-0">{Pozycja}</div>
                           
                           {/* Wyświetlanie zdjęcia profilowego tylko dla top 3 */}
@@ -510,11 +529,25 @@ export default function MojeWynikiPage() {
                             <span className="text-[10px] text-slate-400">{wynik.data_rekordu}</span>
                           </div>
                         </div>
-                        <div className="flex items-baseline gap-1.5 pl-2 shrink-0">
-                          <span className={valueClasses}>
-                            {wynik.najlepszy_wynik}
-                          </span>
-                          <span className="text-xs font-bold text-slate-500">{cwiczenie.jednostka}</span>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="flex items-baseline gap-1.5 pl-2">
+                            <span className={valueClasses}>
+                              {wynik.najlepszy_wynik}
+                            </span>
+                            <span className="text-xs font-bold text-slate-500">{cwiczenie.jednostka}</span>
+                          </div>
+
+                          {/* Przycisk usuwania wyniku przez admina (Zabezpieczenie przed fałszywymi wynikami) */}
+                          {isAdmin && wynik.id && (
+                            <button
+                              onClick={() => handleDeleteWynikKlubowicza(wynik.id!)}
+                              className="w-8 h-8 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm border border-rose-200 cursor-pointer"
+                              title="Usuń fałszywy wynik klubowicza"
+                            >
+                              🗑️
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
