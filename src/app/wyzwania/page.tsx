@@ -40,18 +40,20 @@ export default function WyzwaniaPage() {
   const [newBadgeNazwa, setNewBadgeNazwa] = useState("");
   const [newBadgeOpis, setNewBadgeOpis] = useState("");
   const [newBadgeWarunek, setNewBadgeWarunek] = useState("");
-  const [newBadgeIkona, setNewBadgeIkona] = useState("🏆");
+  const [newBadgeIkona, setNewBadgeIkona] = useState("");
   const [newBadgePunkty, setNewBadgePunkty] = useState("1");
   const [newBadgeKategoria, setNewBadgeKategoria] = useState("Wyzwania");
+  const [isUploadingNewBadge, setIsUploadingNewBadge] = useState(false);
 
   // Stany edycji odznak w panelu Admina
   const [editingBadgeId, setEditingBadgeId] = useState<number | null>(null);
   const [editBadgeNazwa, setEditBadgeNazwa] = useState("");
   const [editBadgeOpis, setEditBadgeOpis] = useState("");
   const [editBadgeWarunek, setEditBadgeWarunek] = useState("");
-  const [editBadgeIkona, setEditBadgeIkona] = useState("🏆");
+  const [editBadgeIkona, setEditBadgeIkona] = useState("");
   const [editBadgePunkty, setEditBadgePunkty] = useState("1");
   const [editBadgeKategoria, setEditBadgeKategoria] = useState("Wyzwania");
+  const [isUploadingEditBadge, setIsUploadingEditBadge] = useState(false);
 
   // Stany edycji dyscyplin
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -183,6 +185,32 @@ export default function WyzwaniaPage() {
     }
   };
 
+  // Helper do uploadu grafiki odznaki
+  const uploadBadgeImageFile = async (file: File): Promise<string | null> => {
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `badge_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
+      const filePath = `badges/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, file);
+
+      if (!uploadError) {
+        const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
+        return data.publicUrl;
+      }
+
+      // Bezpieczny fallback do Base64, gdyby bucket w storage nie był skonfigurowany
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+    } catch (err) {
+      console.error("Błąd podczas uploadu grafiki odznaki:", err);
+      return null;
+    }
+  };
+
   // 3. Logika przypisywania odznaki
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
@@ -221,7 +249,7 @@ export default function WyzwaniaPage() {
       setNewBadgeNazwa("");
       setNewBadgeOpis("");
       setNewBadgeWarunek("");
-      setNewBadgeIkona("🏆");
+      setNewBadgeIkona("");
       setNewBadgePunkty("1");
       fetchAllOdznakiDef();
     } else {
@@ -234,7 +262,7 @@ export default function WyzwaniaPage() {
     setEditBadgeNazwa(badge.nazwa || "");
     setEditBadgeOpis(badge.opis || "");
     setEditBadgeWarunek(badge.warunek || badge.opis || "");
-    setEditBadgeIkona(badge.ikona || "🏆");
+    setEditBadgeIkona(badge.ikona || "");
     setEditBadgePunkty(String(badge.punkty || 1));
     setEditBadgeKategoria(badge.kategoria || "Wyzwania");
   };
@@ -244,7 +272,7 @@ export default function WyzwaniaPage() {
       nazwa: editBadgeNazwa.trim(),
       opis: editBadgeOpis.trim(),
       warunek: editBadgeWarunek.trim(),
-      ikona: editBadgeIkona.trim(),
+      ikona: editBadgeIkona.trim() || "🏆",
       punkty: parseInt(editBadgePunkty) || 1,
       kategoria: editBadgeKategoria.trim()
     }).eq("id", id);
@@ -442,6 +470,23 @@ export default function WyzwaniaPage() {
     })
     .filter((k: any) => k.badgesCount > 0);
 
+  // Funkcja pomocnicza do renderowania grafiki/zdjęcia lub emoji odznaki
+  const renderBadgeGraphic = (iconStr: string | null | undefined, sizeClasses = "w-14 h-14", textClasses = "text-2xl") => {
+    if (!iconStr) return <span className={textClasses}>🏆</span>;
+    const isImage = iconStr.startsWith("http") || iconStr.startsWith("data:") || iconStr.startsWith("/") || iconStr.includes(".png") || iconStr.includes(".jpg") || iconStr.includes(".jpeg") || iconStr.includes(".svg") || iconStr.includes(".webp");
+
+    if (isImage) {
+      return (
+        <img 
+          src={iconStr} 
+          alt="Odznaka" 
+          className={`${sizeClasses} object-cover rounded-2xl shadow-sm border border-amber-400/30`} 
+        />
+      );
+    }
+    return <span className={textClasses}>{iconStr}</span>;
+  };
+
   if (isLoading) return <div className="p-8 text-center text-sky-900 font-bold animate-pulse">Ładowanie modułu wyzwań...</div>;
 
   return (
@@ -637,8 +682,8 @@ export default function WyzwaniaPage() {
                     return (
                       <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
-                          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-600/5 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0">
-                            {def.ikona || '🏆'}
+                          <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0 overflow-hidden">
+                            {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
@@ -687,7 +732,9 @@ export default function WyzwaniaPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {odznaki.map((o: any) => (
                     <div key={o.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex items-center gap-4">
-                      <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/50 flex items-center justify-center text-3xl shadow-inner">{o.klub_odznaki_definicje?.ikona || '🏆'}</div>
+                      <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/50 flex items-center justify-center text-3xl shadow-inner shrink-0 overflow-hidden">
+                        {renderBadgeGraphic(o.klub_odznaki_definicje?.ikona, "w-16 h-16", "text-3xl")}
+                      </div>
                       <div>
                         <div className="flex items-center gap-2">
                           <h4 className="font-black text-xs uppercase text-slate-900 tracking-wider">{o.klub_odznaki_definicje?.nazwa}</h4>
@@ -843,7 +890,7 @@ export default function WyzwaniaPage() {
                    {klienci.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
                  </select>
                  <select id="badge-select" className="p-3 border border-rose-200 rounded-xl w-full text-xs font-bold bg-white">
-                   {wszystkieOdznaki.map(o => <option key={o.id} value={o.id}>{o.ikona} {o.nazwa} ({o.punkty} pkt)</option>)}
+                   {wszystkieOdznaki.map(o => <option key={o.id} value={o.id}>{o.nazwa} ({o.punkty} pkt)</option>)}
                  </select>
                  <button onClick={() => {
                    const userId = (document.getElementById('user-select') as HTMLSelectElement).value;
@@ -854,21 +901,61 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* 3. Podzakładka Admina: Katalog Odznak (Garmin) z edycją i usuwaniem */}
+          {/* 3. Podzakładka Admina: Katalog Odznak (Garmin) ze zdjęciami/grafikami */}
           {adminSubTab === 'katalog_odznak' && (
             <div className="space-y-8">
               {/* Formularz tworzenia nowej odznaki */}
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-4">
-                <h3 className="font-black text-xs uppercase text-slate-900">Stwórz nową odznakę klubową (Styl Garmin)</h3>
+                <h3 className="font-black text-xs uppercase text-slate-900">Stwórz nową odznakę klubową (Własna grafika / Zdjęcie)</h3>
                 <form onSubmit={handleCreateBadgeDef} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Nazwa odznaki</label>
                     <input type="text" value={newBadgeNazwa} onChange={(e) => setNewBadgeNazwa(e.target.value)} placeholder="np. Mistrz Wioślarstwa" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
                   </div>
+                  
+                  {/* Wybór grafiki lub upload zdjęcia */}
                   <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Ikona / Emoji</label>
-                    <input type="text" value={newBadgeIkona} onChange={(e) => setNewBadgeIkona(e.target.value)} placeholder="np. 🚣" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
+                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Grafika / Zdjęcie odznaki</label>
+                    <div className="flex items-center gap-2">
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        id="new-badge-file-upload"
+                        className="hidden" 
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setIsUploadingNewBadge(true);
+                            const url = await uploadBadgeImageFile(file);
+                            if (url) setNewBadgeIkona(url);
+                            setIsUploadingNewBadge(false);
+                          }
+                        }} 
+                      />
+                      <label 
+                        htmlFor="new-badge-file-upload" 
+                        className="bg-slate-900 text-white font-bold text-xs px-4 py-3 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors shrink-0"
+                      >
+                        {isUploadingNewBadge ? "Wgrywanie..." : "📷 Wybierz plik"}
+                      </label>
+                      <input 
+                        type="text" 
+                        value={newBadgeIkona} 
+                        onChange={(e) => setNewBadgeIkona(e.target.value)} 
+                        placeholder="lub wklej URL / Emoji" 
+                        className="flex-1 p-3 border rounded-xl text-xs font-bold bg-white" 
+                      />
+                    </div>
+                    {newBadgeIkona && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-[9px] text-slate-500">Podgląd:</span>
+                        <div className="w-8 h-8 rounded-lg overflow-hidden border border-amber-400/50 flex items-center justify-center bg-amber-50">
+                          {renderBadgeGraphic(newBadgeIkona, "w-8 h-8", "text-sm")}
+                        </div>
+                      </div>
+                    )}
                   </div>
+
                   <div className="sm:col-span-2">
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Krótki Opis Odznaki</label>
                     <input type="text" value={newBadgeOpis} onChange={(e) => setNewBadgeOpis(e.target.value)} placeholder="np. Pokonaj dystans 5000m na ergometrze wioślarskim." className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
@@ -886,7 +973,7 @@ export default function WyzwaniaPage() {
                     <input type="text" value={newBadgeKategoria} onChange={(e) => setNewBadgeKategoria(e.target.value)} placeholder="np. Wytrzymałość / Siła / Pojedynki" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
                   </div>
                   <div className="sm:col-span-2">
-                    <button type="submit" className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer">
+                    <button type="submit" disabled={isUploadingNewBadge} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer">
                       + Dodaj odznakę do systemu
                     </button>
                   </div>
@@ -902,18 +989,70 @@ export default function WyzwaniaPage() {
                       {editingBadgeId === def.id ? (
                         /* Formularz edycji odznaki in-line */
                         <div className="space-y-3">
-                          <div className="flex gap-2">
-                            <input value={editBadgeIkona} onChange={(e) => setEditBadgeIkona(e.target.value)} placeholder="Ikona" className="w-14 p-2 border rounded-xl text-xs font-bold text-center" />
-                            <input value={editBadgeNazwa} onChange={(e) => setEditBadgeNazwa(e.target.value)} placeholder="Nazwa" className="flex-1 p-2 border rounded-xl text-xs font-bold" />
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Nazwa odznaki</label>
+                            <input value={editBadgeNazwa} onChange={(e) => setEditBadgeNazwa(e.target.value)} placeholder="Nazwa" className="w-full p-2 border rounded-xl text-xs font-bold" />
                           </div>
-                          <input value={editBadgeOpis} onChange={(e) => setEditBadgeOpis(e.target.value)} placeholder="Opis" className="w-full p-2 border rounded-xl text-xs" />
-                          <textarea value={editBadgeWarunek} onChange={(e) => setEditBadgeWarunek(e.target.value)} placeholder="Warunek" className="w-full p-2 border rounded-xl text-xs h-14 resize-none" />
-                          <div className="flex gap-2">
-                            <input type="number" min="1" max="10" value={editBadgePunkty} onChange={(e) => setEditBadgePunkty(e.target.value)} placeholder="Punkty" className="w-20 p-2 border rounded-xl text-xs font-bold" />
-                            <input value={editBadgeKategoria} onChange={(e) => setEditBadgeKategoria(e.target.value)} placeholder="Kategoria" className="flex-1 p-2 border rounded-xl text-xs" />
+
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Zdjęcie / Grafika odznaki</label>
+                            <div className="flex items-center gap-2 mt-1">
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                id={`edit-badge-file-${def.id}`}
+                                className="hidden" 
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    setIsUploadingEditBadge(true);
+                                    const url = await uploadBadgeImageFile(file);
+                                    if (url) setEditBadgeIkona(url);
+                                    setIsUploadingEditBadge(false);
+                                  }
+                                }} 
+                              />
+                              <label 
+                                htmlFor={`edit-badge-file-${def.id}`}
+                                className="bg-slate-800 text-white font-bold text-[10px] px-3 py-2 rounded-xl cursor-pointer shrink-0"
+                              >
+                                {isUploadingEditBadge ? "Wgrywanie..." : "📷 Zmień zdjęcie"}
+                              </label>
+                              <input value={editBadgeIkona} onChange={(e) => setEditBadgeIkona(e.target.value)} placeholder="URL lub emoji" className="flex-1 p-2 border rounded-xl text-xs" />
+                            </div>
+                            {editBadgeIkona && (
+                              <div className="mt-1 flex items-center gap-2">
+                                <span className="text-[9px] text-slate-400">Podgląd:</span>
+                                <div className="w-8 h-8 rounded-lg overflow-hidden border border-amber-400/50 flex items-center justify-center bg-amber-50">
+                                  {renderBadgeGraphic(editBadgeIkona, "w-8 h-8", "text-sm")}
+                                </div>
+                              </div>
+                            )}
                           </div>
+
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Opis</label>
+                            <input value={editBadgeOpis} onChange={(e) => setEditBadgeOpis(e.target.value)} placeholder="Opis" className="w-full p-2 border rounded-xl text-xs" />
+                          </div>
+
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Warunek</label>
+                            <textarea value={editBadgeWarunek} onChange={(e) => setEditBadgeWarunek(e.target.value)} placeholder="Warunek" className="w-full p-2 border rounded-xl text-xs h-14 resize-none" />
+                          </div>
+
+                          <div className="flex gap-2">
+                            <div className="w-24">
+                              <label className="text-[9px] font-bold text-slate-400 uppercase">Punkty</label>
+                              <input type="number" min="1" max="10" value={editBadgePunkty} onChange={(e) => setEditBadgePunkty(e.target.value)} placeholder="Punkty" className="w-full p-2 border rounded-xl text-xs font-bold" />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-[9px] font-bold text-slate-400 uppercase">Kategoria</label>
+                              <input value={editBadgeKategoria} onChange={(e) => setEditBadgeKategoria(e.target.value)} placeholder="Kategoria" className="w-full p-2 border rounded-xl text-xs" />
+                            </div>
+                          </div>
+
                           <div className="flex gap-2 pt-2">
-                            <button onClick={() => handleSaveEditBadge(def.id)} className="flex-1 bg-emerald-600 text-white font-bold py-2 rounded-xl text-xs cursor-pointer">Zapisz</button>
+                            <button onClick={() => handleSaveEditBadge(def.id)} disabled={isUploadingEditBadge} className="flex-1 bg-emerald-600 text-white font-bold py-2 rounded-xl text-xs cursor-pointer">Zapisz zmiany</button>
                             <button onClick={() => setEditingBadgeId(null)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-2 rounded-xl text-xs cursor-pointer">Anuluj</button>
                           </div>
                         </div>
@@ -921,8 +1060,8 @@ export default function WyzwaniaPage() {
                         /* Widok karty odznaki */
                         <>
                           <div className="flex items-start gap-4">
-                            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0">
-                              {def.ikona || '🏆'}
+                            <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-3xl shadow-inner shrink-0 overflow-hidden">
+                              {renderBadgeGraphic(def.ikona, "w-16 h-16", "text-3xl")}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
