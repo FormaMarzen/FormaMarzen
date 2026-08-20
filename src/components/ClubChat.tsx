@@ -33,7 +33,7 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages]);
 
-  // 1. Identyfikacja użytkownika (obsługa wielu e-maili administratora i kont powiązanych)
+  // 1. Identyfikacja użytkownika
   useEffect(() => {
     const initUser = async () => {
       const {
@@ -63,7 +63,6 @@ export default function ClubChat() {
           setCurrentUserName("Maciej Kłaput (Admin)");
           setCurrentUserAvatar(null);
 
-          // Powiąż ID klienta Macieja z bazy (jeśli istnieje dla któregoś z jego e-maili)
           const maciejClient = enriched.find(
             (c: any) =>
               ADMIN_EMAILS.includes(c.email) ||
@@ -83,7 +82,7 @@ export default function ClubChat() {
     initUser();
   }, []);
 
-  // 2. Pobieranie wiadomości uwzględniające ID admina oraz powiązane konta
+  // 2. Pobieranie wiadomości
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
@@ -134,16 +133,20 @@ export default function ClubChat() {
     };
   }, [currentUserId, secondaryUserId]);
 
-  // 3. Oznaczanie wiadomości jako przeczytane
+  // 3. Oznaczanie wiadomości jako przeczytane wraz z zapisem daty i godziny
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
         const targetId = secondaryUserId || currentUserId;
         await supabase
           .from("czat_wiadomosci")
-          .update({ przeczytana: true })
+          .update({
+            przeczytana: true,
+            przeczytana_at: new Date().toISOString(),
+          })
           .eq("nadawca_id", selectedUser.id)
-          .eq("odbiorca_id", targetId);
+          .eq("odbiorca_id", targetId)
+          .eq("przeczytana", false);
 
         fetchMessages();
       };
@@ -165,6 +168,7 @@ export default function ClubChat() {
       odbiorca_id: selectedUser.id,
       tresc: newMessage.trim(),
       przeczytana: false,
+      przeczytana_at: null,
     };
 
     const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
@@ -194,7 +198,7 @@ export default function ClubChat() {
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
-  // Zbieranie ID osób, z którymi prowadzono historię
+  // Zbieranie ID osób z historią
   const chattedUserIds = new Set<string | number>();
   messages.forEach((m: any) => {
     if (effectiveIds.includes(String(m.nadawca_id))) {
@@ -204,9 +208,6 @@ export default function ClubChat() {
     }
   });
 
-  // Filtrowanie listy kontaktów:
-  // - Bez wpisania tekstu: tylko osoby z historii.
-  // - Po wpisaniu: szukanie po nazwisku LUB imieniu + pierwszej literze nazwiska.
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
@@ -353,6 +354,15 @@ export default function ClubChat() {
                       })
                     : "";
 
+                  const readTime = msg.przeczytana_at
+                    ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : null;
+
                   return (
                     <div
                       key={msg.id}
@@ -367,7 +377,17 @@ export default function ClubChat() {
                       >
                         {msg.tresc}
                       </div>
-                      <span className="text-[9px] text-slate-400 mt-1 px-1 font-mono">{time}</span>
+                      
+                      <div className="flex items-center gap-2 mt-1 px-1">
+                        <span className="text-[9px] text-slate-400 font-mono">{time}</span>
+                        {isMe && (
+                          <span className="text-[9px] text-slate-400 font-medium">
+                            {msg.przeczytana && readTime
+                              ? `✓✓ Przeczytano: ${readTime}`
+                              : "✓ Wysłano"}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
