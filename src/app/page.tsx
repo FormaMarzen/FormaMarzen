@@ -629,15 +629,21 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
+    // POBIERANIE ZAPISÓW Z CHRONOLOGICZNYM SORTOWANIEM (ZACHOWANIE KOLEJKI KRZESEŁKA)
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const groupedZapisy: { [key: string]: any[] } = {};
     if (zapisyData) {
-      zapisyData.forEach((z: any) => {
+      const sortedZapisy = [...zapisyData].sort((a: any, b: any) => {
+        if (a.created_at && b.created_at) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        if (a.id && b.id) return Number(a.id) - Number(b.id);
+        return 0;
+      });
+      sortedZapisy.forEach((z: any) => {
         if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
         groupedZapisy[z.class_key].push({
           ...z,
           id: z.klient_id,
-          status: z.status,
+          status: z.status || 'zapisany',
           obecny: z.obecny,
           nieobecny: z.nieobecny
         });
@@ -1927,8 +1933,10 @@ export default function DashboardPage() {
     
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
+    // PRECYZYJNA WERYFIKACJA STATUSU ZAPISU (GŁÓWNY vs KRZESEŁKO)
     const limitZajec = selectedClass.limit || 12;
-    const statusZapisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
+    const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
+    const statusZapisu = glownaCount >= limitZajec ? 'krzesełko' : 'zapisany';
 
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: statusZapisu, obecny: false }
@@ -1953,7 +1961,7 @@ export default function DashboardPage() {
       }
     }
 
-    const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
+    const oblozenieStr = `${glownaCount + (statusZapisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
     const typWydarzenia = statusZapisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
     
     await supabase.from('transakcje').insert([{ 
@@ -2045,9 +2053,10 @@ export default function DashboardPage() {
 
     const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
-    const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
+    const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    if (listaGlownaPoWypisie.length < limitZajec && pierwszaRezerwa) {
+    if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
+      const pierwszaRezerwa = rezerwaPoWypisie[0];
       await supabase
         .from('zapisy_zajec')
         .update({ status: 'zapisany' })
@@ -2126,13 +2135,21 @@ export default function DashboardPage() {
 
     await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${title}. Zwrócono 1 wejście.` }]);
     
-    const limitZajec = 12;
+    const parts = classKey.split('_');
+    const classId = parts[0];
+    const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
+    const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
+    const override = nadpisaneZajeciaDni[classKey];
+    const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+    const limitZajec = classInfo?.limit || 12;
+
     const aktualni = zapisyNaZajecia[classKey] || [];
     const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
-    const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
+    const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    if (listaGlownaPoWypisie.length < limitZajec && pierwszaRezerwa) {
+    if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
+      const pierwszaRezerwa = rezerwaPoWypisie[0];
       await supabase
         .from('zapisy_zajec')
         .update({ status: 'zapisany' })
@@ -2238,7 +2255,8 @@ export default function DashboardPage() {
     if (userSignupsOnThisDate >= dailyLimit) { showToast(`Nie można zapisać! Wykorzystano dzienny limit (${dailyLimit}).`, 'error'); return; }
     
     const limitZajec = selectedClass.limit || 12;
-    const statusZpisu = aktualni.length >= limitZajec ? 'krzesełko' : 'zapisany';
+    const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
+    const statusZpisu = glownaCount >= limitZajec ? 'krzesełko' : 'zapisany';
     const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: klient.id, status: statusZpisu, obecny: false }]);
     if (error) { showToast(`Nie udało się zapisać: ${error.message}`, 'error'); return; }
 
@@ -2255,7 +2273,7 @@ export default function DashboardPage() {
       }
     }
 
-    const oblozenieStr = `${aktualni.length + 1}/${limitZajec}`;
+    const oblozenieStr = `${glownaCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
     const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
     await supabase.from('transakcje').insert([{ klient_id: klient.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
     setIsSearchingClient(false); setSearchClientQuery(''); loadData();
@@ -2287,13 +2305,14 @@ export default function DashboardPage() {
       }
     }
 
-    await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''} Obłożenie: ${aktualni.length - 1}/${limitZajec}` }]);
+    await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}` }]);
     
     const pozostaliUczestnicy = aktualni.filter(u => u.id !== clientToUnregister.id);
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
-    const pierwszaRezerwa = pozostaliUczestnicy.find(u => u.status === 'krzesełko');
+    const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    if (listaGlownaPoWypisie.length < limitZajec && pierwszaRezerwa) {
+    if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
+      const pierwszaRezerwa = rezerwaPoWypisie[0];
       await supabase
         .from('zapisy_zajec')
         .update({ status: 'zapisany' })
@@ -2385,6 +2404,7 @@ export default function DashboardPage() {
     setClientToMarkAbsent(null); setBlokadaZapisow(false); loadData();
     showToast(`Oznaczono nieobecność dla ${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName}.`);
   };
+
   const getTopBorderColor = (title: string, isOdwolane: boolean, isUsunięte: boolean) => {
     if (isOdwolane || isUsunięte) return '#fda4af';
     if (!title) return '#0284c7';
@@ -2571,7 +2591,6 @@ export default function DashboardPage() {
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
@@ -2894,6 +2913,7 @@ export default function DashboardPage() {
 
         </div>
       )}
+
       {/* SEKCJA: GRAFIK ZAJĘĆ */}
       <section className="space-y-4">
         <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
@@ -2990,9 +3010,11 @@ export default function DashboardPage() {
                       const classKey = `${item.id}_${col.date}`;
                       const zapisani = zapisyNaZajecia[classKey] || [];
                       const limitZajec = item.limit || 12;
-                      const liczbaGlowna = Math.min(zapisani.length, limitZajec);
-                      const liczbaKrzesełko = Math.max(0, zapisani.length - limitZajec);
-                      const isFull = zapisani.length >= limitZajec;
+                      const zapisaniGlowna = zapisani.filter((s: any) => s.status === 'zapisany');
+                      const zapisaniKrzeselko = zapisani.filter((s: any) => s.status === 'krzesełko');
+                      const liczbaGlowna = zapisaniGlowna.length;
+                      const liczbaKrzesełko = zapisaniKrzeselko.length;
+                      const isFull = liczbaGlowna >= limitZajec;
                       const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
                       const isPastEvent = isPastDay || isPastTime;
                       const isLockedForClient = ['klubowicz', 'trener'].includes(appRole) && isPastEvent;
@@ -3439,14 +3461,19 @@ export default function DashboardPage() {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
         const zapisaniWszyscy = zapisyNaZajecia[classKey] || [];
         const limitZajec = selectedClass.limit || 12;
+        
         const sortAlfabet = (a: any, b: any) => {
           const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
           const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
           return nameA.localeCompare(nameB);
         };
-        const listaGlowna = [...zapisaniWszyscy.slice(0, limitZajec)].sort(sortAlfabet);
-        const listaKrzesełko = zapisaniWszyscy.slice(limitZajec);
-        const isFull = zapisaniWszyscy.length >= limitZajec;
+
+        // ROZDZIELENIE UCZESTNIKÓW NA LISTĘ GŁÓWNĄ I LISTĘ REZERWOWĄ (KRZESEŁKO)
+        const glownaNieposortowana = zapisaniWszyscy.filter(u => u.status === 'zapisany');
+        const listaGlowna = [...glownaNieposortowana].sort(sortAlfabet);
+        const listaKrzesełko = zapisaniWszyscy.filter(u => u.status === 'krzesełko');
+        
+        const isFull = glownaNieposortowana.length >= limitZajec;
         const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.id) === String(currentUser.id));
         const filteredSuggestions = klienciList
           .filter(c =>
@@ -3471,7 +3498,7 @@ export default function DashboardPage() {
                   <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${
                     isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-sky-100 text-sky-900 border-sky-200'
                   }`}>
-                    {zapisaniWszyscy.length}/{limitZajec}
+                    {glownaNieposortowana.length}/{limitZajec}
                   </span>
                   <button
                     onClick={() => setSelectedClass(null)}
