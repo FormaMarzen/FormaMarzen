@@ -210,7 +210,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika przypisywania odznaki + wysyłanie powiadomienia z KONTA SYSTEMOWEGO
+  // 3. Logika przypisywania odznaki + wysyłanie powiadomienia z KONTA SYSTEMOWEGO (ID: 5000)
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
@@ -224,10 +224,10 @@ export default function WyzwaniaPage() {
       
       const chatNotification = `🎖️ Gratulacje! Otrzymałeś nową odznakę klubową: "${badgeName}"${badgePoints}! Sprawdź swoją Gablotę Odznak 🏆.`;
 
-      // Wysłanie wiadomości z konta systemowego (ID: 999999999, Nazwa: Forma Marzeń)
+      // Wysłanie wiadomości z konta systemowego (ID: 5000, Nazwa: Forma Marzeń)
       await supabase.from("czat_wiadomosci").insert([
         {
-          nadawca_id: 999999999,
+          nadawca_id: 5000,
           nadawca_nazwa: "Forma Marzeń",
           nadawca_avatar: null,
           odbiorca_id: userId,
@@ -1122,7 +1122,7 @@ export default function WyzwaniaPage() {
                      {editingIndex === i ? (
                        <div className="flex gap-2 flex-1 mr-2">
                          <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
-                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zapisz</button>
+                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
                          <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
                        </div>
                      ) : (
