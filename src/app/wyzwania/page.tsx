@@ -23,6 +23,10 @@ export default function WyzwaniaPage() {
   // Stan interfejsu
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
+  const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
+  const [challengeToResolve, setChallengeToResolve] = useState<any | null>(null);
+  const [selectedWinnerId, setSelectedWinnerId] = useState<any | null>(null);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
@@ -189,7 +193,37 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 6. Rzucenie nowego wyzwania
+  // 6. Otwieranie modalu wyboru zwycięzcy
+  const openWinnerModal = (challenge: any) => {
+    setChallengeToResolve(challenge);
+    setSelectedWinnerId(challenge.tworca_id); // Domyślnie zaznaczamy twórcę
+    setIsWinnerModalOpen(true);
+  };
+
+  // 7. Zatwierdzenie zwycięzcy i wyzwania
+  const handleConfirmWinner = async () => {
+    if (!challengeToResolve || !selectedWinnerId) return;
+
+    const { error } = await supabase
+      .from("klub_wyzwania")
+      .update({
+        status: "zweryfikowane",
+        zwyciezca_id: selectedWinnerId,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", challengeToResolve.id);
+
+    if (!error) {
+      alert("Zwycięzca został wybrany i wyzwanie zatwierdzone!");
+      setIsWinnerModalOpen(false);
+      setChallengeToResolve(null);
+      fetchWyzwania();
+    } else {
+      alert("Błąd podczas zapisywania zwycięzcy: " + error.message);
+    }
+  };
+
+  // 8. Rzucenie nowego wyzwania
   const handleCreateChallenge = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
@@ -231,7 +265,7 @@ export default function WyzwaniaPage() {
     fetchWyzwania();
   };
 
-  // 7. Zmiana statusu wyzwania
+  // 9. Zmiana statusu wyzwania
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
     const { error } = await supabase
       .from("klub_wyzwania")
@@ -245,7 +279,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 8. Wyszukiwanie przeciwnika
+  // 10. Wyszukiwanie przeciwnika
   const filteredOpponents = klienci
     .filter((k: any) => String(k.id) !== String(currentUserId))
     .filter((k: any) => {
@@ -346,6 +380,13 @@ export default function WyzwaniaPage() {
                   </div>
                 </div>
 
+                {w.zwyciezca_id && (
+                  <div className="bg-amber-50 text-amber-900 p-3 rounded-2xl text-xs font-bold flex items-center justify-between border border-amber-200">
+                    <span>🏆 Zwycięzca:</span>
+                    <span className="font-black">{getClientName(w.zwyciezca_id)}</span>
+                  </div>
+                )}
+
                 {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
                   <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
                     <button
@@ -411,10 +452,15 @@ export default function WyzwaniaPage() {
                  </tr>
                </thead>
                <tbody>{wyzwania.map(w => <tr key={w.id} className="border-b border-slate-50">
-                 <td className="py-4 px-2 font-bold text-slate-900">{w.dyscyplina}</td>
+                 <td className="py-4 px-2 font-bold text-slate-900">
+                   <div>{w.dyscyplina}</div>
+                   {w.zwyciezca_id && <div className="text-[10px] text-amber-600 font-normal">Zwycięzca: {getClientName(w.zwyciezca_id)}</div>}
+                 </td>
                  <td className="py-4 px-2 text-slate-600">{w.status}</td>
                  <td className="py-4 px-2 text-right flex gap-2 justify-end">
-                    {w.status !== 'zweryfikowane' && <button onClick={() => handleUpdateStatus(w.id, 'zweryfikowane')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zatwierdź</button>}
+                    {w.status !== 'zweryfikowane' && (
+                      <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors">Zatwierdź</button>
+                    )}
                     <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
                  </td>
                </tr>)}</tbody>
@@ -435,8 +481,8 @@ export default function WyzwaniaPage() {
                      {editingIndex === i ? (
                        <div className="flex gap-2 flex-1 mr-2">
                          <input value={editText} onChange={(e) => setEditText(e.target.value)} className="p-2 border rounded-xl flex-1 text-xs font-bold bg-white" />
-                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer">Zapisz</button>
-                         <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-bold cursor-pointer">Anuluj</button>
+                         <button onClick={() => handleUpdateDyscyplina(d.id, editText)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Zapisz</button>
+                         <button onClick={() => {setEditingIndex(null); setEditText("");}} className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold cursor-pointer">Anuluj</button>
                        </div>
                      ) : (
                        <>
@@ -471,6 +517,37 @@ export default function WyzwaniaPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* MODAL WYBORU ZWYCIĘZCY */}
+      {isWinnerModalOpen && challengeToResolve && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-[2rem] max-w-sm w-full p-6 shadow-2xl space-y-4 border border-sky-100">
+            <h3 className="font-black text-sm text-slate-950">Wybierz zwycięzcę wyzwania</h3>
+            <p className="text-xs text-slate-500">Dyscyplina: <span className="font-bold text-slate-800">{challengeToResolve.dyscyplina}</span></p>
+
+            <div className="space-y-2 pt-2">
+              <label className="text-xs font-bold text-slate-700 block">Wskaż zwycięzcę:</label>
+              <select 
+                value={selectedWinnerId || ""} 
+                onChange={(e) => setSelectedWinnerId(e.target.value)} 
+                className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold bg-white"
+              >
+                <option value={challengeToResolve.tworca_id}>
+                  {getClientName(challengeToResolve.tworca_id)} (Rzucający)
+                </option>
+                <option value={challengeToResolve.przeciwnik_id}>
+                  {getClientName(challengeToResolve.przeciwnik_id)} (Przeciwnik)
+                </option>
+              </select>
+            </div>
+
+            <div className="flex gap-2 pt-4">
+              <button onClick={() => setIsWinnerModalOpen(false)} className="flex-1 bg-slate-100 text-slate-600 font-bold p-3 rounded-2xl text-xs cursor-pointer">Anuluj</button>
+              <button onClick={handleConfirmWinner} className="flex-1 bg-emerald-600 text-white font-black p-3 rounded-2xl text-xs cursor-pointer">Zatwierdź wynik</button>
+            </div>
+          </div>
         </div>
       )}
 
