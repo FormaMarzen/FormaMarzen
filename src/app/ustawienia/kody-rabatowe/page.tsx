@@ -32,6 +32,7 @@ export default function KodyRabatowePage() {
     wartosc_znizki: '',
     limit_ogolny: '100',
     limit_na_osobe: '1',
+    ma_date_zakonczenia: false,
     data_zakonczenia: '',
     wszystkie_karnety: true,
     wybrane_karnety: [] as string[],
@@ -53,7 +54,6 @@ export default function KodyRabatowePage() {
     if (error) {
       console.error('Błąd pobierania kodów:', error);
     } else {
-      // Mapowanie w celu zapewnienia, że wybrane_karnety to zawsze tablica
       const parsedData = (data || []).map(kod => ({
         ...kod,
         wybrane_karnety: kod.wybrane_karnety || []
@@ -81,8 +81,9 @@ export default function KodyRabatowePage() {
         kod: kod.kod,
         typ_znizki: kod.typ_znizki,
         wartosc_znizki: kod.wartosc_znizki.toString(),
-        limit_ogolny: kod.limit_ogolny.toString(),
-        limit_na_osobe: kod.limit_na_osobe.toString(),
+        limit_ogolny: (kod.limit_ogolny ?? 100).toString(),
+        limit_na_osobe: (kod.limit_na_osobe ?? 1).toString(),
+        ma_date_zakonczenia: Boolean(kod.data_zakonczenia),
         data_zakonczenia: kod.data_zakonczenia || '',
         wszystkie_karnety: kod.wszystkie_karnety,
         wybrane_karnety: kod.wybrane_karnety || [],
@@ -96,6 +97,7 @@ export default function KodyRabatowePage() {
         wartosc_znizki: '',
         limit_ogolny: '100',
         limit_na_osobe: '1',
+        ma_date_zakonczenia: false,
         data_zakonczenia: '',
         wszystkie_karnety: true,
         wybrane_karnety: [],
@@ -123,10 +125,10 @@ export default function KodyRabatowePage() {
     const payload = {
       kod: formData.kod.toUpperCase().trim(),
       typ_znizki: formData.typ_znizki,
-      wartosc_znizki: parseFloat(formData.wartosc_znizki),
+      wartosc_znizki: parseFloat(formData.wartosc_znizki) || 0,
       limit_ogolny: parseInt(formData.limit_ogolny) || 0,
       limit_na_osobe: parseInt(formData.limit_na_osobe) || 1,
-      data_zakonczenia: formData.data_zakonczenia || null,
+      data_zakonczenia: formData.ma_date_zakonczenia && formData.data_zakonczenia ? formData.data_zakonczenia : null,
       wszystkie_karnety: formData.wszystkie_karnety,
       wybrane_karnety: formData.wszystkie_karnety ? [] : formData.wybrane_karnety,
       aktywny: formData.aktywny,
@@ -159,6 +161,24 @@ export default function KodyRabatowePage() {
     setIsSaving(false);
   };
 
+  const handleDelete = async (id: string, kodNazwa: string) => {
+    const confirmed = window.confirm(`Czy na pewno chcesz bezpowrotnie usunąć kod rabatowy "${kodNazwa}"?`);
+    if (!confirmed) return;
+
+    setIsLoading(true);
+    const { error } = await supabase
+      .from('kody_rabatowe')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      alert('Błąd podczas usuwania kodu: ' + error.message);
+    } else {
+      await fetchKody();
+    }
+    setIsLoading(false);
+  };
+
   const toggleAktywny = async (id: string, currentStatus: boolean) => {
     const { error } = await supabase
       .from('kody_rabatowe')
@@ -174,7 +194,7 @@ export default function KodyRabatowePage() {
         <h1 className="text-xl font-black text-slate-800 uppercase tracking-wider">Kody Rabatowe</h1>
         <button
           onClick={() => openSidebar()}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 uppercase tracking-wider"
+          className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 uppercase tracking-wider cursor-pointer"
         >
           <span>+</span> Dodaj Kod
         </button>
@@ -224,19 +244,30 @@ export default function KodyRabatowePage() {
                     </span>
                   </td>
                   <td className="px-6 py-4 text-xs">
-                    <div className="flex flex-col gap-1">
-                      <span className="font-semibold text-slate-700">Limit użyć: {kod.limit_ogolny} (Zużyto: {kod.wykorzystano_ogolnie})</span>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="font-semibold text-slate-700">
+                        Limit: {kod.limit_ogolny} (Zużyto: {kod.wykorzystano_ogolnie || 0}) • Osob.: {kod.limit_na_osobe || 1}
+                      </span>
                       <span className="text-slate-500">
-                        Data zakończenia: {kod.data_zakonczenia ? kod.data_zakonczenia : 'Brak'}
+                        {kod.data_zakonczenia ? `Wygasa: ${kod.data_zakonczenia}` : 'Bezterminowy'}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        {kod.wszystkie_karnety ? 'Wszystkie karnety' : `Wybrane (${kod.wybrane_karnety?.length || 0})`}
                       </span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-right">
+                  <td className="px-6 py-4 text-right space-x-3">
                     <button 
                       onClick={() => openSidebar(kod)}
-                      className="text-sky-600 hover:text-sky-800 font-bold text-xs uppercase tracking-wider"
+                      className="text-sky-600 hover:text-sky-800 font-bold text-xs uppercase tracking-wider cursor-pointer"
                     >
                       Edytuj
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(kod.id, kod.kod)}
+                      className="text-rose-600 hover:text-rose-800 font-bold text-xs uppercase tracking-wider cursor-pointer"
+                    >
+                      Usuń
                     </button>
                   </td>
                 </tr>
@@ -351,14 +382,34 @@ export default function KodyRabatowePage() {
                   />
                 </div>
 
+                {/* Data wygaśnięcia z przełącznikiem */}
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1.5">Data zakończenia (opcjonalnie)</label>
-                  <input 
-                    type="date" 
-                    value={formData.data_zakonczenia}
-                    onChange={(e) => setFormData({...formData, data_zakonczenia: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-slate-800 font-semibold focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                  />
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-slate-700">Ustaw datę wygaśnięcia</label>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only peer"
+                        checked={formData.ma_date_zakonczenia}
+                        onChange={(e) => setFormData({
+                          ...formData, 
+                          ma_date_zakonczenia: e.target.checked,
+                          data_zakonczenia: e.target.checked ? formData.data_zakonczenia : ''
+                        })}
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                    </label>
+                  </div>
+
+                  {formData.ma_date_zakonczenia && (
+                    <input 
+                      type="date" 
+                      required={formData.ma_date_zakonczenia}
+                      value={formData.data_zakonczenia}
+                      onChange={(e) => setFormData({...formData, data_zakonczenia: e.target.value})}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-slate-800 font-semibold focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 mt-2"
+                    />
+                  )}
                 </div>
               </section>
 
