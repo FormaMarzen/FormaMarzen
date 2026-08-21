@@ -260,7 +260,7 @@ export default function KarnetyPage() {
     }]);
   };
 
-  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ)
+  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - OPARTA WYŁĄCZNIE NA POLU CYKL (ZAMRAŻANIE PRZY KODACH)
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -275,9 +275,8 @@ export default function KarnetyPage() {
     for (const k of karnety) {
       if (k.isContract12M) continue;
 
-      const extensionsCount = Array.isArray(k.historiaPrzedluzen) ? k.historiaPrzedluzen.length : 0;
-      const passCycle = typeof k.cykl === 'number' ? k.cykl : (1 + extensionsCount);
-      maxCykl = Math.max(maxCykl, passCycle, karnety.length + extensionsCount);
+      const passCycle = typeof k.cykl === 'number' ? k.cykl : 1;
+      maxCykl = Math.max(maxCykl, passCycle);
 
       if (k.waznyDo) {
         const exp = new Date(k.waznyDo);
@@ -308,11 +307,11 @@ export default function KarnetyPage() {
     return {
       hasContinuity: true,
       percent: rabatProcent,
-      label: `${rabatProcent}% (Ciągłość: ${liczbaKarnetow} ${liczbaKarnetow === 1 ? 'karnet' : 'karnety'})`
+      label: `${rabatProcent}% (Ciągłość: poziom ${liczbaKarnetow})`
     };
   };
 
-  // EFEKTYWNY RABAT Z UWZGLĘDNIENIEM JEDNORAZOWEGO UŻYCIA URODZIN
+  // EFEKTYWNY RABAT Z UWZGLĘDNIENIEM JEDNORAZOWEGO UŻYCIA URODZIN I BLOKADY CIĄGŁOŚCI DLA 12M
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false) => {
     if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false };
     
@@ -755,8 +754,10 @@ export default function KarnetyPage() {
     }
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (karnetyList.length || 1));
-    const nextCykl = appliedDiscountCode ? currentCykl : (currentCykl + 1);
+    
+    // ZAMROŻENIE CYKLU PRZY UŻYCIU KODU RABATOWEGO
+    const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
+    const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
     const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
@@ -785,14 +786,15 @@ export default function KarnetyPage() {
           nowaWaznosc: nowaDataWygasnieciaStr,
           rata: isContract ? nextRataStr : undefined,
           cena: cenaStr,
-          rabat: appliedLabel
+          rabat: appliedLabel,
+          usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
         }];
 
         return {
           ...k,
           waznyDo: nowaDataWygasnieciaStr,
           cena: cenaStr,
-          cykl: isContract ? 1 : nextCykl,
+          cykl: nextCykl,
           rata: isContract ? nextRataStr : (k.rata || '1 / 1'),
           isContract12M: isContract,
           historiaPrzedluzen: nowaHistoria,
@@ -916,7 +918,15 @@ export default function KarnetyPage() {
     const existingPassIndex = updatedKarnetyList.findIndex(k => k.nazwa === selectedBuyPass);
 
     let nowaDataWygasnieciaStr = '';
-    let nextCykl = isContract ? 1 : (appliedDiscountCode ? (karnetyList.length || 1) : ((karnetyList.length || 0) + 1));
+
+    // WYLICZENIE CYKLU: DLA KODU RABATOWEGO ZAMRAŻAMY POZIOM BEZ DODAWANIA +1
+    let baseCykl = 1;
+    if (updatedKarnetyList.length > 0) {
+      const highestCykl = Math.max(...updatedKarnetyList.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
+      baseCykl = highestCykl;
+    }
+
+    let nextCykl = isContract ? 1 : (appliedDiscountCode ? baseCykl : (updatedKarnetyList.length === 0 ? 1 : baseCykl + 1));
     let statusTekst = '';
 
     if (isContract) {
@@ -946,7 +956,7 @@ export default function KarnetyPage() {
         updatedKarnetyList.push(nowyKarnetObj);
 
     } else if (isTimeBased && existingPassIndex !== -1 && !isContract) {
-      const prevCykl = updatedKarnetyList[existingPassIndex].cykl || updatedKarnetyList.length || 1;
+      const prevCykl = typeof updatedKarnetyList[existingPassIndex].cykl === 'number' ? updatedKarnetyList[existingPassIndex].cykl : 1;
       nextCykl = appliedDiscountCode ? prevCykl : prevCykl + 1;
 
       updatedKarnetyList = updatedKarnetyList.map((k, index) => {
@@ -966,7 +976,8 @@ export default function KarnetyPage() {
             staraWaznosc: k.waznyDo,
             nowaWaznosc: nowaDataWygasnieciaStr,
             cena: cenaStr,
-            rabat: appliedLabel
+            rabat: appliedLabel,
+            usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
           }];
 
           return {
@@ -986,9 +997,6 @@ export default function KarnetyPage() {
       if (activationMode === 'after' && maxDateStr) {
         const parts = maxDateStr.split('-');
         baseStartDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-        if (!appliedDiscountCode) {
-          nextCykl = nextCykl + 1;
-        }
       }
 
       const dataWygasniecia = new Date(baseStartDate);
