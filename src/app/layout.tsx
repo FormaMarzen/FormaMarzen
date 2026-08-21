@@ -301,6 +301,7 @@ export default function RootLayout({
         { href: '/', label: 'Panel główny', icon: '📊' },
         { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
+        { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
@@ -357,6 +358,7 @@ export default function RootLayout({
       title: "Aktywność",
       items: [
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
+        { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
       ]
@@ -378,6 +380,7 @@ export default function RootLayout({
       title: "Strefa Trenera",
       items: [
         { href: '/', label: 'Trener (Grafik)', icon: '📅' },
+        { href: '/analiza-formy', label: 'Analiza formy (Klubowicze)', icon: '⚖️' },
       ]
     },
     {
@@ -385,6 +388,7 @@ export default function RootLayout({
       items: [
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
         { href: '/moje-wyniki', label: 'Moje wyniki', icon: '🏆' },
+        { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
