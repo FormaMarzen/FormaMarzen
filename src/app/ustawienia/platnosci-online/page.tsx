@@ -72,7 +72,7 @@ export default function PlatnosciOnlinePage() {
         pełnaData: t.created_at,
         kupiec: t.klienci ? `${t.klienci.Imię} ${t.klienci.Nazwisko}` : 'Klient anonimowy',
         produkty: t.opis || t.typ_operacji || 'Opłata w klubie',
-        dostawca: 'Autopay',
+        dostawca: 'System',
         status: 'ukończono',
         kwota: Number(t.kwota) < 0 ? Math.abs(Number(t.kwota)) : Number(t.kwota)
       }));
@@ -85,7 +85,7 @@ export default function PlatnosciOnlinePage() {
     if (typeof window !== 'undefined') {
       localStorage.setItem('forma_marzen_ustawienia_platnosci', JSON.stringify(config));
     }
-    alert("Ustawienia płatności online zostały pomyślnie zapisane!");
+    alert("Ustawienia płatności zostały pomyślnie zapisane!");
   };
 
   const handleGenerujTest = async () => {
@@ -100,7 +100,7 @@ export default function PlatnosciOnlinePage() {
       klient_id: testClientId,
       typ_operacji: 'zakup_karnetu',
       kwota: 150.00,
-      opis: 'Karnet OPEN Miesięczny (Autopay Test)'
+      opis: 'Karnet OPEN Miesięczny (Test)'
     }]);
 
     if (error) {
@@ -109,7 +109,7 @@ export default function PlatnosciOnlinePage() {
     }
 
     await fetchTransakcjeFromSupabase();
-    alert("Wygenerowano testową transakcję online w bazie Supabase!");
+    alert("Wygenerowano testową transakcję w bazie Supabase!");
   };
 
   // Filtrowanie historii
@@ -128,7 +128,7 @@ export default function PlatnosciOnlinePage() {
   const totalRevenue = filteredTransakcje.reduce((acc, curr) => acc + Number(curr.kwota), 0);
 
   if (!isMounted || loading) {
-    return <div className="p-12 text-center text-sky-900 font-bold text-sm">Ładowanie panelu płatności online z Supabase...</div>;
+    return <div className="p-12 text-center text-sky-900 font-bold text-sm">Ładowanie panelu płatności z Supabase...</div>;
   }
 
   if (!isAdmin) return null;
@@ -137,62 +137,21 @@ export default function PlatnosciOnlinePage() {
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24">
       
       {/* NAGŁÓWEK ORAZ DYNAMICZNE STATYSTYKI Z SUPABASE */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-sky-200 shadow-sm">
         <div>
           <h1 className="text-xl font-black text-sky-950 uppercase tracking-wider">Płatności Online</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Zarządzaj konfiguracją bramek płatniczych i historią transakcji z bazy Supabase.</p>
+          <p className="text-xs text-slate-500 mt-0.5">Zarządzaj ustawieniami płatności i historią transakcji z bazy Supabase.</p>
         </div>
         
         <div className="flex items-center gap-3">
-          <div className="bg-white border border-sky-200 px-5 py-2.5 rounded-2xl shadow-sm text-center">
+          <div className="bg-sky-50/50 border border-sky-200 px-5 py-2.5 rounded-xl text-center">
             <div className="text-[10px] text-slate-400 font-black uppercase">Wpływy</div>
             <div className="text-base font-black text-emerald-600">{totalRevenue.toFixed(2)} PLN</div>
           </div>
-          <div className="bg-white border border-sky-200 px-5 py-2.5 rounded-2xl shadow-sm text-center">
+          <div className="bg-sky-50/50 border border-sky-200 px-5 py-2.5 rounded-xl text-center">
             <div className="text-[10px] text-slate-400 font-black uppercase">Transakcje</div>
             <div className="text-base font-black text-sky-900">{filteredTransakcje.length}</div>
           </div>
-        </div>
-      </div>
-
-      {/* DOSTAWCA PŁATNOŚCI ONLINE */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs font-black uppercase tracking-wider text-slate-400">Dostawca płatności online</h2>
-          <button onClick={() => alert("Pomoc dotycząca integracji z Autopay / PayU / Stripe")} className="bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer">
-            ❓ POMOC
-          </button>
-        </div>
-
-        {/* Kafel Autopay Aktywny */}
-        <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="font-black text-slate-900 text-sm">Autopay</span>
-            <span className="bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-md text-xs">Aktywny</span>
-          </div>
-          <ul className="text-xs text-slate-600 space-y-1.5 list-disc list-inside">
-            <li>Łatwa i szybka rejestracja konta w Autopay bezpośrednio w systemie</li>
-            <li>Gwarantowana niska prowizja: 1,2%</li>
-            <li>Szybkie przelewy / BLIK z automatycznym księgowaniem w Supabase</li>
-          </ul>
-        </div>
-
-        {/* Kafel Autopay (Płatności odnawialne) Nieaktywny */}
-        <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <span className="font-black text-slate-900 text-sm">Autopay (Płatności odnawialne)</span>
-              <span className="bg-amber-100 text-amber-800 font-bold px-2.5 py-0.5 rounded-md text-xs">Nieaktywny</span>
-            </div>
-            <ul className="text-xs text-slate-600 space-y-1.5 list-disc list-inside">
-              <li>Płatności kartowe cykliczne</li>
-              <li>Klubowicz dodaje kartę raz, system pobiera z niej środki automatycznie na podstawie karnetu.</li>
-              <li>Gwarantowana niska prowizja: 1,2%</li>
-            </ul>
-          </div>
-          <button onClick={() => alert("Konfiguracja płatności odnawialnych")} className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold px-5 py-2.5 rounded-xl text-xs transition-colors shrink-0 cursor-pointer">
-            USTAW
-          </button>
         </div>
       </div>
 
