@@ -432,7 +432,7 @@ export default function KarnetyPage() {
     };
   };
 
-  // PRO-RATA DLA UMOWY 12M
+  // PRO-RATA DLA UMOWY 12M (Miesiąc zerowy)
   const calculateContractProRata = (baseMonthlyPrice: number) => {
     const today = new Date();
     const currentYear = today.getFullYear();
@@ -791,6 +791,18 @@ export default function KarnetyPage() {
     let dniWażności = 30;
     let nextRataStr = '1 / 1';
     let nowaDataWygasnieciaStr = '';
+    let isBonus13thPeriod = false;
+    let bonusDaysAmount = 0;
+
+    // Pobieramy stawkę bazową
+    let basePriceNum = 0;
+    if (isContract && passToExtend.cena) {
+      basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
+    } else if (defKarnetu) {
+      basePriceNum = parseFloat(defKarnetu.cena) || 0;
+    } else {
+      basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    }
 
     if (isContract) {
       let curRataNum = 0;
@@ -798,19 +810,41 @@ export default function KarnetyPage() {
         const match = String(passToExtend.rata).match(/(\d+)\s*\/\s*12/);
         if (match) curRataNum = parseInt(match[1], 10);
       }
-      const nextRataNum = Math.min(12, curRataNum + 1);
-      nextRataStr = `${nextRataNum} / 12`;
 
-      let baseDate = new Date();
-      if (passToExtend.waznyDo) {
-        const parts = passToExtend.waznyDo.split('-');
-        if (parts.length === 3) {
-          const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-          if (exp > baseDate) baseDate = exp;
+      const totalSuspUsed = passToExtend.totalSuspendedDaysUsed || (30 - (passToExtend.contractSuspensionDaysLeft ?? 30)) || 0;
+
+      if (curRataNum >= 12 && totalSuspUsed > 0) {
+        // 13. RATA - OKRES BONUSOWY Z ZAWIESZENIA (0.00 PLN)
+        isBonus13thPeriod = true;
+        bonusDaysAmount = totalSuspUsed;
+        nextRataStr = 'Bonus / 12';
+
+        let baseDate = new Date();
+        if (passToExtend.waznyDo) {
+          const parts = passToExtend.waznyDo.split('-');
+          if (parts.length === 3) {
+            const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            if (exp > baseDate) baseDate = exp;
+          }
         }
+        baseDate.setDate(baseDate.getDate() + bonusDaysAmount);
+        nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+        basePriceNum = 0; // Okres bonusowy z zawieszenia jest całkowicie bezpłatny
+      } else {
+        const nextRataNum = Math.min(12, curRataNum + 1);
+        nextRataStr = `${nextRataNum} / 12`;
+
+        let baseDate = new Date();
+        if (passToExtend.waznyDo) {
+          const parts = passToExtend.waznyDo.split('-');
+          if (parts.length === 3) {
+            const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            if (exp > baseDate) baseDate = exp;
+          }
+        }
+        const nextMonthDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0);
+        nowaDataWygasnieciaStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
       }
-      const nextMonthDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0);
-      nowaDataWygasnieciaStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
     } else {
       if (defKarnetu && defKarnetu.dlugosc) {
         const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
@@ -834,17 +868,6 @@ export default function KarnetyPage() {
       nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
     }
 
-    // PRIORYTET: Dla umów 12M pobieramy indywidualną stawkę przypisaną do rekordu klienta
-    let basePriceNum = 0;
-    if (isContract && passToExtend.cena) {
-      basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
-    } else if (defKarnetu) {
-      basePriceNum = parseFloat(defKarnetu.cena) || 0;
-    } else {
-      basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    }
-    
-    // ZAMROŻENIE CYKLU PRZY UŻYCIU KODU RABATOWEGO W ZAKŁADCE KARNETY
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
     const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
@@ -879,18 +902,25 @@ export default function KarnetyPage() {
           usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
         }];
 
+        let statusFinalTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
+        if (isContract) {
+          if (isBonus13thPeriod) {
+            statusFinalTekst = `Umowa 12M (Bonus z zawieszenia: +${bonusDaysAmount} dni • Ważny do: ${nowaDataWygasnieciaStr})`;
+          } else {
+            statusFinalTekst = `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})`;
+          }
+        }
+
         return {
           ...k,
           waznyDo: nowaDataWygasnieciaStr,
-          cena: cenaStr,
+          cena: isBonus13thPeriod ? (k.cena || '0.00 PLN') : cenaStr,
           cykl: nextCykl,
           rata: isContract ? nextRataStr : (k.rata || '1 / 1'),
           isContract12M: isContract,
           historiaPrzedluzen: nowaHistoria,
           znizkaProcentowa: appliedLabel,
-          statusTekst: isContract 
-            ? `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})` 
-            : `Ważny do: ${nowaDataWygasnieciaStr}`,
+          statusTekst: statusFinalTekst,
           pozostaloWejsc: isContract ? null : updatedRemaining,
           poczatkoweWejsc: isContract ? null : updatedInitial
         };
@@ -912,7 +942,7 @@ export default function KarnetyPage() {
       dbPayload.urodziny_rabat_rok = currentYear;
     }
 
-    // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI BEZPOŚREDNIO W KOLUMNIE 'rabat' I 'cyklCiaglosci'
+    // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI W SUPABASE
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
@@ -936,8 +966,10 @@ export default function KarnetyPage() {
     else if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
 
-    if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
-    else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
+    if (!isBonus13thPeriod) {
+      if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
+      else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
+    }
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
@@ -961,6 +993,14 @@ export default function KarnetyPage() {
       }]).select('id').maybeSingle();
 
       if (transData?.id) createdTransactionId = transData.id;
+    } else if (isBonus13thPeriod) {
+      await supabase.from('transakcje').insert([{
+        klient_id: currentUser.id,
+        typ_operacji: 'bonus_zawieszenia_12m',
+        kwota: 0,
+        opis: `Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu wykorzystanego zawieszenia dla umowy 12M: ${passToExtend.nazwa}`,
+        kod_rabatowy: null
+      }]);
     }
 
     if (appliedDiscountCode) {
@@ -984,7 +1024,12 @@ export default function KarnetyPage() {
       wallet: nowyStanPortfelaStr
     });
     
-    showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} za kwotę ${cenaStr}.` : `Karnet "${passToExtend.nazwa}" został przedłużony za kwotę ${cenaStr}.`, 'success');
+    if (isBonus13thPeriod) {
+      showToast(`Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu zawieszenia karnetu!`, 'success');
+    } else {
+      showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} za kwotę ${cenaStr}.` : `Karnet "${passToExtend.nazwa}" został przedłużony za kwotę ${cenaStr}.`, 'success');
+    }
+    
     setIsExtendModalOpen(false);
     resetDiscountState();
     loadData();
@@ -1053,13 +1098,14 @@ export default function KarnetyPage() {
           waznyDo: nowaDataWygasnieciaStr,
           pozostaloWejsc: null,
           poczatkoweWejsc: null,
-          cena: cenaStr,
+          cena: `${basePriceNum.toFixed(2)} PLN`, // Zachowujemy pełną comiesięczną stawkę w profilu karnetu
           cykl: 1,
           znizkaProcentowa: appliedLabel,
           rata: '0 / 12',
           statusTekst: statusTekst,
           isContract12M: true,
           contractSuspensionDaysLeft: 30,
+          totalSuspendedDaysUsed: 0,
           blokadaDo: null,
           powodBlokady: null,
           zawieszonyOd: null,
@@ -1476,7 +1522,7 @@ export default function KarnetyPage() {
     setSuspendEndDate('');
   };
 
-  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA) - Z UWZGLĘDNIENIEM UMÓW 12M
+  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA) - Z UWZGLĘDNIENIEM BENEFITU ZAWIESZENIA DLA 12M
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -1516,9 +1562,12 @@ export default function KarnetyPage() {
     }
 
     let updatedSuspensionDaysLeft = targetKarnet.contractSuspensionDaysLeft;
+    let updatedTotalSuspendedDaysUsed = targetKarnet.totalSuspendedDaysUsed || 0;
+
     if (targetKarnet.isContract12M) {
       const currentPool = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
       updatedSuspensionDaysLeft = Math.max(0, currentPool - actualDays);
+      updatedTotalSuspendedDaysUsed += actualDays;
     }
 
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
@@ -1541,6 +1590,7 @@ export default function KarnetyPage() {
       zawieszonyDo: null,
       waznyDo: nowaDataWygasnieciaStr,
       contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
+      totalSuspendedDaysUsed: updatedTotalSuspendedDaysUsed,
       statusTekst: targetKarnet.isContract12M 
         ? `Umowa 12M (Rata ${targetKarnet.rata || '0 / 12'} • Ważny do: ${nowaDataWygasnieciaStr})`
         : `Ważny do: ${nowaDataWygasnieciaStr}`
@@ -1768,8 +1818,9 @@ export default function KarnetyPage() {
                 let isSuspendedLocal = !!karnet.zawieszonyOd;
                 const isContract = karnet.isContract12M;
                 const suspensionDaysLeft = karnet.contractSuspensionDaysLeft !== undefined ? karnet.contractSuspensionDaysLeft : 30;
+                const isBonus13thActive = karnet.rata === 'Bonus / 12' || karnet.statusTekst?.includes('Bonus z zawieszenia');
 
-                if (!isPending && !isSuspendedLocal) {
+                if (!isPending && !isSuspendedLocal && !isBonus13thActive) {
                   if (karnet.waznyDo) {
                     const todayDate = new Date();
                     todayDate.setHours(0, 0, 0, 0);
@@ -1785,6 +1836,7 @@ export default function KarnetyPage() {
 
                 let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
                 if (isSuspendedLocal) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
+                else if (isBonus13thActive) statusColorClass = 'bg-purple-100 text-purple-900 border-purple-300';
                 else if (isPending) statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; 
                 else if (isExpiring) statusColorClass = 'bg-rose-100 text-rose-800 border-rose-200'; 
 
@@ -1796,7 +1848,7 @@ export default function KarnetyPage() {
                           <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
                           {isContract && (
                             <span className="bg-amber-500/20 text-amber-900 text-[10px] font-black px-2.5 py-0.5 rounded-md border border-amber-300 uppercase">
-                              Umowa 12M • Rata {karnet.rata || '0/12'}
+                              {isBonus13thActive ? 'Umowa 12M • Dni bonusowe' : `Umowa 12M • Rata ${karnet.rata || '0/12'}`}
                             </span>
                           )}
                           {karnet.znizkaProcentowa && (
@@ -1812,7 +1864,7 @@ export default function KarnetyPage() {
                           <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
                             {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                           </span>
-                          {karnet.cena && (
+                          {karnet.cena && !isBonus13thActive && (
                             <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200">
                               Cena: {karnet.cena}
                             </span>
@@ -1837,9 +1889,9 @@ export default function KarnetyPage() {
                       ) : isContract ? (
                         <button 
                           onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
-                          className="bg-amber-600 border border-amber-700 text-white hover:bg-amber-700 font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                          className={`${isBonus13thActive ? 'bg-purple-700 hover:bg-purple-800' : 'bg-amber-600 hover:bg-amber-700'} border border-amber-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5`}
                         >
-                          <span className="text-sm">💳</span> OPŁAĆ KOLEJNĄ RATĘ
+                          <span className="text-sm">💳</span> {isBonus13thActive ? 'AKTYWNY BONUS Z ZAWIESZENIA (0.00 PLN)' : 'OPŁAĆ KOLEJNĄ RATĘ'}
                         </button>
                       ) : (
                         <button 
@@ -1888,7 +1940,7 @@ export default function KarnetyPage() {
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex-1 text-center sm:text-left">
                 <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
-                <p className="text-xs text-slate-500 mt-1">Dla umów 12M masz 30 dni w roku. Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
+                <p className="text-xs text-slate-500 mt-1">Dla umów 12M masz 30 dni w roku. Niewykorzystane dni zostaną automatycznie doliczone po 12. racie jako <strong>bezpłatny okres bonusowy (0.00 PLN)</strong>.</p>
               </div>
               {suspendedPasses.length > 0 ? (
                  <button 
@@ -1993,7 +2045,7 @@ export default function KarnetyPage() {
               <div className="bg-sky-50/80 p-5 rounded-2xl border border-sky-100 space-y-3 text-xs text-sky-900">
                 <p className="font-bold">Limity zawieszeń obowiązują dla Twoich karnetów:</p>
                 <ul className="list-disc pl-4 space-y-2 font-medium">
-                  <li><strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni zawieszenia</strong> w ciągu całego roku trwania umowy.</li>
+                  <li><strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!</li>
                   <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy).</li>
                   <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Uwaga: jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
                   <li><strong>Odwieszenie:</strong> Karnet możesz odwiesić w dowolnym momencie przed czasem, a niewykorzystane dni zostaną automatycznie doliczone do daty ważności.</li>
@@ -2020,7 +2072,7 @@ export default function KarnetyPage() {
               <div className="space-y-4 text-xs">
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium p-4 rounded-xl leading-relaxed text-center">
                   Czy na pewno chcesz <strong>już dzisiaj</strong> odwiesić swój karnet i wrócić na treningi? <br/><br/>
-                  System przeliczy faktyczne dni zawieszenia i o tę wartość przedłuży ważność karnetu.
+                  System przeliczy faktyczne dni zawieszenia i o tę wartość przedłuży ważność karnetu (oraz doda je do bezpłatnego okresu bonusowego po 12. racie).
                 </div>
                 
                 <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
@@ -2106,7 +2158,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M Z INDYWIDUALNĄ CENĄ */}
+        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M Z OBSŁUGĄ RATY 13 (0.00 PLN) */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
           const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
@@ -2121,13 +2173,20 @@ export default function KarnetyPage() {
             basePrice = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
           }
 
-          const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
-
           let curRataNum = 0;
           if (passToExtend.rata) {
             const match = String(passToExtend.rata).match(/(\d+)\s*\/\s*12/);
             if (match) curRataNum = parseInt(match[1], 10);
           }
+
+          const totalSuspUsed = passToExtend.totalSuspendedDaysUsed || (30 - (passToExtend.contractSuspensionDaysLeft ?? 30)) || 0;
+          const isBonus13Period = isContract && curRataNum >= 12 && totalSuspUsed > 0;
+
+          if (isBonus13Period) {
+            basePrice = 0; // Okres bonusowy z zawieszenia wynosi 0.00 PLN
+          }
+
+          const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
           const nextRataNum = Math.min(12, curRataNum + 1);
 
           return (
@@ -2135,13 +2194,24 @@ export default function KarnetyPage() {
               <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
                 <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                   <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
-                    {isContract ? '💳 Opłać kolejną ratę umowy 12M' : '🕒 Przedłuż karnet'}
+                    {isBonus13Period 
+                      ? '🎁 Aktywacja okresu bonusowego z zawieszenia'
+                      : isContract 
+                        ? '💳 Opłać kolejną ratę umowy 12M' 
+                        : '🕒 Przedłuż karnet'}
                   </h3>
                   <button onClick={() => { setIsExtendModalOpen(false); resetDiscountState(); }} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
                 </div>
                 <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
                   <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900">
-                    {isContract ? (
+                    {isBonus13Period ? (
+                      <div className="space-y-1">
+                        <span className="font-bold text-purple-900 block text-sm">🎉 Bezpłatny okres bonusowy (+{totalSuspUsed} dni)</span>
+                        <p className="text-[11px] text-slate-600 leading-relaxed">
+                          W trakcie trwania 12-miesięcznej umowy wykorzystano łącznie <strong>{totalSuspUsed} dni zawieszenia</strong>. Okres ten zostaje doliczony jako bezpłatne przedłużenie Twojego karnetu.
+                        </p>
+                      </div>
+                    ) : isContract ? (
                       <div>
                         <span>Opłacasz kolejną ratę (<strong>{nextRataNum} / 12</strong>) dla umowy:</span>
                         <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
@@ -2154,46 +2224,48 @@ export default function KarnetyPage() {
                     )}
                   </div>
 
-                  <div className="space-y-1 mt-2">
-                    <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        value={discountCodeInput} 
-                        onChange={(e) => setDiscountCodeInput(e.target.value.toUpperCase())}
-                        placeholder="Wpisz kod"
-                        className="flex-1 bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-blue-500 uppercase font-bold"
-                        disabled={!!appliedDiscountCode}
-                      />
-                      {!appliedDiscountCode ? (
-                        <button 
-                          onClick={handleApplyDiscountCode}
-                          className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
-                        >
-                          Zastosuj
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={(e) => { e.preventDefault(); resetDiscountState(); }}
-                          className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
-                        >
-                          Usuń
-                        </button>
+                  {!isBonus13Period && (
+                    <div className="space-y-1 mt-2">
+                      <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          value={discountCodeInput} 
+                          onChange={(e) => setDiscountCodeInput(e.target.value.toUpperCase())}
+                          placeholder="Wpisz kod"
+                          className="flex-1 bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-blue-500 uppercase font-bold"
+                          disabled={!!appliedDiscountCode}
+                        />
+                        {!appliedDiscountCode ? (
+                          <button 
+                            onClick={handleApplyDiscountCode}
+                            className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
+                          >
+                            Zastosuj
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={(e) => { e.preventDefault(); resetDiscountState(); }}
+                            className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
+                          >
+                            Usuń
+                          </button>
+                        )}
+                      </div>
+                      {discountCodeStatus.message && (
+                         <div className={`text-[10px] font-bold mt-1 ${discountCodeStatus.type === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {discountCodeStatus.message}
+                         </div>
                       )}
                     </div>
-                    {discountCodeStatus.message && (
-                       <div className={`text-[10px] font-bold mt-1 ${discountCodeStatus.type === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {discountCodeStatus.message}
-                       </div>
-                    )}
-                  </div>
+                  )}
                   
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                     <div className="flex justify-between text-slate-600">
-                      <span>{isContract ? 'Miesięczna kwota raty (Twoja stawka):' : 'Cena katalogowa:'}</span>
-                      <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
+                      <span>{isBonus13Period ? 'Wartość bonusu:' : isContract ? 'Miesięczna kwota raty (Twoja stawka):' : 'Cena katalogowa:'}</span>
+                      <span className="font-bold">{isBonus13Period ? '0.00 PLN' : `${basePrice.toFixed(2)} PLN`}</span>
                     </div>
-                    {appliedLabel && (
+                    {appliedLabel && !isBonus13Period && (
                       <div className="flex justify-between text-emerald-700 font-bold">
                         <span>Naliczony rabat:</span>
                         <span>{appliedLabel} (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
@@ -2209,8 +2281,12 @@ export default function KarnetyPage() {
                     <button type="button" onClick={() => { setIsExtendModalOpen(false); resetDiscountState(); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
                       Anuluj
                     </button>
-                    <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                      {isContract ? `Opłać ratę ${nextRataNum}/12 (${finalPrice.toFixed(2)} PLN)` : `Potwierdzam przedłużenie (${finalPrice.toFixed(2)} PLN)`}
+                    <button type="submit" className={`${isBonus13Period ? 'bg-purple-700 hover:bg-purple-800' : 'bg-amber-600 hover:bg-amber-700'} text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer`}>
+                      {isBonus13Period 
+                        ? `Aktywuj bonus +${totalSuspUsed} dni (0.00 PLN)` 
+                        : isContract 
+                          ? `Opłać ratę ${nextRataNum}/12 (${finalPrice.toFixed(2)} PLN)` 
+                          : `Potwierdzam przedłużenie (${finalPrice.toFixed(2)} PLN)`}
                     </button>
                   </div>
                 </form>
@@ -2727,7 +2803,7 @@ export default function KarnetyPage() {
                     <p className="font-bold text-sm">Karnet na umowę cykliczną (12 miesięcy)</p>
                     <p className="text-[11px] leading-relaxed font-medium">
                       Wybór tej opcji oznacza, że karnet podlega pod zasady rozliczeń ratalnych z uwzględnieniem wyrównania za bieżący miesiąc (pro-rata). 
-                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na zawieszenie. System przy zakupie wyliczy stawkę automatycznie.
+                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na darmowe zawieszenie. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong>.
                     </p>
                   </div>
                 )}
