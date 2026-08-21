@@ -34,6 +34,12 @@ export default function RootLayout({
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
+  // Stany dla mechanizmu Pull-to-Refresh
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartY = useRef(0);
+  const isPulling = useRef(false);
+
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pathname = usePathname();
@@ -49,6 +55,62 @@ export default function RootLayout({
       cleanPath.startsWith('/grafik-publiczny')
     );
   })();
+
+  // Obsługa gestu Pull-to-Refresh (przeciągnięcie w dół z góry ekranu)
+  useEffect(() => {
+    const handleTouchStart = (e: TouchEvent) => {
+      // Reagujemy tylko przy jednym palcu i gdy przewinięcie jest na samej górze
+      if (e.touches.length === 1 && window.scrollY <= 0) {
+        touchStartY.current = e.touches[0].clientY;
+        isPulling.current = true;
+      } else {
+        isPulling.current = false;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!isPulling.current || isRefreshing) return;
+
+      const currentY = e.touches[0].clientY;
+      const diffY = currentY - touchStartY.current;
+
+      // Ciągniemy w dół, będąc na samej górze ekranu
+      if (diffY > 0 && window.scrollY <= 0) {
+        // Tłumienie oporu (współczynnik 0.4 dla naturalnego efektu sprężystości)
+        const dampedPull = Math.min(diffY * 0.4, 90);
+        setPullDistance(dampedPull);
+      } else {
+        setPullDistance(0);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      if (!isPulling.current || isRefreshing) return;
+
+      if (pullDistance >= 65) {
+        setIsRefreshing(true);
+        setPullDistance(60);
+        
+        // Wywołanie pełnego odświeżenia aplikacji
+        setTimeout(() => {
+          window.location.reload();
+        }, 400);
+      } else {
+        setPullDistance(0);
+      }
+      isPulling.current = false;
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [pullDistance, isRefreshing]);
 
   // Blokada skalowania, podwójnego tapnięcia i pinch-to-zoom na urządzeniach mobilnych
   useEffect(() => {
@@ -468,6 +530,22 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-sky-50/50 text-slate-800 flex font-sans antialiased h-screen overflow-hidden">
         
+        {/* Wskaźnik gestu Pull-to-Refresh */}
+        <div 
+          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out"
+          style={{
+            transform: `translateY(${pullDistance > 0 ? pullDistance : 0}px)`,
+            opacity: pullDistance > 10 ? 1 : 0
+          }}
+        >
+          <div className="bg-sky-950 text-amber-400 px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 border border-sky-800 text-xs font-black">
+            <span className={`text-base inline-block ${isRefreshing ? 'animate-spin' : ''}`} style={{ transform: isRefreshing ? 'none' : `rotate(${pullDistance * 4}deg)` }}>
+              {isRefreshing ? '🔄' : '⬇️'}
+            </span>
+            <span>{isRefreshing ? 'Odświeżanie danych...' : pullDistance >= 65 ? 'Puść, aby odświeżyć' : 'Pociągnij w dół...'}</span>
+          </div>
+        </div>
+
         <AuthGuard>
           {isPublicPage ? (
             <main className="flex-1 w-full h-screen overflow-y-auto bg-slate-50">
