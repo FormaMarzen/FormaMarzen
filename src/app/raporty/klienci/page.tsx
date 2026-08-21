@@ -143,9 +143,16 @@ export default function KlienciPage() {
     return Math.min(25, 4 + (count - 2)); 
   };
 
+  // POPRAWIONA LOGIKA: Admin najpierw czyta DOKŁADNĄ liczbę z kolumny `rabat`
   const calculateSystemDiscount = (client: any) => {
     if (!client) return 0;
-    if (client.hasLostContinuity) return 0;
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') return 0;
+
+    if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
+      const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
+      if (!isNaN(val) && val > 0) return val;
+      if (!isNaN(val) && val === 0) return 0;
+    }
     
     const std = calculateStandardSystemDiscount(client);
     const offset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
@@ -156,7 +163,7 @@ export default function KlienciPage() {
     if (!client) return 0;
     const staly = parseFloat(client.discount || '0');
     if (staly > 0) return staly;
-    if (isContract) return 0; // Umowy 12M nie posiadają rabatu za ciągłość
+    if (isContract) return 0; 
     return calculateSystemDiscount(client);
   };
 
@@ -562,11 +569,13 @@ export default function KlienciPage() {
         let currentDiscount = c.discount;
         let currentOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
         let hasLostContinuity = c.hasLostContinuity || false;
+        let currentRabat = c.rabat !== undefined ? c.rabat : null;
 
         if (utrataCiaglosci || finalKarnety.length === 0) {
            if (currentDiscount > 0 || !hasLostContinuity) {
                currentDiscount = '';
                hasLostContinuity = true;
+               currentRabat = 0;
                
                const staryStd = calculateStandardSystemDiscount({ transakcje: clientTransakcje });
                currentOffset = -staryStd; 
@@ -592,6 +601,7 @@ export default function KlienciPage() {
            await supabase.from('klienci').update({ 
                karnetyKlubowicza: finalKarnety,
                discount: currentDiscount,
+               rabat: currentRabat,
                system_discount_offset: currentOffset,
                hasLostContinuity: hasLostContinuity
            }).eq('id', c.id);
@@ -613,7 +623,7 @@ export default function KlienciPage() {
         return {
           ...c,
           id: c.id,
-          rabat: 0, 
+          rabat: c.rabat,
           systemDiscountOffset: currentOffset,
           hasLostContinuity: hasLostContinuity,
           firstName: c.Imię || c.firstName || '',
@@ -695,6 +705,7 @@ export default function KlienciPage() {
     setIsEditingDiscount(false);
   };
 
+  // POPRAWIONA FUNKCJA ZAPISU RABATU SYSTEMOWEGO PROSTO DO KOLUMNY 'rabat'
   const handleSaveSystemDiscount = async () => {
     if (!profileClient) return;
     const targetVal = parseFloat(systemDiscountInput) || 0;
@@ -705,8 +716,18 @@ export default function KlienciPage() {
     
     const newOffset = targetVal - std;
 
-    const updatedClient = { ...profileClient, systemDiscountOffset: newOffset, hasLostContinuity: false };
-    const { error } = await supabase.from('klienci').update({ system_discount_offset: newOffset, hasLostContinuity: false }).eq('id', profileClient.id);
+    const updatedClient = { 
+        ...profileClient, 
+        rabat: targetVal,
+        systemDiscountOffset: newOffset, 
+        hasLostContinuity: false 
+    };
+    
+    const { error } = await supabase.from('klienci').update({ 
+        rabat: targetVal,
+        system_discount_offset: newOffset, 
+        hasLostContinuity: false 
+    }).eq('id', profileClient.id);
     
     if (error) {
       alert(`Błąd zapisu rabatu za ciągłość: ${error.message}`);
@@ -836,7 +857,6 @@ export default function KlienciPage() {
     setIsEditProfileInfoOpen(false);
     loadData();
   };
-
   const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
       const { data: userSignups } = await supabase.from('zapisy_zajec').select('class_key').eq('klient_id', id);
@@ -2034,7 +2054,7 @@ export default function KlienciPage() {
                     </div>
                   )}
                 </div>
-
+                
                 {/* ROZWIJANE MENU: HISTORIA TYLKO ZAKUPÓW I PRZEDŁUŻENIÓW */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 mt-4">
                   <button 
@@ -2091,7 +2111,7 @@ export default function KlienciPage() {
                 </div>
               </div>
 
-              {/* Sekcja Zapisy na zajęcia (DEDYKOWANY SILNIK CZASU RZECZYWISTEGO I TRWAŁA HISTORIA) */}
+              {/* Sekcja Zapisy na zajęcia */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Aktywność na zajęciach</h3>
                 
