@@ -64,10 +64,10 @@ export default function KarnetyPage() {
   };
 
   // =========================================================================
-  // 🎂 NIEZAWODNA OBSŁUGA URODZIN (20% RABATU PRZEZ 5 DNI OD DNIA URODZIN)
+  // 🎂 OBSŁUGA URODZIN (20% RABATU PRZEZ 5 DNI - DOKŁADNIE 1 RAZ W ROKU)
   // =========================================================================
-  const checkBirthdayStatus = (birthDateStr: string | null | undefined) => {
-    if (!birthDateStr) return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
+  const checkBirthdayStatus = (birthDateStr: string | null | undefined, urodzinyRabatRok?: number | null) => {
+    if (!birthDateStr) return { isBirthdayWindow: false, daysLeft: 0, isToday: false, alreadyUsedThisYear: false };
 
     const cleanStr = String(birthDateStr).trim();
     let bMonth = -1;
@@ -89,7 +89,7 @@ export default function KarnetyPage() {
     }
 
     if (bMonth < 0 || isNaN(bMonth) || isNaN(bDay)) {
-      return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
+      return { isBirthdayWindow: false, daysLeft: 0, isToday: false, alreadyUsedThisYear: false };
     }
 
     const today = new Date();
@@ -102,15 +102,19 @@ export default function KarnetyPage() {
     const diffTime = today.getTime() - thisYearBirthday.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
 
-    if (diffDays >= 0 && diffDays < 5) {
+    const isWindow = diffDays >= 0 && diffDays < 5;
+    const isUsed = Number(urodzinyRabatRok) === currentYear;
+
+    if (isWindow) {
       return {
         isBirthdayWindow: true,
         daysLeft: 5 - diffDays,
-        isToday: diffDays === 0
+        isToday: diffDays === 0,
+        alreadyUsedThisYear: isUsed
       };
     }
 
-    return { isBirthdayWindow: false, daysLeft: 0, isToday: false };
+    return { isBirthdayWindow: false, daysLeft: 0, isToday: false, alreadyUsedThisYear: isUsed };
   };
 
   // 💬 WYSYŁANIE WIADOMOŚCI URODZINOWEJ NA CZAT
@@ -121,7 +125,7 @@ export default function KarnetyPage() {
 
     if (Number(lastSentYear) === currentYear) return;
 
-    const birthdayMessage = `🎂 Wszystkiego najlepszego z okazji urodzin od całego zespołu FORMA MARZEŃ! 🎉 Z tej okazji przygotowaliśmy dla Ciebie specjalny prezent: 20% rabatu na zakup lub przedłużenie dowolnego karnetu. Rabat jest aktywny przez 5 dni i nalicza się automatycznie w Twoim panelu!`;
+    const birthdayMessage = `🎂 Wszystkiego najlepszego z okazji urodzin od całego zespołu FORMA MARZEŃ! 🎉 Z tej okazji przygotowaliśmy dla Ciebie specjalny prezent: 20% rabatu na zakup lub przedłużenie karnetu (do jednorazowego wykorzystania w ciągu 5 dni). Rabat nalicza się automatycznie w Twoim panelu!`;
 
     try {
       await supabase.from('czat_wiadomosci').insert([{
@@ -308,14 +312,17 @@ export default function KarnetyPage() {
     };
   };
 
-  // EFEKTYWNY RABAT
+  // EFEKTYWNY RABAT Z UWZGLĘDNIENIEM JEDNORAZOWEGO UŻYCIA URODZIN
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false) => {
-    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0 };
+    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false };
     
-    const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia']);
-    const birthdayDiscountVal = bStatus.isBirthdayWindow ? 20 : 0;
+    const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia'], client.urodziny_rabat_rok);
+    
+    // Rabat 20% nalicza się TYLKO jeśli okno urodzinowe jest aktywne i NIE został jeszcze wykorzystany w tym roku
+    const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
+    // Dla umów 12M rabat ciągłościowy wynosi ZAWSZE 0%
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
@@ -324,7 +331,7 @@ export default function KarnetyPage() {
 
     if (birthdayDiscountVal > 0) {
       totalPercent += birthdayDiscountVal;
-      labelParts.push(`20% rabat urodzinowy (5 dni)`);
+      labelParts.push(`20% rabat urodzinowy`);
     }
 
     if (manualDiscountVal > 0) {
@@ -343,11 +350,21 @@ export default function KarnetyPage() {
         isBirthday: birthdayDiscountVal > 0,
         continuityPercent: continuityDiscountVal,
         birthdayPercent: birthdayDiscountVal,
-        daysLeftBirthday: bStatus.daysLeft
+        daysLeftBirthday: bStatus.daysLeft,
+        isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear
       };
     }
 
-    return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0 };
+    return { 
+      percent: 0, 
+      label: '', 
+      type: 'none', 
+      isBirthday: false, 
+      continuityPercent: 0, 
+      birthdayPercent: 0, 
+      daysLeftBirthday: bStatus.daysLeft,
+      isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear
+    };
   };
 
   // PRO-RATA DLA UMOWY 12M
@@ -418,6 +435,8 @@ export default function KarnetyPage() {
               email: c['E-mail'] || c.email || '',
               discount: c.discount || '',
               birthDate: c.Urodziny || c.urodziny || c['Data urodzenia'] || c.Data_urodzenia || c.data_urodzenia || null,
+              urodziny_rabat_rok: c.urodziny_rabat_rok || null,
+              ostatnie_zyczenia_rok: c.ostatnie_zyczenia_rok || null,
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
@@ -440,6 +459,8 @@ export default function KarnetyPage() {
                Portfel: '0.00 PLN',
                discount: '',
                Urodziny: null,
+               urodziny_rabat_rok: null,
+               ostatnie_zyczenia_rok: null,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -453,6 +474,8 @@ export default function KarnetyPage() {
                  email: defaultClient["E-mail"],
                  discount: '',
                  birthDate: null,
+                 urodziny_rabat_rok: null,
+                 ostatnie_zyczenia_rok: null,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN'
                };
@@ -462,7 +485,7 @@ export default function KarnetyPage() {
           
           if (myUser) {
             setCurrentUser(myUser);
-            const bStatus = checkBirthdayStatus(myUser.birthDate);
+            const bStatus = checkBirthdayStatus(myUser.birthDate, myUser.urodziny_rabat_rok);
             if (bStatus.isBirthdayWindow) {
               sendBirthdayChatMessage(myUser);
             }
@@ -690,7 +713,6 @@ export default function KarnetyPage() {
     let nowaDataWygasnieciaStr = '';
 
     if (isContract) {
-      // 1. Logika umowy 12M: obliczenie kolejnej raty
       let curRataNum = 0;
       if (passToExtend.rata) {
         const match = String(passToExtend.rata).match(/(\d+)\s*\/\s*12/);
@@ -699,7 +721,6 @@ export default function KarnetyPage() {
       const nextRataNum = Math.min(12, curRataNum + 1);
       nextRataStr = `${nextRataNum} / 12`;
 
-      // 2. Data ważności zostaje przedłużona do końca kolejnego miesiąca kalendarzowego
       let baseDate = new Date();
       if (passToExtend.waznyDo) {
         const parts = passToExtend.waznyDo.split('-');
@@ -711,7 +732,6 @@ export default function KarnetyPage() {
       const nextMonthDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0);
       nowaDataWygasnieciaStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
     } else {
-      // Standardowy karnet na czas lub wejścia
       if (defKarnetu && defKarnetu.dlugosc) {
         const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
         if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
@@ -791,10 +811,16 @@ export default function KarnetyPage() {
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
+    const currentYear = new Date().getFullYear();
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
     };
     
+    // ZAPIS JEDNORAZOWEGO WYKORZYSTANIA RABATU URODZINOWEGO
+    if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
+      dbPayload.urodziny_rabat_rok = currentYear;
+    }
+
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
     else if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
@@ -838,6 +864,7 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
+      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
@@ -995,10 +1022,16 @@ export default function KarnetyPage() {
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
+    const currentYear = new Date().getFullYear();
     const dbPayload: any = {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
     };
     
+    // ZAPIS JEDNORAZOWEGO WYKORZYSTANIA RABATU URODZINOWEGO
+    if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
+      dbPayload.urodziny_rabat_rok = currentYear;
+    }
+
     if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
     else if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr;
     else dbPayload.Portfel = nowyStanPortfelaStr;
@@ -1038,6 +1071,7 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
+      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
@@ -1497,7 +1531,7 @@ export default function KarnetyPage() {
   // JEŚLI UŻYTKOWNIK TO KLUBOWICZ
   if (appRole === 'klubowicz' && currentUser) {
     const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const birthdayStatus = checkBirthdayStatus(currentUser.birthDate || currentUser.Urodziny);
+    const birthdayStatus = checkBirthdayStatus(currentUser.birthDate || currentUser.Urodziny, currentUser.urodziny_rabat_rok);
 
     return (
       <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in pb-24 font-sans antialiased relative">
@@ -1514,25 +1548,39 @@ export default function KarnetyPage() {
                   <span className="bg-white/20 backdrop-blur-md text-white text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full border border-white/30">
                     🎉 Specjalna Okazja
                   </span>
-                  <span className="bg-white text-rose-600 text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full shadow-sm">
-                    Prezent Urodzinowy: -20%
-                  </span>
+                  {!birthdayStatus.alreadyUsedThisYear ? (
+                    <span className="bg-white text-rose-600 text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full shadow-sm">
+                      Prezent Urodzinowy: -20%
+                    </span>
+                  ) : (
+                    <span className="bg-white/20 text-white text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full border border-white/30">
+                      Rabat Urodzinowy Wykorzystany
+                    </span>
+                  )}
                 </div>
                 <h3 className="text-xl sm:text-2xl font-black tracking-tight">
                   Wszystkiego Najlepszego, {currentUser.firstName || 'Klubowiczu'}! 🎈
                 </h3>
                 <p className="text-xs sm:text-sm text-white/90 max-w-xl leading-relaxed">
-                  Z okazji Twoich urodzin otrzymujesz <strong>20% rabatu</strong> na zakup lub przedłużenie dowolnego karnetu! Ceny wszystkich karnetów zostały automatycznie obniżone w Twoim panelu.
-                  {effectiveDiscount.continuityPercent > 0 && (
-                    <span className="block mt-1 font-bold text-amber-200">
-                      ✨ Twój rabat urodzinowy łączy się ze zgromadzonym rabatem za ciągłość (+{effectiveDiscount.continuityPercent}%)!
+                  {!birthdayStatus.alreadyUsedThisYear ? (
+                    <>
+                      Z okazji Twoich urodzin otrzymujesz <strong>jednorazowy 20% rabat</strong> na zakup lub przedłużenie dowolnego karnetu! Rabat nalicza się automatycznie w Twoim panelu przy najbliższej płatności.
+                      {effectiveDiscount.continuityPercent > 0 && (
+                        <span className="block mt-1 font-bold text-amber-200">
+                          ✨ Twój rabat urodzinowy łączy się ze zgromadzonym rabatem za ciągłość (+{effectiveDiscount.continuityPercent}%)!
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-amber-100 font-medium">
+                      Twój tegoroczny prezent urodzinowy (-20%) został już pomyślnie zrealizowany przy wcześniejszym zakupie. Życzymy udanych treningów!
                     </span>
                   )}
                 </p>
               </div>
 
               <div className="flex flex-col items-end shrink-0 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20 text-center sm:text-right">
-                <div className="text-[10px] uppercase font-bold text-white/80 tracking-wider">Ważność rabatu:</div>
+                <div className="text-[10px] uppercase font-bold text-white/80 tracking-wider">Ważność okna:</div>
                 <div className="text-xl font-black text-amber-200">
                   {birthdayStatus.daysLeft} {birthdayStatus.daysLeft === 1 ? 'dzień' : 'dni'}
                 </div>
