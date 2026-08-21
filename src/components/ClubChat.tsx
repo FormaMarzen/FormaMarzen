@@ -415,7 +415,7 @@ export default function ClubChat() {
                 <>
                   <button
                     onClick={() => setSelectedUser(null)}
-                    className="text-slate-300 hover:text-white p-1 cursor-pointer transition-colors"
+                    className="text-white hover:text-amber-400 w-7 h-7 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-bold text-sm cursor-pointer transition-colors shadow-sm"
                     title="Wróć do listy"
                   >
                     ←
