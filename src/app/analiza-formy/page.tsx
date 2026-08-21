@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 interface Klient {
@@ -51,17 +51,19 @@ export default function AnalizaFormyPage() {
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Lista podopiecznych dla Admina / Trenera
+  // Wyszukiwarka i wybór klienta dla Admina / Trenera
   const [klienci, setKlienci] = useState<Klient[]>([]);
   const [selectedKlient, setSelectedKlient] = useState<Klient | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
 
-  // Pomiary
+  // Pomiary i formularze
   const [measurements, setMeasurements] = useState<AnalizaFormyWpis[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [editingMeasurementId, setEditingMeasurementId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Stan formularza nowego pomiaru
+  // Stan formularza nowego / edytowanego pomiaru
   const [formData, setFormData] = useState({
     data_pomiaru: new Date().toISOString().split('T')[0],
     wzrost: '',
@@ -86,6 +88,20 @@ export default function AnalizaFormyPage() {
     uwagi_trenera: '',
     notatki_klubowicza: ''
   });
+
+  // Stany dla Kalkulatora Katch-McArdle
+  const [calcWeight, setCalcWeight] = useState<string>('');
+  const [calcFat, setCalcFat] = useState<string>('');
+  const [calcPal, setCalcPal] = useState<string>('1.4');
+  const [calcGoal, setCalcGoal] = useState<'redukcja' | 'utrzymanie' | 'masa'>('redukcja');
+  const [calcResult, setCalcResult] = useState<{
+    bmr: number;
+    tdee: number;
+    targetKcal: number;
+    protein: number;
+    fat: number;
+    carbs: number;
+  } | null>(null);
 
   // 1. Sprawdzanie uprawnień i sesji użytkownika
   useEffect(() => {
@@ -133,7 +149,7 @@ export default function AnalizaFormyPage() {
     initAuth();
   }, []);
 
-  // 2. Pobieranie listy klientów (dla Admina i Trenera)
+  // 2. Pobieranie bazy klientów dla autouzupełniania wyszukiwarki (Admin/Trener)
   const fetchClientsList = async () => {
     const { data, error } = await supabase
       .from('klienci')
@@ -141,12 +157,7 @@ export default function AnalizaFormyPage() {
       .order('Nazwisko', { ascending: true });
 
     if (data && !error) {
-      const formatted = data as unknown as Klient[];
-      setKlienci(formatted);
-      if (formatted.length > 0) {
-        setSelectedKlient(formatted[0]);
-        await fetchMeasurements(formatted[0].id, formatted[0]['E-mail']);
-      }
+      setKlienci(data as unknown as Klient[]);
     }
   };
 
@@ -171,17 +182,79 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Zmiana wybranego klienta z listy
+  // Zmiana wybranego klienta z wyszukiwarki
   const handleSelectClient = (klient: Klient) => {
     setSelectedKlient(klient);
+    setSearchQuery(`${klient.Imię} ${klient.Nazwisko}`);
+    setIsSearchFocused(false);
     fetchMeasurements(klient.id, klient['E-mail']);
   };
 
-  // Obsługa zapisu nowego pomiaru
+  // Otwarcie modala dodawania nowego pomiaru
+  const handleOpenAddModal = () => {
+    setEditingMeasurementId(null);
+    setFormData({
+      data_pomiaru: new Date().toISOString().split('T')[0],
+      wzrost: measurements[0]?.wzrost ? String(measurements[0].wzrost) : '',
+      waga: '',
+      obwod_pasa: '',
+      klatka: '',
+      ramie: '',
+      talia: '',
+      biodra: '',
+      udo: '',
+      lydka: '',
+      tkanka_tluszczowa: '',
+      miesnie: '',
+      kosci: '',
+      wiek_metaboliczny: '',
+      woda: '',
+      tluszcz_wisceralny: '',
+      kcal: measurements[0]?.kcal ? String(measurements[0].kcal) : '',
+      bialko: measurements[0]?.bialko ? String(measurements[0].bialko) : '',
+      tluszcz: measurements[0]?.tluszcz ? String(measurements[0].tluszcz) : '',
+      weglowodany: measurements[0]?.weglowodany ? String(measurements[0].weglowodany) : '',
+      uwagi_trenera: '',
+      notatki_klubowicza: ''
+    });
+    setIsAddModalOpen(true);
+  };
+
+  // Otwarcie modala w trybie edycji istniejącego pomiaru
+  const handleOpenEditModal = (m: AnalizaFormyWpis) => {
+    setEditingMeasurementId(m.id);
+    setFormData({
+      data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
+      wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : '',
+      waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
+      obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
+      klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
+      ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
+      talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
+      biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
+      udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
+      lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
+      tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
+      miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
+      kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
+      wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
+      woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
+      tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
+      kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
+      bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
+      tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
+      weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
+      uwagi_trenera: m.uwagi_trenera || '',
+      notatki_klubowicza: m.notatki_klubowicza || ''
+    });
+    setIsAddModalOpen(true);
+  };
+
+  // Obsługa zapisu (dodanie lub aktualizacja)
   const handleSubmitMeasurement = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedKlient && appRole !== 'klubowicz') {
-      alert("Proszę wybrać podopiecznego.");
+      alert("Proszę najpierw wyszukać i wybrać podopiecznego.");
       return;
     }
 
@@ -222,39 +295,29 @@ export default function AnalizaFormyPage() {
       notatki_klubowicza: formData.notatki_klubowicza || null
     };
 
-    const { error } = await supabase.from('analiza_formy').insert([payload]);
+    let error = null;
+
+    if (editingMeasurementId) {
+      const res = await supabase
+        .from('analiza_formy')
+        .update(payload)
+        .eq('id', editingMeasurementId);
+      error = res.error;
+    } else {
+      const res = await supabase
+        .from('analiza_formy')
+        .insert([payload]);
+      error = res.error;
+    }
 
     setIsSubmitting(false);
 
     if (error) {
       alert("Błąd zapisu pomiaru: " + error.message);
     } else {
-      alert("Pomiar został pomyślnie dodany!");
+      alert(editingMeasurementId ? "Pomiar został pomyślnie zaktualizowany!" : "Nowy pomiar został pomyślnie dodany!");
       setIsAddModalOpen(false);
-      setFormData({
-        data_pomiaru: new Date().toISOString().split('T')[0],
-        wzrost: '',
-        waga: '',
-        obwod_pasa: '',
-        klatka: '',
-        ramie: '',
-        talia: '',
-        biodra: '',
-        udo: '',
-        lydka: '',
-        tkanka_tluszczowa: '',
-        miesnie: '',
-        kosci: '',
-        wiek_metaboliczny: '',
-        woda: '',
-        tluszcz_wisceralny: '',
-        kcal: '',
-        bialko: '',
-        tluszcz: '',
-        weglowodany: '',
-        uwagi_trenera: '',
-        notatki_klubowicza: ''
-      });
+      setEditingMeasurementId(null);
 
       if (selectedKlient) {
         fetchMeasurements(selectedKlient.id, selectedKlient['E-mail']);
@@ -266,7 +329,7 @@ export default function AnalizaFormyPage() {
 
   // Usuwanie wpisu
   const handleDeleteMeasurement = async (id: number) => {
-    if (!confirm("Czy na pewno chcesz usunąć ten pomiar?")) return;
+    if (!confirm("Czy na pewno chcesz trwale usunąć ten pomiar?")) return;
     const { error } = await supabase.from('analiza_formy').delete().eq('id', id);
     if (!error) {
       setMeasurements(prev => prev.filter(m => m.id !== id));
@@ -275,10 +338,15 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  const filteredKlienci = klienci.filter(k => 
-    `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    k['E-mail']?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filtr podpowiedzi dla wyszukiwarki (po min. 2 znakach)
+  const searchResults = useMemo(() => {
+    if (searchQuery.trim().length < 2) return [];
+    return klienci.filter(k => 
+      `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      k['E-mail']?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (k['Numer tel.'] && k['Numer tel.'].includes(searchQuery))
+    ).slice(0, 8);
+  }, [klienci, searchQuery]);
 
   const latestMeasurement = measurements[0] || null;
   const previousMeasurement = measurements[1] || null;
@@ -287,6 +355,150 @@ export default function AnalizaFormyPage() {
     if (current === undefined || current === null || previous === undefined || previous === null) return null;
     const diff = current - previous;
     return diff > 0 ? `+${diff.toFixed(1)}` : `${diff.toFixed(1)}`;
+  };
+
+  // Filtrowanie pomiarów z ostatnich 24 miesięcy i sortowanie rosnąco chronologicznie do wykresów
+  const chartData24Months = useMemo(() => {
+    const cutoffDate = new Date();
+    cutoffDate.setMonth(cutoffDate.getMonth() - 24);
+    
+    return [...measurements]
+      .filter(m => new Date(m.data_pomiaru) >= cutoffDate)
+      .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
+  }, [measurements]);
+
+  // Kalkulator Katch-McArdle
+  const calculateKatchMcArdle = () => {
+    const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
+    const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
+    const pal = parseFloat(calcPal);
+
+    if (!w || w <= 0 || !bf || bf <= 0) {
+      alert("Wprowadź prawidłową wagę (kg) oraz poziom tkanki tłuszczowej (%).");
+      return;
+    }
+
+    // LBM = Waga * (1 - %BF / 100)
+    const lbm = w * (1 - bf / 100);
+    // BMR = 370 + (21.6 * LBM)
+    const bmr = 370 + (21.6 * lbm);
+    const tdee = bmr * pal;
+
+    let targetKcal = tdee;
+    if (calcGoal === 'redukcja') targetKcal = tdee - 400;
+    else if (calcGoal === 'masa') targetKcal = tdee + 300;
+
+    // Podział makroskładników: Białko 2.2g/kg LBM, Tłuszcze 1.0g/kg masy ciała, reszta węglowodany
+    const proteinG = Math.round(lbm * 2.2);
+    const fatG = Math.round(w * 0.9);
+    const proteinKcal = proteinG * 4;
+    const fatKcal = fatG * 9;
+    const remainingKcal = Math.max(0, targetKcal - proteinKcal - fatKcal);
+    const carbsG = Math.round(remainingKcal / 4);
+
+    setCalcResult({
+      bmr: Math.round(bmr),
+      tdee: Math.round(tdee),
+      targetKcal: Math.round(targetKcal),
+      protein: proteinG,
+      fat: fatG,
+      carbs: carbsG
+    });
+  };
+
+  // Komponent renderujący pojedynczy wykres SVG
+  const renderLineChart = (
+    title: string, 
+    dataKey: keyof AnalizaFormyWpis, 
+    unit: string, 
+    strokeColor: string, 
+    fillGradient: string
+  ) => {
+    const validPoints = chartData24Months
+      .map(item => ({
+        date: item.data_pomiaru,
+        val: item[dataKey] !== null && item[dataKey] !== undefined ? Number(item[dataKey]) : null
+      }))
+      .filter((p): p is { date: string; val: number } => p.val !== null);
+
+    if (validPoints.length < 2) {
+      return (
+        <div className="bg-white p-4 rounded-2xl border border-sky-200 shadow-sm flex flex-col justify-between">
+          <div className="text-xs font-black text-sky-950 uppercase tracking-wider">{title} ({unit})</div>
+          <div className="h-40 flex items-center justify-center text-xs text-slate-400 font-bold">
+            Wymagane min. 2 pomiary w okresie 24 msc do wygenerowania wykresu.
+          </div>
+        </div>
+      );
+    }
+
+    const minVal = Math.min(...validPoints.map(p => p.val));
+    const maxVal = Math.max(...validPoints.map(p => p.val));
+    const padding = (maxVal - minVal) === 0 ? 2 : (maxVal - minVal) * 0.15;
+    const yMin = Math.max(0, minVal - padding);
+    const yMax = maxVal + padding;
+
+    const width = 360;
+    const height = 150;
+    const margin = { top: 15, right: 20, bottom: 25, left: 35 };
+
+    const points = validPoints.map((p, index) => {
+      const x = margin.left + (index / (validPoints.length - 1)) * (width - margin.left - margin.right);
+      const y = height - margin.bottom - ((p.val - yMin) / (yMax - yMin)) * (height - margin.top - margin.bottom);
+      return { x, y, val: p.val, date: p.date };
+    });
+
+    const pathD = points.reduce((acc, p, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${p.x},${p.y}`, '');
+    const areaD = `${pathD} L ${points[points.length - 1].x},${height - margin.bottom} L ${points[0].x},${height - margin.bottom} Z`;
+
+    return (
+      <div className="bg-white p-4 rounded-2xl border border-sky-200 shadow-sm flex flex-col justify-between">
+        <div className="flex items-center justify-between border-b border-sky-100 pb-2 mb-2">
+          <div className="text-xs font-black text-sky-950 uppercase tracking-wider">{title}</div>
+          <div className="text-xs font-black" style={{ color: strokeColor }}>
+            Ost: {validPoints[validPoints.length - 1].val} {unit}
+          </div>
+        </div>
+
+        <div className="w-full overflow-x-auto">
+          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-40">
+            <defs>
+              <linearGradient id={`grad-${String(dataKey)}`} x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor={fillGradient} stopOpacity="0.4" />
+                <stop offset="100%" stopColor={fillGradient} stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+
+            {/* Poziome linie siatki */}
+            <line x1={margin.left} y1={margin.top} x2={width - margin.right} y2={margin.top} stroke="#f1f5f9" strokeWidth="1" />
+            <line x1={margin.left} y1={(height - margin.bottom + margin.top) / 2} x2={width - margin.right} y2={(height - margin.bottom + margin.top) / 2} stroke="#f1f5f9" strokeWidth="1" />
+            <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#e2e8f0" strokeWidth="1" />
+
+            {/* Obszar pod wykresem */}
+            <path d={areaD} fill={`url(#grad-${String(dataKey)})`} />
+
+            {/* Główna linia wykresu */}
+            <path d={pathD} fill="none" stroke={strokeColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
+            {/* Punkty pomiarowe */}
+            {points.map((p, idx) => (
+              <g key={idx}>
+                <circle cx={p.x} cy={p.y} r="3.5" fill="#ffffff" stroke={strokeColor} strokeWidth="2" />
+                <text x={p.x} y={p.y - 6} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#0f172a">
+                  {p.val}
+                </text>
+                {/* Daty na osi X (pierwsza, środkowa, ostatnia) */}
+                {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
+                  <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
+                    {p.date.substring(5)}
+                  </text>
+                )}
+              </g>
+            ))}
+          </svg>
+        </div>
+      </div>
+    );
   };
 
   if (isLoading) {
@@ -302,7 +514,7 @@ export default function AnalizaFormyPage() {
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       
-      {/* NAGŁÓWEK STRONY & GŁÓWNE ZAKŁADKI */}
+      {/* NAGŁÓWEK STRONY */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-5 rounded-2xl border border-sky-200 shadow-sm">
         <div>
           <div className="flex items-center gap-2">
@@ -313,15 +525,15 @@ export default function AnalizaFormyPage() {
           </div>
           <p className="text-xs text-slate-500 font-medium mt-1">
             {appRole === 'admin' || appRole === 'trener' 
-              ? "Panel trenerski: Zarządzanie obwodami, składem ciała i dietą podopiecznych" 
+              ? "Panel trenerski: Wyszukaj podopiecznego, zarządzaj pomiarami, edytuj karty i plany makro" 
               : "Twój dziennik postępów: Pomiary, skład ciała oraz wytyczne dietetyczne"}
           </p>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {(appRole === 'admin' || appRole === 'trener') && (
+          {(appRole === 'admin' || appRole === 'trener') && selectedKlient && (
             <button
-              onClick={() => setIsAddModalOpen(true)}
+              onClick={handleOpenAddModal}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
             >
               <span>+</span> Dodaj pomiar
@@ -330,7 +542,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK WYBORU PODSTAWOWYCH ZAKŁADEK */}
+      {/* PASEK ZAKŁADEK */}
       <div className="flex rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-xs font-bold gap-1.5 shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -364,50 +576,68 @@ export default function AnalizaFormyPage() {
         </button>
       </div>
 
-      {/* WYBÓR KLUBOWICZA DLA ADMINA / TRENERA */}
+      {/* WYSZUKIWARKA KLUBOWICZA TYLKO DLA ADMINA / TRENERA */}
       {(appRole === 'admin' || appRole === 'trener') && (
-        <div className="bg-white p-4 rounded-2xl border border-sky-200 shadow-sm space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="text-xs font-black text-sky-950 uppercase tracking-wider flex items-center gap-2">
-              <span>👥</span> Wybierz podopiecznego:
-            </div>
-            <div className="relative w-full sm:w-72">
-              <input
-                type="text"
-                placeholder="Szukaj po nazwisku lub e-mailu..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-sky-50/60 border border-sky-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
-              />
-            </div>
-          </div>
+        <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3 relative">
+          <label className="text-xs font-black text-sky-950 uppercase tracking-wider flex items-center gap-2">
+            <span>🔍</span> Wyszukaj podopiecznego:
+          </label>
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Wpisz imię, nazwisko lub e-mail (min. 2 znaki)..."
+              value={searchQuery}
+              onFocus={() => setIsSearchFocused(true)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setIsSearchFocused(true);
+              }}
+              className="w-full bg-sky-50/60 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-semibold"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setSelectedKlient(null);
+                  setMeasurements([]);
+                }}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 font-bold text-xs"
+              >
+                ✕ Wyczyść
+              </button>
+            )}
 
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin">
-            {filteredKlienci.map((klient) => {
-              const isSelected = selectedKlient?.id === klient.id;
-              return (
-                <button
-                  key={klient.id}
-                  onClick={() => handleSelectClient(klient)}
-                  className={`shrink-0 px-3.5 py-2 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                    isSelected
-                      ? 'bg-sky-950 text-amber-400 border-sky-900 shadow-sm'
-                      : 'bg-sky-50/50 text-slate-700 border-sky-100 hover:bg-sky-100'
-                  }`}
-                >
-                  <div className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-900 flex items-center justify-center text-[10px] font-black">
-                    {klient.Imię?.[0] || 'K'}
+            {/* Lista rozwijana wyników wyszukiwania */}
+            {isSearchFocused && searchResults.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-sky-100">
+                {searchResults.map((klient) => (
+                  <div
+                    key={klient.id}
+                    onClick={() => handleSelectClient(klient)}
+                    className="p-3 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-900 flex items-center justify-center font-black">
+                        {klient.Imię?.[0] || 'K'}
+                      </div>
+                      <div>
+                        <div className="font-bold text-sky-950">{klient.Imię} {klient.Nazwisko}</div>
+                        <div className="text-[10px] text-slate-500">{klient['E-mail']}</div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200">
+                      Wybierz ➔
+                    </span>
                   </div>
-                  <span>{klient.Imię} {klient.Nazwisko}</span>
-                </button>
-              );
-            })}
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* PODSUMOWANIE PROFILU AKTUALNIE WYBRANEJ OSOBY */}
-      {selectedKlient && (
+      {/* KARTA WYBRANEGO PODOPIECZNEGO */}
+      {selectedKlient ? (
         <div className="bg-gradient-to-r from-sky-950 to-slate-900 p-4 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-full border-2 border-amber-400 bg-sky-900 flex items-center justify-center text-amber-300 font-black text-lg">
@@ -442,15 +672,22 @@ export default function AnalizaFormyPage() {
             </div>
           )}
         </div>
+      ) : (
+        (appRole === 'admin' || appRole === 'trener') && (
+          <div className="bg-sky-50 border border-sky-200 rounded-2xl p-8 text-center text-slate-500 text-xs font-bold space-y-1">
+            <span className="text-2xl block mb-2">👤</span>
+            Użyj powyższego pola wyszukiwania, aby wybrać klubowicza i załadować jego historię pomiarów.
+          </div>
+        )
       )}
 
       {/* ========================================================================= */}
-      {/* ZAKŁADKA 1: POMIARY CENTYMETREM I ANALIZA SKŁADU CIAŁA */}
+      {/* ZAKŁADKA 1: POMIARY CENTYMETREM, SKŁAD CIAŁA I WYKRESY 24 MSC */}
       {/* ========================================================================= */}
-      {activeTab === 'pomiary' && (
+      {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz') && (
         <div className="space-y-6">
           
-          {/* SZYBKIE KAFLE OSTATNIEGO POMIARU */}
+          {/* KAFLE OSTATNIEGO POMIARU */}
           {latestMeasurement ? (
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
               <div className="bg-white p-3.5 rounded-2xl border border-sky-200 shadow-sm text-center">
@@ -523,7 +760,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* PEŁNA TABELA POMIARÓW TRENINGOWYCH */}
+          {/* TABELA POMIARÓW Z MOŻLIWOŚCIĄ EDYCJI */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -535,7 +772,7 @@ export default function AnalizaFormyPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse min-w-[950px]">
+              <table className="w-full text-xs text-left border-collapse min-w-[1000px]">
                 <thead>
                   <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
                     <th className="p-3 border-r border-sky-900 sticky left-0 bg-sky-950 z-10">Data</th>
@@ -545,7 +782,7 @@ export default function AnalizaFormyPage() {
                     <th className="p-3 border-r border-sky-900 bg-slate-800/60 text-center" colSpan={7}>
                       Analiza Składu Ciała
                     </th>
-                    <th className="p-3 text-center">Akcje</th>
+                    <th className="p-3 text-center">Akcje / Edycja</th>
                   </tr>
                   <tr className="bg-sky-50 text-slate-700 font-bold border-b border-sky-200 text-[11px]">
                     <th className="p-2.5 border-r border-sky-200 sticky left-0 bg-sky-50 z-10">Data pomiaru</th>
@@ -566,7 +803,7 @@ export default function AnalizaFormyPage() {
                     <th className="p-2.5 border-r border-sky-100 text-center">Woda (%)</th>
                     <th className="p-2.5 border-r border-sky-200 text-center">Tł. wiscer.</th>
                     {/* Opcje */}
-                    <th className="p-2.5 text-center">Opcje</th>
+                    <th className="p-2.5 text-center">Akcje</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-100">
@@ -592,16 +829,27 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.tluszcz_wisceralny || '-'}</td>
-                        {/* Akcje */}
+                        {/* Akcje / Edycja */}
                         <td className="p-3 text-center">
-                          {(appRole === 'admin' || appRole === 'trener') && (
-                            <button
-                              onClick={() => handleDeleteMeasurement(m.id)}
-                              className="text-rose-600 hover:text-rose-800 font-bold p-1 rounded transition-colors"
-                              title="Usuń wpis"
-                            >
-                              🗑️
-                            </button>
+                          {(appRole === 'admin' || appRole === 'trener') ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => handleOpenEditModal(m)}
+                                className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                                title="Edytuj ten wpis"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => handleDeleteMeasurement(m.id)}
+                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                                title="Usuń wpis"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 font-bold">-</span>
                           )}
                         </td>
                       </tr>
@@ -618,13 +866,35 @@ export default function AnalizaFormyPage() {
             </div>
           </div>
 
+          {/* ========================================================================= */}
+          {/* SEKCJA WYKRESÓW ZA OSTATNIE 24 MIESIĄCE */}
+          {/* ========================================================================= */}
+          <div className="space-y-4 pt-4">
+            <div className="flex items-center justify-between border-b border-sky-200 pb-2">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                <span>📈</span> Wykresy Progresu (Ostatnie 24 Miesiące)
+              </h3>
+              <span className="text-xs text-slate-500 font-bold">
+                Liczba pomiarów na osi: {chartData24Months.length}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {renderLineChart("Waga", "waga", "kg", "#0284c7", "#0284c7")}
+              {renderLineChart("Tkanka Tłuszczowa", "tkanka_tluszczowa", "%", "#f59e0b", "#f59e0b")}
+              {renderLineChart("Masa Mięśniowa", "miesnie", "kg", "#10b981", "#10b981")}
+              {renderLineChart("Wiek Metaboliczny", "wiek_metaboliczny", "lat", "#8b5cf6", "#8b5cf6")}
+              {renderLineChart("Tłuszcz Wisceralny", "tluszcz_wisceralny", "lvl", "#ef4444", "#ef4444")}
+            </div>
+          </div>
+
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* ZAKŁADKA 2: DIETA I MAKROSKŁADNIKI */}
+      {/* ZAKŁADKA 2: DIETA, MAKROSKŁADNIKI I KALKULATOR KATCH-MCARDLE */}
       {/* ========================================================================= */}
-      {activeTab === 'makro' && (
+      {activeTab === 'makro' && (selectedKlient || appRole === 'klubowicz') && (
         <div className="space-y-6">
           
           {/* GŁÓWNE KARTY KALORII I MAKRO */}
@@ -677,7 +947,7 @@ export default function AnalizaFormyPage() {
 
           {/* HISTORIA ZALECEN DIETETYCZNYCH */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
-            <div className="p-4 bg-slate-50 border-b border-sky-100">
+            <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
                 <span>🥗</span> Historia Zaleceń Kalorycznych i Makroskładników
               </h3>
@@ -693,6 +963,7 @@ export default function AnalizaFormyPage() {
                     <th className="p-3 border-r border-sky-900 text-center">Tłuszcz (g)</th>
                     <th className="p-3 border-r border-sky-900 text-center">Węglowodany (g)</th>
                     <th className="p-3">Zalecenia i Wskazówki Trenera</th>
+                    {(appRole === 'admin' || appRole === 'trener') && <th className="p-3 text-center">Edycja</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-100">
@@ -717,11 +988,22 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-slate-700 font-medium">
                           {m.uwagi_trenera || 'Brak dodatkowych uwag.'}
                         </td>
+                        {(appRole === 'admin' || appRole === 'trener') && (
+                          <td className="p-3 text-center">
+                            <button
+                              onClick={() => handleOpenEditModal(m)}
+                              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                              title="Edytuj ten plan"
+                            >
+                              ✏️
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="p-6 text-center text-slate-400 font-bold">
+                      <td colSpan={7} className="p-6 text-center text-slate-400 font-bold">
                         Brak historii planów dietetycznych.
                       </td>
                     </tr>
@@ -731,13 +1013,150 @@ export default function AnalizaFormyPage() {
             </div>
           </div>
 
+          {/* ========================================================================= */}
+          {/* KALKULATOR KATCH-MCARDLE DLA ZAPOTRZEBOWANIA KALORYCZNEGO */}
+          {/* ========================================================================= */}
+          <div className="bg-white p-6 rounded-2xl border border-sky-200 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
+              <div>
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                  <span>🧮</span> Kalkulator Katch-McArdle (BMR & TDEE)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Precyzyjna metoda wyliczania zapotrzebowania na podstawie beztłuszczowej masy ciała (LBM).
+                </p>
+              </div>
+              <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-3 py-1 rounded-full uppercase border border-amber-300">
+                Wzór Katch-McArdle
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Waga ciała (kg)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder={latestMeasurement ? String(latestMeasurement.waga) : "np. 75"}
+                  value={calcWeight}
+                  onChange={(e) => setCalcWeight(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Tkanka tłuszczowa (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder={latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : "np. 15"}
+                  value={calcFat}
+                  onChange={(e) => setCalcFat(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Aktywność fizyczna (PAL)</label>
+                <select
+                  value={calcPal}
+                  onChange={(e) => setCalcPal(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium"
+                >
+                  <option value="1.2">1.2 – Siedzący tryb życia / brak treningów</option>
+                  <option value="1.375">1.375 – Lekka aktywność (1-3 treningi/tydz.)</option>
+                  <option value="1.55">1.55 – Umiarkowana aktywność (3-5 treningów)</option>
+                  <option value="1.725">1.725 – Duża aktywność (6-7 treningów/tydz.)</option>
+                  <option value="1.9">1.9 – Bardzo duża aktywność / ciężka praca</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Cel sylwetkowy</label>
+                <select
+                  value={calcGoal}
+                  onChange={(e) => setCalcGoal(e.target.value as any)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium"
+                >
+                  <option value="redukcja">🔥 Redukcja (-400 kcal)</option>
+                  <option value="utrzymanie">⚖️ Utrzymanie wagi (Zero)</option>
+                  <option value="masa">💪 Budowa masy (+300 kcal)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={calculateKatchMcArdle}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl shadow-sm text-xs uppercase tracking-wider transition-all cursor-pointer"
+              >
+                Przelicz zapotrzebowanie ➔
+              </button>
+            </div>
+
+            {/* WYNIK KALKULATORA */}
+            {calcResult && (
+              <div className="bg-gradient-to-br from-sky-950 to-slate-900 p-5 rounded-2xl text-white space-y-4 shadow-md">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
+                  <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
+                    <span className="text-[10px] text-sky-300 block uppercase font-bold">BMR (Podstawowe)</span>
+                    <span className="text-lg font-black text-white">{calcResult.bmr} kcal</span>
+                  </div>
+                  <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
+                    <span className="text-[10px] text-sky-300 block uppercase font-bold">TDEE (Całkowite)</span>
+                    <span className="text-lg font-black text-white">{calcResult.tdee} kcal</span>
+                  </div>
+                  <div className="bg-amber-500 text-slate-950 p-3 rounded-xl font-black shadow">
+                    <span className="text-[10px] text-slate-900/80 block uppercase">Cel Kalorii</span>
+                    <span className="text-xl font-black">{calcResult.targetKcal} kcal</span>
+                  </div>
+                  <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
+                    <span className="text-[10px] text-rose-400 block uppercase font-bold">Białko</span>
+                    <span className="text-lg font-black text-white">{calcResult.protein} g</span>
+                  </div>
+                  <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
+                    <span className="text-[10px] text-amber-300 block uppercase font-bold">Tłuszcze</span>
+                    <span className="text-lg font-black text-white">{calcResult.fat} g</span>
+                  </div>
+                  <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
+                    <span className="text-[10px] text-sky-300 block uppercase font-bold">Węglowodany</span>
+                    <span className="text-lg font-black text-white">{calcResult.carbs} g</span>
+                  </div>
+                </div>
+
+                {(appRole === 'admin' || appRole === 'trener') && (
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          kcal: String(calcResult.targetKcal),
+                          bialko: String(calcResult.protein),
+                          tluszcz: String(calcResult.fat),
+                          weglowodany: String(calcResult.carbs)
+                        }));
+                        setIsAddModalOpen(true);
+                      }}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-4 py-2 rounded-xl transition-all shadow cursor-pointer uppercase tracking-wider"
+                    >
+                      Przepisz wyliczone makro do karty pomiaru ➔
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+          </div>
+
         </div>
       )}
 
       {/* ========================================================================= */}
       {/* ZAKŁADKA 3: WYZWANIE REDUKCJI */}
       {/* ========================================================================= */}
-      {activeTab === 'redukcja' && (
+      {activeTab === 'redukcja' && (selectedKlient || appRole === 'klubowicz') && (
         <div className="space-y-6">
           <div className="bg-gradient-to-br from-slate-900 to-sky-950 text-white p-6 rounded-2xl shadow-md space-y-4">
             <div className="flex items-center gap-3">
@@ -800,7 +1219,7 @@ export default function AnalizaFormyPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL DODAWANIA NOWEGO POMIARU (ADMIN / TRENER) */}
+      {/* MODAL DODAWANIA I EDYCJI POMIARU */}
       {/* ========================================================================= */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
@@ -809,14 +1228,17 @@ export default function AnalizaFormyPage() {
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <div>
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
-                  Nowy Pomiar i Karta Formy
+                  {editingMeasurementId ? "Edycja Pomiaru i Karty Formy" : "Nowy Pomiar i Karta Formy"}
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Dla: {selectedKlient ? `${selectedKlient.Imię} ${selectedKlient.Nazwisko}` : 'Wybierz podopiecznego'}
+                  Dla: {selectedKlient ? `${selectedKlient.Imię} ${selectedKlient.Nazwisko}` : currentUserEmail}
                 </p>
               </div>
               <button 
-                onClick={() => setIsAddModalOpen(false)}
+                onClick={() => {
+                  setIsAddModalOpen(false);
+                  setEditingMeasurementId(null);
+                }}
                 className="text-slate-400 hover:text-slate-700 font-bold p-1 cursor-pointer"
               >
                 ✕
@@ -1089,7 +1511,10 @@ export default function AnalizaFormyPage() {
               <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
                 <button
                   type="button"
-                  onClick={() => setIsAddModalOpen(false)}
+                  onClick={() => {
+                    setIsAddModalOpen(false);
+                    setEditingMeasurementId(null);
+                  }}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
                 >
                   Anuluj
@@ -1099,7 +1524,7 @@ export default function AnalizaFormyPage() {
                   disabled={isSubmitting}
                   className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer disabled:opacity-50"
                 >
-                  {isSubmitting ? 'Zapisywanie...' : 'Zapisz pomiar'}
+                  {isSubmitting ? 'Zapisywanie...' : editingMeasurementId ? 'Zapisz zmiany' : 'Dodaj pomiar'}
                 </button>
               </div>
 
