@@ -33,8 +33,10 @@ export default function KlienciPage() {
   const [extendPassTarget, setExtendPassTarget] = useState<any | null>(null);
   const [extendSelectedNewPassName, setExtendSelectedNewPassName] = useState('');
   const [extendNewDate, setExtendNewDate] = useState('');
+  const [extendCustomPriceInput, setExtendCustomPriceInput] = useState('');
   const [isEditingNewPassType, setIsEditingNewPassType] = useState(false);
   const [isEditingNewDate, setIsEditingNewDate] = useState(false);
+  const [isEditingNewPrice, setIsEditingNewPrice] = useState(false);
 
   const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -67,6 +69,7 @@ export default function KlienciPage() {
   const [selectedPassToAdd, setSelectedPassToAdd] = useState('');
   const [newPassCustomRata, setNewPassCustomRata] = useState('0 / 12');
   const [newPassCustomSuspensionDays, setNewPassCustomSuspensionDays] = useState('30');
+  const [newPassCustomPrice, setNewPassCustomPrice] = useState('');
 
   // STANY RABATÓW
   const [isEditingDiscount, setIsEditingDiscount] = useState(false);
@@ -90,7 +93,8 @@ export default function KlienciPage() {
     selectedPass: '',
     isContractMigration: false,
     customRata: '0 / 12',
-    customSuspensionDays: '30'
+    customSuspensionDays: '30',
+    customContractPrice: ''
   });
 
   // --- KULOODPORNY PARSER DAT ---
@@ -143,7 +147,6 @@ export default function KlienciPage() {
     return Math.min(25, 4 + (count - 2)); 
   };
 
-  // POPRAWIONA LOGIKA: Admin najpierw czyta DOKŁADNĄ liczbę z kolumny `rabat`
   const calculateSystemDiscount = (client: any) => {
     if (!client) return 0;
     if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') return 0;
@@ -767,7 +770,11 @@ export default function KlienciPage() {
       dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
       const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
 
-      cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 150;
+      if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
+        cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
+      } else {
+        cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 150;
+      }
       cenaKarnetu = `${cenaWartosc.toFixed(2)} PLN`;
 
       let metaDef: Record<string, any> = {};
@@ -827,7 +834,7 @@ export default function KlienciPage() {
       setIsAddModalOpen(false);
       setNewClient({
         firstName: '', lastName: '', phone: '', email: '', price: '0.00 PLN', wallet: '0.00 PLN',
-        registered: todayStr, selectedPass: '', isContractMigration: false, customRata: '0 / 12', customSuspensionDays: '30'
+        registered: todayStr, selectedPass: '', isContractMigration: false, customRata: '0 / 12', customSuspensionDays: '30', customContractPrice: ''
       });
       loadData();
     }
@@ -941,8 +948,15 @@ export default function KlienciPage() {
     const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
 
     const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-    const bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, ''));
-    const cenaPoRabacie = bazowaCena * (1 - activeDiscount / 100);
+    
+    let bazowaCena = 0;
+    if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
+      bazowaCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
+    } else {
+      bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, ''));
+    }
+
+    const cenaPoRabacie = isContract ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
     const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
     const kwotaKarnetu = cenaPoRabacie;
 
@@ -951,7 +965,7 @@ export default function KlienciPage() {
     const nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
     let znizkaTekst = '';
-    if (activeDiscount > 0) {
+    if (activeDiscount > 0 && !isContract) {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
@@ -1018,12 +1032,19 @@ export default function KlienciPage() {
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
     
     const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-    const bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : 150.00;
-    const kwotaKarnetu = bazowaCena * (1 - activeDiscount / 100);
+    
+    let bazowaCena = 150.00;
+    if (isContract && newPassCustomPrice && newPassCustomPrice.trim() !== '') {
+      bazowaCena = parseFloat(newPassCustomPrice.replace(/[^0-9.]/g, '')) || 0;
+    } else if (defKarnetu) {
+      bazowaCena = parseFloat(defKarnetu.cena) || 0;
+    }
+
+    const kwotaKarnetu = isContract ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
     const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
 
     let znizkaTekst = '';
-    if (activeDiscount > 0) {
+    if (activeDiscount > 0 && !isContract) {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
@@ -1086,6 +1107,7 @@ export default function KlienciPage() {
     setSelectedPassToAdd('');
     setNewPassCustomRata('0 / 12');
     setNewPassCustomSuspensionDays('30');
+    setNewPassCustomPrice('');
     setIsAddSecondPassModalOpen(false);
     loadData();
   };
@@ -1284,10 +1306,10 @@ export default function KlienciPage() {
     const isTimeBased = bazowyKarnet?.typ_karnetu === 'Na czas';
     const activeRabat = getEffectiveDiscount(profileClient, isContract);
     const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
-    const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
+    const nowaCenaWartosc = parseFloat(String(editingPassModal.cena).replace(/[^0-9.]/g, '')) || 0;
 
     let znizkaTekst = profileClient.discount ? `(-${profileClient.discount}%)` : '';
-    if (!profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
+    if (!isContract && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
       const roznica = cenaRegularna - nowaCenaWartosc;
       const procent = Math.round((roznica / cenaRegularna) * 100);
       znizkaTekst = `(-${procent}%)`;
@@ -1300,8 +1322,8 @@ export default function KlienciPage() {
           nazwa: editingPassModal.nazwa,
           waznyDo: editingPassModal.waznyDo,
           pozostaloWejsc: (isContract || isTimeBased) ? null : editingPassModal.pozostaloWejsc,
-          cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
-          znizkaProcentowa: znizkaTekst,
+          cena: String(editingPassModal.cena).includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
+          znizkaProcentowa: isContract ? '' : znizkaTekst,
           rata: isContract ? editingPassModal.rata : (editingPassModal.rata || '1 / 1'),
           isContract12M: isContract,
           contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft !== undefined ? editingPassModal.contractSuspensionDaysLeft : 30) : undefined,
@@ -1317,7 +1339,7 @@ export default function KlienciPage() {
       klient_id: profileClient.id,
       typ_operacji: 'edycja_karnetu',
       kwota: null,
-      opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Rata: ${editingPassModal.rata})` : ''}`
+      opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata: ${editingPassModal.rata})` : ''}`
     }]);
 
     setEditingPassModal(null);
@@ -1685,6 +1707,7 @@ export default function KlienciPage() {
                   if(tableActionClient.karnetyKlubowicza?.length > 0) {
                     setExtendPassTarget(tableActionClient.karnetyKlubowicza[0]);
                     setExtendSelectedNewPassName(tableActionClient.karnetyKlubowicza[0].nazwa);
+                    setExtendCustomPriceInput(tableActionClient.karnetyKlubowicza[0].cena ? tableActionClient.karnetyKlubowicza[0].cena.replace(/[^0-9.]/g, '') : '');
                     const curDate = new Date(tableActionClient.karnetyKlubowicza[0].waznyDo || Date.now());
                     curDate.setMonth(curDate.getMonth() + 1);
                     setExtendNewDate(curDate.toISOString().split('T')[0]);
@@ -1869,7 +1892,7 @@ export default function KlienciPage() {
                   
                   <div className="flex items-center gap-2">
                     <button 
-                      onClick={() => { setSelectedPassToAdd(dostepneKarnety[0]?.nazwa || ''); setIsAddSecondPassModalOpen(true); }} 
+                      onClick={() => { setSelectedPassToAdd(dostepneKarnety[0]?.nazwa || ''); setNewPassCustomPrice(''); setIsAddSecondPassModalOpen(true); }} 
                       className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-2 rounded-xl text-xs font-black cursor-pointer shadow-sm whitespace-nowrap"
                     >
                       + DODAJ DRUGI KARNET
@@ -1890,6 +1913,7 @@ export default function KlienciPage() {
                             if(profileClient.karnetyKlubowicza?.length > 0) {
                               setExtendPassTarget(profileClient.karnetyKlubowicza[0]);
                               setExtendSelectedNewPassName(profileClient.karnetyKlubowicza[0].nazwa);
+                              setExtendCustomPriceInput(profileClient.karnetyKlubowicza[0].cena ? profileClient.karnetyKlubowicza[0].cena.replace(/[^0-9.]/g, '') : '');
                               const curDate = new Date(profileClient.karnetyKlubowicza[0].waznyDo || Date.now());
                               curDate.setMonth(curDate.getMonth() + 1);
                               setExtendNewDate(curDate.toISOString().split('T')[0]);
@@ -2027,6 +2051,7 @@ export default function KlienciPage() {
                                 onClick={() => {
                                   setExtendPassTarget(karnet);
                                   setExtendSelectedNewPassName(karnet.nazwa);
+                                  setExtendCustomPriceInput(karnet.cena ? karnet.cena.replace(/[^0-9.]/g, '') : '');
                                   const curDate = new Date(karnet.waznyDo || Date.now());
                                   curDate.setMonth(curDate.getMonth() + 1);
                                   setExtendNewDate(curDate.toISOString().split('T')[0]);
@@ -2128,7 +2153,6 @@ export default function KlienciPage() {
                       const upcomingList: any[] = [];
                       const processedKeys = new Set<string>();
 
-                      // 1. Sprawdzamy wszystkie aktywne rezerwacje w tabeli zapisy_zajec
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
                         .forEach((z: any) => {
@@ -2161,7 +2185,6 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // 2. Dodajemy wpisy z tablicy zapisyNadchodzace jeśli nie zostały jeszcze uwzględnione
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         if (item.classKey && processedKeys.has(item.classKey)) return;
                         const pTime = parseClassDate(item.data);
@@ -2228,7 +2251,6 @@ export default function KlienciPage() {
                       const allHistory: any[] = [];
                       const processedSignups = new Set<string>();
 
-                      // 1. Zbieramy przeszłe treningi z tabeli zapisy_zajec z realnym statusem obecności oznaczonym przez trenera
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
                         .forEach((z: any) => {
@@ -2266,7 +2288,6 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // 2. Dołączamy trwałą historię przeszłych zajęć z profilu
                       (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
                         const st = parseClassDate(item.data);
                         let szczegoly = '🟢 OBECNY';
@@ -2286,7 +2307,6 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // 3. Dołączamy wszystkie zarejestrowane wypisy
                       (profileClient.zapisyWypisy || []).forEach((item: any) => {
                         const st = parseClassDate(item.data);
                         allHistory.push({
@@ -2301,7 +2321,6 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // 4. Dołączamy transakcje związane z zapisami/wypisami
                       (profileClient.transakcje || []).forEach((t: any) => {
                         if (t.typ_operacji === 'zajecia_wypis' && t.opis) {
                           const tTime = new Date(t.created_at).getTime();
@@ -2386,6 +2405,7 @@ export default function KlienciPage() {
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">Aktualny karnet</div>
                 <div className="font-bold text-slate-900 text-sm whitespace-nowrap">Karnet: {extendPassTarget.nazwa}</div>
                 <div className="font-mono text-slate-600 whitespace-nowrap">Wygasa: {extendPassTarget.waznyDo}</div>
+                <div className="font-bold text-slate-700 whitespace-nowrap">Aktualna cena: {extendPassTarget.cena}</div>
                 {extendPassTarget.isContract12M && (
                   <div className="text-amber-800 font-bold text-[11px]">Umowa 12M • Bieżąca rata: {extendPassTarget.rata || '0 / 12'}</div>
                 )}
@@ -2404,7 +2424,14 @@ export default function KlienciPage() {
                     {isEditingNewPassType ? (
                       <select 
                         value={extendSelectedNewPassName}
-                        onChange={(e) => setExtendSelectedNewPassName(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setExtendSelectedNewPassName(val);
+                          const def = dostepneKarnety.find(k => k.nazwa === val);
+                          if (def && !extendCustomPriceInput) {
+                            setExtendCustomPriceInput(def.cena);
+                          }
+                        }}
                         className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
                       >
                         {dostepneKarnety.map(k => {
@@ -2414,7 +2441,7 @@ export default function KlienciPage() {
                           let hasDiscount = false;
                           const activeDiscount = getEffectiveDiscount(profileClient, isContract);
                           
-                          if (activeDiscount > 0) {
+                          if (activeDiscount > 0 && !isContract) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
@@ -2431,11 +2458,16 @@ export default function KlienciPage() {
                         {(() => {
                           const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
                           const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
-                          const baseCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget?.cena?.replace(/[^0-9.]/g, '') || '0');
+                          let baseCena = 0;
+                          if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
+                            baseCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
+                          } else {
+                            baseCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget?.cena?.replace(/[^0-9.]/g, '') || '0');
+                          }
                           let finalCena = baseCena;
                           let hasDiscount = false;
                           const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-                          if (activeDiscount > 0) {
+                          if (activeDiscount > 0 && !isContract) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
@@ -2449,6 +2481,34 @@ export default function KlienciPage() {
                     onClick={() => setIsEditingNewPassType(!isEditingNewPassType)}
                     className="p-1.5 bg-white hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer"
                     title="Zmień typ karnetu"
+                  >
+                    ✏️
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 whitespace-nowrap">
+                    <span className="font-bold text-slate-700">Cena przedłużenia (PLN): </span>
+                    {isEditingNewPrice ? (
+                      <input 
+                        type="number"
+                        step="0.01"
+                        value={extendCustomPriceInput}
+                        onChange={(e) => setExtendCustomPriceInput(e.target.value)}
+                        placeholder="np. 119.00"
+                        className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 w-28"
+                      />
+                    ) : (
+                      <span className="font-mono font-bold text-slate-900 whitespace-nowrap">
+                        {extendCustomPriceInput ? `${parseFloat(extendCustomPriceInput).toFixed(2)} PLN (Własna stawka)` : 'Domyślna cena karnetu'}
+                      </span>
+                    )}
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setIsEditingNewPrice(!isEditingNewPrice)}
+                    className="p-1.5 bg-white hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer"
+                    title="Ustaw indywidualną cenę przedłużenia"
                   >
                     ✏️
                   </button>
@@ -2665,7 +2725,7 @@ export default function KlienciPage() {
                     let hasDiscount = false;
                     const activeDiscount = getEffectiveDiscount(profileClient, isContract);
                     
-                    if (activeDiscount > 0) {
+                    if (activeDiscount > 0 && !isContract) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
@@ -2688,7 +2748,18 @@ export default function KlienciPage() {
                 return (
                   <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
                     <div className="font-black text-amber-950 uppercase tracking-wider text-[10px]">
-                      Konfiguracja umowy 12M (np. migracja):
+                      Konfiguracja umowy 12M (indywidualne warunki):
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block text-[10px]">Indywidualna kwota raty (PLN / m-c)</label>
+                      <input 
+                        type="number"
+                        step="0.01"
+                        placeholder={targetDef ? targetDef.cena : "np. 119.00"}
+                        value={newPassCustomPrice}
+                        onChange={(e) => setNewPassCustomPrice(e.target.value)}
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                      />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1">
@@ -2730,7 +2801,7 @@ export default function KlienciPage() {
         </div>
       )}
 
-      {/* OKNO EDYCJI KARNETU (Z PEŁNĄ EDYCJĄ RAT DLA UMÓW 12M) */}
+      {/* OKNO EDYCJI KARNETU (Z PEŁNĄ EDYCJĄ CENY I RAT DLA UMÓW 12M) */}
       {editingPassModal && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2749,7 +2820,7 @@ export default function KlienciPage() {
                     const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
                     const actRab = getEffectiveDiscount(profileClient, isContract);
                     const baseCena = def ? parseFloat(def.cena) : 0;
-                    const finalCena = actRab > 0 ? baseCena * (1 - actRab / 100) : baseCena;
+                    const finalCena = (actRab > 0 && !isContract) ? baseCena * (1 - actRab / 100) : baseCena;
                     
                     setEditingPassModal({
                       ...editingPassModal, 
@@ -2769,7 +2840,7 @@ export default function KlienciPage() {
                     let finalCena = baseCena;
                     let hasDiscount = false;
                     const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-                    if (activeDiscount > 0) {
+                    if (activeDiscount > 0 && !isContract) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
@@ -2780,6 +2851,18 @@ export default function KlienciPage() {
                     );
                   })}
                 </select>
+              </div>
+
+              {/* DEDYKOWANA EDYCJA INDYWIDUALNEJ CENY KARNETU / RATY */}
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Indywidualna cena karnetu / raty (PLN) *</label>
+                <input 
+                  type="text" 
+                  value={editingPassModal.cena || ''} 
+                  onChange={(e) => setEditingPassModal({...editingPassModal, cena: e.target.value})} 
+                  placeholder="np. 119.00 PLN"
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
+                />
               </div>
 
               <div className="space-y-1">
@@ -3059,7 +3142,8 @@ export default function KlienciPage() {
                     setNewClient({
                       ...newClient, 
                       selectedPass: passName,
-                      isContractMigration: isContract
+                      isContractMigration: isContract,
+                      customContractPrice: def ? def.cena : ''
                     });
                   }} 
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer focus:outline-none focus:border-sky-500"
@@ -3075,7 +3159,18 @@ export default function KlienciPage() {
               {newClient.isContractMigration && (
                 <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
                   <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
-                    Migracja umowy 12M z poprzedniego systemu:
+                    Parametry umowy 12M (indywidualna oferta):
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block text-[10px]">Indywidualna kwota raty (PLN / m-c)</label>
+                    <input 
+                      type="number"
+                      step="0.01"
+                      placeholder="np. 119.00"
+                      value={newClient.customContractPrice}
+                      onChange={(e) => setNewClient({...newClient, customContractPrice: e.target.value})}
+                      className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
