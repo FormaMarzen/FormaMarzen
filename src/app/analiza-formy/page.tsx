@@ -9,6 +9,10 @@ interface Klient {
   Nazwisko: string;
   "E-mail": string;
   "Numer tel."?: string;
+  Płeć?: string;
+  plec?: string;
+  gender?: string;
+  Urodziny?: string;
   avatarUrl?: string;
   AvatarUrl?: string;
 }
@@ -90,9 +94,11 @@ export default function AnalizaFormyPage() {
     notatki_klubowicza: ''
   });
 
-  // Stany dla Kalkulatora Katch-McArdle z procentowymi modyfikatorami
+  // Stany dla Kalkulatora (uwzględniającego płeć i cele procentowe)
   const [calcWeight, setCalcWeight] = useState<string>('');
-  const [calcFat, setCalcFat] = useState<string>('');
+  const [calcHeight, setCalcHeight] = useState<string>('');
+  const [calcAge, setCalcAge] = useState<string>('30');
+  const [calcGender, setCalcGender] = useState<string>('mezczyzna'); // 'mezczyzna' lub 'kobieta'
   const [calcPal, setCalcPal] = useState<string>('1.4');
   const [calcGoal, setCalcGoal] = useState<string>('-0.2'); // domyślnie -20%
   const [calcResult, setCalcResult] = useState<{
@@ -139,6 +145,10 @@ export default function AnalizaFormyPage() {
             if (klientData) {
               const k = klientData as unknown as Klient;
               setSelectedKlient(k);
+              const g = (k.Płeć || k.plec || k.gender || '').toLowerCase();
+              if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
+              else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+
               await fetchMeasurements(k.id, cleanEmail);
             }
           }
@@ -188,6 +198,19 @@ export default function AnalizaFormyPage() {
     setSelectedKlient(klient);
     setSearchQuery(`${klient.Imię} ${klient.Nazwisko}`);
     setIsSearchFocused(false);
+
+    const g = (klient.Płeć || klient.plec || klient.gender || '').toLowerCase();
+    if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
+    else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+
+    if (klient.Urodziny) {
+      const birthYear = new Date(klient.Urodziny).getFullYear();
+      if (!isNaN(birthYear)) {
+        const currentYear = new Date().getFullYear();
+        setCalcAge(String(currentYear - birthYear));
+      }
+    }
+
     fetchMeasurements(klient.id, klient['E-mail']);
   };
 
@@ -368,27 +391,34 @@ export default function AnalizaFormyPage() {
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
-  // Kalkulator Katch-McArdle oparty na procentach (-20%, -10%, 0%, +10%, +20%)
-  const calculateKatchMcArdle = () => {
+  // Kalkulator uwzględniający płeć (Mifflin-St Jeor / wzory płciowe) oraz cele procentowe
+  const calculateCaloriesWithGender = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
-    const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
+    const h = parseFloat(calcHeight || (latestMeasurement?.wzrost ? String(latestMeasurement.wzrost) : '175'));
+    const a = parseFloat(calcAge || '30');
     const pal = parseFloat(calcPal);
     const goalModifier = parseFloat(calcGoal); // np. -0.2, -0.1, 0, 0.1, 0.2
 
-    if (!w || w <= 0 || !bf || bf <= 0) {
-      alert("Wprowadź prawidłową wagę (kg) oraz poziom tkanki tłuszczowej (%).");
+    if (!w || w <= 0 || !h || h <= 0) {
+      alert("Wprowadź prawidłową wagę (kg) oraz wzrost (cm).");
       return;
     }
 
-    const lbm = w * (1 - bf / 100);
-    const bmr = 370 + (21.6 * lbm);
-    const tdee = bmr * pal;
+    // Wzór Mifflin-St Jeor uwzględniający płeć:
+    // Mężczyźni: BMR = (10 * waga) + (6.25 * wzrost) - (5 * wiek) + 5
+    // Kobiety: BMR = (10 * waga) + (6.25 * wzrost) - (5 * wiek) - 161
+    let bmr = (10 * w) + (6.25 * h) - (5 * a);
+    if (calcGender === 'mezczyzna') {
+      bmr += 5;
+    } else {
+      bmr -= 161;
+    }
 
-    // Wyliczenie docelowych kalorii na podstawie wybranego procentu
+    const tdee = bmr * pal;
     const targetKcal = tdee * (1 + goalModifier);
 
-    // Podział makroskładników: Białko 2.2g/kg LBM, Tłuszcze 0.9g/kg masy ciała, reszta węglowodany
-    const proteinG = Math.round(lbm * 2.2);
+    // Makroskładniki: Białko zależne od wagi i celu (np. 2.0g/kg), tłuszcze 1.0g/kg, reszta węglowodany
+    const proteinG = Math.round(w * 2.0);
     const fatG = Math.round(w * 0.9);
     const proteinKcal = proteinG * 4;
     const fatKcal = fatG * 9;
@@ -504,6 +534,8 @@ export default function AnalizaFormyPage() {
     );
   }
 
+  const clientGenderDisplay = selectedKlient ? (selectedKlient.Płeć || selectedKlient.plec || selectedKlient.gender || 'Nie podano') : '';
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       
@@ -605,6 +637,7 @@ export default function AnalizaFormyPage() {
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-sky-100">
                 {searchResults.map((klient) => {
                   const avatar = klient.avatarUrl || klient.AvatarUrl;
+                  const plecTxt = klient.Płeć || klient.plec || klient.gender || 'Nie podano';
                   return (
                     <div
                       key={klient.id}
@@ -620,7 +653,7 @@ export default function AnalizaFormyPage() {
                           )}
                         </div>
                         <div>
-                          <div className="font-bold text-sky-950">{klient.Imię} {klient.Nazwisko}</div>
+                          <div className="font-bold text-sky-950">{klient.Imię} {klient.Nazwisko} <span className="text-[10px] text-slate-400 font-normal">({plecTxt})</span></div>
                           <div className="text-[10px] text-slate-500">{klient['E-mail']}</div>
                         </div>
                       </div>
@@ -636,7 +669,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* KARTA WYBRANEGO PODOPIECZNEGO */}
+      {/* KARTA WYBRANEGO PODOPIECZNEGO Z INFORMACJĄ O PŁCI */}
       {selectedKlient ? (
         <div className="bg-gradient-to-r from-sky-950 to-slate-900 p-4 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
@@ -648,8 +681,11 @@ export default function AnalizaFormyPage() {
               )}
             </div>
             <div>
-              <div className="text-sm font-black tracking-wide text-amber-400 uppercase">
-                {selectedKlient.Imię} {selectedKlient.Nazwisko}
+              <div className="text-sm font-black tracking-wide text-amber-400 uppercase flex items-center gap-2">
+                <span>{selectedKlient.Imię} {selectedKlient.Nazwisko}</span>
+                <span className="bg-sky-900 text-sky-200 text-[10px] px-2 py-0.5 rounded-full border border-sky-700 font-bold">
+                  {clientGenderDisplay}
+                </span>
               </div>
               <div className="text-xs text-sky-200/80">
                 {selectedKlient['E-mail']} • {selectedKlient['Numer tel.'] || 'Brak tel.'}
@@ -764,7 +800,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* TABELA POMIARÓW Z MOŻLIWOŚCIą EDYCJI */}
+          {/* TABELA POMIARÓW Z MOŻLIWOŚCIĄ EDYCJI */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -890,7 +926,7 @@ export default function AnalizaFormyPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* ZAKŁADKA 2: DIETA, MAKROSKŁADNIKI I KALKULATOR KATCH-MCARDLE */}
+      {/* ZAKŁADKA 2: DIETA, MAKROSKŁADNIKI I KALKULATOR UWZGLĘDNIAJĄCY PŁEĆ */}
       {/* ========================================================================= */}
       {activeTab === 'makro' && (selectedKlient || appRole === 'klubowicz') && (
         <div className="space-y-6">
@@ -1012,24 +1048,42 @@ export default function AnalizaFormyPage() {
           </div>
 
           {/* ========================================================================= */}
-          {/* KALKULATOR KATCH-MCARDLE Z PROCENTOWYMI MODYFIKATORAMI CELU */}
+          {/* KALKULATOR ZAPOTRZEBOWANIA UWZGLĘDNIAJĄCY PŁEĆ I PROCENTY */}
           {/* ========================================================================= */}
           <div className="bg-white p-6 rounded-2xl border border-sky-200 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
               <div>
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                  <span>🧮</span> Kalkulator Katch-McArdle (BMR & TDEE)
+                  <span>🧮</span> Kalkulator Zapotrzebowania (Mifflin-St Jeor)
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Precyzyjna metoda wyliczania zapotrzebowania na podstawie beztłuszczowej masy ciała (LBM) i procentowego celu.
+                  Precyzyjna metoda uwzględniająca płeć, wagę, wzrost, wiek oraz procentowy cel kaloryczny.
                 </p>
               </div>
               <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-3 py-1 rounded-full uppercase border border-amber-300">
-                Wzór Katch-McArdle
+                Wzór z uwzględnieniem płci
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+            {/* INFORMACJA O WYMAGANEJ PŁCI */}
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 font-bold flex items-center gap-2">
+              <span>⚠️</span>
+              <span>W celu prawidłowego i dokładnego obliczenia zapotrzebowania kalorycznego niezbędna jest płeć podopiecznego (różnice w metabolizmie kobiet i mężczyzn).</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Płeć *</label>
+                <select
+                  value={calcGender}
+                  onChange={(e) => setCalcGender(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-bold text-sky-950"
+                >
+                  <option value="mezczyzna">👨 Mężczyzna</option>
+                  <option value="kobieta">👩 Kobieta</option>
+                </select>
+              </div>
+
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Waga ciała (kg)</label>
                 <input
@@ -1043,32 +1097,44 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Tkanka tłuszczowa (%)</label>
+                <label className="font-bold text-slate-700 block">Wzrost (cm)</label>
                 <input
                   type="number"
-                  step="0.1"
-                  placeholder={latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : "np. 15"}
-                  value={calcFat}
-                  onChange={(e) => setCalcFat(e.target.value)}
+                  placeholder={measurements[0]?.wzrost ? String(measurements[0].wzrost) : "np. 175"}
+                  value={calcHeight}
+                  onChange={(e) => setCalcHeight(e.target.value)}
                   className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none"
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Aktywność fizyczna (PAL)</label>
+                <label className="font-bold text-slate-700 block">Wiek (lata)</label>
+                <input
+                  type="number"
+                  placeholder="np. 30"
+                  value={calcAge}
+                  onChange={(e) => setCalcAge(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Aktywność (PAL)</label>
                 <select
                   value={calcPal}
                   onChange={(e) => setCalcPal(e.target.value)}
                   className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium"
                 >
-                  <option value="1.2">1.2 – Siedzący tryb życia / brak treningów</option>
-                  <option value="1.375">1.375 – Lekka aktywność (1-3 treningi/tydz.)</option>
-                  <option value="1.55">1.55 – Umiarkowana aktywność (3-5 treningów)</option>
-                  <option value="1.725">1.725 – Duża aktywność (6-7 treningów/tydz.)</option>
-                  <option value="1.9">1.9 – Bardzo duża aktywność / ciężka praca</option>
+                  <option value="1.2">1.2 – Siedzący tryb</option>
+                  <option value="1.375">1.375 – Lekka (1-3 treng.)</option>
+                  <option value="1.55">1.55 – Umiarkowana (3-5 treng.)</option>
+                  <option value="1.725">1.725 – Duża (6-7 treng.)</option>
+                  <option value="1.9">1.9 – Bardzo duża</option>
                 </select>
               </div>
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2">
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Cel procentowy (Modyfikator)</label>
                 <select
@@ -1083,16 +1149,16 @@ export default function AnalizaFormyPage() {
                   <option value="0.2">💪 +20% kcal (Budowa masy)</option>
                 </select>
               </div>
-            </div>
 
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={calculateKatchMcArdle}
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl shadow-sm text-xs uppercase tracking-wider transition-all cursor-pointer"
-              >
-                Przelicz zapotrzebowanie ➔
-              </button>
+              <div className="flex items-end justify-end">
+                <button
+                  type="button"
+                  onClick={calculateCaloriesWithGender}
+                  className="w-full sm:w-auto bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl shadow-sm text-xs uppercase tracking-wider transition-all cursor-pointer"
+                >
+                  Przelicz zapotrzebowanie z uwzględnieniem płci ➔
+                </button>
+              </div>
             </div>
 
             {/* WYNIK KALKULATORA */}
