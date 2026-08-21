@@ -260,9 +260,23 @@ export default function KarnetyPage() {
     }]);
   };
 
-  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - OPARTA WYŁĄCZNIE NA POLU CYKL (ZAMRAŻANIE PRZY KODACH)
+  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - Z OBSŁUGĄ RĘCZNEGO WYZEROWANIA I ZAMROŻENIA
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
+    
+    // 1. Sprawdzenie czy ciągłość została ręcznie wyzerowana przez admina
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
+      return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
+    }
+
+    // 2. Sprawdzenie czy w profilu klienta ustawiono ręczną wartość rabatu za ciągłość
+    if (client.rabat_za_ciaglosc !== undefined && client.rabat_za_ciaglosc !== null && client.rabat_za_ciaglosc !== '') {
+      const parsedManualContinuity = parseFloat(String(client.rabat_za_ciaglosc).replace(/[^0-9.-]/g, ''));
+      if (!isNaN(parsedManualContinuity) && parsedManualContinuity === 0) {
+        return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
+      }
+    }
+
     const karnety = client.karnetyKlubowicza || [];
     if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
 
@@ -304,6 +318,14 @@ export default function KarnetyPage() {
       rabatProcent = Math.min(25, 4 + (liczbaKarnetow - 2) * 1);
     }
 
+    // Uwzględnienie ewentualnego offsetu systemowego
+    const offset = typeof client.system_discount_offset === 'number' ? client.system_discount_offset : 0;
+    rabatProcent = Math.max(0, rabatProcent + offset);
+
+    if (rabatProcent === 0) {
+      return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
+    }
+
     return {
       hasContinuity: true,
       percent: rabatProcent,
@@ -317,11 +339,9 @@ export default function KarnetyPage() {
     
     const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia'], client.urodziny_rabat_rok);
     
-    // Rabat 20% nalicza się TYLKO jeśli okno urodzinowe jest aktywne i NIE został jeszcze wykorzystany w tym roku
     const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
-    // Dla umów 12M rabat ciągłościowy wynosi ZAWSZE 0%
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
@@ -436,6 +456,9 @@ export default function KarnetyPage() {
               birthDate: c.Urodziny || c.urodziny || c['Data urodzenia'] || c.Data_urodzenia || c.data_urodzenia || null,
               urodziny_rabat_rok: c.urodziny_rabat_rok || null,
               ostatnie_zyczenia_rok: c.ostatnie_zyczenia_rok || null,
+              hasLostContinuity: c.hasLostContinuity ?? false,
+              rabat_za_ciaglosc: c.rabat_za_ciaglosc !== undefined ? c.rabat_za_ciaglosc : null,
+              system_discount_offset: c.system_discount_offset || 0,
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
@@ -460,6 +483,8 @@ export default function KarnetyPage() {
                Urodziny: null,
                urodziny_rabat_rok: null,
                ostatnie_zyczenia_rok: null,
+               hasLostContinuity: false,
+               system_discount_offset: 0,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -475,6 +500,8 @@ export default function KarnetyPage() {
                  birthDate: null,
                  urodziny_rabat_rok: null,
                  ostatnie_zyczenia_rok: null,
+                 hasLostContinuity: false,
+                 system_discount_offset: 0,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN'
                };
@@ -698,7 +725,6 @@ export default function KarnetyPage() {
 
     return true;
   });
-
   // PRZEDŁUŻENIE KARNETU ORAZ OPŁACENIE KOLEJNEJ RATY UMOWY 12M
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1182,6 +1208,7 @@ export default function KarnetyPage() {
       }]);
     }
   };
+
   // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA) - Z UWZGLĘDNIENIEM UMÓW 12M
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1221,14 +1248,12 @@ export default function KarnetyPage() {
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
 
     if (isContract) {
-      // ZASADY ZAWIESZANIA UMÓW 12 MIESIĘCY
       const daysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
       if (requestedDays > daysLeft) {
         setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${daysLeft} dni z rocznej puli 30 dni.`);
         return;
       }
     } else {
-      // ZASADY ZAWIESZANIA STANDARDOWYCH KARNETÓW
       if (requestedDays > 14) {
         setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
         return;
@@ -2864,7 +2889,7 @@ export default function KarnetyPage() {
               : toast.type === 'info'
               ? 'bg-slate-900 border-sky-500/30 text-white'
               : 'bg-slate-900 border-slate-800 text-white'
-          }`}>
+            }`}>
             <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
               toast.type === 'error' ? 'bg-rose-600 text-white' :
               toast.type === 'info' ? 'bg-sky-600 text-white' :
