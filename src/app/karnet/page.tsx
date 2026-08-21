@@ -261,7 +261,7 @@ export default function KarnetyPage() {
   };
 
   // =========================================================================
-  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - SYNCHRONIZACJA Z PANELEM ADMINA
+  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - DOKŁADNA BAZA OD ADMINA
   // =========================================================================
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
@@ -271,9 +271,10 @@ export default function KarnetyPage() {
       return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
     }
 
-    // 2. Jeśli Administrator ręcznie wpisał wartość w profilu klienta, traktujemy ją jako bazę
-    if (client.rabat_za_ciaglosc !== undefined && client.rabat_za_ciaglosc !== null && client.rabat_za_ciaglosc !== '') {
-      const parsedManual = parseFloat(String(client.rabat_za_ciaglosc).replace(/[^0-9.-]/g, ''));
+    // 2. Jeśli Administrator ręcznie wpisał wartość w profilu klienta, traktujemy ją jako 100% autoratywną bazę procentową
+    const manualContinuityField = client.rabat_za_ciaglosc ?? client['Rabat za ciągłość'] ?? client.rabatZaCiaglosc ?? client.rabat_ciaglosc;
+    if (manualContinuityField !== undefined && manualContinuityField !== null && manualContinuityField !== '') {
+      const parsedManual = parseFloat(String(manualContinuityField).replace(/[^0-9.-]/g, ''));
       if (!isNaN(parsedManual)) {
         if (parsedManual <= 0) {
           return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
@@ -281,11 +282,13 @@ export default function KarnetyPage() {
         return {
           hasContinuity: true,
           percent: Math.min(25, parsedManual),
-          label: `${parsedManual}% (Rabat ustalony)`
+          label: `${parsedManual}% (Rabat ciągłościowy)`
         };
       }
     }
 
+    // 3. Fallback: Jeśli pole w bazie jest puste, wyliczamy z historii według oficjalnego wzoru:
+    // Karnet 1 = 2%, Karnet 2 = 4%, Karnet 3+ = 4 + (N-2)
     const karnety = client.karnetyKlubowicza || [];
     if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
 
@@ -455,6 +458,8 @@ export default function KarnetyPage() {
               try { parsedGlobalHistory = JSON.parse(c.historiaZawieszenGlobalna); } catch(e) {}
             }
 
+            const rawContinuity = c.rabat_za_ciaglosc ?? c['Rabat za ciągłość'] ?? c.rabatZaCiaglosc ?? c.rabat_ciaglosc ?? null;
+
             return {
               ...c,
               id: c.id,
@@ -466,7 +471,7 @@ export default function KarnetyPage() {
               urodziny_rabat_rok: c.urodziny_rabat_rok || null,
               ostatnie_zyczenia_rok: c.ostatnie_zyczenia_rok || null,
               hasLostContinuity: c.hasLostContinuity ?? false,
-              rabat_za_ciaglosc: c.rabat_za_ciaglosc !== undefined ? c.rabat_za_ciaglosc : (c.rabatZaCiaglosc !== undefined ? c.rabatZaCiaglosc : null),
+              rabat_za_ciaglosc: rawContinuity,
               system_discount_offset: c.system_discount_offset || 0,
               karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
@@ -493,6 +498,7 @@ export default function KarnetyPage() {
                urodziny_rabat_rok: null,
                ostatnie_zyczenia_rok: null,
                hasLostContinuity: false,
+               rabat_za_ciaglosc: '0%',
                system_discount_offset: 0,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
@@ -510,6 +516,7 @@ export default function KarnetyPage() {
                  urodziny_rabat_rok: null,
                  ostatnie_zyczenia_rok: null,
                  hasLostContinuity: false,
+                 rabat_za_ciaglosc: '0%',
                  system_discount_offset: 0,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN'
@@ -859,20 +866,18 @@ export default function KarnetyPage() {
     }
 
     // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI PO ZAKUPIE BEZ KODU
+    let finalContinuityString = currentUser.rabat_za_ciaglosc;
     if (!isContract && !appliedDiscountCode) {
-      let currentContinuityVal = 0;
-      if (currentUser.rabat_za_ciaglosc !== undefined && currentUser.rabat_za_ciaglosc !== null && currentUser.rabat_za_ciaglosc !== '') {
-        currentContinuityVal = parseFloat(String(currentUser.rabat_za_ciaglosc).replace(/[^0-9.-]/g, '')) || 0;
-      } else {
-        currentContinuityVal = effectiveDiscount.continuityPercent || 0;
-      }
-      
+      const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
+      
       if (currentContinuityVal === 0) nextContinuityVal = 2;
       else if (currentContinuityVal === 2) nextContinuityVal = 4;
       else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
 
-      dbPayload.rabat_za_ciaglosc = `${nextContinuityVal}%`;
+      finalContinuityString = `${nextContinuityVal}%`;
+      dbPayload.rabat_za_ciaglosc = finalContinuityString;
+      dbPayload['Rabat za ciągłość'] = finalContinuityString;
       dbPayload.hasLostContinuity = false;
     }
 
@@ -920,7 +925,8 @@ export default function KarnetyPage() {
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
       urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
-      rabat_za_ciaglosc: dbPayload.rabat_za_ciaglosc !== undefined ? dbPayload.rabat_za_ciaglosc : currentUser.rabat_za_ciaglosc,
+      rabat_za_ciaglosc: finalContinuityString,
+      'Rabat za ciągłość': finalContinuityString,
       hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
@@ -1096,20 +1102,18 @@ export default function KarnetyPage() {
     }
 
     // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI PO ZAKUPIE BEZ KODU
+    let finalContinuityString = currentUser.rabat_za_ciaglosc;
     if (!isContract && !appliedDiscountCode) {
-      let currentContinuityVal = 0;
-      if (currentUser.rabat_za_ciaglosc !== undefined && currentUser.rabat_za_ciaglosc !== null && currentUser.rabat_za_ciaglosc !== '') {
-        currentContinuityVal = parseFloat(String(currentUser.rabat_za_ciaglosc).replace(/[^0-9.-]/g, '')) || 0;
-      } else {
-        currentContinuityVal = effectiveDiscount.continuityPercent || 0;
-      }
-      
+      const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
+      
       if (currentContinuityVal === 0) nextContinuityVal = 2;
       else if (currentContinuityVal === 2) nextContinuityVal = 4;
       else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
 
-      dbPayload.rabat_za_ciaglosc = `${nextContinuityVal}%`;
+      finalContinuityString = `${nextContinuityVal}%`;
+      dbPayload.rabat_za_ciaglosc = finalContinuityString;
+      dbPayload['Rabat za ciągłość'] = finalContinuityString;
       dbPayload.hasLostContinuity = false;
     }
 
@@ -1153,7 +1157,8 @@ export default function KarnetyPage() {
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
       urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
-      rabat_za_ciaglosc: dbPayload.rabat_za_ciaglosc !== undefined ? dbPayload.rabat_za_ciaglosc : currentUser.rabat_za_ciaglosc,
+      rabat_za_ciaglosc: finalContinuityString,
+      'Rabat za ciągłość': finalContinuityString,
       hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
       Portfel: dbPayload.Portfel || currentUser.Portfel,
       portfel: dbPayload.portfel || currentUser.portfel,
