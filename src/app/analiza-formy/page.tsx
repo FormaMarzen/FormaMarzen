@@ -10,6 +10,7 @@ interface Klient {
   "E-mail": string;
   "Numer tel."?: string;
   avatarUrl?: string;
+  AvatarUrl?: string;
 }
 
 interface AnalizaFormyWpis {
@@ -378,9 +379,7 @@ export default function AnalizaFormyPage() {
       return;
     }
 
-    // LBM = Waga * (1 - %BF / 100)
     const lbm = w * (1 - bf / 100);
-    // BMR = 370 + (21.6 * LBM)
     const bmr = 370 + (21.6 * lbm);
     const tdee = bmr * pal;
 
@@ -388,7 +387,6 @@ export default function AnalizaFormyPage() {
     if (calcGoal === 'redukcja') targetKcal = tdee - 400;
     else if (calcGoal === 'masa') targetKcal = tdee + 300;
 
-    // Podział makroskładników: Białko 2.2g/kg LBM, Tłuszcze 1.0g/kg masy ciała, reszta węglowodany
     const proteinG = Math.round(lbm * 2.2);
     const fatG = Math.round(w * 0.9);
     const proteinKcal = proteinG * 4;
@@ -469,25 +467,19 @@ export default function AnalizaFormyPage() {
               </linearGradient>
             </defs>
 
-            {/* Poziome linie siatki */}
             <line x1={margin.left} y1={margin.top} x2={width - margin.right} y2={margin.top} stroke="#f1f5f9" strokeWidth="1" />
             <line x1={margin.left} y1={(height - margin.bottom + margin.top) / 2} x2={width - margin.right} y2={(height - margin.bottom + margin.top) / 2} stroke="#f1f5f9" strokeWidth="1" />
             <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#e2e8f0" strokeWidth="1" />
 
-            {/* Obszar pod wykresem */}
             <path d={areaD} fill={`url(#grad-${String(dataKey)})`} />
-
-            {/* Główna linia wykresu */}
             <path d={pathD} fill="none" stroke={strokeColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
 
-            {/* Punkty pomiarowe */}
             {points.map((p, idx) => (
               <g key={idx}>
                 <circle cx={p.x} cy={p.y} r="3.5" fill="#ffffff" stroke={strokeColor} strokeWidth="2" />
                 <text x={p.x} y={p.y - 6} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#0f172a">
                   {p.val}
                 </text>
-                {/* Daty na osi X (pierwsza, środkowa, ostatnia) */}
                 {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
                   <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
                     {p.date.substring(5)}
@@ -607,29 +599,36 @@ export default function AnalizaFormyPage() {
               </button>
             )}
 
-            {/* Lista rozwijana wyników wyszukiwania */}
+            {/* Lista rozwijana wyników wyszukiwania z obsługą awatara */}
             {isSearchFocused && searchResults.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-sky-100">
-                {searchResults.map((klient) => (
-                  <div
-                    key={klient.id}
-                    onClick={() => handleSelectClient(klient)}
-                    className="p-3 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-900 flex items-center justify-center font-black">
-                        {klient.Imię?.[0] || 'K'}
+                {searchResults.map((klient) => {
+                  const avatar = klient.avatarUrl || klient.AvatarUrl;
+                  return (
+                    <div
+                      key={klient.id}
+                      onClick={() => handleSelectClient(klient)}
+                      className="p-3 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500">
+                          {avatar ? (
+                            <img src={avatar} alt="Avatar" className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="uppercase">{klient.Imię?.[0] || 'K'}{klient.Nazwisko?.[0] || ''}</span>
+                          )}
+                        </div>
+                        <div>
+                          <div className="font-bold text-sky-950">{klient.Imię} {klient.Nazwisko}</div>
+                          <div className="text-[10px] text-slate-500">{klient['E-mail']}</div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="font-bold text-sky-950">{klient.Imię} {klient.Nazwisko}</div>
-                        <div className="text-[10px] text-slate-500">{klient['E-mail']}</div>
-                      </div>
+                      <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200">
+                        Wybierz ➔
+                      </span>
                     </div>
-                    <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200">
-                      Wybierz ➔
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -640,8 +639,12 @@ export default function AnalizaFormyPage() {
       {selectedKlient ? (
         <div className="bg-gradient-to-r from-sky-950 to-slate-900 p-4 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full border-2 border-amber-400 bg-sky-900 flex items-center justify-center text-amber-300 font-black text-lg">
-              {selectedKlient.Imię?.[0] || ''}{selectedKlient.Nazwisko?.[0] || ''}
+            <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-amber-400 bg-sky-900 flex items-center justify-center text-amber-300 font-black text-sm shrink-0">
+              {(selectedKlient.avatarUrl || selectedKlient.AvatarUrl) ? (
+                <img src={selectedKlient.avatarUrl || selectedKlient.AvatarUrl} alt="Profil" className="w-full h-full object-cover" />
+              ) : (
+                <span className="uppercase">{selectedKlient.Imię?.[0] || ''}{selectedKlient.Nazwisko?.[0] || ''}</span>
+              )}
             </div>
             <div>
               <div className="text-sm font-black tracking-wide text-amber-400 uppercase">
@@ -786,7 +789,6 @@ export default function AnalizaFormyPage() {
                   </tr>
                   <tr className="bg-sky-50 text-slate-700 font-bold border-b border-sky-200 text-[11px]">
                     <th className="p-2.5 border-r border-sky-200 sticky left-0 bg-sky-50 z-10">Data pomiaru</th>
-                    {/* Obwody */}
                     <th className="p-2.5 border-r border-sky-100 text-center">Obw. pasa</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Klatka</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Ramię</th>
@@ -794,7 +796,6 @@ export default function AnalizaFormyPage() {
                     <th className="p-2.5 border-r border-sky-100 text-center">Biodra</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Udo</th>
                     <th className="p-2.5 border-r border-sky-200 text-center">Łydka</th>
-                    {/* Skład Ciała */}
                     <th className="p-2.5 border-r border-sky-100 text-center font-black text-sky-950">Waga (kg)</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Tk. tłuszcz. (%)</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Mięśnie (kg)</th>
@@ -802,7 +803,6 @@ export default function AnalizaFormyPage() {
                     <th className="p-2.5 border-r border-sky-100 text-center">Wiek metab.</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Woda (%)</th>
                     <th className="p-2.5 border-r border-sky-200 text-center">Tł. wiscer.</th>
-                    {/* Opcje */}
                     <th className="p-2.5 text-center">Akcje</th>
                   </tr>
                 </thead>
@@ -813,7 +813,6 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 font-black text-sky-950 border-r border-sky-100 sticky left-0 bg-white z-10 whitespace-nowrap">
                           {m.data_pomiaru}
                         </td>
-                        {/* Obwody */}
                         <td className="p-3 text-center border-r border-sky-100">{m.obwod_pasa || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.klatka || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.ramie || '-'}</td>
@@ -821,7 +820,6 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center border-r border-sky-100">{m.biodra || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.udo || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.lydka || '-'}</td>
-                        {/* Skład Ciała */}
                         <td className="p-3 text-center border-r border-sky-100 font-black text-sky-950">{m.waga}</td>
                         <td className="p-3 text-center border-r border-sky-100 font-semibold">{m.tkanka_tluszczowa ? `${m.tkanka_tluszczowa}%` : '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.miesnie || '-'}</td>
@@ -829,7 +827,6 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.tluszcz_wisceralny || '-'}</td>
-                        {/* Akcje / Edycja */}
                         <td className="p-3 text-center">
                           {(appRole === 'admin' || appRole === 'trener') ? (
                             <div className="flex items-center justify-center gap-1.5">
