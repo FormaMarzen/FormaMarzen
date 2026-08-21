@@ -10,6 +10,14 @@ const SYSTEM_CHAT_ID = 5000;
 // POMOCNICZA FUNKCJA DO PEWNEGO ODCZYTU RABATU CIĄGŁOŚCI OD ADMINA
 const extractClientContinuityDiscount = (client: any): number | null => {
   if (!client) return null;
+  
+  // 1. PRIORYTET: Odczyt bezpośrednio z kolumny 'rabat' z bazy Supabase
+  if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
+    const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
+    if (!isNaN(val)) return val;
+  }
+
+  // 2. Warianty zapasowe
   const candidateKeys = [
     'rabat_za_ciaglosc',
     'Rabat za ciągłość',
@@ -20,12 +28,14 @@ const extractClientContinuityDiscount = (client: any): number | null => {
     'system_discount_offset',
     'systemDiscountOffset'
   ];
+  
   for (const k of candidateKeys) {
     if (client[k] !== undefined && client[k] !== null && client[k] !== '') {
       const val = parseFloat(String(client[k]).replace(/[^0-9.-]/g, ''));
       if (!isNaN(val)) return val;
     }
   }
+  
   for (const key of Object.keys(client)) {
     const norm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (norm.includes('ciaglos') || norm.includes('ciaglo') || norm.includes('lojaln')) {
@@ -297,12 +307,10 @@ export default function KarnetyPage() {
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     
-    // 1. Sprawdzenie flagi utraty ciągłości
     if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
       return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
     }
 
-    // 2. Jeśli Administrator ręcznie wpisał wartość w profilu klienta, traktujemy ją jako 100% autorytatywną bazę procentową
     const manualVal = extractClientContinuityDiscount(client);
     if (manualVal !== null) {
       if (manualVal <= 0) {
@@ -315,7 +323,6 @@ export default function KarnetyPage() {
       };
     }
 
-    // 3. Fallback: Jeśli pole w bazie jest puste, wyliczamy z historii według wzoru ciągłości
     const karnety = client.karnetyKlubowicza || [];
     if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
 
@@ -498,6 +505,7 @@ export default function KarnetyPage() {
               urodziny_rabat_rok: c.urodziny_rabat_rok || null,
               ostatnie_zyczenia_rok: c.ostatnie_zyczenia_rok || null,
               hasLostContinuity: c.hasLostContinuity ?? false,
+              rabat: c.rabat,
               rabat_za_ciaglosc: rawContinuity !== null ? `${rawContinuity}%` : null,
               'Rabat za ciągłość': rawContinuity !== null ? `${rawContinuity}%` : null,
               system_discount_offset: c.system_discount_offset || 0,
@@ -526,6 +534,7 @@ export default function KarnetyPage() {
                urodziny_rabat_rok: null,
                ostatnie_zyczenia_rok: null,
                hasLostContinuity: false,
+               rabat: 0,
                rabat_za_ciaglosc: '0%',
                system_discount_offset: 0,
                Zarejestrowany: new Date().toISOString().split('T')[0],
@@ -544,6 +553,7 @@ export default function KarnetyPage() {
                  urodziny_rabat_rok: null,
                  ostatnie_zyczenia_rok: null,
                  hasLostContinuity: false,
+                 rabat: 0,
                  rabat_za_ciaglosc: '0%',
                  'Rabat za ciągłość': '0%',
                  system_discount_offset: 0,
@@ -826,7 +836,7 @@ export default function KarnetyPage() {
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
     
-    // ZAMROŻENIE CYKLU PRZY UŻYCIU KODU RABATOWEGO
+    // ZAMROŻENIE CYKLU PRZY UŻYCIU KODU RABATOWEGO W ZAKŁADCE KARNETY
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
     const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
@@ -894,7 +904,7 @@ export default function KarnetyPage() {
       dbPayload.urodziny_rabat_rok = currentYear;
     }
 
-    // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI W SUPABASE (KOLUMNY rabat ORAZ cyklCiaglosci)
+    // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI BEZPOŚREDNIO W KOLUMNIE 'rabat' I 'cyklCiaglosci'
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
@@ -1013,6 +1023,7 @@ export default function KarnetyPage() {
 
     let nowaDataWygasnieciaStr = '';
 
+    // WYLICZENIE CYKLU W STRUKTURZE KARNETÓW
     let baseCykl = 1;
     if (updatedKarnetyList.length > 0) {
       const highestCykl = Math.max(...updatedKarnetyList.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
