@@ -148,6 +148,9 @@ export default function KarnetyPage() {
     } catch (e) {}
   };
 
+  // =========================================================================
+  // 🏷️ WERYFIKACJA I NALICZANIE KODU RABATOWEGO (Z PEŁNĄ KONTROLĄ LIMITÓW)
+  // =========================================================================
   const handleApplyDiscountCode = async (e: React.MouseEvent) => {
     e.preventDefault();
     setDiscountCodeStatus({ type: 'loading', message: 'Sprawdzanie kodu...' });
@@ -175,30 +178,53 @@ export default function KarnetyPage() {
     }
 
     if (!data.aktywny) {
-      setDiscountCodeStatus({ type: 'error', message: 'Ten kod jest nieaktywny' });
+      setDiscountCodeStatus({ type: 'error', message: 'Ten kod jest obecnie nieaktywny' });
       return;
     }
 
     if (data.data_zakonczenia && new Date(data.data_zakonczenia) < new Date(new Date().setHours(0,0,0,0))) {
-      setDiscountCodeStatus({ type: 'error', message: 'Ten kod stracił ważność' });
+      setDiscountCodeStatus({ type: 'error', message: 'Ten kod rabatowy stracił już ważność' });
       return;
     }
 
-    if (data.limit_ogolny > 0 && data.wykorzystano_ogolnie >= data.limit_ogolny) {
-       setDiscountCodeStatus({ type: 'error', message: 'Limit użyć tego kodu został wyczerpany' });
-       return;
+    if (data.limit_ogolny > 0 && (data.wykorzystano_ogolnie || 0) >= data.limit_ogolny) {
+      setDiscountCodeStatus({ type: 'error', message: 'Ogólny limit użyć tego kodu został wyczerpany' });
+      return;
     }
 
     // SPRAWDZENIE CZY KOD OBOWIĄZUJE NA WYBRANY KARNET
     if (!data.wszystkie_karnety && Array.isArray(data.wybrane_karnety)) {
       if (!data.wybrane_karnety.includes(currentPassName)) {
-        setDiscountCodeStatus({ type: 'error', message: `Ten kod rabatowy nie obejmuje karnetu: ${currentPassName}` });
+        setDiscountCodeStatus({ type: 'error', message: `Ten kod rabatowy nie obejmuje karnetu: "${currentPassName}"` });
         return;
       }
     }
 
+    // SPRAWDZENIE LIMITU UŻYĆ NA OSOBĘ W TABELI kody_rabatowe_uzycia
+    if (currentUser?.id) {
+      const { count, error: countErr } = await supabase
+        .from('kody_rabatowe_uzycia')
+        .select('*', { count: 'exact', head: true })
+        .eq('kod_id', data.id)
+        .eq('klient_id', currentUser.id);
+
+      if (!countErr && typeof count === 'number') {
+        const limitNaOsobe = data.limit_na_osobe || 1;
+        if (count >= limitNaOsobe) {
+          setDiscountCodeStatus({ 
+            type: 'error', 
+            message: `Wykorzystałeś już ten kod maksymalną liczbę razy (${count}/${limitNaOsobe}).` 
+          });
+          return;
+        }
+      }
+    }
+
     setAppliedDiscountCode(data);
-    setDiscountCodeStatus({ type: 'success', message: `Zastosowano kod rabatowy: ${data.wartosc_znizki}${data.typ_znizki === 'procentowa' ? '%' : ' PLN'}` });
+    setDiscountCodeStatus({ 
+      type: 'success', 
+      message: `Zastosowano rabat: ${data.wartosc_znizki}${data.typ_znizki === 'procentowa' ? '%' : ' PLN'}` 
+    });
   };
 
   const calculateFinalPrice = (basePriceNum: number, userEffectiveDiscount: any, appliedCode: any) => {
@@ -222,11 +248,19 @@ export default function KarnetyPage() {
     return { finalPrice, appliedLabel };
   };
 
-  const incrementCodeUsage = async (codeId: string) => {
+  const incrementCodeUsage = async (codeId: string, klientId: number, karnetId: number | null, transakcjaId: number | null) => {
+    // 1. Zwiększenie licznika ogólnego
     const { data } = await supabase.from('kody_rabatowe').select('wykorzystano_ogolnie').eq('id', codeId).single();
     if (data) {
       await supabase.from('kody_rabatowe').update({ wykorzystano_ogolnie: (data.wykorzystano_ogolnie || 0) + 1 }).eq('id', codeId);
     }
+    // 2. Rejestracja wpisu w historii użyć użytkownika
+    await supabase.from('kody_rabatowe_uzycia').insert([{
+      kod_id: codeId,
+      klient_id: klientId,
+      karnet_id: karnetId,
+      transakcja_id: transakcjaId
+    }]);
   };
 
   // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ)
@@ -747,17 +781,26 @@ export default function KarnetyPage() {
       return;
     }
 
+    let createdTransactionId: number | null = null;
     if (cenaWartosc > 0) {
-      await supabase.from('transakcje').insert([{
+      const { data: transData } = await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
         typ_operacji: 'zakup_karnetu',
         kwota: -cenaWartosc,
-        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`
-      }]);
+        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+        kod_rabatowy: appliedDiscountCode?.kod || null
+      }]).select('id').maybeSingle();
+
+      if (transData?.id) createdTransactionId = transData.id;
     }
 
     if (appliedDiscountCode) {
-      await incrementCodeUsage(appliedDiscountCode.id);
+      await incrementCodeUsage(
+        appliedDiscountCode.id, 
+        currentUser.id, 
+        defKarnetu?.id || null, 
+        createdTransactionId
+      );
     }
     
     setCurrentUser({
@@ -949,17 +992,26 @@ export default function KarnetyPage() {
       return;
     }
 
+    let createdTransactionId: number | null = null;
     if (cenaWartosc > 0) {
-      await supabase.from('transakcje').insert([{
+      const { data: transData } = await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
         typ_operacji: 'zakup_karnetu',
         kwota: -cenaWartosc,
-        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`
-      }]);
+        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+        kod_rabatowy: appliedDiscountCode?.kod || null
+      }]).select('id').maybeSingle();
+
+      if (transData?.id) createdTransactionId = transData.id;
     }
 
     if (appliedDiscountCode) {
-      await incrementCodeUsage(appliedDiscountCode.id);
+      await incrementCodeUsage(
+        appliedDiscountCode.id, 
+        currentUser.id, 
+        defKarnetu?.id || null, 
+        createdTransactionId
+      );
     }
 
     setCurrentUser({
@@ -975,6 +1027,7 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -1317,7 +1370,6 @@ export default function KarnetyPage() {
     showToast(`Karnet odwieszony! Zużyto ${actualDays} dni z limitu. Data ważności przedłużona do: ${nowaDataWygasnieciaStr}`, 'success');
     setIsUnsuspendModalOpen(false);
   };
-
   const activePassesForSuspend = karnetyList.filter((k: any) => {
     const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd && k.waznyDo;
     return isActive;
