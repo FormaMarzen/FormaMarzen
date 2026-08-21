@@ -415,7 +415,7 @@ export default function ClubChat() {
                 <>
                   <button
                     onClick={() => setSelectedUser(null)}
-                    className="text-white hover:text-amber-400 w-7 h-7 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-bold text-sm cursor-pointer transition-colors shadow-sm"
+                    className="text-amber-400 hover:text-white w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-2xl cursor-pointer transition-colors shadow-md border border-slate-700 shrink-0"
                     title="Wróć do listy"
                   >
                     ←
@@ -430,7 +430,7 @@ export default function ClubChat() {
                     )}
                   </div>
                   <div className="overflow-hidden">
-                    <div className="font-bold text-xs truncate max-w-[170px]">{selectedUser.name}</div>
+                    <div className="font-bold text-xs truncate max-w-[150px]">{selectedUser.name}</div>
                     <div className="text-[10px] font-medium flex items-center gap-1">
                       {Number(selectedUser.id) === SYSTEM_ID ? (
                         <span className="text-amber-400 font-bold">Konto Systemowe</span>
