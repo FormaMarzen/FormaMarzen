@@ -394,20 +394,16 @@ export default function AnalizaFormyPage() {
       return;
     }
 
-    // Beztłuszczowa masa ciała (LBM)
     const lbm = w * (1 - bf / 100);
-    // Bazowy wzór Katch-McArdle
     let bmr = 370 + (21.6 * lbm);
 
-    // Drobna korekta metaboliczna uwzględniająca płeć przy zapotrzebowaniu beztłuszczowym
     if (calcGender === 'kobieta') {
-      bmr *= 0.96; // Kobiety mają średnio nieco niższy wydatek energetyczny tkanki beztłuszczowej
+      bmr *= 0.96;
     }
 
     const tdee = bmr * pal;
     const targetKcal = tdee * (1 + goalModifier);
 
-    // Makroskładniki: Białko 2.2g/kg LBM, Tłuszcze 0.9g/kg masy ciała, reszta węglowodany
     const proteinG = Math.round(lbm * 2.2);
     const fatG = Math.round(w * 0.9);
     const proteinKcal = proteinG * 4;
@@ -546,48 +542,48 @@ export default function AnalizaFormyPage() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {(appRole === 'admin' || appRole === 'trener') && selectedKlient && (
+          {((appRole === 'admin' || appRole === 'trener' && selectedKlient) || appRole === 'klubowicz') && (
             <button
               onClick={handleOpenAddModal}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
             >
-              <span>+</span> Dodaj pomiar
+              <span>+</span> {appRole === 'klubowicz' ? 'Dodaj swój pomiar' : 'Dodaj pomiar'}
             </button>
           )}
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK */}
-      <div className="flex rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-xs font-bold gap-1.5 shadow-inner">
+      {/* PASEK ZAKŁADEK (RESPONSYWNA SIATKA DLA MOBILE) */}
+      <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
-          className={`flex-1 py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
             activeTab === 'pomiary'
               ? 'bg-amber-500 text-slate-950 font-black shadow-md'
               : 'text-slate-600 hover:text-sky-950 hover:bg-white/50'
           }`}
         >
-          <span>📏</span> 1. Pomiary i Skład Ciała
+          <span>📏</span> <span>1. Pomiary</span>
         </button>
         <button
           onClick={() => setActiveTab('makro')}
-          className={`flex-1 py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
             activeTab === 'makro'
               ? 'bg-amber-500 text-slate-950 font-black shadow-md'
               : 'text-slate-600 hover:text-sky-950 hover:bg-white/50'
           }`}
         >
-          <span>🥗</span> 2. Dieta i Makroskładniki
+          <span>🥗</span> <span>2. Dieta i Makro</span>
         </button>
         <button
           onClick={() => setActiveTab('redukcja')}
-          className={`flex-1 py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
             activeTab === 'redukcja'
               ? 'bg-amber-500 text-slate-950 font-black shadow-md'
               : 'text-slate-600 hover:text-sky-950 hover:bg-white/50'
           }`}
         >
-          <span>🔥</span> 3. Wyzwanie Redukcji
+          <span>🔥</span> <span>3. Redukcja</span>
         </button>
       </div>
 
@@ -622,7 +618,7 @@ export default function AnalizaFormyPage() {
               </button>
             )}
 
-            {/* Lista rozwijana wyników wyszukiwania z obsługą awatara i płci */}
+            {/* Lista rozwijana wyników wyszukiwania */}
             {isSearchFocused && searchResults.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-sky-100">
                 {searchResults.map((klient) => {
@@ -671,7 +667,7 @@ export default function AnalizaFormyPage() {
               )}
             </div>
             <div>
-              <div className="text-sm font-black tracking-wide text-amber-400 uppercase flex items-center gap-2">
+              <div className="text-sm font-black tracking-wide text-amber-400 uppercase flex items-center gap-2 flex-wrap">
                 <span>{selectedKlient.Imię} {selectedKlient.Nazwisko}</span>
                 <span className="bg-sky-900 text-sky-200 text-[10px] px-2 py-0.5 rounded-full border border-sky-700 font-bold">
                   Płeć: {clientGenderDisplay}
@@ -855,7 +851,7 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.tluszcz_wisceralny || '-'}</td>
                         <td className="p-3 text-center">
-                          {(appRole === 'admin' || appRole === 'trener') ? (
+                          {((appRole === 'admin' || appRole === 'trener') || appRole === 'klubowicz') ? (
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 onClick={() => handleOpenEditModal(m)}
@@ -1169,7 +1165,7 @@ export default function AnalizaFormyPage() {
                   </div>
                 </div>
 
-                {(appRole === 'admin' || appRole === 'trener') && (
+                {((appRole === 'admin' || appRole === 'trener') || appRole === 'klubowicz') && (
                   <div className="flex justify-end pt-2">
                     <button
                       type="button"
