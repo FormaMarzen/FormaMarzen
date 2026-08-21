@@ -677,30 +677,68 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU
+  // PRZEDŁUŻENIE KARNETU ORAZ OPŁACENIE KOLEJNEJ RATY UMOWY 12M
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
+    const isContract = passToExtend.isContract12M || defKarnetu?.isContract12M || defKarnetu?.typKarnetu === 'Umowa 12 miesięcy';
+    
     let dniWażności = 30;
+    let nextRataStr = '1 / 1';
+    let nowaDataWygasnieciaStr = '';
 
-    if (defKarnetu && defKarnetu.dlugosc) {
-      const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
-      if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
-      else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
-      else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
-      else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
-      else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
-      else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
+    if (isContract) {
+      // 1. Logika umowy 12M: obliczenie kolejnej raty
+      let curRataNum = 0;
+      if (passToExtend.rata) {
+        const match = String(passToExtend.rata).match(/(\d+)\s*\/\s*12/);
+        if (match) curRataNum = parseInt(match[1], 10);
+      }
+      const nextRataNum = Math.min(12, curRataNum + 1);
+      nextRataStr = `${nextRataNum} / 12`;
+
+      // 2. Data ważności zostaje przedłużona do końca kolejnego miesiąca kalendarzowego
+      let baseDate = new Date();
+      if (passToExtend.waznyDo) {
+        const parts = passToExtend.waznyDo.split('-');
+        if (parts.length === 3) {
+          const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          if (exp > baseDate) baseDate = exp;
+        }
+      }
+      const nextMonthDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0);
+      nowaDataWygasnieciaStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
+    } else {
+      // Standardowy karnet na czas lub wejścia
+      if (defKarnetu && defKarnetu.dlugosc) {
+        const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
+        if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
+        else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
+        else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
+        else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
+        else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
+        else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
+      }
+
+      let baseDate = new Date();
+      if (passToExtend.waznyDo) {
+        const parts = passToExtend.waznyDo.split('-');
+        if (parts.length === 3) {
+          const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          if (currentExp > baseDate) baseDate = currentExp;
+        }
+      }
+      baseDate.setDate(baseDate.getDate() + dniWażności);
+      nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
     }
 
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    
     const currentCykl = passToExtend.cykl || (passToExtend.historiaPrzedluzen ? passToExtend.historiaPrzedluzen.length + 1 : (karnetyList.length || 1));
     const nextCykl = appliedDiscountCode ? currentCykl : (currentCykl + 1);
 
-    const effectiveDiscount = getEffectiveDiscount(currentUser, passToExtend.isContract12M);
+    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
     const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
     
@@ -708,28 +746,12 @@ export default function KarnetyPage() {
 
     updatedKarnetyList = updatedKarnetyList.map(k => {
       if (k.id === passToExtend.id) {
-        let baseDate = new Date();
-        if (k.waznyDo) {
-          const parts = k.waznyDo.split('-');
-          if (parts.length === 3) {
-            const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            if (currentExp > baseDate) {
-              baseDate = currentExp;
-            }
-          }
-        }
-        baseDate.setDate(baseDate.getDate() + dniWażności);
-        const year = baseDate.getFullYear();
-        const month = String(baseDate.getMonth() + 1).padStart(2, '0');
-        const day = String(baseDate.getDate()).padStart(2, '0');
-        const nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
-
         let updatedRemaining = k.pozostaloWejsc;
         let updatedInitial = k.poczatkoweWejsc;
 
         let metaExt: Record<string, any> = {};
         try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-        const extWejsciaVal = defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null;
+        const extWejsciaVal = (isContract) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
         const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
 
         if (parsedExtWejscia !== null) {
@@ -741,6 +763,7 @@ export default function KarnetyPage() {
           data: todayStr,
           staraWaznosc: k.waznyDo,
           nowaWaznosc: nowaDataWygasnieciaStr,
+          rata: isContract ? nextRataStr : undefined,
           cena: cenaStr,
           rabat: appliedLabel
         }];
@@ -749,12 +772,16 @@ export default function KarnetyPage() {
           ...k,
           waznyDo: nowaDataWygasnieciaStr,
           cena: cenaStr,
-          cykl: nextCykl,
+          cykl: isContract ? 1 : nextCykl,
+          rata: isContract ? nextRataStr : (k.rata || '1 / 1'),
+          isContract12M: isContract,
           historiaPrzedluzen: nowaHistoria,
           znizkaProcentowa: appliedLabel,
-          statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
-          pozostaloWejsc: updatedRemaining,
-          poczatkoweWejsc: updatedInitial
+          statusTekst: isContract 
+            ? `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})` 
+            : `Ważny do: ${nowaDataWygasnieciaStr}`,
+          pozostaloWejsc: isContract ? null : updatedRemaining,
+          poczatkoweWejsc: isContract ? null : updatedInitial
         };
       }
       return k;
@@ -784,11 +811,15 @@ export default function KarnetyPage() {
 
     let createdTransactionId: number | null = null;
     if (cenaWartosc > 0) {
+      const opisOperacji = isContract 
+        ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`
+        : `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`;
+
       const { data: transData } = await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
-        typ_operacji: 'zakup_karnetu',
+        typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
         kwota: -cenaWartosc,
-        opis: `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+        opis: opisOperacji,
         kod_rabatowy: appliedDiscountCode?.kod || null
       }]).select('id').maybeSingle();
 
@@ -812,7 +843,7 @@ export default function KarnetyPage() {
       wallet: nowyStanPortfelaStr
     });
     
-    showToast(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony za kwotę ${cenaStr}.`, 'success');
+    showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} za kwotę ${cenaStr}.` : `Karnet "${passToExtend.nazwa}" został przedłużony za kwotę ${cenaStr}.`, 'success');
     setIsExtendModalOpen(false);
     resetDiscountState();
     loadData();
@@ -901,10 +932,7 @@ export default function KarnetyPage() {
             }
           }
           baseDate.setDate(baseDate.getDate() + dniWażności);
-          const year = baseDate.getFullYear();
-          const month = String(baseDate.getMonth() + 1).padStart(2, '0');
-          const day = String(baseDate.getDate()).padStart(2, '0');
-          nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
+          nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
 
           const nowaHistoria = [...(k.historiaPrzedluzen || []), {
             data: todayStr,
@@ -938,11 +966,7 @@ export default function KarnetyPage() {
 
       const dataWygasniecia = new Date(baseStartDate);
       dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-      
-      const year = dataWygasniecia.getFullYear();
-      const month = String(dataWygasniecia.getMonth() + 1).padStart(2, '0');
-      const day = String(dataWygasniecia.getDate()).padStart(2, '0');
-      nowaDataWygasnieciaStr = `${year}-${month}-${day}`;
+      nowaDataWygasnieciaStr = `${dataWygasniecia.getFullYear()}-${String(dataWygasniecia.getMonth() + 1).padStart(2, '0')}-${String(dataWygasniecia.getDate()).padStart(2, '0')}`;
 
       statusTekst = activationMode === 'after' 
         ? `Oczekujący (Ważny od: ${maxDateStr} do: ${nowaDataWygasnieciaStr})`
@@ -1155,12 +1179,14 @@ export default function KarnetyPage() {
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
 
     if (isContract) {
+      // ZASADY ZAWIESZANIA UMÓW 12 MIESIĘCY
       const daysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
       if (requestedDays > daysLeft) {
         setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${daysLeft} dni z rocznej puli 30 dni.`);
         return;
       }
     } else {
+      // ZASADY ZAWIESZANIA STANDARDOWYCH KARNETÓW
       if (requestedDays > 14) {
         setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
         return;
@@ -1340,7 +1366,7 @@ export default function KarnetyPage() {
       waznyDo: nowaDataWygasnieciaStr,
       contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
       statusTekst: targetKarnet.isContract12M 
-        ? `Umowa 12M (${targetKarnet.rata || '0 / 12'}) - Ważny do: ${nowaDataWygasnieciaStr}`
+        ? `Umowa 12M (Rata ${targetKarnet.rata || '0 / 12'} • Ważny do: ${nowaDataWygasnieciaStr})`
         : `Ważny do: ${nowaDataWygasnieciaStr}`
     };
 
@@ -1618,15 +1644,20 @@ export default function KarnetyPage() {
                          >
                            <span className="text-sm">🔓</span> ODWIEŚ KARNET
                          </button>
+                      ) : isContract ? (
+                        <button 
+                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                          className="bg-amber-600 border border-amber-700 text-white hover:bg-amber-700 font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                        >
+                          <span className="text-sm">💳</span> OPŁAĆ KOLEJNĄ RATĘ
+                        </button>
                       ) : (
-                        !isContract && (
-                          <button 
-                            onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
-                            className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                          >
-                            <span className="text-sm">🕒</span> PRZEDŁUŻ
-                          </button>
-                        )
+                        <button 
+                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                          className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                        >
+                          <span className="text-sm">🕒</span> PRZEDŁUŻ
+                        </button>
                       )}
                       <button 
                         onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
@@ -1886,23 +1917,43 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* MODAL: PRZEDŁUŻ KARNET */}
+        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M */}
         {isExtendModalOpen && passToExtend && (() => {
-          const effectiveDiscount = getEffectiveDiscount(currentUser, passToExtend.isContract12M);
+          const isContract = passToExtend.isContract12M;
+          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
           const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
           const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
+
+          let curRataNum = 0;
+          if (passToExtend.rata) {
+            const match = String(passToExtend.rata).match(/(\d+)\s*\/\s*12/);
+            if (match) curRataNum = parseInt(match[1], 10);
+          }
+          const nextRataNum = Math.min(12, curRataNum + 1);
 
           return (
             <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
               <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
                 <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Przedłuż karnet</h3>
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                    {isContract ? '💳 Opłać kolejną ratę umowy 12M' : '🕒 Przedłuż karnet'}
+                  </h3>
                   <button onClick={() => { setIsExtendModalOpen(false); resetDiscountState(); }} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
                 </div>
                 <form onSubmit={handleExtendSubmit} className="space-y-4 text-xs">
                   <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sky-900">
-                    Przedłużasz karnet: <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
+                    {isContract ? (
+                      <div>
+                        <span>Opłacasz kolejną ratę (<strong>{nextRataNum} / 12</strong>) dla umowy:</span>
+                        <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
+                      </div>
+                    ) : (
+                      <div>
+                        <span>Przedłużasz karnet:</span>
+                        <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-1 mt-2">
@@ -1941,7 +1992,7 @@ export default function KarnetyPage() {
                   
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                     <div className="flex justify-between text-slate-600">
-                      <span>Cena katalogowa:</span>
+                      <span>{isContract ? 'Miesięczna kwota raty:' : 'Cena katalogowa:'}</span>
                       <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                     </div>
                     {appliedLabel && (
@@ -1951,7 +2002,7 @@ export default function KarnetyPage() {
                       </div>
                     )}
                     <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                      <span>Cena po rabacie:</span>
+                      <span>Do zapłaty (z portfela):</span>
                       <span className="text-emerald-700 font-bold">{finalPrice.toFixed(2)} PLN</span>
                     </div>
                   </div>
@@ -1960,8 +2011,8 @@ export default function KarnetyPage() {
                     <button type="button" onClick={() => { setIsExtendModalOpen(false); resetDiscountState(); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
                       Anuluj
                     </button>
-                    <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                      Potwierdzam przedłużenie ({finalPrice.toFixed(2)} PLN)
+                    <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                      {isContract ? `Opłać ratę ${nextRataNum}/12 (${finalPrice.toFixed(2)} PLN)` : `Potwierdzam przedłużenie (${finalPrice.toFixed(2)} PLN)`}
                     </button>
                   </div>
                 </form>
@@ -2163,7 +2214,7 @@ export default function KarnetyPage() {
           );
         })()}
 
-        {/* TOAST */}
+        {/* TOAST DLA KLUBOWICZA */}
         {toast && (
           <div className="fixed bottom-6 right-6 z-[100] animate-in fade-in slide-in-from-bottom-5 duration-300 pointer-events-none">
             <div className={`px-5 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border ${
@@ -2317,7 +2368,7 @@ export default function KarnetyPage() {
         </div>
       </div>
 
-      {/* MODAL DODAWANIA / EDYCJI KARNETU (ADMIN - Z PEŁNĄ FORMĄ) */}
+      {/* MODAL DODAWANIA / EDYCJI KARNETU (ADMIN - PEŁNY FORMULARZ) */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-3xl w-full p-8 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto">
