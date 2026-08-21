@@ -50,6 +50,42 @@ export default function RootLayout({
     );
   })();
 
+  // Blokada skalowania, podwójnego tapnięcia i pinch-to-zoom na urządzeniach mobilnych
+  useEffect(() => {
+    const handleGesture = (e: Event) => {
+      e.preventDefault();
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length > 1) {
+        e.preventDefault();
+      }
+    };
+
+    let lastTouchEnd = 0;
+    const handleTouchEnd = (e: TouchEvent) => {
+      const now = Date.now();
+      if (now - lastTouchEnd <= 300) {
+        e.preventDefault();
+      }
+      lastTouchEnd = now;
+    };
+
+    document.addEventListener('gesturestart', handleGesture, { passive: false });
+    document.addEventListener('gesturechange', handleGesture, { passive: false });
+    document.addEventListener('gestureend', handleGesture, { passive: false });
+    document.addEventListener('touchstart', handleTouchStart, { passive: false });
+    document.addEventListener('touchend', handleTouchEnd, { passive: false });
+
+    return () => {
+      document.removeEventListener('gesturestart', handleGesture);
+      document.removeEventListener('gesturechange', handleGesture);
+      document.removeEventListener('gestureend', handleGesture);
+      document.removeEventListener('touchstart', handleTouchStart);
+      document.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, []);
+
   useEffect(() => {
     setIsMounted(true);
 
@@ -394,6 +430,8 @@ export default function RootLayout({
         <head>
           <title>Forma Marzeń</title>
           <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+          <meta name="HandheldFriendly" content="true" />
           <link rel="manifest" href="/manifest.json?v=2" />
           <meta name="theme-color" content="#0284c7" />
         </head>
@@ -409,6 +447,8 @@ export default function RootLayout({
       <head>
         <title>Forma Marzeń</title>
         <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+        <meta name="HandheldFriendly" content="true" />
         
         {/* Open Graph Meta Tags for Social Media Preview */}
         <meta property="og:title" content="Forma Marzeń" />

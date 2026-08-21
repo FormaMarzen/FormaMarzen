@@ -19,8 +19,29 @@
   }
 }
 
+html,
 body {
+  width: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  
+  /* Blokada niekontrolowanych gestów i dopasowanie do ekranu */
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+  -webkit-touch-callout: none;
+}
+
+/* Blokada automatycznego przybliżania (zoomu) w iOS Safari przy focusie na polach */
+input,
+textarea,
+select,
+button {
+  font-size: 16px !important;
+  touch-action: manipulation;
 }

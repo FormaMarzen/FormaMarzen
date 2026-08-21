@@ -1,8 +1,11 @@
 {
   "name": "Forma Marzeń",
   "short_name": "Forma Marzeń",
+  "description": "Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#0284c7",
   "icons": [
