@@ -65,6 +65,8 @@ export default function KlienciPage() {
   const [editingPassModal, setEditingPassModal] = useState<any | null>(null);
   const [isAddSecondPassModalOpen, setIsAddSecondPassModalOpen] = useState(false);
   const [selectedPassToAdd, setSelectedPassToAdd] = useState('');
+  const [newPassCustomRata, setNewPassCustomRata] = useState('0 / 12');
+  const [newPassCustomSuspensionDays, setNewPassCustomSuspensionDays] = useState('30');
 
   // STANY RABATÓW
   const [isEditingDiscount, setIsEditingDiscount] = useState(false);
@@ -85,7 +87,10 @@ export default function KlienciPage() {
     price: '0.00 PLN',
     wallet: '0.00 PLN',
     registered: todayStr,
-    selectedPass: '', 
+    selectedPass: '',
+    isContractMigration: false,
+    customRata: '0 / 12',
+    customSuspensionDays: '30'
   });
 
   // --- KULOODPORNY PARSER DAT ---
@@ -147,10 +152,11 @@ export default function KlienciPage() {
     return Math.max(0, Math.min(25, std + offset));
   };
 
-  const getEffectiveDiscount = (client: any) => {
+  const getEffectiveDiscount = (client: any, isContract: boolean = false) => {
     if (!client) return 0;
     const staly = parseFloat(client.discount || '0');
     if (staly > 0) return staly;
+    if (isContract) return 0; // Umowy 12M nie posiadają rabatu za ciągłość
     return calculateSystemDiscount(client);
   };
 
@@ -471,11 +477,15 @@ export default function KlienciPage() {
           meta = JSON.parse(k.inne_ustawienia || '{}');
         } catch(e) {}
 
+        const is12M = k.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true;
+        const isTimeBased = k.typ_karnetu === 'Na czas';
+
         return {
           ...k,
           cena: k.cena_brutto || k.cena || '0.00',
           limitCzasowy: k.dlugosc || k.limitCzasowy || '',
-          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
+          isContract12M: is12M,
+          ilosc_wejsc: (is12M || isTimeBased) ? null : (k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null)
         };
       });
       setDostepneKarnety(ustrukturyzowaneKarnety);
@@ -502,8 +512,26 @@ export default function KlienciPage() {
 
         let karnetyZmienione = false;
         parsedKarnety = parsedKarnety.map((k: any) => {
-          if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
-            const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
+          const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
+          const isContract = k.isContract12M || pasujacyDef?.isContract12M || pasujacyDef?.typ_karnetu === 'Umowa 12 miesięcy';
+          const isTimeBased = pasujacyDef?.typ_karnetu === 'Na czas';
+
+          if (isContract) {
+            k.isContract12M = true;
+            k.pozostaloWejsc = null;
+            k.poczatkoweWejsc = null;
+            if (k.contractSuspensionDaysLeft === undefined) {
+              k.contractSuspensionDaysLeft = 30;
+              karnetyZmienione = true;
+            }
+            if (!k.rata) {
+              k.rata = '0 / 12';
+              karnetyZmienione = true;
+            }
+          } else if (isTimeBased) {
+            k.pozostaloWejsc = null;
+            k.poczatkoweWejsc = null;
+          } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
             if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
               const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
               k.pozostaloWejsc = valWejsc;
@@ -519,7 +547,7 @@ export default function KlienciPage() {
         let finalKarnety = [];
 
         for (const k of parsedKarnety) {
-          if (k.waznyDo && k.waznyDo < yesterdayStr) {
+          if (k.waznyDo && k.waznyDo < yesterdayStr && !k.isContract12M) {
             hasChanges = true; 
           } else {
             finalKarnety.push(k);
@@ -699,6 +727,8 @@ export default function KlienciPage() {
 
     if (newClient.selectedPass) {
       const defKarnetu = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
+      const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
+      const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
       let dniWażności = 30;
       
       if (defKarnetu && defKarnetu.limitCzasowy) {
@@ -721,7 +751,7 @@ export default function KlienciPage() {
 
       let metaDef: Record<string, any> = {};
       try { metaDef = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-      const initialWejsciaVal = defKarnetu ? (defKarnetu.ilosc_wejsc || metaDef.ilosc_wejsc || metaDef.iloscTreningow || null) : null;
+      const initialWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaDef.ilosc_wejsc || metaDef.iloscTreningow || null) : null);
       const parsedInitialWejscia = initialWejsciaVal !== null ? parseInt(initialWejsciaVal, 10) : null;
 
       poczatkoweKarnety.push({
@@ -730,8 +760,10 @@ export default function KlienciPage() {
         waznyDo: dataWygasnieciaStr,
         cena: cenaKarnetu,
         znizkaProcentowa: '',
-        rata: '1 / 1',
-        statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
+        rata: isContract ? (newClient.customRata || '0 / 12') : '1 / 1',
+        statusTekst: isContract ? `Umowa 12M (Rata ${newClient.customRata || '0 / 12'})` : `Ważny do: ${dataWygasnieciaStr}`,
+        isContract12M: isContract,
+        contractSuspensionDaysLeft: isContract ? (parseInt(newClient.customSuspensionDays, 10) || 30) : undefined,
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
@@ -741,7 +773,6 @@ export default function KlienciPage() {
         poczatkoweWejsc: parsedInitialWejscia
       });
     }
-
     const poczatkowyStan = (parseFloat(newClient.wallet) || 0) - cenaWartosc;
     const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
     const newClientId = Date.now();
@@ -775,7 +806,7 @@ export default function KlienciPage() {
       setIsAddModalOpen(false);
       setNewClient({
         firstName: '', lastName: '', phone: '', email: '', price: '0.00 PLN', wallet: '0.00 PLN',
-        registered: todayStr, selectedPass: ''
+        registered: todayStr, selectedPass: '', isContractMigration: false, customRata: '0 / 12', customSuspensionDays: '30'
       });
       loadData();
     }
@@ -886,7 +917,10 @@ export default function KlienciPage() {
     if (!profileClient || !extendPassTarget) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-    const activeDiscount = getEffectiveDiscount(profileClient);
+    const isContract = extendPassTarget.isContract12M || defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
+    const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
+
+    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
     const bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, ''));
     const cenaPoRabacie = bazowaCena * (1 - activeDiscount / 100);
     const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
@@ -903,7 +937,7 @@ export default function KlienciPage() {
 
     let metaExt: Record<string, any> = {};
     try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-    const extWejsciaVal = defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null;
+    const extWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
     const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
@@ -914,9 +948,9 @@ export default function KlienciPage() {
           waznyDo: extendNewDate,
           cena: nowaCena,
           znizkaProcentowa: znizkaTekst,
-          statusTekst: `Ważny do: ${extendNewDate}`,
-          pozostaloWejsc: parsedExtWejscia !== null ? parsedExtWejscia : k.pozostaloWejsc,
-          poczatkoweWejsc: parsedExtWejscia !== null ? parsedExtWejscia : k.poczatkoweWejsc
+          statusTekst: isContract ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${extendNewDate}` : `Ważny do: ${extendNewDate}`,
+          pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? parsedExtWejscia : k.pozostaloWejsc),
+          poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? parsedExtWejscia : k.poczatkoweWejsc)
         };
       }
       return k;
@@ -944,6 +978,8 @@ export default function KlienciPage() {
     if (!profileClient || !selectedPassToAdd) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
+    const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
+    const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
     
     let dniWażności = 30;
     if (defKarnetu && defKarnetu.limitCzasowy) {
@@ -961,7 +997,7 @@ export default function KlienciPage() {
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
     const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
     
-    const activeDiscount = getEffectiveDiscount(profileClient);
+    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
     const bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : 150.00;
     const kwotaKarnetu = bazowaCena * (1 - activeDiscount / 100);
     const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
@@ -973,7 +1009,7 @@ export default function KlienciPage() {
 
     let metaAdd: Record<string, any> = {};
     try { metaAdd = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || metaAdd.ilosc_wejsc || metaAdd.iloscTreningow || null) : null;
+    const limitWejscBaza = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaAdd.ilosc_wejsc || metaAdd.iloscTreningow || null) : null);
     const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
 
     let nowyStanStr = profileClient.wallet;
@@ -996,8 +1032,10 @@ export default function KlienciPage() {
       poczatkoweWejsc: parsedLimitWejsc,
       cena: cenaObjKarnetu,
       znizkaProcentowa: znizkaTekst,
-      rata: '1 / 1',
-      statusTekst: `Ważny do: ${dataWygasnieciaStr}`,
+      rata: isContract ? (newPassCustomRata || '0 / 12') : '1 / 1',
+      statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'})` : `Ważny do: ${dataWygasnieciaStr}`,
+      isContract12M: isContract,
+      contractSuspensionDaysLeft: isContract ? (parseInt(newPassCustomSuspensionDays, 10) || 30) : undefined,
       blokadaDo: null,
       powodBlokady: null,
       zawieszonyOd: null,
@@ -1026,6 +1064,8 @@ export default function KlienciPage() {
     }]);
 
     setSelectedPassToAdd('');
+    setNewPassCustomRata('0 / 12');
+    setNewPassCustomSuspensionDays('30');
     setIsAddSecondPassModalOpen(false);
     loadData();
   };
@@ -1091,6 +1131,12 @@ export default function KlienciPage() {
     currentExpDate.setDate(currentExpDate.getDate() + diffDays);
     const newExpDateStr = currentExpDate.toISOString().split('T')[0];
 
+    let updatedSuspensionDaysLeft = karnetTarget.contractSuspensionDaysLeft;
+    if (karnetTarget.isContract12M) {
+      const currentPool = karnetTarget.contractSuspensionDaysLeft !== undefined ? karnetTarget.contractSuspensionDaysLeft : 30;
+      updatedSuspensionDaysLeft = Math.max(0, currentPool - diffDays);
+    }
+
     const historiaEntry = {
       id: Date.now(),
       od: karnetTarget.zawieszonyOd,
@@ -1103,9 +1149,10 @@ export default function KlienciPage() {
         return {
           ...k,
           waznyDo: newExpDateStr,
-          statusTekst: `Ważny do: ${newExpDateStr}`,
+          statusTekst: k.isContract12M ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${newExpDateStr}` : `Ważny do: ${newExpDateStr}`,
           zawieszonyOd: null,
           zawieszonyDo: null,
+          contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
           historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])]
         };
       }
@@ -1213,7 +1260,9 @@ export default function KlienciPage() {
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
 
     const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
-    const activeRabat = getEffectiveDiscount(profileClient);
+    const isContract = editingPassModal.isContract12M || bazowyKarnet?.isContract12M || bazowyKarnet?.typ_karnetu === 'Umowa 12 miesięcy';
+    const isTimeBased = bazowyKarnet?.typ_karnetu === 'Na czas';
+    const activeRabat = getEffectiveDiscount(profileClient, isContract);
     const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
     const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
 
@@ -1227,9 +1276,16 @@ export default function KlienciPage() {
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === editingPassModal.id) {
         return {
-          ...k, nazwa: editingPassModal.nazwa, waznyDo: editingPassModal.waznyDo, pozostaloWejsc: editingPassModal.pozostaloWejsc,
+          ...k,
+          nazwa: editingPassModal.nazwa,
+          waznyDo: editingPassModal.waznyDo,
+          pozostaloWejsc: (isContract || isTimeBased) ? null : editingPassModal.pozostaloWejsc,
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
-          znizkaProcentowa: znizkaTekst, rata: editingPassModal.rata, statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
+          znizkaProcentowa: znizkaTekst,
+          rata: isContract ? editingPassModal.rata : (editingPassModal.rata || '1 / 1'),
+          isContract12M: isContract,
+          contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft !== undefined ? editingPassModal.contractSuspensionDaysLeft : 30) : undefined,
+          statusTekst: isContract ? `Umowa 12M (${editingPassModal.rata || '0 / 12'}) - Ważny do: ${editingPassModal.waznyDo}` : `Ważny do: ${editingPassModal.waznyDo}`
         };
       }
       return k;
@@ -1241,7 +1297,7 @@ export default function KlienciPage() {
       klient_id: profileClient.id,
       typ_operacji: 'edycja_karnetu',
       kwota: null,
-      opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}`
+      opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Rata: ${editingPassModal.rata})` : ''}`
     }]);
 
     setEditingPassModal(null);
@@ -1506,7 +1562,14 @@ export default function KlienciPage() {
                     <td className="py-3.5 px-3 font-mono text-slate-600 whitespace-nowrap">{client.phone || '-'}</td>
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col gap-1">
-                        <span className="font-semibold text-slate-800">{nazwaKarnetu}</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-slate-800">{nazwaKarnetu}</span>
+                          {client.karnetyKlubowicza?.[0]?.isContract12M && (
+                            <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-2 py-0.5 rounded border border-amber-300 uppercase">
+                              12M • Rata {client.karnetyKlubowicza[0].rata || '0/12'}
+                            </span>
+                          )}
+                        </div>
                         {aktywnyKarnetZawieszony && (
                           <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-200 inline-block w-fit whitespace-nowrap">
                             ⏸️ Zawieszony: od {aktywnyKarnetZawieszony.zawieszonyOd} do {aktywnyKarnetZawieszony.zawieszonyDo}
@@ -1850,6 +1913,7 @@ export default function KlienciPage() {
                       let isExpiring = false;
                       let isPending = karnet.statusTekst?.includes('Oczekujący');
                       const czyZawieszony = !!karnet.zawieszonyOd;
+                      const isContract = karnet.isContract12M;
 
                       if (!isPending) {
                         if (karnet.waznyDo) {
@@ -1882,6 +1946,11 @@ export default function KlienciPage() {
                             <div className="space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
                                 <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
+                                {isContract && (
+                                  <span className="bg-amber-500/20 text-amber-900 text-[10px] font-black px-2.5 py-0.5 rounded border border-amber-300 uppercase">
+                                    Umowa 12M • Rata {karnet.rata || '0/12'}
+                                  </span>
+                                )}
                                 {karnet.blokadaDo && karnet.blokadaDo >= todayStr && (
                                   <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
                                     ⚠️ Zablokowane: {karnet.blokadaOd ? `od ${karnet.blokadaOd} ` : ''}do {karnet.blokadaDo}
@@ -1895,6 +1964,11 @@ export default function KlienciPage() {
                                 <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
                                   Cena: {karnet.cena} {karnet.znizkaProcentowa ? ` ${karnet.znizkaProcentowa}` : ''}
                                 </span>
+                                {isContract && (
+                                  <span className="bg-sky-50 text-sky-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-sky-200">
+                                    Pula zawieszenia: {karnet.contractSuspensionDaysLeft ?? 30} dni
+                                  </span>
+                                )}
                                 {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
                                   <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
                                     <span>🎟️ Wejścia:</span> 
@@ -2268,8 +2342,7 @@ export default function KlienciPage() {
                   </div>
                 </div>
               </div>
-
-            </div>
+              </div>
 
           </div>
         </div>
@@ -2293,6 +2366,9 @@ export default function KlienciPage() {
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">Aktualny karnet</div>
                 <div className="font-bold text-slate-900 text-sm whitespace-nowrap">Karnet: {extendPassTarget.nazwa}</div>
                 <div className="font-mono text-slate-600 whitespace-nowrap">Wygasa: {extendPassTarget.waznyDo}</div>
+                {extendPassTarget.isContract12M && (
+                  <div className="text-amber-800 font-bold text-[11px]">Umowa 12M • Bieżąca rata: {extendPassTarget.rata || '0 / 12'}</div>
+                )}
               </div>
 
               <div className="flex justify-center">
@@ -2312,10 +2388,11 @@ export default function KlienciPage() {
                         className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
                       >
                         {dostepneKarnety.map(k => {
+                          const isContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy';
                           const baseCena = parseFloat(k.cena) || 0;
                           let finalCena = baseCena;
                           let hasDiscount = false;
-                          const activeDiscount = getEffectiveDiscount(profileClient);
+                          const activeDiscount = getEffectiveDiscount(profileClient, isContract);
                           
                           if (activeDiscount > 0) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
@@ -2324,7 +2401,7 @@ export default function KlienciPage() {
                           
                           return (
                             <option key={k.id} value={k.nazwa}>
-                              {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
+                              {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''} {isContract ? '• Umowa 12M' : ''})
                             </option>
                           );
                         })}
@@ -2333,15 +2410,16 @@ export default function KlienciPage() {
                       <span className="font-black text-slate-900 whitespace-nowrap">
                         {(() => {
                           const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
+                          const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
                           const baseCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget?.cena?.replace(/[^0-9.]/g, '') || '0');
                           let finalCena = baseCena;
                           let hasDiscount = false;
-                          const activeDiscount = getEffectiveDiscount(profileClient);
+                          const activeDiscount = getEffectiveDiscount(profileClient, isContract);
                           if (activeDiscount > 0) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
-                          return `${extendSelectedNewPassName} (${finalCena.toFixed(2)} PLN${hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})`;
+                          return `${extendSelectedNewPassName} (${finalCena.toFixed(2)} PLN${hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''}${isContract ? ' • Umowa 12M' : ''})`;
                         })()}
                       </span>
                     )}
@@ -2561,10 +2639,11 @@ export default function KlienciPage() {
                 <select value={selectedPassToAdd} onChange={(e) => setSelectedPassToAdd(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer">
                   <option value="">-- Wybierz karnet --</option>
                   {dostepneKarnety.map(k => {
+                    const isContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy';
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
-                    const activeDiscount = getEffectiveDiscount(profileClient);
+                    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
                     
                     if (activeDiscount > 0) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
@@ -2573,12 +2652,52 @@ export default function KlienciPage() {
                     
                     return (
                       <option key={k.id} value={k.nazwa}>
-                        {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
+                        {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''} {isContract ? '• Umowa 12M' : ''})
                       </option>
                     );
                   })}
                 </select>
               </div>
+
+              {/* OPCJE DLA UMOWY 12 MIESIĘCY PRZY PRZYPISYWANIU */}
+              {(() => {
+                const targetDef = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
+                const isContract = targetDef?.isContract12M || targetDef?.typ_karnetu === 'Umowa 12 miesięcy';
+                if (!isContract) return null;
+
+                return (
+                  <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                    <div className="font-black text-amber-950 uppercase tracking-wider text-[10px]">
+                      Konfiguracja umowy 12M (np. migracja):
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block text-[10px]">Bieżąca rata</label>
+                        <input 
+                          type="text" 
+                          placeholder="np. 4 / 12"
+                          value={newPassCustomRata}
+                          onChange={(e) => setNewPassCustomRata(e.target.value)}
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block text-[10px]">Dni zawieszenia</label>
+                        <input 
+                          type="number" 
+                          min="0"
+                          max="30"
+                          placeholder="30"
+                          value={newPassCustomSuspensionDays}
+                          onChange={(e) => setNewPassCustomSuspensionDays(e.target.value)}
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="pt-4 flex justify-between gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsAddSecondPassModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
                 <div className="flex gap-2">
@@ -2591,7 +2710,7 @@ export default function KlienciPage() {
         </div>
       )}
 
-      {/* OKNO EDYCJI KARNETU */}
+      {/* OKNO EDYCJI KARNETU (Z PEŁNĄ EDYCJĄ RAT DLA UMÓW 12M) */}
       {editingPassModal && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2607,13 +2726,17 @@ export default function KlienciPage() {
                   onChange={(e) => {
                     const wybranyNazwa = e.target.value;
                     const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
-                    const actRab = getEffectiveDiscount(profileClient);
+                    const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
+                    const actRab = getEffectiveDiscount(profileClient, isContract);
                     const baseCena = def ? parseFloat(def.cena) : 0;
                     const finalCena = actRab > 0 ? baseCena * (1 - actRab / 100) : baseCena;
                     
                     setEditingPassModal({
                       ...editingPassModal, 
                       nazwa: wybranyNazwa,
+                      isContract12M: isContract,
+                      rata: isContract ? (editingPassModal.rata || '0 / 12') : '1 / 1',
+                      contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft ?? 30) : undefined,
                       cena: def ? `${finalCena.toFixed(2)} PLN` : editingPassModal.cena
                     });
                   }} 
@@ -2621,22 +2744,24 @@ export default function KlienciPage() {
                 >
                   <option value="">-- Wybierz karnet z bazy --</option>
                   {dostepneKarnety.map(k => {
+                    const isContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy';
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
-                    const activeDiscount = getEffectiveDiscount(profileClient);
+                    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
                     if (activeDiscount > 0) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
                     return (
                       <option key={k.id} value={k.nazwa}>
-                        {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''})
+                        {k.nazwa} ({finalCena.toFixed(2)} PLN{hasDiscount ? ` - po rabacie ${activeDiscount}%` : ''} {isContract ? '• Umowa 12M' : ''})
                       </option>
                     );
                   })}
                 </select>
               </div>
+
               <div className="space-y-1">
                 <label className="font-bold text-slate-700">Ważny do</label>
                 <input 
@@ -2646,15 +2771,47 @@ export default function KlienciPage() {
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer text-slate-800" 
                 />
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Pozostało wejść</label>
-                <input 
-                  type="number" 
-                  value={editingPassModal.pozostaloWejsc ?? ''} 
-                  onChange={(e) => setEditingPassModal({...editingPassModal, pozostaloWejsc: e.target.value === '' ? null : parseInt(e.target.value, 10)})} 
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
-                />
-              </div>
+
+              {/* DLA UMÓW 12M: EDYCJA RAT I PULI ZAWIESZENIA */}
+              {editingPassModal.isContract12M ? (
+                <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                  <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
+                    Parametry Umowy 12M:
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block text-[10px]">Bieżąca rata (np. 4 / 12)</label>
+                      <input 
+                        type="text" 
+                        value={editingPassModal.rata || ''} 
+                        onChange={(e) => setEditingPassModal({...editingPassModal, rata: e.target.value})} 
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block text-[10px]">Pozostało zawieszenia (dni)</label>
+                      <input 
+                        type="number" 
+                        min="0"
+                        max="30"
+                        value={editingPassModal.contractSuspensionDaysLeft ?? 30} 
+                        onChange={(e) => setEditingPassModal({...editingPassModal, contractSuspensionDaysLeft: parseInt(e.target.value, 10) || 0})} 
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700">Pozostało wejść (dla karnetów ilościowych)</label>
+                  <input 
+                    type="number" 
+                    value={editingPassModal.pozostaloWejsc ?? ''} 
+                    onChange={(e) => setEditingPassModal({...editingPassModal, pozostaloWejsc: e.target.value === '' ? null : parseInt(e.target.value, 10)})} 
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
+                  />
+                </div>
+              )}
             </div>
 
             <div className="pt-4 flex justify-between items-center border-t border-sky-100">
@@ -2695,7 +2852,7 @@ export default function KlienciPage() {
                 <div>
                   <h4 className="font-black text-amber-900 text-xs uppercase flex items-center gap-2"><span>⏸️</span> Zawieś karnet</h4>
                   <p className="text-[10px] text-amber-800 leading-tight mt-1">
-                    Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopiero w momencie odwieszenia</strong> i dopiero wtedy doliczona do ważności karnetu.
+                    Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopiero w momencie odwieszenia</strong> i doliczona do ważności karnetu.
                   </p>
                 </div>
                 
@@ -2797,7 +2954,7 @@ export default function KlienciPage() {
             <div className="space-y-4 max-h-64 overflow-y-auto pr-2">
               {(profileClient.karnetyKlubowicza || []).map((karnet: any) => (
                 <div key={karnet.id} className="bg-sky-50/50 border border-sky-100 p-3 rounded-xl text-xs">
-                  <div className="font-bold text-sky-900 mb-2">Karnet: {karnet.nazwa}</div>
+                  <div className="font-bold text-sky-900 mb-2">Karnet: {karnet.nazwa} {karnet.isContract12M ? '(Umowa 12M)' : ''}</div>
                   {karnet.historiaZawieszen && karnet.historiaZawieszen.length > 0 ? (
                     <div className="space-y-2">
                       {karnet.historiaZawieszen.map((hz: any) => (
@@ -2843,7 +3000,7 @@ export default function KlienciPage() {
         </div>
       )}
 
-      {/* MODAL DODAWANIA NOWEGO KLIENTA */}
+      {/* MODAL DODAWANIA NOWEGO KLIENTA Z MIGRACJĄ UMÓW 12M */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -2875,15 +3032,55 @@ export default function KlienciPage() {
                 <label className="font-bold text-slate-700 block whitespace-nowrap">Wybierz karnet początkowy (opcjonalnie)</label>
                 <select 
                   value={newClient.selectedPass} 
-                  onChange={(e) => setNewClient({...newClient, selectedPass: e.target.value})} 
+                  onChange={(e) => {
+                    const passName = e.target.value;
+                    const def = dostepneKarnety.find(k => k.nazwa === passName);
+                    const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
+                    setNewClient({
+                      ...newClient, 
+                      selectedPass: passName,
+                      isContractMigration: isContract
+                    });
+                  }} 
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer focus:outline-none focus:border-sky-500"
                 >
                   <option value="">-- Brak przypisanego karnetu --</option>
                   {dostepneKarnety.map(k => (
-                    <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
+                    <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN){k.isContract12M ? ' • Umowa 12M' : ''}</option>
                   ))}
                 </select>
               </div>
+
+              {/* POLA MIGRACJI UMOWY 12M PRZY TWORZENIU KLIENTA */}
+              {newClient.isContractMigration && (
+                <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                  <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
+                    Migracja umowy 12M z poprzedniego systemu:
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block text-[10px]">Numer raty (np. 4 / 12)</label>
+                      <input 
+                        type="text" 
+                        value={newClient.customRata}
+                        onChange={(e) => setNewClient({...newClient, customRata: e.target.value})}
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block text-[10px]">Pozostałe dni zawieszenia</label>
+                      <input 
+                        type="number" 
+                        min="0"
+                        max="30"
+                        value={newClient.customSuspensionDays}
+                        onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})}
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsAddModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap">Anuluj</button>

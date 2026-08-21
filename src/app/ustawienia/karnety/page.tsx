@@ -11,6 +11,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
   
   // Stany dla strefy klubowicza (klient przeglądający swój karnet)
@@ -26,6 +27,7 @@ export default function KarnetyPage() {
 
   // 1. POBIERANIE DANYCH Z SUPABASE (Karnety + Rodzaje Zajęć + Użytkownik)
   const loadData = async () => {
+    setIsLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
@@ -89,10 +91,10 @@ export default function KarnetyPage() {
             cena: item.cena_brutto ? item.cena_brutto.toString() : '0',
             typKarnetu: item.typ_karnetu,
             limitCzasowy: item.dlugosc,
-            dostepDo: item.dostep_do_zajec,
-            dostepnyOnline: item.sprzedaz_online,
+            dostepDo: item.dostep_do_zajec || 'wszystkich zajęć',
+            dostepnyOnline: item.sprzedaz_online ?? meta.dostepnyOnline ?? false,
             wUzyciu: item.wUzyciu || 0,
-            ilosc_wejsc: item.ilosc_wejsc || meta.ilosc_wejsc || null,
+            ilosc_wejsc: item.typ_karnetu === 'Na ilość treningów' ? (item.ilosc_wejsc || meta.ilosc_wejsc || null) : null,
             isContract12M: item.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true,
             ...meta 
           };
@@ -118,6 +120,8 @@ export default function KarnetyPage() {
 
     } catch (err) {
       console.error("Błąd sieci podczas pobierania:", err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -142,7 +146,6 @@ export default function KarnetyPage() {
   const [limitOkres, setLimitOkres] = useState('Miesiąc');
   const [dostepDo, setDostepDo] = useState('wszystkich zajęć');
   const [zaznaczoneZajecia, setZaznaczoneZajecia] = useState<string[]>([]);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [limitCzasowyZapisow, setLimitCzasowyZapisow] = useState('Domyślny (14 dni)');
   const [niestandardowyDni, setNiestandardowyDni] = useState('14');
   const [tygodniowyLimit, setTygodniowyLimit] = useState('Bez limitu');
@@ -160,13 +163,61 @@ export default function KarnetyPage() {
 
   const handleOpenAdd = () => {
     setEditingId(null);
-    setNazwa(''); setCena(''); setStawkaVat('8%'); setTypKarnetu('Na czas'); setCzasIlosc('1'); setCzasJednostka('Miesiąc'); setIloscTreningow('10'); setDodajLimitCzasowy(true); setLimitIlosc('1'); setLimitOkres('Miesiąc'); setDostepDo('wszystkich zajęć'); setZaznaczoneZajecia([]); setLimitCzasowyZapisow('Domyślny (14 dni)'); setNiestandardowyDni('14'); setTygodniowyLimit('Bez limitu'); setDziennyLimit('Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc('1'); setBlokujPortfel(false); setPortfelPrógKwota('0'); setDostepnyOnline(false); setPonownyZakup(true); setZmianaNaInny(true); setKupInnyKarnet(true); setOpis(''); setObrazekUrl(null);
+    setNazwa(''); 
+    setCena(''); 
+    setStawkaVat('8%'); 
+    setTypKarnetu('Na czas'); 
+    setCzasIlosc('1'); 
+    setCzasJednostka('Miesiąc'); 
+    setIloscTreningow('10'); 
+    setDodajLimitCzasowy(true); 
+    setLimitIlosc('1'); 
+    setLimitOkres('Miesiąc'); 
+    setDostepDo('wszystkich zajęć'); 
+    setZaznaczoneZajecia([]); 
+    setLimitCzasowyZapisow('Domyślny (14 dni)'); 
+    setNiestandardowyDni('14'); 
+    setTygodniowyLimit('Bez limitu'); 
+    setDziennyLimit('Domyślny (Bez limitu)'); 
+    setNiestandardowyDziennyIlosc('1'); 
+    setBlokujPortfel(false); 
+    setPortfelPrógKwota('0'); 
+    setDostepnyOnline(false); 
+    setPonownyZakup(true); 
+    setZmianaNaInny(true); 
+    setKupInnyKarnet(true); 
+    setOpis(''); 
+    setObrazekUrl(null);
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (item: any) => {
     setEditingId(item.id);
-    setNazwa(item.nazwa || ''); setCena(item.cena || ''); setStawkaVat(item.stawkaVat || '8%'); setTypKarnetu(item.typKarnetu || 'Na czas'); setCzasIlosc(item.czasIlosc || '1'); setCzasJednostka(item.czasJednostka || 'Miesiąc'); setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10'); setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); setLimitIlosc(item.limitIlosc || '1'); setLimitOkres(item.limitOkres || 'Miesiąc'); setDostepDo(item.dostepDo || 'wszystkich zajęć'); setZaznaczoneZajecia(item.zaznaczoneZajecia || []); setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); setNiestandardowyDni(item.niestandardowyDni || '14'); setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); setBlokujPortfel(item.blokujPortfel ?? false); setPortfelPrógKwota(item.portfelPrógKwota || '0'); setDostepnyOnline(item.dostepnyOnline ?? false); setPonownyZakup(item.ponownyZakup ?? true); setZmianaNaInny(item.zmianaNaInny ?? true); setKupInnyKarnet(item.kupInnyKarnet ?? true); setOpis(item.opis || ''); setObrazekUrl(item.obrazekUrl || null);
+    setNazwa(item.nazwa || ''); 
+    setCena(item.cena || ''); 
+    setStawkaVat(item.stawkaVat || '8%'); 
+    setTypKarnetu(item.typKarnetu || 'Na czas'); 
+    setCzasIlosc(item.czasIlosc || '1'); 
+    setCzasJednostka(item.czasJednostka || 'Miesiąc'); 
+    setIloscTreningow(item.iloscTreningow || (item.ilosc_wejsc ? item.ilosc_wejsc.toString() : '10')); 
+    setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); 
+    setLimitIlosc(item.limitIlosc || '1'); 
+    setLimitOkres(item.limitOkres || 'Miesiąc'); 
+    setDostepDo(item.dostepDo || item.dostep_do_zajec || 'wszystkich zajęć'); 
+    setZaznaczoneZajecia(item.zaznaczoneZajecia || []); 
+    setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); 
+    setNiestandardowyDni(item.niestandardowyDni || '14'); 
+    setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); 
+    setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); 
+    setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); 
+    setBlokujPortfel(item.blokujPortfel ?? false); 
+    setPortfelPrógKwota(item.portfelPrógKwota || '0'); 
+    setDostepnyOnline(item.dostepnyOnline ?? item.sprzedaz_online ?? false); 
+    setPonownyZakup(item.ponownyZakup ?? true); 
+    setZmianaNaInny(item.zmianaNaInny ?? true); 
+    setKupInnyKarnet(item.kupInnyKarnet ?? true); 
+    setOpis(item.opis || ''); 
+    setObrazekUrl(item.obrazekUrl || null);
     setIsModalOpen(true);
   };
 
@@ -247,7 +298,6 @@ export default function KarnetyPage() {
       }
     }
 
-    // Aktualizacja w tabeli klienci (karnety, zapisyNadchodzace, zapisyWypisy)
     const { data: klientData } = await supabase.from('klienci').select('*').eq('id', klientId).single();
     if (klientData) {
       let updatedKarnety = klientData.karnetyKlubowicza;
@@ -382,19 +432,21 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin) z automatyczną synchronizacją zasad nadrzędnych
+  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nazwa.trim() || !cena.trim()) return;
 
     let wyliczonaDlugosc = '';
-    let dodanaIloscWejsc = null;
+    let dodanaIloscWejsc: number | null = null;
     const isContract = typKarnetu === 'Umowa 12 miesięcy';
 
     if (isContract) {
       wyliczonaDlugosc = 'Umowa 12 miesięcy (Cykliczna)';
+      dodanaIloscWejsc = null; // Karnety na umowę nie mają licznika wejść
     } else if (typKarnetu === 'Na czas') {
       wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
+      dodanaIloscWejsc = null; // Karnety na czas nie mają licznika wejść
     } else {
       dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
       if (dodajLimitCzasowy) {
@@ -413,7 +465,7 @@ export default function KarnetyPage() {
       dodajLimitCzasowy,
       limitIlosc,
       limitOkres,
-      zaznaczoneZajecia,
+      zaznaczoneZajecia: dostepDo === 'określonych zajęć' ? zaznaczoneZajecia : [],
       limitCzasowyZapisow,
       niestandardowyDni,
       tygodniowyLimit,
@@ -421,6 +473,7 @@ export default function KarnetyPage() {
       niestandardowyDziennyIlosc,
       blokujPortfel,
       portfelPrógKwota,
+      dostepnyOnline,
       ponownyZakup,
       zmianaNaInny,
       kupInnyKarnet,
@@ -431,7 +484,7 @@ export default function KarnetyPage() {
     };
 
     const supabasePayload = {
-      nazwa: nazwa,
+      nazwa: nazwa.trim(),
       cena_brutto: parseFloat(cena) || 0,
       typ_karnetu: typKarnetu,
       dlugosc: wyliczonaDlugosc,
@@ -449,7 +502,7 @@ export default function KarnetyPage() {
         const { error } = await supabase.from('karnety').insert([supabasePayload]);
         if (error) throw error;
 
-        // Synchronizacja z nadrzędnymi zasadami zapisu (utworzenie domyślnych wpisów dla nowego karnetu)
+        // Synchronizacja z nadrzędnymi zasadami zapisu
         const { data: rulesData } = await supabase
           .from('club_booking_rules')
           .select('*')
@@ -464,17 +517,17 @@ export default function KarnetyPage() {
           await supabase.from('club_booking_rules').update({
             booking_window_per_pass: {
               ...currentWindowMap,
-              [nazwa]: rulesData.booking_window_days ?? 14
+              [nazwa.trim()]: rulesData.booking_window_days ?? 14
             },
             expired_pass_grace_per_pass: {
               ...currentGraceMap,
-              [nazwa]: rulesData.expired_pass_grace_days ?? 15
+              [nazwa.trim()]: rulesData.expired_pass_grace_days ?? 15
             }
           }).eq('id', rulesData.id);
         }
       }
 
-      loadData(); 
+      await loadData(); 
       setIsModalOpen(false);
       
     } catch (error: any) {
@@ -489,7 +542,7 @@ export default function KarnetyPage() {
       try {
         const { error } = await supabase.from('karnety').delete().eq('id', id);
         if (error) throw error;
-        loadData();
+        await loadData();
       } catch (error: any) {
         console.error("Błąd podczas usuwania:", error);
         alert(`Nie udało się usunąć: ${error.message || JSON.stringify(error)}`);
@@ -497,8 +550,8 @@ export default function KarnetyPage() {
     }
   };
 
-  if (!isMounted) {
-    return <div className="p-8 text-center text-slate-500 font-bold">Ładowanie karnetów z chmury...</div>;
+  if (!isMounted || isLoading) {
+    return <div className="p-8 text-center text-slate-500 font-bold uppercase text-xs">Ładowanie karnetów z bazy...</div>;
   }
 
   // JEŚLI UŻYTKOWNIK TO KLUBOWICZ - WYŚWIETLAMY JEGO PANEL KARNETU
@@ -727,6 +780,7 @@ export default function KarnetyPage() {
                   </td>
                   <td className="py-4 px-4 text-slate-600 text-[11px] space-y-0.5">
                     <div>• Dzienny limit: {item.dziennyLimit === 'Niestandardowy' ? `${item.niestandardowyDziennyIlosc} dziennie` : item.dziennyLimit}</div>
+                    <div>• Tygodniowy limit: {item.tygodniowyLimit || 'Bez limitu'}</div>
                     {item.blokujPortfel && (
                       <div className="text-rose-700 font-bold">• Blokada portfela: &lt; {item.portfelPrógKwota} PLN</div>
                     )}
@@ -955,10 +1009,7 @@ export default function KarnetyPage() {
                       value={dostepDo}
                       onChange={(e) => {
                         setDostepDo(e.target.value);
-                        if (e.target.value === 'określonych zajęć') {
-                          setIsDropdownOpen(true);
-                        } else {
-                          setIsDropdownOpen(false);
+                        if (e.target.value !== 'określonych zajęć') {
                           setZaznaczoneZajecia([]);
                         }
                       }}
