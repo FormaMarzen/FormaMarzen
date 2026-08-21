@@ -834,7 +834,15 @@ export default function KarnetyPage() {
       nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
     }
 
-    const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    // PRIORYTET: Dla umów 12M pobieramy indywidualną stawkę przypisaną do rekordu klienta
+    let basePriceNum = 0;
+    if (isContract && passToExtend.cena) {
+      basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
+    } else if (defKarnetu) {
+      basePriceNum = parseFloat(defKarnetu.cena) || 0;
+    } else {
+      basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+    }
     
     // ZAMROŻENIE CYKLU PRZY UŻYCIU KODU RABATOWEGO W ZAKŁADCE KARNETY
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
@@ -2009,7 +2017,6 @@ export default function KarnetyPage() {
                 <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">🔓 Odwieszenie karnetu</h3>
                 <button onClick={() => setIsUnsuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
               </div>
-              
               <div className="space-y-4 text-xs">
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium p-4 rounded-xl leading-relaxed text-center">
                   Czy na pewno chcesz <strong>już dzisiaj</strong> odwiesić swój karnet i wrócić na treningi? <br/><br/>
@@ -2099,12 +2106,21 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M */}
+        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M Z INDYWIDUALNĄ CENĄ */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
           const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
           const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
-          const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+          
+          let basePrice = 0;
+          if (isContract && passToExtend.cena) {
+            basePrice = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
+          } else if (defKarnetu) {
+            basePrice = parseFloat(defKarnetu.cena) || 0;
+          } else {
+            basePrice = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+          }
+
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
 
           let curRataNum = 0;
@@ -2174,7 +2190,7 @@ export default function KarnetyPage() {
                   
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                     <div className="flex justify-between text-slate-600">
-                      <span>{isContract ? 'Miesięczna kwota raty:' : 'Cena katalogowa:'}</span>
+                      <span>{isContract ? 'Miesięczna kwota raty (Twoja stawka):' : 'Cena katalogowa:'}</span>
                       <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                     </div>
                     {appliedLabel && (
