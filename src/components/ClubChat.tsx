@@ -34,6 +34,55 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages]);
 
+  // Funkcja wysyłająca powiadomienie Push do odbiorcy wiadomości
+  const sendChatPushNotification = async (recipientId: number | string, senderName: string, messageText: string) => {
+    try {
+      if (Number(recipientId) === SYSTEM_ID) return;
+
+      let query = supabase.from("klienci").select("id, push_subscription");
+      if (Number(recipientId) === 999999999) {
+        query = query.in("E-mail", ADMIN_EMAILS);
+      } else {
+        query = query.eq("id", recipientId);
+      }
+
+      const { data: clients } = await query;
+      if (!clients || clients.length === 0) return;
+
+      const subscriptions = clients
+        .map((c: any) => {
+          if (!c.push_subscription) return null;
+          try {
+            return typeof c.push_subscription === "string"
+              ? JSON.parse(c.push_subscription)
+              : c.push_subscription;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      if (subscriptions.length === 0) return;
+
+      const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
+
+      await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscriptions,
+          payload: {
+            title: `Wiadomość od: ${senderName}`,
+            body: previewText,
+            url: "/",
+          },
+        }),
+      });
+    } catch (err) {
+      console.error("Błąd wysyłania powiadomienia Push z czatu:", err);
+    }
+  };
+
   // 1. Identyfikacja użytkownika
   useEffect(() => {
     const initUser = async () => {
@@ -179,13 +228,14 @@ export default function ClubChat() {
     if (!newMessage.trim() || !selectedUser || !currentUserId) return;
 
     const senderId = secondaryUserId || currentUserId;
+    const messageText = newMessage.trim();
 
     const payload = {
       nadawca_id: senderId,
       nadawca_nazwa: currentUserName,
       nadawca_avatar: currentUserAvatar,
       odbiorca_id: selectedUser.id,
-      tresc: newMessage.trim(),
+      tresc: messageText,
       przeczytana: false,
       przeczytana_at: null,
     };
@@ -195,6 +245,8 @@ export default function ClubChat() {
     if (!error) {
       setNewMessage("");
       fetchMessages();
+      // Wysłanie powiadomienia Push do odbiorcy
+      sendChatPushNotification(selectedUser.id, currentUserName, messageText);
     }
   };
 
@@ -277,7 +329,7 @@ export default function ClubChat() {
   const renderMessageContent = (msg: any, isMe: boolean) => {
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
     
-    // Teraz sprawdzamy nie tylko treść, ale też czy nadawcą jest system
+    // Sprawdzamy treść i czy nadawcą jest system
     const isBirthdayNotification = isSystemSender && (msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin"));
     const isBadgeNotification = isSystemSender && (msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową"));
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");

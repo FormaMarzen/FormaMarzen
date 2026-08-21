@@ -1481,7 +1481,6 @@ export default function DashboardPage() {
     setIsAddSecondPassModalOpen(false);
     showToast(`Pomyślnie przypisano karnet "${selectedPassToAdd}".`);
   };
-
   const handleSavePassEditSubmit = async () => {
     if (!profileClient || !editingPassModal) return;
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
@@ -1613,6 +1612,7 @@ export default function DashboardPage() {
       : "Karnet został usunięty."
     );
   };
+
   const handleConfirmSuspendPass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !suspendPassTarget) return;
@@ -2822,6 +2822,7 @@ export default function DashboardPage() {
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
@@ -3404,6 +3405,7 @@ export default function DashboardPage() {
           })}
         </div>
       </section>
+
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
@@ -5284,36 +5286,36 @@ export default function DashboardPage() {
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 font-bold"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Email</label>
-                <input
-                  type="email"
-                  value={profileClient.email || ''}
-                  onChange={(e) => setProfileClient({ ...profileClient, email: e.target.value })}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 font-bold"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Płeć</label>
-                <select
-                  value={profileClient.gender || ''}
-                  onChange={(e) => setProfileClient({ ...profileClient, gender: e.target.value })}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 font-bold cursor-pointer"
-                >
-                  <option value="">Nie podano</option>
-                  <option value="Mężczyzna">Mężczyzna</option>
-                  <option value="Kobieta">Kobieta</option>
-                </select>
-              </div>
-              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
-                <button type="button" onClick={() => setIsEditProfileInfoOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-sky-900 hover:bg-sky-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz dane</button>
-              </div>
-            </form>
-          </div>
+<div className="space-y-1">
+              <label className="font-bold text-slate-700">Email</label>
+              <input
+                type="email"
+                value={profileClient.email || ''}
+                onChange={(e) => setProfileClient({ ...profileClient, email: e.target.value })}
+                className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 font-bold"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="font-bold text-slate-700">Płeć</label>
+              <select
+                value={profileClient.gender || ''}
+                onChange={(e) => setProfileClient({ ...profileClient, gender: e.target.value })}
+                className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 font-bold cursor-pointer"
+              >
+                <option value="">Nie podano</option>
+                <option value="Mężczyzna">Mężczyzna</option>
+                <option value="Kobieta">Kobieta</option>
+              </select>
+            </div>
+            <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+              <button type="button" onClick={() => setIsEditProfileInfoOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+              <button type="submit" className="bg-sky-900 hover:bg-sky-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz dane</button>
+            </div>
+          </form>
         </div>
-      )}
+      </div>
+    )}
 
-    </div>
+  </div>
   );
 }
