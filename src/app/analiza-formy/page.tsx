@@ -90,11 +90,11 @@ export default function AnalizaFormyPage() {
     notatki_klubowicza: ''
   });
 
-  // Stany dla Kalkulatora Katch-McArdle
+  // Stany dla Kalkulatora Katch-McArdle z procentowymi modyfikatorami
   const [calcWeight, setCalcWeight] = useState<string>('');
   const [calcFat, setCalcFat] = useState<string>('');
   const [calcPal, setCalcPal] = useState<string>('1.4');
-  const [calcGoal, setCalcGoal] = useState<'redukcja' | 'utrzymanie' | 'masa'>('redukcja');
+  const [calcGoal, setCalcGoal] = useState<string>('-0.2'); // domyślnie -20%
   const [calcResult, setCalcResult] = useState<{
     bmr: number;
     tdee: number;
@@ -368,11 +368,12 @@ export default function AnalizaFormyPage() {
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
-  // Kalkulator Katch-McArdle
+  // Kalkulator Katch-McArdle oparty na procentach (-20%, -10%, 0%, +10%, +20%)
   const calculateKatchMcArdle = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
     const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
     const pal = parseFloat(calcPal);
+    const goalModifier = parseFloat(calcGoal); // np. -0.2, -0.1, 0, 0.1, 0.2
 
     if (!w || w <= 0 || !bf || bf <= 0) {
       alert("Wprowadź prawidłową wagę (kg) oraz poziom tkanki tłuszczowej (%).");
@@ -383,10 +384,10 @@ export default function AnalizaFormyPage() {
     const bmr = 370 + (21.6 * lbm);
     const tdee = bmr * pal;
 
-    let targetKcal = tdee;
-    if (calcGoal === 'redukcja') targetKcal = tdee - 400;
-    else if (calcGoal === 'masa') targetKcal = tdee + 300;
+    // Wyliczenie docelowych kalorii na podstawie wybranego procentu
+    const targetKcal = tdee * (1 + goalModifier);
 
+    // Podział makroskładników: Białko 2.2g/kg LBM, Tłuszcze 0.9g/kg masy ciała, reszta węglowodany
     const proteinG = Math.round(lbm * 2.2);
     const fatG = Math.round(w * 0.9);
     const proteinKcal = proteinG * 4;
@@ -763,7 +764,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* TABELA POMIARÓW Z MOŻLIWOŚCIĄ EDYCJI */}
+          {/* TABELA POMIARÓW Z MOŻLIWOŚCIą EDYCJI */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -1011,7 +1012,7 @@ export default function AnalizaFormyPage() {
           </div>
 
           {/* ========================================================================= */}
-          {/* KALKULATOR KATCH-MCARDLE DLA ZAPOTRZEBOWANIA KALORYCZNEGO */}
+          {/* KALKULATOR KATCH-MCARDLE Z PROCENTOWYMI MODYFIKATORAMI CELU */}
           {/* ========================================================================= */}
           <div className="bg-white p-6 rounded-2xl border border-sky-200 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
@@ -1020,7 +1021,7 @@ export default function AnalizaFormyPage() {
                   <span>🧮</span> Kalkulator Katch-McArdle (BMR & TDEE)
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Precyzyjna metoda wyliczania zapotrzebowania na podstawie beztłuszczowej masy ciała (LBM).
+                  Precyzyjna metoda wyliczania zapotrzebowania na podstawie beztłuszczowej masy ciała (LBM) i procentowego celu.
                 </p>
               </div>
               <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-3 py-1 rounded-full uppercase border border-amber-300">
@@ -1069,15 +1070,17 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Cel sylwetkowy</label>
+                <label className="font-bold text-slate-700 block">Cel procentowy (Modyfikator)</label>
                 <select
                   value={calcGoal}
-                  onChange={(e) => setCalcGoal(e.target.value as any)}
+                  onChange={(e) => setCalcGoal(e.target.value)}
                   className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium"
                 >
-                  <option value="redukcja">🔥 Redukcja (-400 kcal)</option>
-                  <option value="utrzymanie">⚖️ Utrzymanie wagi (Zero)</option>
-                  <option value="masa">💪 Budowa masy (+300 kcal)</option>
+                  <option value="-0.2">🔥 -20% kcal (Głęboka redukcja)</option>
+                  <option value="-0.1">📉 -10% kcal (Lekka redukcja)</option>
+                  <option value="0">⚖️ 0% kcal (Utrzymanie / Zero)</option>
+                  <option value="0.1">📈 +10% kcal (Lekka masa)</option>
+                  <option value="0.2">💪 +20% kcal (Budowa masy)</option>
                 </select>
               </div>
             </div>
