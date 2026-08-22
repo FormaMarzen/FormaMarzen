@@ -18,6 +18,7 @@ export default function MojeZapisyPage() {
   const [zapisyNadchodzace, setZapisyNadchodzace] = useState<any[]>([]);
   const [showAllActive, setShowAllActive] = useState(false);
   const [zapisyPrzeszle, setZapisyPrzeszle] = useState<any[]>([]);
+  const [showAllHistory, setShowAllHistory] = useState(false);
   const [itemToUnregister, setItemToUnregister] = useState<any | null>(null);
 
   // Ranking globalny i wyszukiwarki
@@ -521,9 +522,19 @@ export default function MojeZapisyPage() {
             </div>
           </div>
 
-          {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) - OD POCZĄTKU KONTA, BEZ USUWANIA */}
+          {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) - OSTATNIE 3 + ROZWIJANA LISTA */}
           <div className="space-y-4">
-            <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
+            <div className="flex justify-between items-center">
+              <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
+              {zapisyPrzeszle.length > 3 && (
+                <button 
+                  onClick={() => setShowAllHistory(!showAllHistory)}
+                  className="text-xs font-bold text-sky-600 hover:text-sky-800 cursor-pointer uppercase tracking-wider"
+                >
+                  {showAllHistory ? 'Zwiń listę ↑' : `Pokaż wszystkie (${zapisyPrzeszle.length}) ↓`}
+                </button>
+              )}
+            </div>
             
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
               <div className="overflow-x-auto">
@@ -543,7 +554,7 @@ export default function MojeZapisyPage() {
                         <td colSpan={5} className="py-8 text-center text-slate-400 font-medium">Brak historii odbytych zajęć od początku istnienia konta.</td>
                       </tr>
                     ) : (
-                      zapisyPrzeszle.map((item: any, index: number) => (
+                      (showAllHistory ? zapisyPrzeszle : zapisyPrzeszle.slice(0, 3)).map((item: any, index: number) => (
                         <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
                           <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
                           <td className="py-4 px-5">
@@ -617,7 +628,7 @@ export default function MojeZapisyPage() {
                 </div>
               </div>
 
-              {/* Statystyki Roczne */}
+              {/* Statystyki Roczne (pełna wysokość bez zwijania/scrolla) */}
               <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4">
                 <div className="flex justify-between items-center">
                   <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Roczne podsumowanie</h3>
@@ -642,7 +653,7 @@ export default function MojeZapisyPage() {
                   {Object.keys(userStatsYear.breakdown).length === 0 ? (
                     <div className="text-xs text-slate-400 italic">Brak obecności w wybranym roku.</div>
                   ) : (
-                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    <div className="space-y-1.5">
                       {Object.entries(userStatsYear.breakdown).map(([typeName, countVal]: any) => (
                         <div key={typeName} className="flex justify-between items-center text-xs bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
                           <span className="font-bold text-slate-700">{typeName}</span>
