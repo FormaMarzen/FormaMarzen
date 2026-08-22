@@ -21,12 +21,14 @@ export default function MojeZapisyPage() {
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [itemToUnregister, setItemToUnregister] = useState<any | null>(null);
 
-  // Ranking globalny i wyszukiwarki
+  // Ranking globalny, wyszukiwarki i zwijanie powyżej 10 osób
   const [allUsersAttendance, setAllUsersAttendance] = useState<any[]>([]);
   const [rankingFilterMonth, setRankingFilterMonth] = useState(new Date().getMonth());
   const [rankingFilterYear, setRankingFilterYear] = useState(new Date().getFullYear());
   const [rankingSearchMonth, setRankingSearchMonth] = useState('');
   const [rankingSearchYear, setRankingSearchYear] = useState('');
+  const [showAllRankingMonth, setShowAllRankingMonth] = useState(false);
+  const [showAllRankingYear, setShowAllRankingYear] = useState(false);
 
   // Statystyki użytkownika
   const [statsMonth, setStatsMonth] = useState(new Date().getMonth());
@@ -709,9 +711,17 @@ export default function MojeZapisyPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             
+            {/* Tabela 1: Ranking Miesięczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Ranking Miesięczny</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Ranking Miesięczny</h3>
+                  {filteredRankingMonth.length > 10 && (
+                    <span className="bg-sky-100 text-sky-900 font-bold text-[10px] px-2 py-0.5 rounded-full">
+                      Razem: {filteredRankingMonth.length}
+                    </span>
+                  )}
+                </div>
                 <select 
                   value={rankingFilterMonth}
                   onChange={(e) => setRankingFilterMonth(parseInt(e.target.value, 10))}
@@ -735,10 +745,10 @@ export default function MojeZapisyPage() {
                 />
               </div>
 
-              <div className="overflow-x-auto text-xs max-h-[450px] overflow-y-auto">
+              <div className="overflow-x-auto text-xs">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px] sticky top-0">
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-3 w-16">Pozycja</th>
                       <th className="py-3 px-3">Klubowicz</th>
                       <th className="py-3 px-3 text-right">Liczba obecności</th>
@@ -750,7 +760,7 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników wyszukiwania lub obecności w wybranym miesiącu.</td>
                       </tr>
                     ) : (
-                      filteredRankingMonth.map((item: any, idx: number) => (
+                      (showAllRankingMonth ? filteredRankingMonth : filteredRankingMonth.slice(0, 10)).map((item: any, idx: number) => (
                         <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
                           <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
                             {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
@@ -763,11 +773,30 @@ export default function MojeZapisyPage() {
                   </tbody>
                 </table>
               </div>
+
+              {filteredRankingMonth.length > 10 && (
+                <div className="pt-2 border-t border-slate-100 text-center">
+                  <button
+                    onClick={() => setShowAllRankingMonth(!showAllRankingMonth)}
+                    className="text-xs font-bold text-sky-600 hover:text-sky-800 transition-colors cursor-pointer uppercase tracking-wider"
+                  >
+                    {showAllRankingMonth ? 'Zwiń listę ↑' : `Pokaż wszystkich (${filteredRankingMonth.length}) ↓`}
+                  </button>
+                </div>
+              )}
             </div>
 
+            {/* Tabela 2: Ranking Roczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Ranking Roczny</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Ranking Roczny</h3>
+                  {filteredRankingYear.length > 10 && (
+                    <span className="bg-sky-100 text-sky-900 font-bold text-[10px] px-2 py-0.5 rounded-full">
+                      Razem: {filteredRankingYear.length}
+                    </span>
+                  )}
+                </div>
                 <select 
                   value={rankingFilterYear}
                   onChange={(e) => setRankingFilterYear(parseInt(e.target.value, 10))}
@@ -789,10 +818,10 @@ export default function MojeZapisyPage() {
                 />
               </div>
 
-              <div className="overflow-x-auto text-xs max-h-[450px] overflow-y-auto">
+              <div className="overflow-x-auto text-xs">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px] sticky top-0">
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-3 w-16">Pozycja</th>
                       <th className="py-3 px-3">Klubowicz</th>
                       <th className="py-3 px-3 text-right">Liczba obecności</th>
@@ -804,7 +833,7 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników wyszukiwania lub obecności w wybranym roku.</td>
                       </tr>
                     ) : (
-                      filteredRankingYear.map((item: any, idx: number) => (
+                      (showAllRankingYear ? filteredRankingYear : filteredRankingYear.slice(0, 10)).map((item: any, idx: number) => (
                         <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
                           <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
                             {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
@@ -817,6 +846,17 @@ export default function MojeZapisyPage() {
                   </tbody>
                 </table>
               </div>
+
+              {filteredRankingYear.length > 10 && (
+                <div className="pt-2 border-t border-slate-100 text-center">
+                  <button
+                    onClick={() => setShowAllRankingYear(!showAllRankingYear)}
+                    className="text-xs font-bold text-sky-600 hover:text-sky-800 transition-colors cursor-pointer uppercase tracking-wider"
+                  >
+                    {showAllRankingYear ? 'Zwiń listę ↑' : `Pokaż wszystkich (${filteredRankingYear.length}) ↓`}
+                  </button>
+                </div>
+              )}
             </div>
 
           </div>
@@ -825,6 +865,7 @@ export default function MojeZapisyPage() {
 
       )}
 
+      {/* MODAL POTWIERDZENIA WYPISANIA Z ZAJĘĆ */}
       {itemToUnregister && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
