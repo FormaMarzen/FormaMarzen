@@ -27,15 +27,31 @@ export async function POST(request: Request) {
       url: payload.url || '/'
     });
 
-    const sendPromises = subscriptions.map((sub: any) =>
-      webpush.sendNotification(sub, notificationPayload).catch((err: any) => {
-        console.error('Błąd wysyłania do subskrypcji (status):', err.statusCode || err);
+    // Wysyłamy powiadomienia i zbieramy pełne statusy odpowiedzi
+    const results = await Promise.allSettled(
+      subscriptions.map(async (sub: any) => {
+        try {
+          const response = await webpush.sendNotification(sub, notificationPayload);
+          return { success: true, statusCode: response.statusCode };
+        } catch (err: any) {
+          console.error('Szczegóły błędu Google/Apple Push:', {
+            message: err.message,
+            statusCode: err.statusCode,
+            body: err.body,
+            headers: err.headers
+          });
+          throw err;
+        }
       })
     );
 
-    await Promise.all(sendPromises);
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length > 0) {
+      const errorDetails = failed.map((f: any) => f.reason?.message || 'Nieznany błąd web-push');
+      return NextResponse.json({ success: false, error: errorDetails[0] }, { status: 500 });
+    }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, results });
   } catch (error: any) {
     console.error('Błąd krytyczny endpointu /api/push/send:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
