@@ -8,6 +8,33 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Funkcje pomocnicze do poprawnej gramatyki okresów czasowych
+const formatOkresGramatyka = (ilosc: number, jednostka: string): string => {
+  if (jednostka === 'Dzień') {
+    return ilosc === 1 ? 'dzień' : 'dni';
+  }
+  if (ilosc === 1) return 'miesiąc';
+  const rem10 = ilosc % 10;
+  const rem100 = ilosc % 100;
+  if (rem10 >= 2 && rem10 <= 4 && (rem100 < 10 || rem100 >= 20)) {
+    return 'miesiące';
+  }
+  return 'miesięcy';
+};
+
+const parsujOkresZDlugosci = (dlugoscStr: string) => {
+  if (!dlugoscStr) return { ilosc: '1', jednostka: 'Miesiąc' };
+  const match = dlugoscStr.match(/(\d+)\s*(dzień|dni|miesiąc|miesiące|miesięcy|m|d)/i);
+  if (match) {
+    const isDay = match[2].toLowerCase().startsWith('d');
+    return {
+      ilosc: match[1],
+      jednostka: isDay ? 'Dzień' : 'Miesiąc'
+    };
+  }
+  return { ilosc: '1', jednostka: 'Miesiąc' };
+};
+
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
@@ -84,6 +111,8 @@ export default function KarnetyPage() {
             console.log("Brak dodatkowych ustawień dla:", item.nazwa);
           }
 
+          const fallbackCzas = parsujOkresZDlugosci(item.dlugosc);
+
           return {
             id: item.id,
             utworzony: item.created_at ? item.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
@@ -91,6 +120,10 @@ export default function KarnetyPage() {
             cena: item.cena_brutto ? item.cena_brutto.toString() : '0',
             typKarnetu: item.typ_karnetu,
             limitCzasowy: item.dlugosc,
+            czasIlosc: meta.czasIlosc || fallbackCzas.ilosc,
+            czasJednostka: meta.czasJednostka || fallbackCzas.jednostka,
+            limitIlosc: meta.limitIlosc || '1',
+            limitOkres: meta.limitOkres || 'Miesiąc',
             dostepDo: item.dostep_do_zajec || 'wszystkich zajęć',
             dostepnyOnline: item.sprzedaz_online ?? meta.dostepnyOnline ?? false,
             wUzyciu: item.wUzyciu || 0,
@@ -196,12 +229,15 @@ export default function KarnetyPage() {
     setNazwa(item.nazwa || '');
     setCena(item.cena || '');
     setStawkaVat(item.stawkaVat || '8%');
-    setTypKarnetu(item.typKarnetu || 'Na czas');
-    setCzasIlosc(item.czasIlosc || '1');
-    setCzasJednostka(item.czasJednostka || 'Miesiąc');
+    setTypKarnetu(item.typKarnetu || item.typ_karnetu || 'Na czas');
+
+    const parsedCzas = parsujOkresZDlugosci(item.dlugosc || item.limitCzasowy);
+    setCzasIlosc(item.czasIlosc ? String(item.czasIlosc) : parsedCzas.ilosc);
+    setCzasJednostka(item.czasJednostka || parsedCzas.jednostka);
+
     setIloscTreningow(item.iloscTreningow || (item.ilosc_wejsc ? item.ilosc_wejsc.toString() : '10'));
     setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true);
-    setLimitIlosc(item.limitIlosc || '1');
+    setLimitIlosc(item.limitIlosc ? String(item.limitIlosc) : '1');
     setLimitOkres(item.limitOkres || 'Miesiąc');
     setDostepDo(item.dostepDo || item.dostep_do_zajec || 'wszystkich zajęć');
     setZaznaczoneZajecia(item.zaznaczoneZajecia || []);
@@ -396,7 +432,7 @@ export default function KarnetyPage() {
         return { 
           ...k, 
           zawieszonyOd: sOd, 
-          zawieszonyDo: sDo,
+          zawieszonyDo: sDo, 
           statusTekst: `Zawieszony (od ${sOd} do ${sDo})`
         };
       }
@@ -482,16 +518,21 @@ export default function KarnetyPage() {
     let dodanaIloscWejsc: number | null = null;
     const isContract = typKarnetu === 'Umowa 12 miesięcy';
 
+    const intCzasIlosc = parseInt(czasIlosc, 10) || 1;
+    const intLimitIlosc = parseInt(limitIlosc, 10) || 1;
+
     if (isContract) {
       wyliczonaDlugosc = 'Umowa 12 miesięcy (Cykliczna)';
       dodanaIloscWejsc = null;
     } else if (typKarnetu === 'Na czas') {
-      wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
+      const okresTekst = formatOkresGramatyka(intCzasIlosc, czasJednostka);
+      wyliczonaDlugosc = `${intCzasIlosc} ${okresTekst}`;
       dodanaIloscWejsc = null;
     } else {
       dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
       if (dodajLimitCzasowy) {
-        wyliczonaDlugosc = `${iloscTreningow} wejść / ${limitIlosc} ${limitOkres.toLowerCase()}${parseInt(limitIlosc) > 1 && limitOkres === 'Miesiąc' ? 'e' : ''}`;
+        const okresLimitTekst = formatOkresGramatyka(intLimitIlosc, limitOkres);
+        wyliczonaDlugosc = `${iloscTreningow} wejść / ${intLimitIlosc} ${okresLimitTekst}`;
       } else {
         wyliczonaDlugosc = `${iloscTreningow} wejść (bez limitu czasu)`;
       }
@@ -499,13 +540,15 @@ export default function KarnetyPage() {
 
     const metaDane = {
       stawkaVat,
-      czasIlosc,
+      czasIlosc: String(intCzasIlosc),
       czasJednostka,
       iloscTreningow,
       ilosc_wejsc: dodanaIloscWejsc,
       dodajLimitCzasowy,
-      limitIlosc,
+      limitIlosc: String(intLimitIlosc),
       limitOkres,
+      dlugoscDni: typKarnetu === 'Na czas' ? (czasJednostka === 'Dzień' ? intCzasIlosc : intCzasIlosc * 30) : null,
+      dlugoscMiesiace: typKarnetu === 'Na czas' && czasJednostka === 'Miesiąc' ? intCzasIlosc : null,
       zaznaczoneZajecia: dostepDo === 'określonych zajęć' ? zaznaczoneZajecia : [],
       limitCzasowyZapisow,
       niestandardowyDni,
