@@ -144,7 +144,7 @@ export default function AnalizaFormyPage() {
             if (klientData) {
               const k = klientData as unknown as Klient;
               setSelectedKlient(k);
-              const g = (k.Płeć || k.plec || k.gender || '').toLowerCase();
+              const g = (k.gender || k.Płeć || k.plec || '').toLowerCase();
               if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
               else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
 
@@ -198,7 +198,7 @@ export default function AnalizaFormyPage() {
     setSearchQuery(`${klient.Imię} ${klient.Nazwisko}`);
     setIsSearchFocused(false);
 
-    const g = (klient.Płeć || klient.plec || klient.gender || '').toLowerCase();
+    const g = (klient.gender || klient.Płeć || klient.plec || '').toLowerCase();
     if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
     else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
 
@@ -520,7 +520,7 @@ export default function AnalizaFormyPage() {
     );
   }
 
-  const clientGenderDisplay = selectedKlient ? (selectedKlient.Płeć || selectedKlient.plec || selectedKlient.gender || 'Nie podano') : '';
+  const clientGenderDisplay = selectedKlient ? (selectedKlient.gender || selectedKlient.Płeć || selectedKlient.plec || 'Nie podano') : '';
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
@@ -623,7 +623,7 @@ export default function AnalizaFormyPage() {
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-sky-100">
                 {searchResults.map((klient) => {
                   const avatar = klient.avatarUrl || klient.AvatarUrl;
-                  const plecTxt = klient.Płeć || klient.plec || klient.gender || 'Nie podano';
+                  const plecTxt = klient.gender || klient.Płeć || klient.plec || 'Nie podano';
                   return (
                     <div
                       key={klient.id}
@@ -786,7 +786,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* TABELA POMIARÓW Z MOŻLIWOŚCIĄ EDYCJI */}
+          {/* TABELA POMIARÓW Z MOŻLIWOŚCIą EDYCJI */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -1063,7 +1063,7 @@ export default function AnalizaFormyPage() {
                 <select
                   value={calcGender}
                   onChange={(e) => setCalcGender(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-bold text-sky-950"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-bold text-sky-950 cursor-pointer"
                 >
                   <option value="mezczyzna">👨 Mężczyzna</option>
                   <option value="kobieta">👩 Kobieta</option>
@@ -1099,7 +1099,7 @@ export default function AnalizaFormyPage() {
                 <select
                   value={calcPal}
                   onChange={(e) => setCalcPal(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium cursor-pointer"
                 >
                   <option value="1.2">1.2 – Siedzący tryb</option>
                   <option value="1.375">1.375 – Lekka (1-3 treng.)</option>
@@ -1114,7 +1114,7 @@ export default function AnalizaFormyPage() {
                 <select
                   value={calcGoal}
                   onChange={(e) => setCalcGoal(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium cursor-pointer"
                 >
                   <option value="-0.2">🔥 -20% kcal (Głęboka redukcja)</option>
                   <option value="-0.1">📉 -10% kcal (Lekka redukcja)</option>
