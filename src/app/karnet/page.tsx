@@ -2109,12 +2109,6 @@ export default function KarnetyPage() {
                           <span className="text-sm">🕒</span> PRZEDŁUŻ
                         </button>
                       )}
-                      <button 
-                        onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
-                        className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer"
-                      >
-                        $ KUP KARNET
-                      </button>
                     </div>
                   </div>
                 );
@@ -3119,7 +3113,7 @@ export default function KarnetyPage() {
                           min="1"
                           value={niestandardowyDziennyIlosc}
                           onChange={(e) => setNiestandardowyDziennyIlosc(e.target.value)}
-                          className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
+                          className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold"
                         />
                       </div>
                     )}
