@@ -12,6 +12,7 @@ export default function AutomatyczneZapisyPage() {
   const [klienciList, setKlienciList] = useState<any[]>([]);
   const [grafikItems, setGrafikItems] = useState<any[]>([]);
   const [autoBookingsList, setAutoBookingsList] = useState<any[]>([]);
+  const [zapisyList, setZapisyList] = useState<any[]>([]);
   
   // Stan wyboru
   const [selectedClientId, setSelectedClientId] = useState<string>('');
@@ -68,6 +69,43 @@ export default function AutomatyczneZapisyPage() {
     return null;
   };
 
+  // Kalkulacja liczby wyłącznie przyszłych treningów dla danej reguły
+  const getFutureBookingsCount = (rule: any, bookings: any[], grafik: any[]): number => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const classObj = grafik.find(c => String(c.id) === String(rule.grafik_id));
+    const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || classObj?.godzina || '00:00').split(':');
+
+    return (bookings || []).filter((b: any) => {
+      if (String(b.klient_id) !== String(rule.klient_id)) return false;
+      const key = b.class_key || '';
+      if (!key.startsWith(`${rule.grafik_id}_`)) return false;
+
+      const datePart = key.split('_')[1];
+      if (!datePart) return false;
+
+      let m = 0;
+      let d = 0;
+      let yr = currentYear;
+
+      if (datePart.includes('/')) {
+        const p = datePart.split('/').map(Number);
+        d = p[0];
+        m = p[1];
+      } else if (datePart.includes('-')) {
+        const p = datePart.split('-').map(Number);
+        yr = p[0];
+        m = p[1];
+        d = p[2];
+      } else {
+        return false;
+      }
+
+      const classDateTime = new Date(yr, m - 1, d, parseInt(sh, 10), parseInt(sm, 10), 0);
+      return classDateTime > now && (b.status === 'zapisany' || !b.status);
+    }).length;
+  };
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -104,11 +142,20 @@ export default function AutomatyczneZapisyPage() {
       }));
       setGrafikItems(combinedGrafik);
 
-      // 3. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
+      // 3. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika
+      const { data: zapisyData, error: zapisyErr } = await supabase.from('zapisy_zajec').select('*');
+      if (zapisyErr) console.error('Błąd pobierania zapisów:', zapisyErr);
+      if (zapisyData) setZapisyList(zapisyData);
+
+      // 4. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
       const { data: autoData, error: autoErr } = await supabase.from('automatyczne_zapisy').select('*');
       if (!autoErr && autoData) {
         setAutoBookingsList(autoData);
         await syncAutoBookings(autoData, enrichedClients, combinedGrafik);
+        
+        // Ponowne pobranie zapisów po ewentualnym dopisaniu przez synchronizację
+        const { data: refreshedZapisy } = await supabase.from('zapisy_zajec').select('*');
+        if (refreshedZapisy) setZapisyList(refreshedZapisy);
       }
 
     } catch (err) {
@@ -130,7 +177,7 @@ export default function AutomatyczneZapisyPage() {
 
       const livePassExpiry = clientObj.calculatedPassExpiry;
 
-      // Jeżeli data karnetu zmieniła się w profilu klienta, uaktualnij wpis w tabeli automatyczne_zapisy
+      // Aktualizacja wpisu w tabeli automatyczne_zapisy jeśli zmieniła się ważność karnetu
       if (livePassExpiry !== rule.pass_expiry) {
         await supabase
           .from('automatyczne_zapisy')
@@ -173,7 +220,7 @@ export default function AutomatyczneZapisyPage() {
         }
       }
 
-      // Jeżeli karnet wygasł lub został usunięty, usuń wszystkie przyszłe terminy dla tej reguły
+      // Jeśli brak aktywnego karnetu, usuń przyszłe rezerwacje dla tej reguły
       if (!endDate || endDate < startDate) {
         const keysToRemove: string[] = [];
         (existingBookings || []).forEach((b: any) => {
@@ -189,7 +236,7 @@ export default function AutomatyczneZapisyPage() {
                 yr = p[0]; m = p[1]; d = p[2];
               }
               const [sh = '00', sm = '00'] = (classObj.time || classObj.start || '00:00').split(':');
-              const classDateTime = new Date(yr, m - 1, d, parseInt(sh), parseInt(sm), 0);
+              const classDateTime = new Date(yr, m - 1, d, parseInt(sh, 10), parseInt(sm, 10), 0);
               if (classDateTime > now) {
                 keysToRemove.push(b.class_key);
               }
@@ -207,7 +254,7 @@ export default function AutomatyczneZapisyPage() {
         continue;
       }
 
-      // Dopisz klubowicza na wszystkie terminy w ramach aktywnego karnetu
+      // Dopisz na przyszłe terminy w ramach ważności karnetu
       let newZapisyNadchodzace = [...(clientObj.zapisyNadchodzace || [])];
       let hasUpdates = false;
 
@@ -435,7 +482,7 @@ export default function AutomatyczneZapisyPage() {
             }
 
             const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || '00:00').split(':');
-            const classDateTime = new Date(yr, m - 1, d, parseInt(sh), parseInt(sm), 0);
+            const classDateTime = new Date(yr, m - 1, d, parseInt(sh, 10), parseInt(sm, 10), 0);
 
             if (classDateTime > now) {
               keysToDelete.push(key);
@@ -680,7 +727,7 @@ export default function AutomatyczneZapisyPage() {
               📋 Aktywne Reguły Automatycznych Zapisów
             </h2>
             <p className="text-xs text-slate-400 font-medium">
-              Lista osób posiadających stałe przypisanie do zajęć cyklicznych wraz z aktualnym statusem karnetu.
+              Lista osób posiadających stałe przypisanie do zajęć cyklicznych wraz z aktualnym statusem karnetu oraz liczbą zaplanowanych przyszłych treningów.
             </p>
           </div>
           <span className="text-[11px] font-black text-sky-900 bg-sky-50 px-3 py-1.5 rounded-xl border border-sky-200">
@@ -694,13 +741,14 @@ export default function AutomatyczneZapisyPage() {
               const matchedClient = klienciList.find(k => String(k.id) === String(item.klient_id));
               const livePassExpiry = matchedClient ? matchedClient.displayPassExpiry : (item.pass_expiry || 'Brak');
               const hasActivePass = matchedClient ? !!matchedClient.calculatedPassExpiry : (item.pass_expiry && item.pass_expiry !== 'Brak');
+              const futureBookingsCount = getFutureBookingsCount(item, zapisyList, grafikItems);
 
               return (
                 <div
                   key={item.id}
                   className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50/80 border border-slate-200 rounded-2xl gap-3 hover:border-sky-300 transition-all"
                 >
-                  <div className="space-y-1">
+                  <div className="space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase bg-emerald-100 text-emerald-900">
                         Stała Rezerwacja
@@ -709,6 +757,10 @@ export default function AutomatyczneZapisyPage() {
                         hasActivePass ? 'bg-sky-50 text-sky-900 border-sky-200' : 'bg-rose-50 text-rose-800 border-rose-200'
                       }`}>
                         Ważność karnetu: {livePassExpiry}
+                      </span>
+                      <span className="bg-amber-100 text-amber-900 text-[11px] font-black px-2.5 py-0.5 rounded-md border border-amber-300 flex items-center gap-1 shadow-xs">
+                        <span>🎯 Przyszłe treningi:</span>
+                        <span className="text-amber-950 font-black underline">{futureBookingsCount}</span>
                       </span>
                     </div>
                     <h3 className="text-xs font-black text-slate-900">
