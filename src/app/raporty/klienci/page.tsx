@@ -120,6 +120,24 @@ export default function KlienciPage() {
     return isNaN(fallback) ? 0 : fallback;
   };
 
+  // --- HELPERY SYNCHRONIZACJI DATY WAŻNOŚCI I CENY DO SUPABASE ---
+  const getLatestPassExpiry = (passes: any[]): string | null => {
+    if (!passes || passes.length === 0) return null;
+    const validDates = passes
+      .map((k: any) => k.waznyDo)
+      .filter(Boolean)
+      .sort((a: string, b: string) => b.localeCompare(a));
+    return validDates.length > 0 ? validDates[0] : null;
+  };
+
+  const getPassPrice = (passes: any[]): string => {
+    if (!passes || passes.length === 0) return '0.00 PLN';
+    const latest = passes.reduce((prev: any, curr: any) => {
+      return (!prev || (curr.waznyDo && curr.waznyDo > prev.waznyDo)) ? curr : prev;
+    }, null);
+    return latest?.cena || '0.00 PLN';
+  };
+
   // --- FUNKCJE POMOCNICZE I RABATOWE ---
   const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
 
@@ -600,24 +618,20 @@ export default function KlienciPage() {
            }
         }
 
-        if (hasChanges) {
+        const calculatedExpiry = getLatestPassExpiry(finalKarnety);
+        const cenaAktywnegoKarnetu = getPassPrice(finalKarnety);
+
+        // Synchronizacja z Supabase jeśli data wygaśnięcia lub cena w bazie różnią się od rzeczywistego stanu
+        if (hasChanges || c.Wygasa !== calculatedExpiry || c.Cena !== cenaAktywnegoKarnetu) {
            await supabase.from('klienci').update({ 
                karnetyKlubowicza: finalKarnety,
+               Wygasa: calculatedExpiry,
+               Cena: cenaAktywnegoKarnetu,
                discount: currentDiscount,
                rabat: currentRabat,
                system_discount_offset: currentOffset,
                hasLostContinuity: hasLostContinuity
            }).eq('id', c.id);
-        }
-
-        let cenaAktywnegoKarnetu = '0.00 PLN';
-        if (finalKarnety.length > 0) {
-          const najblizszyKarnet = finalKarnety.reduce((prev: any, curr: any) => {
-            return (!prev || (curr.waznyDo && curr.waznyDo > prev.waznyDo)) ? curr : prev;
-          }, null);
-          if (najblizszyKarnet && najblizszyKarnet.cena) {
-            cenaAktywnegoKarnetu = najblizszyKarnet.cena;
-          }
         }
 
         const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
@@ -633,7 +647,8 @@ export default function KlienciPage() {
           lastName: c.Nazwisko || c.lastName || '',
           registered: c.Zarejestrowany || c.registered || '2026-06-01',
           activated: c.activated || '2026-06-01',
-          expiresDate: c.expiresDate || '',
+          expiresDate: calculatedExpiry || '',
+          Wygasa: calculatedExpiry,
           price: cenaAktywnegoKarnetu,
           discount: currentDiscount || '',
           wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
@@ -708,7 +723,7 @@ export default function KlienciPage() {
     setIsEditingDiscount(false);
   };
 
-  // POPRAWIONA FUNKCJA ZAPISU RABATU SYSTEMOWEGO PROSTO DO KOLUMNY 'rabat'
+  // ZAPIS RABATU SYSTEMOWEGO DO KOLUMNY 'rabat'
   const handleSaveSystemDiscount = async () => {
     if (!profileClient) return;
     const targetVal = parseFloat(systemDiscountInput) || 0;
@@ -748,6 +763,7 @@ export default function KlienciPage() {
     let poczatkoweKarnety: any[] = [];
     let cenaKarnetu = '0.00 PLN';
     let cenaWartosc = 0;
+    let dataWygasnieciaStr: string | null = null;
 
     if (newClient.selectedPass) {
       const defKarnetu = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
@@ -768,7 +784,7 @@ export default function KlienciPage() {
 
       const dataWygasniecia = new Date();
       dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-      const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+      dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
 
       if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
         cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
@@ -813,6 +829,7 @@ export default function KlienciPage() {
         "Numer tel.": newClient.phone,
         "E-mail": newClient.email,
         Cena: cenaKarnetu,
+        Wygasa: dataWygasnieciaStr,
         Portfel: poczatkowyStanStr,
         Zarejestrowany: newClient.registered,
         karnetyKlubowicza: poczatkoweKarnety
@@ -864,6 +881,7 @@ export default function KlienciPage() {
     setIsEditProfileInfoOpen(false);
     loadData();
   };
+
   const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
       const { data: userSignups } = await supabase.from('zapisy_zajec').select('class_key').eq('klient_id', id);
@@ -874,6 +892,7 @@ export default function KlienciPage() {
         }
       }
       await supabase.from('transakcje').delete().eq('klient_id', id);
+      await supabase.from('automatyczne_zapisy').delete().eq('klient_id', id);
       await supabase.from('klienci').delete().eq('id', id);
       
       setTableActionClient(null);
@@ -990,8 +1009,11 @@ export default function KlienciPage() {
       return k;
     });
 
+    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
     await supabase.from('klienci').update({
       karnetyKlubowicza: uaktualnioneKarnety,
+      Wygasa: latestExpiry,
       Cena: nowaCena,
       Portfel: nowyStanStr
     }).eq('id', profileClient.id);
@@ -1085,9 +1107,11 @@ export default function KlienciPage() {
     };
 
     const uaktualnioneKarnety = [...(profileClient.karnetyKlubowicza || []), nowyKarnetObj];
+    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
 
     const { error } = await supabase.from('klienci').update({
       karnetyKlubowicza: uaktualnioneKarnety,
+      Wygasa: latestExpiry,
       Cena: cenaObjKarnetu,
       Portfel: nowyStanStr
     }).eq('id', profileClient.id);
@@ -1201,7 +1225,13 @@ export default function KlienciPage() {
       return k;
     });
 
-    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
+    const { error } = await supabase.from('klienci').update({ 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      Wygasa: latestExpiry 
+    }).eq('id', profileClient.id);
+
     if (!error) {
       alert(`Karnet został odwieszony! Ważność została przedłużona o ${diffDays} dni. Nowa data to ${newExpDateStr}.`);
       setIsSuspendModalOpen(false);
@@ -1241,9 +1271,9 @@ export default function KlienciPage() {
       if (k.id === suspendPassTarget.id) {
         return { 
           ...k, 
-          blokadaOd: bOd,
-          blokadaDo: bDo,
-          powodBlokady: powod
+          blokadaOd: bOd, 
+          blokadaDo: bDo, 
+          powodBlokady: powod 
         };
       }
       return k;
@@ -1333,7 +1363,14 @@ export default function KlienciPage() {
       return k;
     });
 
-    await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+    const passPrice = getPassPrice(uaktualnioneKarnety);
+
+    await supabase.from('klienci').update({ 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      Wygasa: latestExpiry,
+      Cena: passPrice
+    }).eq('id', profileClient.id);
 
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
@@ -1347,6 +1384,7 @@ export default function KlienciPage() {
     loadData();
   };
 
+  // CAŁKOWITE USUNIĘCIE KARNETU Z CZYSZCZENIEM WYGASA I CENY W SUPABASE
   const handleConfirmDeletePass = async (passId: number) => {
     if (confirm("Czy na pewno chcesz usunąć ten karnet? Klient zostanie automatycznie wypisany ze wszystkich przyszłych zajęć.")) {
       if (!profileClient) return;
@@ -1389,8 +1427,15 @@ export default function KlienciPage() {
       }
 
       const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
+      const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+      const newCena = getPassPrice(uaktualnioneKarnety);
       
-      await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+      // Zapisujemy w Supabase wyczyszczoną kolumnę Wygasa (null jeśli brak karnetów)
+      await supabase.from('klienci').update({ 
+        karnetyKlubowicza: uaktualnioneKarnety,
+        Wygasa: latestExpiry,
+        Cena: newCena
+      }).eq('id', profileClient.id);
       
       if (cancelledCount > 0) {
         await supabase.from('transakcje').insert([{
@@ -1484,6 +1529,7 @@ export default function KlienciPage() {
   });
 
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
@@ -1547,8 +1593,8 @@ export default function KlienciPage() {
           <div className="relative flex-1">
             <span className="absolute left-4 top-3 text-slate-400">🔍</span>
             <input 
-              type="text"
-              placeholder="Wyszukaj po imieniu, nazwisku, emailu lub telefonie..."
+              type="text" 
+              placeholder="Wyszukaj po imieniu, nazwisku, emailu lub telefonie..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-white border border-sky-200 rounded-xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
@@ -2080,7 +2126,7 @@ export default function KlienciPage() {
                   )}
                 </div>
                 
-                {/* ROZWIJANE MENU: HISTORIA TYLKO ZAKUPÓW I PRZEDŁUŻENIÓW */}
+                {/* ROZWIJANE MENU: HISTORIA TYLKO ZAKUPÓW I PRZEDŁUŻEŃ */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 mt-4">
                   <button 
                     onClick={() => setIsPassHistoryOpen(!isPassHistoryOpen)} 
@@ -2381,7 +2427,7 @@ export default function KlienciPage() {
                   </div>
                 </div>
               </div>
-              </div>
+            </div>
 
           </div>
         </div>
