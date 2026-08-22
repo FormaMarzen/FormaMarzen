@@ -247,6 +247,15 @@ export default function PortfelPage() {
         </div>
       </div>
 
+      {/* BANER PŁATNOŚCI */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-center overflow-hidden">
+        <img 
+          src="/autopay-banner.png" 
+          alt="Dostępne metody płatności Autopay" 
+          className="w-full max-h-14 sm:max-h-16 object-contain"
+        />
+      </div>
+
       {/* SEKCJA 2: HISTORIA TRANSAKCJI FINANSOWYCH */}
       <div className="space-y-4">
         <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA TRANSAKCJI FINANSOWYCH</h2>
