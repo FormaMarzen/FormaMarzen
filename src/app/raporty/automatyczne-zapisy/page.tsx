@@ -18,10 +18,13 @@ export default function AutomatyczneZapisyPage() {
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   
-  // Wyszukiwarka klubowiczów
+  // Wyszukiwarka klubowiczów w formularzu
   const [clientSearchQuery, setClientSearchQuery] = useState<string>('');
   const [isClientDropdownOpen, setIsClientDropdownOpen] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Wyszukiwarka w aktywnych regułach
+  const [rulesSearchQuery, setRulesSearchQuery] = useState<string>('');
 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
@@ -153,7 +156,6 @@ export default function AutomatyczneZapisyPage() {
         setAutoBookingsList(autoData);
         await syncAutoBookings(autoData, enrichedClients, combinedGrafik);
         
-        // Ponowne pobranie zapisów po ewentualnym dopisaniu przez synchronizację
         const { data: refreshedZapisy } = await supabase.from('zapisy_zajec').select('*');
         if (refreshedZapisy) setZapisyList(refreshedZapisy);
       }
@@ -177,7 +179,6 @@ export default function AutomatyczneZapisyPage() {
 
       const livePassExpiry = clientObj.calculatedPassExpiry;
 
-      // Aktualizacja wpisu w tabeli automatyczne_zapisy jeśli zmieniła się ważność karnetu
       if (livePassExpiry !== rule.pass_expiry) {
         await supabase
           .from('automatyczne_zapisy')
@@ -186,7 +187,6 @@ export default function AutomatyczneZapisyPage() {
         rule.pass_expiry = livePassExpiry || 'Brak';
       }
 
-      // Istniejące rezerwacje klienta
       const { data: existingBookings } = await supabase
         .from('zapisy_zajec')
         .select('id, class_key')
@@ -194,7 +194,6 @@ export default function AutomatyczneZapisyPage() {
 
       const bookedKeys = new Set((existingBookings || []).map(b => b.class_key));
 
-      // Historia manualnych wypisów klienta
       const { data: cancelledT } = await supabase
         .from('transakcje')
         .select('class_key')
@@ -220,7 +219,6 @@ export default function AutomatyczneZapisyPage() {
         }
       }
 
-      // Jeśli brak aktywnego karnetu, usuń przyszłe rezerwacje dla tej reguły
       if (!endDate || endDate < startDate) {
         const keysToRemove: string[] = [];
         (existingBookings || []).forEach((b: any) => {
@@ -254,7 +252,6 @@ export default function AutomatyczneZapisyPage() {
         continue;
       }
 
-      // Dopisz na przyszłe terminy w ramach ważności karnetu
       let newZapisyNadchodzace = [...(clientObj.zapisyNadchodzace || [])];
       let hasUpdates = false;
 
@@ -452,7 +449,6 @@ export default function AutomatyczneZapisyPage() {
       const now = new Date();
       const currentYear = now.getFullYear();
 
-      // 1. Pobierz wszystkie zapisy tego klienta
       const { data: userBookings } = await supabase
         .from('zapisy_zajec')
         .select('*')
@@ -492,7 +488,6 @@ export default function AutomatyczneZapisyPage() {
         }
       });
 
-      // 2. Usuń przyszłe rezerwacje z tabeli zapisy_zajec
       if (keysToDelete.length > 0) {
         await supabase
           .from('zapisy_zajec')
@@ -501,7 +496,6 @@ export default function AutomatyczneZapisyPage() {
           .eq('klient_id', klientId);
       }
 
-      // 3. Zaktualizuj tablicę zapisyNadchodzace w profilu klienta
       const clientObj = klienciList.find(k => Number(k.id) === klientId);
       if (clientObj) {
         let currentNadchodzace = clientObj.zapisyNadchodzace || [];
@@ -539,11 +533,9 @@ export default function AutomatyczneZapisyPage() {
           .eq('id', Number(klientId));
       }
 
-      // 4. Usuń regułę z tabeli automatyczne_zapisy
       const { error: delErr } = await supabase.from('automatyczne_zapisy').delete().eq('id', id);
       if (delErr) throw delErr;
 
-      // 5. Zarejestruj transakcję informacyjną
       if (cancelledCount > 0) {
         await supabase.from('transakcje').insert([{
           klient_id: klientId,
@@ -568,6 +560,15 @@ export default function AutomatyczneZapisyPage() {
   });
 
   const selectedClientObject = klienciList.find(k => String(k.id) === String(selectedClientId));
+
+  // Filtrowanie listy aktywnych reguł
+  const filteredAutoBookings = autoBookingsList.filter((item) => {
+    const query = rulesSearchQuery.toLowerCase().trim();
+    if (!query) return true;
+    const clientName = (item.client_name || '').toLowerCase();
+    const classTitle = (item.class_title || '').toLowerCase();
+    return clientName.includes(query) || classTitle.includes(query);
+  });
 
   if (loading && klienciList.length === 0) {
     return (
@@ -721,7 +722,7 @@ export default function AutomatyczneZapisyPage() {
 
       {/* LISTA AKTYWNYCH AUTOMATYCZNYCH ZAPISÓW */}
       <div className="bg-white border border-slate-200/80 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-4 gap-4">
           <div className="space-y-1">
             <h2 className="text-xs font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
               📋 Aktywne Reguły Automatycznych Zapisów
@@ -730,14 +731,37 @@ export default function AutomatyczneZapisyPage() {
               Lista osób posiadających stałe przypisanie do zajęć cyklicznych wraz z aktualnym statusem karnetu oraz liczbą zaplanowanych przyszłych treningów.
             </p>
           </div>
-          <span className="text-[11px] font-black text-sky-900 bg-sky-50 px-3 py-1.5 rounded-xl border border-sky-200">
-            Aktywnych reguł: {autoBookingsList.length}
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[11px] font-black text-sky-900 bg-sky-50 px-3 py-1.5 rounded-xl border border-sky-200">
+              Aktywnych reguł: {filteredAutoBookings.length} {rulesSearchQuery && `(z ${autoBookingsList.length})`}
+            </span>
+          </div>
+        </div>
+
+        {/* WYSZUKIWARKA REGUŁ */}
+        <div className="relative">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">🔍</span>
+          <input
+            type="text"
+            value={rulesSearchQuery}
+            onChange={(e) => setRulesSearchQuery(e.target.value)}
+            placeholder="Szukaj reguły po imieniu, nazwisku klubowicza lub nazwie treningu..."
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-9 pr-8 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+          />
+          {rulesSearchQuery && (
+            <button
+              type="button"
+              onClick={() => setRulesSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 gap-3">
-          {autoBookingsList.length > 0 ? (
-            autoBookingsList.map((item) => {
+          {filteredAutoBookings.length > 0 ? (
+            filteredAutoBookings.map((item) => {
               const matchedClient = klienciList.find(k => String(k.id) === String(item.klient_id));
               const livePassExpiry = matchedClient ? matchedClient.displayPassExpiry : (item.pass_expiry || 'Brak');
               const hasActivePass = matchedClient ? !!matchedClient.calculatedPassExpiry : (item.pass_expiry && item.pass_expiry !== 'Brak');
@@ -782,7 +806,9 @@ export default function AutomatyczneZapisyPage() {
             })
           ) : (
             <div className="text-center py-12 text-xs text-slate-400 font-medium">
-              Brak zdefiniowanych automatycznych zapisów. Użyj formularza powyżej, aby dodać pierwszą regułę.
+              {rulesSearchQuery
+                ? `Nie znaleziono reguł pasujących do frazy: "${rulesSearchQuery}"`
+                : 'Brak zdefiniowanych automatycznych zapisów. Użyj formularza powyżej, aby dodać pierwszą regułę.'}
             </div>
           )}
         </div>
