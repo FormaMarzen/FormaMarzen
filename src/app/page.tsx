@@ -4,12 +4,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
-// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Pomocnik do konwersji klucza VAPID
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
@@ -26,7 +24,6 @@ export default function DashboardPage() {
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
   const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
   
-  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST Z DOŁU EKRANU
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -34,7 +31,6 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW
   const sendPushNotification = async (clientIds: number | number[], payload: { title: string; body: string; url?: string }) => {
     try {
       const ids = Array.isArray(clientIds) ? clientIds : [clientIds];
@@ -73,7 +69,6 @@ export default function DashboardPage() {
     }
   };
 
-  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return;
@@ -167,7 +162,6 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
-  // STAN WYBORU CZASU WYPISU Z KRZESEŁKA
   const [isWaitlistModalOpen, setIsWaitlistModalOpen] = useState(false);
   const [selectedWaitlistCutoff, setSelectedWaitlistCutoff] = useState<number>(30);
   const [isEditWaitlistModalOpen, setIsEditWaitlistModalOpen] = useState(false);
@@ -177,7 +171,6 @@ export default function DashboardPage() {
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
 
-  // STAN NADRZĘDNYCH ZASAD ZAPISÓW
   const [bookingRules, setBookingRules] = useState<any>({
     cancel_deadline_minutes: 90,
     booking_cutoff_minutes: null,
@@ -195,7 +188,6 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // SILNIK PROGRAMOWANIA TRENINGÓW I CYKLICZNEJ ROTACJI JEDNOSTEK TRENINGOWYCH
   const getProgrammedWorkout = (classItem: any, isoDate?: string, displayDate?: string) => {
     if (!classItem || !classItem.title) return null;
     const matchedRodzaj = rodzajeZajec.find((r: any) => (r.nazwa || '').trim().toLowerCase() === (classItem.title || '').trim().toLowerCase());
@@ -235,7 +227,7 @@ export default function DashboardPage() {
       targetDate = new Date();
     }
 
-    const baseDate = new Date(2026, 0, 5); // Poniedziałek, 5 stycznia 2026 jako baza cyklu
+    const baseDate = new Date(2026, 0, 5);
     const diffMs = targetDate.getTime() - baseDate.getTime();
     const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
     const dayOfWeek = targetDate.getDay();
@@ -255,7 +247,6 @@ export default function DashboardPage() {
     };
   };
 
-  // SILNIK AUTOMATYCZNEGO WYPISYWANIA Z LISTY REZERWOWEJ PO UPŁYWIE CZASU DOSTĘPNOŚCI KLUBOWICZA
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -361,7 +352,6 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
-  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -485,7 +475,6 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
-  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ W WIDOKU
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     
@@ -519,7 +508,6 @@ export default function DashboardPage() {
     return { isAutoCancelled: false, reason: '' };
   };
 
-  // WERYFIKACJA URODZIN KLUBOWICZA W DNIU TRENINGU
   const isBirthdayOnDate = (birthDateStr?: string, classDisplayDate?: string, classIsoDate?: string) => {
     if (!birthDateStr) return false;
     let bDay: number | null = null;
@@ -565,7 +553,6 @@ export default function DashboardPage() {
     return bDay === cDay && bMonth === cMonth;
   };
 
-  // POMOCNIKI KLASYFIKACJI KARNETÓW
   const isContractPass = (k: any) => k?.isContract12M || (k?.nazwa || '').toLowerCase().includes('umowa') || (k?.typKarnetu || '').toLowerCase().includes('umowa');
   const isTimePass = (k: any) => {
     if (!k) return false;
@@ -575,7 +562,6 @@ export default function DashboardPage() {
   };
   const isQuantityPass = (k: any) => !isTimePass(k) && k?.pozostaloWejsc !== null && k?.pozostaloWejsc !== undefined;
 
-  // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -803,7 +789,7 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    // POBIERANIE I PODWÓJNE MAPOWANIE ZAPISÓW NA ZAJĘCIA (KOMPATYBILNOŚĆ DD/MM ORAZ YYYY-MM-DD)
+    // Pobieranie i podwójne mapowanie zapisów
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const groupedZapisy: { [key: string]: any[] } = {};
     if (zapisyData) {
@@ -823,11 +809,9 @@ export default function DashboardPage() {
           nieobecny: z.nieobecny
         };
 
-        // Zapisz pod oryginalnym kluczem
         if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
         groupedZapisy[z.class_key].push(entry);
 
-        // Zunifikowane mapowanie między YYYY-MM-DD oraz DD/MM
         if (z.class_key && z.class_key.includes('_')) {
           const [classId, datePart] = z.class_key.split('_');
           if (datePart && datePart.includes('-')) {
@@ -989,7 +973,6 @@ export default function DashboardPage() {
     }
   };
 
-  // REALTIME SUBSKRYPCJA ZMIAN
   useEffect(() => {
     loadData();
 
@@ -2772,7 +2755,7 @@ export default function DashboardPage() {
 
           if (classInfo) {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-              // pomijamy
+              // pomijamy usunięte dla klubowicza
             } else {
               const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
               const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
@@ -3022,15 +3005,15 @@ export default function DashboardPage() {
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
-          {/* SEKCJA: TWOJE AKTYWNE ZAPISY */}
+          {/* SEKCJA: TWOJE AKTYWNE ZAPISY (RESPONSYWNA, BEZ UCINANIA KRZESEŁKA NA TELEFONIE) */}
           <section className="space-y-4">
             <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje aktywne zapisy</h2>
             <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
               
               {myUpcomingClasses.length > 0 && (
-                <div className="flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
-                  <div className="w-[45%]">Data</div>
-                  <div className="w-[40%]">Zajęcia i plan</div>
+                <div className="hidden sm:flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
+                  <div className="w-[35%]">Data</div>
+                  <div className="w-[50%]">Zajęcia i plan</div>
                   <div className="w-[15%] text-right pr-2">Wypisz</div>
                 </div>
               )}
@@ -3042,21 +3025,25 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => (
-                    <div key={idx} className="flex justify-between items-center px-5 py-4 hover:bg-slate-50 transition-colors bg-white">
-                      <div className="w-[45%] pr-2">
+                    <div key={idx} className="flex items-center justify-between p-4 sm:px-5 sm:py-4 hover:bg-slate-50 transition-colors bg-white gap-2 sm:gap-4">
+                      
+                      {/* LEWA KOLUMNA: DATA */}
+                      <div className="shrink-0 min-w-[95px] sm:min-w-[130px] pr-1">
                         <div className="text-[10px] font-black text-sky-700 uppercase tracking-wider mb-0.5">
                           {['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'][cls.fullDateObj.getDay()]}
                         </div>
                         <div className="text-[12px] sm:text-[13px] font-bold text-slate-800 font-mono">
                           {`${String(cls.fullDateObj.getDate()).padStart(2, '0')}.${String(cls.fullDateObj.getMonth() + 1).padStart(2, '0')}.${String(cls.fullDateObj.getFullYear()).slice(-2)}`}
                         </div>
-                        <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5">
+                        <div className="text-[10px] sm:text-[12px] text-slate-500 mt-0.5">
                           {cls.start} - {cls.end} ({calculateDuration(cls.start, cls.end)})
                         </div>
                       </div>
-                      <div className="w-[40%] pr-2">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <span className="text-[12px] sm:text-[13px] font-bold text-slate-900 truncate">{cls.title}</span>
+
+                      {/* ŚRODKOWA KOLUMNA: TYTUŁ, KRZESEŁKO I TRENING */}
+                      <div className="flex-1 min-w-0 px-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[12px] sm:text-[13px] font-bold text-slate-900">{cls.title}</span>
                           {cls.isKrzeselko && (
                             <button
                               type="button"
@@ -3066,21 +3053,22 @@ export default function DashboardPage() {
                                 setSelectedClass(cls);
                                 setIsEditWaitlistModalOpen(true);
                               }}
-                              className="bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-200 text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1 cursor-pointer transition-colors"
+                              className="bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-200 text-[9px] font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap shadow-xs shrink-0"
                               title="Kliknij, aby zmienić czas gotowości bez utraty miejsca w kolejce"
                             >
-                              <span>🪑 Krzesełko ({cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes}m`})</span>
+                              <span>🪑 Krzesełko ({cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes} min`})</span>
                               <span className="text-[8px] opacity-70">✏️</span>
                             </button>
                           )}
                         </div>
+
                         {cls.programmedWorkout && (
                           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                             <span className="bg-amber-100 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded border border-amber-300">
                               Trening {cls.programmedWorkout.index}/{cls.programmedWorkout.total}: {cls.programmedWorkout.workout.tytul}
                             </span>
                             {cls.programmedWorkout.workout.opis && (
-                              <span className="text-[10px] text-slate-500 truncate max-w-[200px]" title={cls.programmedWorkout.workout.opis}>
+                              <span className="text-[10px] text-slate-500 truncate max-w-[160px] sm:max-w-[250px]" title={cls.programmedWorkout.workout.opis}>
                                 ({cls.programmedWorkout.workout.opis})
                               </span>
                             )}
@@ -3088,18 +3076,21 @@ export default function DashboardPage() {
                         )}
                         <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
                       </div>
-                      <div className="w-[15%] flex justify-end items-center pr-1">
+
+                      {/* PRAWA KOLUMNA: PRZYCISK WYPISU */}
+                      <div className="shrink-0 flex items-center justify-end pl-1">
                         <button 
                           onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
-                          className="w-10 h-10 bg-[#ff2a43] hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
+                          className="w-9 h-9 sm:w-10 sm:h-10 bg-[#ff2a43] hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
                           title="Wypisz się z zajęć"
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                             <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l4 4m0-4l-4 4" />
                           </svg>
                         </button>
                       </div>
+
                     </div>
                   ))
                 )}
@@ -4155,7 +4146,7 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ (NOWY ZAPIS) */}
+      {/* MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ */}
       {isWaitlistModalOpen && selectedClass && (
         <div className="fixed inset-0 bg-slate-950/70 z-[70] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">

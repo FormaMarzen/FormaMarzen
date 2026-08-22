@@ -29,7 +29,6 @@ export default function AutomatyczneZapisyPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Zamykanie listy wyszukiwania po kliknięciu poza komponent
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -80,7 +79,7 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
-  // Funkcja synchronizująca reguły na 90 dni do przodu lub do końca ważności karnetu
+  // Synchronizacja reguł z pominięciem terminów, z których klient się wypisał
   const syncAutoBookings = async (rules: any[], clients: any[], grafik: any[]) => {
     for (const rule of rules) {
       const clientObj = clients.find(k => String(k.id) === String(rule.klient_id));
@@ -89,12 +88,22 @@ export default function AutomatyczneZapisyPage() {
 
       const passExpiry = clientObj.Wygasa || rule.pass_expiry;
       
+      // Istniejące rezerwacje
       const { data: existingBookings } = await supabase
         .from('zapisy_zajec')
         .select('class_key')
         .eq('klient_id', Number(rule.klient_id));
 
       const bookedKeys = new Set((existingBookings || []).map(b => b.class_key));
+
+      // Historia celowych wypisów klienta z transakcji
+      const { data: cancelledT } = await supabase
+        .from('transakcje')
+        .select('class_key')
+        .eq('klient_id', Number(rule.klient_id))
+        .eq('typ_operacji', 'zajecia_wypis');
+
+      const cancelledKeys = new Set((cancelledT || []).map(t => t.class_key).filter(Boolean));
 
       const dayMap: { [key: string]: number } = { nd: 0, pon: 1, wt: 2, sr: 3, czw: 4, pt: 5, sb: 6 };
       const activeDays = classObj.days || {};
@@ -124,16 +133,21 @@ export default function AutomatyczneZapisyPage() {
       let curr = new Date(startDate);
       while (curr <= endDate) {
         if (targetDayIndices.includes(curr.getDay())) {
-          const year = curr.getFullYear();
           const month = String(curr.getMonth() + 1).padStart(2, '0');
           const day = String(curr.getDate()).padStart(2, '0');
-          const dateStr = `${year}-${month}-${day}`;
-          const classKey = `${classObj.id}_${dateStr}`;
+          const year = curr.getFullYear();
+          
+          const classKeyDisplay = `${classObj.id}_${day}/${month}`;
+          const classKeyIso = `${classObj.id}_${year}-${month}-${day}`;
 
-          if (!bookedKeys.has(classKey)) {
+          const isAlreadyBooked = bookedKeys.has(classKeyDisplay) || bookedKeys.has(classKeyIso);
+          const wasManuallyCancelled = cancelledKeys.has(classKeyDisplay) || cancelledKeys.has(classKeyIso);
+
+          // Zapisuj tylko jeśli nie jest zapisany I nie wypisał się samodzielnie/administracyjnie
+          if (!isAlreadyBooked && !wasManuallyCancelled) {
             await supabase.from('zapisy_zajec').insert([
               {
-                class_key: classKey,
+                class_key: classKeyDisplay,
                 klient_id: Number(rule.klient_id),
                 status: 'zapisany',
                 obecny: false
@@ -142,7 +156,7 @@ export default function AutomatyczneZapisyPage() {
 
             newZapisyNadchodzace.unshift({
               id: Date.now() + Math.random(),
-              data: dateStr,
+              data: `${year}-${month}-${day}`,
               zajecia: classObj.title || classObj.nazwa,
               karnet: 'Automatyczny zapis',
               zapisujacy: 'Panel Administratora'
@@ -163,26 +177,15 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
-  // Subskrypcja zmian Realtime
+  // Subskrypcja Realtime
   useEffect(() => {
     loadData();
 
     const channel = supabase
       .channel('realtime-auto-zapisy')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'klienci' },
-        () => {
-          loadData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'automatyczne_zapisy' },
-        () => {
-          loadData();
-        }
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
       .subscribe();
 
     return () => {
@@ -256,16 +259,16 @@ export default function AutomatyczneZapisyPage() {
       let curr = new Date(startDate);
       while (curr <= endDate) {
         if (targetDayIndices.includes(curr.getDay())) {
-          const year = curr.getFullYear();
           const month = String(curr.getMonth() + 1).padStart(2, '0');
           const day = String(curr.getDate()).padStart(2, '0');
-          const dateStr = `${year}-${month}-${day}`;
-          const classKey = `${classObj.id}_${dateStr}`;
+          const year = curr.getFullYear();
+          const classKeyDisplay = `${classObj.id}_${day}/${month}`;
+          const classKeyIso = `${classObj.id}_${year}-${month}-${day}`;
 
-          if (!bookedKeys.has(classKey)) {
+          if (!bookedKeys.has(classKeyDisplay) && !bookedKeys.has(classKeyIso)) {
             await supabase.from('zapisy_zajec').insert([
               {
-                class_key: classKey,
+                class_key: classKeyDisplay,
                 klient_id: Number(selectedClientId),
                 status: 'zapisany',
                 obecny: false
@@ -274,7 +277,7 @@ export default function AutomatyczneZapisyPage() {
 
             newZapisyNadchodzace.unshift({
               id: Date.now() + Math.random(),
-              data: dateStr,
+              data: `${year}-${month}-${day}`,
               zajecia: classTitle,
               karnet: 'Automatyczny zapis',
               zapisujacy: 'Panel Administratora'
@@ -335,7 +338,6 @@ export default function AutomatyczneZapisyPage() {
   return (
     <div className="max-w-[1250px] mx-auto space-y-6 pb-16 font-sans antialiased text-slate-800">
       
-      {/* POWIADOMIENIE TOAST */}
       {toastMessage && (
         <div
           className={`fixed bottom-6 right-6 z-50 px-5 py-3.5 rounded-2xl shadow-xl border flex items-center gap-3 transition-all duration-300 ${
@@ -365,7 +367,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System na bieżąco monitoruje ważność karnetów i automatycznie rezerwuje miejsca na zajęciach cyklicznych.
+            System synchronizuje terminy do końca ważności karnetu. Wypisanie się z pojedynczych zajęć trwale zwalnia miejsce.
           </p>
         </div>
       </div>
@@ -383,7 +385,6 @@ export default function AutomatyczneZapisyPage() {
 
         <form onSubmit={handleCreateAutoBooking} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
           
-          {/* WYSZUKIWARKA KLUBOWICZA Z AUTOCOMPLETE */}
           <div className="space-y-1.5 relative" ref={dropdownRef}>
             <label className="text-[11px] font-bold text-slate-700 block">Wyszukaj Klubowicza:</label>
             <div className="relative">
@@ -406,14 +407,13 @@ export default function AutomatyczneZapisyPage() {
                     setSelectedClientId('');
                     setClientSearchQuery('');
                   }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
                 >
                   ✕
                 </button>
               )}
             </div>
 
-            {/* ROZWIJANA LISTA WYNIKÓW WYSZUKIWANIA */}
             {isClientDropdownOpen && (
               <div className="absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-xl divide-y divide-slate-100">
                 {filteredClients.length > 0 ? (
@@ -449,7 +449,6 @@ export default function AutomatyczneZapisyPage() {
             )}
           </div>
 
-          {/* WYBÓR ZAJĘĆ Z GRAFIKU */}
           <div className="space-y-1.5">
             <label className="text-[11px] font-bold text-slate-700 block">Wybierz Zajęcia z Grafiku:</label>
             <select
