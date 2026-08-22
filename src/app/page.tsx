@@ -4,10 +4,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Pomocnik do konwersji klucza VAPID
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
@@ -24,6 +26,7 @@ export default function DashboardPage() {
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
   const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
   
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST Z DOŁU EKRANU
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -31,6 +34,34 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANCIÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
+  const getKeysVariants = (classId: string | number, dateStr: string) => {
+    const keys = new Set<string>();
+    if (!dateStr) return [`${classId}`];
+    
+    if (dateStr.includes('/')) {
+      const [d, m] = dateStr.split('/');
+      const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      keys.add(`${classId}_${dateStr}`);
+      keys.add(`${classId}_${d.padStart(2, '0')}/${m.padStart(2, '0')}`);
+      keys.add(`${classId}_${yr}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
+    } else if (dateStr.includes('-')) {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const [yr, m, d] = parts;
+        keys.add(`${classId}_${dateStr}`);
+        keys.add(`${classId}_${d.padStart(2, '0')}/${m.padStart(2, '0')}`);
+        keys.add(`${classId}_${yr}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
+      } else {
+        keys.add(`${classId}_${dateStr}`);
+      }
+    } else {
+      keys.add(`${classId}_${dateStr}`);
+    }
+    return Array.from(keys);
+  };
+
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW
   const sendPushNotification = async (clientIds: number | number[], payload: { title: string; body: string; url?: string }) => {
     try {
       const ids = Array.isArray(clientIds) ? clientIds : [clientIds];
@@ -69,6 +100,7 @@ export default function DashboardPage() {
     }
   };
 
+  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return;
@@ -162,6 +194,7 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
+  // STAN WYBORU CZASU WYPISU Z KRZESEŁKA
   const [isWaitlistModalOpen, setIsWaitlistModalOpen] = useState(false);
   const [selectedWaitlistCutoff, setSelectedWaitlistCutoff] = useState<number>(30);
   const [isEditWaitlistModalOpen, setIsEditWaitlistModalOpen] = useState(false);
@@ -171,6 +204,7 @@ export default function DashboardPage() {
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
 
+  // STAN NADRZĘDNYCH ZASAD ZAPISÓW
   const [bookingRules, setBookingRules] = useState<any>({
     cancel_deadline_minutes: 90,
     booking_cutoff_minutes: null,
@@ -188,6 +222,7 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
+  // SILNIK PROGRAMOWANIA TRENINGÓW I CYKLICZNEJ ROTACJI JEDNOSTEK TRENINGOWYCH
   const getProgrammedWorkout = (classItem: any, isoDate?: string, displayDate?: string) => {
     if (!classItem || !classItem.title) return null;
     const matchedRodzaj = rodzajeZajec.find((r: any) => (r.nazwa || '').trim().toLowerCase() === (classItem.title || '').trim().toLowerCase());
@@ -227,7 +262,7 @@ export default function DashboardPage() {
       targetDate = new Date();
     }
 
-    const baseDate = new Date(2026, 0, 5);
+    const baseDate = new Date(2026, 0, 5); // Poniedziałek, 5 stycznia 2026 jako baza cyklu
     const diffMs = targetDate.getTime() - baseDate.getTime();
     const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
     const dayOfWeek = targetDate.getDay();
@@ -247,6 +282,7 @@ export default function DashboardPage() {
     };
   };
 
+  // SILNIK AUTOMATYCZNEGO WYPISYWANIA Z LISTY REZERWOWEJ PO UPŁYWIE CZASU DOSTĘPNOŚCI KLUBOWICZA
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -297,12 +333,13 @@ export default function DashboardPage() {
 
           if (diffMinutes <= cutoffMin && diffMinutes >= 0) {
             hasChanges = true;
+            const keysToDelete = getKeysVariants(cls.id, col.date);
 
             await supabase
               .from('zapisy_zajec')
               .delete()
-              .eq('class_key', cls.classKey)
-              .eq('klient_id', wMember.id);
+              .in('class_key', keysToDelete)
+              .eq('klient_id', Number(wMember.id));
 
             const { data: clientData } = await supabase.from('klienci').select('*').eq('id', wMember.id).maybeSingle();
             if (clientData) {
@@ -352,6 +389,7 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
+  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -457,7 +495,8 @@ export default function DashboardPage() {
                 });
               }
 
-              await supabase.from('zapisy_zajec').delete().eq('class_key', cls.classKey);
+              const keysToDelete = getKeysVariants(cls.id, col.date);
+              await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
 
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
@@ -475,6 +514,7 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
+  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ W WIDOKU
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     
@@ -508,6 +548,7 @@ export default function DashboardPage() {
     return { isAutoCancelled: false, reason: '' };
   };
 
+  // WERYFIKACJA URODZIN KLUBOWICZA W DNIU TRENINGU
   const isBirthdayOnDate = (birthDateStr?: string, classDisplayDate?: string, classIsoDate?: string) => {
     if (!birthDateStr) return false;
     let bDay: number | null = null;
@@ -553,6 +594,7 @@ export default function DashboardPage() {
     return bDay === cDay && bMonth === cMonth;
   };
 
+  // POMOCNIKI KLASYFIKACJI KARNETÓW
   const isContractPass = (k: any) => k?.isContract12M || (k?.nazwa || '').toLowerCase().includes('umowa') || (k?.typKarnetu || '').toLowerCase().includes('umowa');
   const isTimePass = (k: any) => {
     if (!k) return false;
@@ -562,6 +604,7 @@ export default function DashboardPage() {
   };
   const isQuantityPass = (k: any) => !isTimePass(k) && k?.pozostaloWejsc !== null && k?.pozostaloWejsc !== undefined;
 
+  // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -789,7 +832,7 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    // Pobieranie i podwójne mapowanie zapisów
+    // POBIERANIE I PODWÓJNE MAPOWANIE ZAPISÓW NA ZAJĘCIA (KOMPATYBILNOŚĆ DD/MM ORAZ YYYY-MM-DD)
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const groupedZapisy: { [key: string]: any[] } = {};
     if (zapisyData) {
@@ -1055,11 +1098,12 @@ export default function DashboardPage() {
           const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
           
           if (classStartDateTime > now) {
+            const keysToDelete = getKeysVariants(classId, dateStr);
             await supabase
               .from('zapisy_zajec')
               .delete()
-              .eq('class_key', signup.class_key)
-              .eq('klient_id', klientId);
+              .in('class_key', keysToDelete)
+              .eq('klient_id', Number(klientId));
             cancelledCount++;
           }
         }
@@ -1101,6 +1145,7 @@ export default function DashboardPage() {
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
         const parts = (signup.class_key || '').split('_');
+        const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
           let m: number = 0;
@@ -1123,11 +1168,12 @@ export default function DashboardPage() {
           const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
 
           if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+            const keysToDelete = getKeysVariants(classId, dateStr);
             await supabase
               .from('zapisy_zajec')
               .delete()
-              .eq('class_key', signup.class_key)
-              .eq('klient_id', klientId);
+              .in('class_key', keysToDelete)
+              .eq('klient_id', Number(klientId));
             cancelledCount++;
           }
         }
@@ -1465,10 +1511,11 @@ export default function DashboardPage() {
           const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
 
           if (classStartDateTime > now) {
+            const keysToDelete = getKeysVariants(classId, dateStr);
             await supabase
               .from('zapisy_zajec')
               .delete()
-              .eq('class_key', signup.class_key)
+              .in('class_key', keysToDelete)
               .eq('klient_id', profileClient.id);
             cancelledCount++;
           }
@@ -1662,10 +1709,11 @@ export default function DashboardPage() {
           const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
           
           if (classStartDateTime > now) {
+            const keysToDelete = getKeysVariants(classId, dateStr);
             await supabase
               .from('zapisy_zajec')
               .delete()
-              .eq('class_key', signup.class_key)
+              .in('class_key', keysToDelete)
               .eq('klient_id', profileClient.id);
             cancelledCount++;
           }
@@ -1788,20 +1836,20 @@ export default function DashboardPage() {
 
   const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
-    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const aktualni = zapisyNaZajecia[classKey] || [];
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const aktualni = zapisyNaZajecia[`${selectedClass.id}_${selectedClass.displayDate}`] || [];
     const szukany = aktualni.find(k => k.id === klientId);
     if (!szukany) return;
     const nowyStanObecny = !szukany.obecny;
-    await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny, nieobecny: false }).eq('class_key', classKey).eq('klient_id', klientId);
+    await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny, nieobecny: false }).in('class_key', keys).eq('klient_id', klientId);
     loadData();
   };
 
   const toggleNieobecnyAction = async (osobaZapisana: any, klient: any) => {
     if (!selectedClass) return;
     if (osobaZapisana.nieobecny) {
-      const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-      await supabase.from('zapisy_zajec').update({ nieobecny: false, obecny: false }).eq('class_key', classKey).eq('klient_id', klient.id);
+      const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      await supabase.from('zapisy_zajec').update({ nieobecny: false, obecny: false }).in('class_key', keys).eq('klient_id', klient.id);
       loadData();
     } else {
       setBlokadaZapisow(true);
@@ -2161,11 +2209,11 @@ export default function DashboardPage() {
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
 
-    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const { error } = await supabase
       .from('zapisy_zajec')
       .update({ waitlist_cutoff_minutes: newCutoff })
-      .eq('class_key', classKey)
+      .in('class_key', keys)
       .eq('klient_id', editWaitlistTarget.id);
 
     if (error) {
@@ -2180,6 +2228,7 @@ export default function DashboardPage() {
     loadData();
   };
 
+  // SKUTECZNE WYPISYWANIE SAMODZIELNE Z OKNA MODAL
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -2205,14 +2254,30 @@ export default function DashboardPage() {
     if (!confirm("Czy na pewno chcesz wypisać się z tych zajęć?")) return;
 
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const limitZajec = selectedClass.limit || 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
 
-    const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', currentUser.id);
+    const { error } = await supabase
+      .from('zapisy_zajec')
+      .delete()
+      .in('class_key', keysToDelete)
+      .eq('klient_id', currentUser.id);
+
     if (error) { 
       showToast(`Nie udało się wypisać z zajęć: ${error.message}`, 'error'); 
       return; 
     }
+
+    // Usunięcie z zapisyNadchodzace w profilu
+    let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
+    if (typeof updatedNadchodzace === 'string') {
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+    }
+    const filteredNadchodzace = updatedNadchodzace.filter((z: any) => {
+      const zData = z.data || '';
+      return !(zData.includes(selectedClass.displayDate) || zData.includes(`${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`));
+    });
 
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -2224,16 +2289,29 @@ export default function DashboardPage() {
           ...updatedKarnety[passIndex],
           pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
         };
-        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
       }
     }
 
-    await supabase.from('transakcje').insert([{ 
-      klient_id: currentUser.id, 
-      typ_operacji: 'zajecia_wypis', 
-      class_key: classKey, 
-      opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć. Zwrócono 1 wejście.` 
-    }]);
+    await supabase.from('klienci').update({ 
+      karnetyKlubowicza: updatedKarnety,
+      zapisyNadchodzace: filteredNadchodzace
+    }).eq('id', currentUser.id);
+
+    // Zapis transakcji z kluczem w celu trwałej blokady ponownego autozapisu na ten termin
+    await supabase.from('transakcje').insert([
+      { 
+        klient_id: currentUser.id, 
+        typ_operacji: 'zajecia_wypis', 
+        class_key: classKey, 
+        opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć. Zwrócono 1 wejście.` 
+      },
+      { 
+        klient_id: currentUser.id, 
+        typ_operacji: 'zajecia_wypis', 
+        class_key: `${selectedClass.id}_${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`, 
+        opis: `Auto-blokada ponownego zapisu (${selectedClass.title})` 
+      }
+    ]);
 
     await supabase.from('booking_logs').insert([{
       action_type: 'CANCEL_SUCCESS',
@@ -2257,7 +2335,7 @@ export default function DashboardPage() {
         await supabase
           .from('zapisy_zajec')
           .update({ status: 'zapisany' })
-          .eq('class_key', classKey)
+          .in('class_key', keysToDelete)
           .eq('klient_id', kandydatDoAwansu.id);
 
         const awansowanyKlient = klienciList.find(c => c.id === kandydatDoAwansu.id);
@@ -2291,6 +2369,7 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
+  // SKUTECZNE WYPISYWANIE Z LISTY "TWOJE AKTYWNE ZAPISY"
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const now = new Date();
     const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
@@ -2312,8 +2391,34 @@ export default function DashboardPage() {
 
     if (!confirm(`Czy na pewno chcesz wypisać się z zajęć: ${title}?`)) return;
 
-    const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', currentUser.id);
-    if (error) { showToast(`Nie udało się wypisać z zajęć: ${error.message}`, 'error'); return; }
+    const parts = classKey.split('_');
+    const classId = parts[0];
+    const dateStr = parts[1];
+    const keysToDelete = getKeysVariants(classId, dateStr);
+
+    const { error } = await supabase
+      .from('zapisy_zajec')
+      .delete()
+      .in('class_key', keysToDelete)
+      .eq('klient_id', currentUser.id);
+
+    if (error) { 
+      showToast(`Nie udało się wypisać z zajęć: ${error.message}`, 'error'); 
+      return; 
+    }
+
+    // Usunięcie z zapisyNadchodzace
+    let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
+    if (typeof updatedNadchodzace === 'string') {
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+    }
+    const dayStr = String(fullDateObj.getDate()).padStart(2, '0');
+    const monthStr = String(fullDateObj.getMonth() + 1).padStart(2, '0');
+    const yearStr = String(fullDateObj.getFullYear());
+    const filteredNadchodzace = updatedNadchodzace.filter((z: any) => {
+      const zData = z.data || '';
+      return !(zData.includes(`${dayStr}/${monthStr}`) || zData.includes(`${yearStr}-${monthStr}-${dayStr}`));
+    });
 
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -2325,14 +2430,30 @@ export default function DashboardPage() {
           ...updatedKarnety[passIndex],
           pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
         };
-        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
       }
     }
 
-    await supabase.from('transakcje').insert([{ klient_id: currentUser.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${title}. Zwrócono 1 wejście.` }]);
+    await supabase.from('klienci').update({ 
+      karnetyKlubowicza: updatedKarnety,
+      zapisyNadchodzace: filteredNadchodzace
+    }).eq('id', currentUser.id);
+
+    // Zapis transakcji z dwoma wariantami kluczy
+    await supabase.from('transakcje').insert([
+      { 
+        klient_id: currentUser.id, 
+        typ_operacji: 'zajecia_wypis', 
+        class_key: classKey, 
+        opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${title}. Zwrócono 1 wejście.` 
+      },
+      { 
+        klient_id: currentUser.id, 
+        typ_operacji: 'zajecia_wypis', 
+        class_key: `${classId}_${yearStr}-${monthStr}-${dayStr}`, 
+        opis: `Auto-blokada ponownego zapisu (${title})` 
+      }
+    ]);
     
-    const parts = classKey.split('_');
-    const classId = parts[0];
     const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
     const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
     const override = nadpisaneZajeciaDni[classKey];
@@ -2354,7 +2475,7 @@ export default function DashboardPage() {
         await supabase
           .from('zapisy_zajec')
           .update({ status: 'zapisany' })
-          .eq('class_key', classKey)
+          .in('class_key', keysToDelete)
           .eq('klient_id', kandydatDoAwansu.id);
 
         const awansowanyKlient = klienciList.find(c => c.id === kandydatDoAwansu.id);
@@ -2488,13 +2609,24 @@ export default function DashboardPage() {
     showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}!`);
   };
 
+  // SKUTECZNE WYPISYWANIE KLIENTA PRZEZ ADMINA/TRENERA
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const limitZajec = selectedClass.limit || 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
-    const { error } = await supabase.from('zapisy_zajec').delete().eq('class_key', classKey).eq('klient_id', clientToUnregister.id);
-    if (error) { showToast(`Nie udało się wypisać: ${error.message}`, 'error'); return; }
+
+    const { error } = await supabase
+      .from('zapisy_zajec')
+      .delete()
+      .in('class_key', keysToDelete)
+      .eq('klient_id', clientToUnregister.id);
+
+    if (error) { 
+      showToast(`Nie udało się wypisać: ${error.message}`, 'error'); 
+      return; 
+    }
 
     const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
     let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
@@ -2508,12 +2640,41 @@ export default function DashboardPage() {
             ...updatedKarnety[passIndex],
             pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
           };
-          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', clientToUnregister.id);
         }
       }
     }
 
-    await supabase.from('transakcje').insert([{ klient_id: clientToUnregister.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}` }]);
+    // Aktualizacja zapisyNadchodzace
+    let updatedNadchodzace = clientToUnregister.zapisyNadchodzace || [];
+    if (typeof updatedNadchodzace === 'string') {
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+    }
+    const [dStr, mStr] = selectedClass.displayDate.split('/');
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const filteredNadchodzace = updatedNadchodzace.filter((z: any) => {
+      const zData = z.data || '';
+      return !(zData.includes(selectedClass.displayDate) || zData.includes(`${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`));
+    });
+
+    await supabase.from('klienci').update({ 
+      karnetyKlubowicza: updatedKarnety,
+      zapisyNadchodzace: filteredNadchodzace
+    }).eq('id', clientToUnregister.id);
+
+    await supabase.from('transakcje').insert([
+      { 
+        klient_id: clientToUnregister.id, 
+        typ_operacji: 'zajecia_wypis', 
+        class_key: classKey, 
+        opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub.${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}` 
+      },
+      { 
+        klient_id: clientToUnregister.id, 
+        typ_operacji: 'zajecia_wypis', 
+        class_key: `${selectedClass.id}_${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`, 
+        opis: `Auto-blokada ponownego zapisu (${selectedClass.title})` 
+      }
+    ]);
     
     const pozostaliUczestnicy = aktualni.filter(u => u.id !== clientToUnregister.id);
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
@@ -2524,7 +2685,7 @@ export default function DashboardPage() {
       await supabase
         .from('zapisy_zajec')
         .update({ status: 'zapisany' })
-        .eq('class_key', classKey)
+        .in('class_key', keysToDelete)
         .eq('klient_id', pierwszaRezerwa.id);
 
       const awansowanyKlient = klienciList.find(c => c.id === pierwszaRezerwa.id);
@@ -2581,7 +2742,8 @@ export default function DashboardPage() {
   const handlePotwierdzNieobecnosc = async () => {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).eq('class_key', classKey).eq('klient_id', clientToMarkAbsent.id);
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', clientToMarkAbsent.id);
     if (error) { showToast(`Nie udało się oznaczyć: ${error.message}`, 'error'); return; }
     
     await supabase.from('transakcje').insert([{ klient_id: clientToMarkAbsent.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Został oznaczony jako NIEOBECNY na zajęciach ${selectedClass.title}.` }]);
@@ -2755,7 +2917,7 @@ export default function DashboardPage() {
 
           if (classInfo) {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-              // pomijamy usunięte dla klubowicza
+              // pomijamy
             } else {
               const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
               const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
@@ -3319,7 +3481,6 @@ export default function DashboardPage() {
                             )}
                           </div>
 
-                          {/* BOKS ZAPROGRAMOWANEGO TRENINGU W KALENDARZU */}
                           {progInfo && !isClassCancelled && !item.isUsunięte && (
                             <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-1.5 text-[10px] space-y-0.5 shadow-2xs">
                               <div className="flex items-center justify-between text-amber-950 font-black">
@@ -3591,7 +3752,7 @@ export default function DashboardPage() {
                             )}
                             {maKarnet && firstPass && isQuantityPass(firstPass) && firstPass.pozostaloWejsc !== null && firstPass.pozostaloWejsc !== undefined && (
                               <span className="bg-sky-100 text-sky-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-sky-200 flex items-center gap-1">
-                                <span>🎟️ Wejścia:</span>
+                                <span>🎟️ Wejścia:</span> 
                                 <span className="text-amber-700">{firstPass.pozostaloWejsc}</span> / <span>{firstPass.poczatkoweWejsc || firstPass.pozostaloWejsc}</span>
                               </span>
                             )}
