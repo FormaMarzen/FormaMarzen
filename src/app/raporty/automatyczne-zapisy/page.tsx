@@ -39,18 +39,57 @@ export default function AutomatyczneZapisyPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Funkcja wyliczająca rzeczywistą datę ważności karnetu z tablicy karnetyKlubowicza lub kolumny Wygasa
+  const getClientPassExpiry = (client: any): string | null => {
+    if (!client) return null;
+    let parsedKarnety: any[] = [];
+    if (Array.isArray(client.karnetyKlubowicza)) {
+      parsedKarnety = client.karnetyKlubowicza;
+    } else if (typeof client.karnetyKlubowicza === 'string') {
+      try {
+        parsedKarnety = JSON.parse(client.karnetyKlubowicza);
+      } catch (e) {
+        parsedKarnety = [];
+      }
+    }
+
+    if (parsedKarnety && parsedKarnety.length > 0) {
+      const validPasses = parsedKarnety.filter((k: any) => k && k.waznyDo);
+      if (validPasses.length > 0) {
+        validPasses.sort((a: any, b: any) => (b.waznyDo || '').localeCompare(a.waznyDo || ''));
+        return validPasses[0].waznyDo;
+      }
+    }
+
+    if (client.Wygasa && client.Wygasa !== 'Brak' && client.Wygasa !== 'null') {
+      return client.Wygasa;
+    }
+
+    return null;
+  };
+
   const loadData = async () => {
     try {
       setLoading(true);
 
-      // 1. Pobierz klientów
+      // 1. Pobierz klientów z bazy
       const { data: klienciData, error: klienciErr } = await supabase
         .from('klienci')
         .select('id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza');
       
       if (klienciErr) console.error('Błąd pobierania klientów:', klienciErr);
+      
+      let enrichedClients: any[] = [];
       if (klienciData) {
-        setKlienciList(klienciData);
+        enrichedClients = klienciData.map((c: any) => {
+          const passExp = getClientPassExpiry(c);
+          return {
+            ...c,
+            calculatedPassExpiry: passExp,
+            displayPassExpiry: passExp || 'Brak'
+          };
+        });
+        setKlienciList(enrichedClients);
       }
 
       // 2. Pobierz grafik cykliczny
@@ -65,11 +104,11 @@ export default function AutomatyczneZapisyPage() {
       }));
       setGrafikItems(combinedGrafik);
 
-      // 3. Pobierz aktywne automatyczne zapisy
+      // 3. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
       const { data: autoData, error: autoErr } = await supabase.from('automatyczne_zapisy').select('*');
       if (!autoErr && autoData) {
         setAutoBookingsList(autoData);
-        await syncAutoBookings(autoData, klienciData || [], combinedGrafik);
+        await syncAutoBookings(autoData, enrichedClients, combinedGrafik);
       }
 
     } catch (err) {
@@ -79,24 +118,36 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
-  // Synchronizacja reguł z pominięciem terminów, z których klient się wypisał
+  // Automatyczna aktualizacja reguł i dopisywanie/odpisywanie terminów na podstawie bieżącej ważności karnetu
   const syncAutoBookings = async (rules: any[], clients: any[], grafik: any[]) => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+
     for (const rule of rules) {
       const clientObj = clients.find(k => String(k.id) === String(rule.klient_id));
       const classObj = grafik.find(c => String(c.id) === String(rule.grafik_id));
       if (!clientObj || !classObj) continue;
 
-      const passExpiry = clientObj.Wygasa || rule.pass_expiry;
-      
-      // Istniejące rezerwacje
+      const livePassExpiry = clientObj.calculatedPassExpiry;
+
+      // Jeżeli data karnetu zmieniła się w profilu klienta, uaktualnij wpis w tabeli automatyczne_zapisy
+      if (livePassExpiry !== rule.pass_expiry) {
+        await supabase
+          .from('automatyczne_zapisy')
+          .update({ pass_expiry: livePassExpiry || 'Brak' })
+          .eq('id', rule.id);
+        rule.pass_expiry = livePassExpiry || 'Brak';
+      }
+
+      // Istniejące rezerwacje klienta
       const { data: existingBookings } = await supabase
         .from('zapisy_zajec')
-        .select('class_key')
+        .select('id, class_key')
         .eq('klient_id', Number(rule.klient_id));
 
       const bookedKeys = new Set((existingBookings || []).map(b => b.class_key));
 
-      // Historia celowych wypisów klienta z transakcji
+      // Historia manualnych wypisów klienta
       const { data: cancelledT } = await supabase
         .from('transakcje')
         .select('class_key')
@@ -113,22 +164,52 @@ export default function AutomatyczneZapisyPage() {
         .filter(idx => idx !== undefined);
 
       const startDate = new Date();
-      let endDate = new Date();
-      if (passExpiry && passExpiry !== 'Brak') {
-        const parsedExpiry = new Date(passExpiry);
-        if (!isNaN(parsedExpiry.getTime()) && parsedExpiry > startDate) {
-          endDate = parsedExpiry;
-        } else if (!isNaN(parsedExpiry.getTime()) && parsedExpiry <= startDate) {
-          continue;
-        } else {
-          endDate.setDate(startDate.getDate() + 90);
+      let endDate: Date | null = null;
+
+      if (livePassExpiry && livePassExpiry !== 'Brak') {
+        const parsedExpiry = new Date(livePassExpiry);
+        if (!isNaN(parsedExpiry.getTime())) {
+          endDate = new Date(parsedExpiry.getFullYear(), parsedExpiry.getMonth(), parsedExpiry.getDate(), 23, 59, 59);
         }
-      } else {
-        endDate.setDate(startDate.getDate() + 90);
       }
 
+      // Jeżeli karnet wygasł lub został usunięty, usuń wszystkie przyszłe terminy dla tej reguły
+      if (!endDate || endDate < startDate) {
+        const keysToRemove: string[] = [];
+        (existingBookings || []).forEach((b: any) => {
+          if (b.class_key && b.class_key.startsWith(`${classObj.id}_`)) {
+            const datePart = b.class_key.split('_')[1];
+            if (datePart) {
+              let m = 0, d = 0, yr = currentYear;
+              if (datePart.includes('/')) {
+                const p = datePart.split('/').map(Number);
+                d = p[0]; m = p[1];
+              } else if (datePart.includes('-')) {
+                const p = datePart.split('-').map(Number);
+                yr = p[0]; m = p[1]; d = p[2];
+              }
+              const [sh = '00', sm = '00'] = (classObj.time || classObj.start || '00:00').split(':');
+              const classDateTime = new Date(yr, m - 1, d, parseInt(sh), parseInt(sm), 0);
+              if (classDateTime > now) {
+                keysToRemove.push(b.class_key);
+              }
+            }
+          }
+        });
+
+        if (keysToRemove.length > 0) {
+          await supabase
+            .from('zapisy_zajec')
+            .delete()
+            .in('class_key', keysToRemove)
+            .eq('klient_id', Number(rule.klient_id));
+        }
+        continue;
+      }
+
+      // Dopisz klubowicza na wszystkie terminy w ramach aktywnego karnetu
       let newZapisyNadchodzace = [...(clientObj.zapisyNadchodzace || [])];
-      let updated = false;
+      let hasUpdates = false;
 
       let curr = new Date(startDate);
       while (curr <= endDate) {
@@ -161,13 +242,13 @@ export default function AutomatyczneZapisyPage() {
               zapisujacy: 'Panel Administratora'
             });
 
-            updated = true;
+            hasUpdates = true;
           }
         }
         curr.setDate(curr.getDate() + 1);
       }
 
-      if (updated) {
+      if (hasUpdates) {
         await supabase
           .from('klienci')
           .update({ zapisyNadchodzace: newZapisyNadchodzace })
@@ -208,9 +289,14 @@ export default function AutomatyczneZapisyPage() {
         return;
       }
 
+      const passExpiry = clientObj.calculatedPassExpiry;
+      if (!passExpiry) {
+        showToast('Wybrany klubowicz nie posiada aktywnego karnetu! Przypisz karnet przed ustawieniem reguły.', 'error');
+        return;
+      }
+
       const clientName = `${clientObj.Imię} ${clientObj.Nazwisko}`;
       const classTitle = classObj.title || classObj.nazwa;
-      const passExpiry = clientObj.Wygasa || 'Brak';
 
       const { error: insertErr } = await supabase.from('automatyczne_zapisy').insert([
         {
@@ -241,13 +327,9 @@ export default function AutomatyczneZapisyPage() {
 
       const startDate = new Date();
       let endDate = new Date();
-      if (passExpiry && passExpiry !== 'Brak') {
-        const parsedExpiry = new Date(passExpiry);
-        if (!isNaN(parsedExpiry.getTime()) && parsedExpiry > startDate) {
-          endDate = parsedExpiry;
-        } else {
-          endDate.setDate(startDate.getDate() + 90);
-        }
+      const parsedExpiry = new Date(passExpiry);
+      if (!isNaN(parsedExpiry.getTime()) && parsedExpiry > startDate) {
+        endDate = parsedExpiry;
       } else {
         endDate.setDate(startDate.getDate() + 90);
       }
@@ -293,7 +375,7 @@ export default function AutomatyczneZapisyPage() {
         .update({ zapisyNadchodzace: newZapisyNadchodzace })
         .eq('id', Number(selectedClientId));
 
-      showToast(`Ustawiono regułę! Dopisano na ${newBookingsCount} terminów.`);
+      showToast(`Ustawiono regułę! Dopisano na ${newBookingsCount} terminów (do ${passExpiry}).`);
       setSelectedClientId('');
       setClientSearchQuery('');
       setSelectedClassId('');
@@ -355,7 +437,6 @@ export default function AutomatyczneZapisyPage() {
             const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || '00:00').split(':');
             const classDateTime = new Date(yr, m - 1, d, parseInt(sh), parseInt(sm), 0);
 
-            // Jeśli trening jest w przyszłości - kwalifikuje się do usunięcia
             if (classDateTime > now) {
               keysToDelete.push(key);
               cancelledCount++;
@@ -408,7 +489,7 @@ export default function AutomatyczneZapisyPage() {
         await supabase
           .from('klienci')
           .update({ zapisyNadchodzace: filteredNadchodzace })
-          .eq('id', klientId);
+          .eq('id', Number(klientId));
       }
 
       // 4. Usuń regułę z tabeli automatyczne_zapisy
@@ -481,7 +562,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System synchronizuje terminy do końca ważności karnetu. Usunięcie reguły automatycznie wypisuje klubowicza ze wszystkich przyszłych terminów.
+            System na bieżąco weryfikuje ważność karnetów. Przedłużenie karnetu automatycznie wydłuża stałe zapisy, a usunięcie reguły zwalnia przyszłe miejsca.
           </p>
         </div>
       </div>
@@ -546,10 +627,10 @@ export default function AutomatyczneZapisyPage() {
                         <div className="text-[10px] text-slate-400">{klient['E-mail'] || 'Brak e-maila'}</div>
                       </div>
                       <div className="text-right">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                          klient.Wygasa ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-800'
+                        <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold ${
+                          klient.calculatedPassExpiry ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800'
                         }`}>
-                          Karnet: {klient.Wygasa || 'Brak'}
+                          Karnet: {klient.displayPassExpiry}
                         </span>
                       </div>
                     </div>
@@ -599,7 +680,7 @@ export default function AutomatyczneZapisyPage() {
               📋 Aktywne Reguły Automatycznych Zapisów
             </h2>
             <p className="text-xs text-slate-400 font-medium">
-              Lista osób posiadających stałe przypisanie do zajęć cyklicznych.
+              Lista osób posiadających stałe przypisanie do zajęć cyklicznych wraz z aktualnym statusem karnetu.
             </p>
           </div>
           <span className="text-[11px] font-black text-sky-900 bg-sky-50 px-3 py-1.5 rounded-xl border border-sky-200">
@@ -609,36 +690,44 @@ export default function AutomatyczneZapisyPage() {
 
         <div className="grid grid-cols-1 gap-3">
           {autoBookingsList.length > 0 ? (
-            autoBookingsList.map((item) => (
-              <div
-                key={item.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50/80 border border-slate-200 rounded-2xl gap-3 hover:border-sky-300 transition-all"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase bg-emerald-100 text-emerald-900">
-                      Stała Rezerwacja
-                    </span>
-                    <span className="text-[11px] text-slate-500 font-bold">
-                      Ważność karnetu: {item.pass_expiry}
-                    </span>
-                  </div>
-                  <h3 className="text-xs font-black text-slate-900">
-                    Klubowicz: <span className="text-sky-900">{item.client_name}</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-600 font-medium">
-                    Zajęcia cykliczne: <strong className="text-slate-800">{item.class_title}</strong>
-                  </p>
-                </div>
+            autoBookingsList.map((item) => {
+              const matchedClient = klienciList.find(k => String(k.id) === String(item.klient_id));
+              const livePassExpiry = matchedClient ? matchedClient.displayPassExpiry : (item.pass_expiry || 'Brak');
+              const hasActivePass = matchedClient ? !!matchedClient.calculatedPassExpiry : (item.pass_expiry && item.pass_expiry !== 'Brak');
 
-                <button
-                  onClick={() => handleRemoveAutoBooking(item.id)}
-                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs px-4 py-2.5 rounded-xl border border-rose-200 transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50/80 border border-slate-200 rounded-2xl gap-3 hover:border-sky-300 transition-all"
                 >
-                  Usuń regułę
-                </button>
-              </div>
-            ))
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase bg-emerald-100 text-emerald-900">
+                        Stała Rezerwacja
+                      </span>
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
+                        hasActivePass ? 'bg-sky-50 text-sky-900 border-sky-200' : 'bg-rose-50 text-rose-800 border-rose-200'
+                      }`}>
+                        Ważność karnetu: {livePassExpiry}
+                      </span>
+                    </div>
+                    <h3 className="text-xs font-black text-slate-900">
+                      Klubowicz: <span className="text-sky-900">{item.client_name}</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-600 font-medium">
+                      Zajęcia cykliczne: <strong className="text-slate-800">{item.class_title}</strong>
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => handleRemoveAutoBooking(item.id)}
+                    className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs px-4 py-2.5 rounded-xl border border-rose-200 transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                  >
+                    Usuń regułę
+                  </button>
+                </div>
+              );
+            })
           ) : (
             <div className="text-center py-12 text-xs text-slate-400 font-medium">
               Brak zdefiniowanych automatycznych zapisów. Użyj formularza powyżej, aby dodać pierwszą regułę.
