@@ -67,11 +67,9 @@ export default function MojeZapisyPage() {
     } else if (datePart.includes('-')) {
       const segments = datePart.split('-');
       if (segments.length === 3) {
-        // YYYY-MM-DD
         const [y, m, d] = segments;
         return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
       } else if (segments.length === 2) {
-        // DD-MM
         const [d, m] = segments;
         return new Date(currentYear, parseInt(m) - 1, parseInt(d));
       }
@@ -80,7 +78,6 @@ export default function MojeZapisyPage() {
   };
 
   useEffect(() => {
-    // Sprawdzenie czy widok jest uruchomiony z parametrem w adresie lub w menu administratora
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const path = window.location.pathname.toLowerCase();
@@ -95,7 +92,6 @@ export default function MojeZapisyPage() {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      // 1. Pobranie nadrzędnych zasad z club_booking_rules
       const { data: rulesData } = await supabase
         .from('club_booking_rules')
         .select('*')
@@ -118,7 +114,6 @@ export default function MojeZapisyPage() {
         });
       }
 
-      // 2. Pobranie zalogowanego użytkownika z tabeli klienci
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
@@ -146,7 +141,6 @@ export default function MojeZapisyPage() {
           };
           setCurrentUser(parsedClient);
 
-          // 3. Pobranie grafików, zajęć jednorazowych, nadpisań i zapisów użytkownika
           const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
             supabase.from('grafik_zajec').select('*'),
             supabase.from('zajecia_jednorazowe').select('*'),
@@ -230,11 +224,14 @@ export default function MojeZapisyPage() {
         }
       }
 
-      // 4. Pobieranie danych do globalnego rankingu klubowiczów ze wszystkich zapisów i klientów
+      // Pobieranie danych do globalnego rankingu
       const [{ data: allRecords }, { data: allClients }] = await Promise.all([
         supabase.from('zapisy_zajec').select('klient_id, obecny, class_key'),
         supabase.from('klienci').select('id, Imię, Nazwisko, firstName, lastName')
       ]);
+
+      console.log("Pobrane rekordy zapisów do rankingu:", allRecords);
+      console.log("Pobrani klienci do rankingu:", allClients);
 
       if (allRecords && allClients) {
         const rankingMap: Record<number, any> = {};
@@ -372,7 +369,6 @@ export default function MojeZapisyPage() {
     loadData();
   };
 
-  // Kalkulacja statystyk użytkownika z rozpiską na rodzaje ćwiczeń
   const getUserStatsForRange = (isYear: boolean, year: number, month?: number) => {
     const filtered = zapisyPrzeszle.filter(item => {
       const d = item.fullStartDateTime;
@@ -393,7 +389,6 @@ export default function MojeZapisyPage() {
   const userStatsMonth = useMemo(() => getUserStatsForRange(false, statsYear, statsMonth), [zapisyPrzeszle, statsYear, statsMonth]);
   const userStatsYear = useMemo(() => getUserStatsForRange(true, statsYear), [zapisyPrzeszle, statsYear]);
 
-  // Kalkulacja globalnego rankingu klubowiczów
   const getGlobalRanking = (isYear: boolean, year: number, month?: number) => {
     const results: Record<string, number> = {};
     allUsersAttendance.forEach(u => {
@@ -412,7 +407,6 @@ export default function MojeZapisyPage() {
   const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [allUsersAttendance, rankingFilterYear, rankingFilterMonth]);
   const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [allUsersAttendance, rankingFilterYear]);
 
-  // Przygotowanie danych z zachowaniem rzeczywistego miejsca przy wyszukiwaniu
   const filteredRankingMonth = useMemo(() => {
     return rankingMonthData.map(([name, count], idx) => ({
       name,
@@ -436,7 +430,6 @@ export default function MojeZapisyPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
-      {/* NAGŁÓWEK ORAZ GŁÓWNA NAWIGACJA / ZAKŁADKI (Ukrywane w trybie administratora) */}
       {!isOnlyRanking && (
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
           <div>
@@ -460,7 +453,6 @@ export default function MojeZapisyPage() {
         </div>
       )}
 
-      {/* NAGŁÓWEK DLA PANELU ADMINISTRATORA */}
       {isOnlyRanking && (
         <div className="border-b border-slate-200 pb-5">
           <h1 className="text-xl font-black text-slate-900 tracking-tight">Globalny Ranking Klubowiczów</h1>
@@ -471,7 +463,6 @@ export default function MojeZapisyPage() {
       {activeTab === 'zapisy' && !isOnlyRanking ? (
         <div className="space-y-12">
           
-          {/* SEKCJA 1: AKTYWNE ZAPISY (NADCHODZĄCE) - 4 PIERWSZE + ROZWIJANA LISTA */}
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">AKTYWNE ZAPISY NA ZAJĘCIA</h2>
@@ -536,7 +527,6 @@ export default function MojeZapisyPage() {
             </div>
           </div>
 
-          {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) - OSTATNIE 3 + ROZWIJANA LISTA */}
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
@@ -597,13 +587,11 @@ export default function MojeZapisyPage() {
             </div>
           </div>
 
-          {/* SEKCJA 3: STATYSTYKI UŻYTKOWNIKA (MIESIĘCZNE I ROCZNE Z ROZPISKĄ NA RODZAJE ĆWICZEŃ) */}
           <div className="space-y-4 pt-2">
             <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">TWOJE STATYSTYKI TRENINGOWE</h2>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               
-              {/* Statystyki Miesięczne */}
               <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4">
                 <div className="flex justify-between items-center">
                   <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Miesięczne podsumowanie</h3>
@@ -642,7 +630,6 @@ export default function MojeZapisyPage() {
                 </div>
               </div>
 
-              {/* Statystyki Roczne */}
               <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4">
                 <div className="flex justify-between items-center">
                   <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Roczne podsumowanie</h3>
@@ -685,7 +672,6 @@ export default function MojeZapisyPage() {
         </div>
       ) : (
         
-        /* SEKCJA ZAKŁADKI: GLOBALNY RANKING KLUBOWICZÓW (OBOK SIEBIE Z WYSZUKIWARKĄ) */
         <div className="space-y-6 animate-in fade-in">
           
           {!isOnlyRanking && (
@@ -697,7 +683,6 @@ export default function MojeZapisyPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             
-            {/* Tabela 1: Ranking Miesięczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Ranking Miesięczny</h3>
@@ -714,7 +699,6 @@ export default function MojeZapisyPage() {
                 </select>
               </div>
 
-              {/* Wyszukiwarka w rankingu miesięcznym */}
               <div>
                 <input 
                   type="text"
@@ -755,7 +739,6 @@ export default function MojeZapisyPage() {
               </div>
             </div>
 
-            {/* Tabela 2: Ranking Roczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Ranking Roczny</h3>
@@ -770,7 +753,6 @@ export default function MojeZapisyPage() {
                 </select>
               </div>
 
-              {/* Wyszukiwarka w rankingu rocznym */}
               <div>
                 <input 
                   type="text"
@@ -817,7 +799,6 @@ export default function MojeZapisyPage() {
 
       )}
 
-      {/* MODAL POTWIERDZENIA WYPISANIA Z ZAJĘĆ */}
       {itemToUnregister && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
