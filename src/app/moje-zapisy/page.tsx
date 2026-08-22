@@ -48,7 +48,7 @@ export default function MojeZapisyPage() {
 
   // Pomocnicza funkcja do bezpiecznego parsowania daty z class_key
   const parseDateFromClassKey = (classKey: string) => {
-    const parts = classKey ? classKey.split('_') : [];
+    const parts = classKey ? String(classKey).split('_') : [];
     const datePart = parts[1] || '';
     const currentYear = new Date().getFullYear();
 
@@ -58,20 +58,28 @@ export default function MojeZapisyPage() {
       const segments = datePart.split('/');
       if (segments.length === 2) {
         const [d, m] = segments;
-        return new Date(currentYear, parseInt(m) - 1, parseInt(d));
+        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
       } else if (segments.length === 3) {
         const [d, m, y] = segments;
-        const fullYear = y.length === 2 ? 2000 + parseInt(y) : parseInt(y);
-        return new Date(fullYear, parseInt(m) - 1, parseInt(d));
+        const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
+        return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
       }
     } else if (datePart.includes('-')) {
       const segments = datePart.split('-');
       if (segments.length === 3) {
-        const [y, m, d] = segments;
-        return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+        if (segments[0].length === 4) {
+          // Format YYYY-MM-DD
+          const [y, m, d] = segments;
+          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+        } else {
+          // Format DD-MM-YYYY
+          const [d, m, y] = segments;
+          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+        }
       } else if (segments.length === 2) {
+        // Format DD-MM
         const [d, m] = segments;
-        return new Date(currentYear, parseInt(m) - 1, parseInt(d));
+        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
       }
     }
     return new Date();
@@ -92,6 +100,7 @@ export default function MojeZapisyPage() {
   const loadData = async () => {
     setIsLoading(true);
     try {
+      // 1. Pobranie zasad rezerwacji
       const { data: rulesData } = await supabase
         .from('club_booking_rules')
         .select('*')
@@ -114,150 +123,167 @@ export default function MojeZapisyPage() {
         });
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const userEmail = session?.user?.email;
+      // 2. Pobranie danych zalogowanego użytkownika oraz jego zapisów
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userEmail = session?.user?.email;
 
-      if (userEmail) {
-        const { data: klientData } = await supabase
-          .from('klienci')
-          .select('*')
-          .eq('E-mail', userEmail)
-          .single();
-          
-        if (klientData) {
-          const rawClient = klientData as any;
-          let parsedKarnety = [];
-          if (Array.isArray(rawClient.karnetyKlubowicza)) {
-            parsedKarnety = rawClient.karnetyKlubowicza;
-          } else if (typeof rawClient.karnetyKlubowicza === 'string') {
-            try { parsedKarnety = JSON.parse(rawClient.karnetyKlubowicza); } catch(e) {}
-          }
+        if (userEmail) {
+          const { data: klientData } = await supabase
+            .from('klienci')
+            .select('*')
+            .ilike('E-mail', userEmail.trim())
+            .maybeSingle();
+            
+          if (klientData) {
+            const rawClient = klientData as any;
+            let parsedKarnety = [];
+            if (Array.isArray(rawClient.karnetyKlubowicza)) {
+              parsedKarnety = rawClient.karnetyKlubowicza;
+            } else if (typeof rawClient.karnetyKlubowicza === 'string') {
+              try { parsedKarnety = JSON.parse(rawClient.karnetyKlubowicza); } catch(e) {}
+            }
 
-          const parsedClient = {
-            ...rawClient,
-            firstName: rawClient.Imię || rawClient.firstName || '',
-            lastName: rawClient.Nazwisko || rawClient.lastName || '',
-            karnetyKlubowicza: parsedKarnety
-          };
-          setCurrentUser(parsedClient);
+            const parsedClient = {
+              ...rawClient,
+              firstName: rawClient['Imię'] || rawClient.Imię || rawClient.firstName || '',
+              lastName: rawClient['Nazwisko'] || rawClient.Nazwisko || rawClient.lastName || '',
+              karnetyKlubowicza: parsedKarnety
+            };
+            setCurrentUser(parsedClient);
 
-          const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
-            supabase.from('grafik_zajec').select('*'),
-            supabase.from('zajecia_jednorazowe').select('*'),
-            supabase.from('nadpisania_zajec').select('*'),
-            supabase.from('zapisy_zajec').select('*').eq('klient_id', rawClient.id)
-          ]);
+            const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
+              supabase.from('grafik_zajec').select('*'),
+              supabase.from('zajecia_jednorazowe').select('*'),
+              supabase.from('nadpisania_zajec').select('*'),
+              supabase.from('zapisy_zajec').select('*').eq('klient_id', rawClient.id)
+            ]);
 
-          if (zData) {
-            const nadchodzace: any[] = [];
-            const przeszle: any[] = [];
-            const dzis = new Date();
-            dzis.setHours(0, 0, 0, 0);
+            if (zData) {
+              const nadchodzace: any[] = [];
+              const przeszle: any[] = [];
+              const dzis = new Date();
+              dzis.setHours(0, 0, 0, 0);
 
-            zData.forEach((z: any) => {
-              const parts = z.class_key ? z.class_key.split('_') : [];
-              const classId = parts[0];
-              let znalezionaNazwa = z.tytul || z.zajecia || null;
-              let znalezionaGodzina = '';
-              let limitMiejsc = 12;
+              zData.forEach((z: any) => {
+                const parts = z.class_key ? String(z.class_key).split('_') : [];
+                const classId = parts[0];
+                let znalezionaNazwa = z.tytul || z.zajecia || null;
+                let znalezionaGodzina = '';
+                let limitMiejsc = 12;
 
-              const override = nadpisaniaData?.find((n: any) => n.class_key === z.class_key);
-              if (override) {
-                if (override.start) znalezionaGodzina = override.start;
-                if (override.limit) limitMiejsc = override.limit;
-              }
+                const override = nadpisaniaData?.find((n: any) => n.class_key === z.class_key);
+                if (override) {
+                  if (override.start) znalezionaGodzina = override.start;
+                  if (override.limit) limitMiejsc = override.limit;
+                }
 
-              if (classId) {
-                const szablon = szablonyData?.find((s: any) => String(s.id) === String(classId));
-                if (szablon) {
-                  if (!znalezionaNazwa) znalezionaNazwa = szablon.title || szablon.nazwa;
-                  if (!znalezionaGodzina) znalezionaGodzina = szablon.start || szablon.start_time;
-                  if (szablon.limit || szablon.limit_miejsc) limitMiejsc = szablon.limit || szablon.limit_miejsc;
-                } else {
-                  const jednorazowe = jednorazoweData?.find((j: any) => String(j.id) === String(classId));
-                  if (jednorazowe) {
-                    if (!znalezionaNazwa) znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
-                    if (!znalezionaGodzina) znalezionaGodzina = jednorazowe.start_time || jednorazowe.start;
-                    if (jednorazowe.limit || jednorazowe.limit_miejsc) limitMiejsc = jednorazowe.limit || jednorazowe.limit_miejsc;
+                if (classId) {
+                  const szablon = szablonyData?.find((s: any) => String(s.id) === String(classId));
+                  if (szablon) {
+                    if (!znalezionaNazwa) znalezionaNazwa = szablon.title || szablon.nazwa;
+                    if (!znalezionaGodzina) znalezionaGodzina = szablon.start || szablon.start_time;
+                    if (szablon.limit || szablon.limit_miejsc) limitMiejsc = szablon.limit || szablon.limit_miejsc;
+                  } else {
+                    const jednorazowe = jednorazoweData?.find((j: any) => String(j.id) === String(classId));
+                    if (jednorazowe) {
+                      if (!znalezionaNazwa) znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
+                      if (!znalezionaGodzina) znalezionaGodzina = jednorazowe.start_time || jednorazowe.start;
+                      if (jednorazowe.limit || jednorazowe.limit_miejsc) limitMiejsc = jednorazowe.limit || jednorazowe.limit_miejsc;
+                    }
                   }
                 }
-              }
 
-              const dataObj = parseDateFromClassKey(z.class_key);
-              const [sh = '00', sm = '00'] = (znalezionaGodzina || '00:00').split(':');
-              const fullStartDateTime = new Date(dataObj.getFullYear(), dataObj.getMonth(), dataObj.getDate(), parseInt(sh), parseInt(sm), 0);
+                const dataObj = parseDateFromClassKey(z.class_key);
+                const [sh = '00', sm = '00'] = (znalezionaGodzina || '00:00').split(':');
+                const fullStartDateTime = new Date(dataObj.getFullYear(), dataObj.getMonth(), dataObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
 
-              const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
-              const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
-              const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
+                const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+                const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
+                const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
 
-              const obecnoscText = (z.obecny === true || z.obecny === 1 || z.obecny === 'true' || z.obecny === 'TRUE' || z.obecny === '1') ? 'Obecny' : (z.nieobecny ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
+                const isPresent = z.obecny === true || z.obecny === 1 || String(z.obecny).toLowerCase() === 'true';
+                const isAbsent = z.nieobecny === true || z.nieobecny === 1 || String(z.nieobecny).toLowerCase() === 'true';
+                const obecnoscText = isPresent ? 'Obecny' : (isAbsent ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
 
-              const itemObj = {
-                id: z.id,
-                classKey: z.class_key,
-                rawClassTitle: znalezionaNazwa || 'Trening',
-                limit: limitMiejsc,
-                data: formatDataPL,
-                dzienTygodnia: dzienTygodniaPL.charAt(0).toUpperCase() + dzienTygodniaPL.slice(1),
-                rawDate: dataObj,
-                fullStartDateTime,
-                zajecia: nazwaZGodzina,
-                statusZapisu: z.status,
-                karnet: parsedClient.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
-                obecnosc: obecnoscText
-              };
+                const itemObj = {
+                  id: z.id,
+                  classKey: z.class_key,
+                  rawClassTitle: znalezionaNazwa || 'Trening',
+                  limit: limitMiejsc,
+                  data: formatDataPL,
+                  dzienTygodnia: dzienTygodniaPL.charAt(0).toUpperCase() + dzienTygodniaPL.slice(1),
+                  rawDate: dataObj,
+                  fullStartDateTime,
+                  zajecia: nazwaZGodzina,
+                  statusZapisu: z.status,
+                  karnet: parsedClient.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
+                  obecnosc: obecnoscText
+                };
 
-              if (fullStartDateTime >= new Date()) {
-                nadchodzace.push(itemObj);
-              } else {
-                przeszle.push(itemObj);
-              }
-            });
+                if (fullStartDateTime >= new Date()) {
+                  nadchodzace.push(itemObj);
+                } else {
+                  przeszle.push(itemObj);
+                }
+              });
 
-            nadchodzace.sort((a, b) => a.fullStartDateTime.getTime() - b.fullStartDateTime.getTime());
-            przeszle.sort((a, b) => b.fullStartDateTime.getTime() - a.fullStartDateTime.getTime());
+              nadchodzace.sort((a, b) => a.fullStartDateTime.getTime() - b.fullStartDateTime.getTime());
+              przeszle.sort((a, b) => b.fullStartDateTime.getTime() - a.fullStartDateTime.getTime());
 
-            setZapisyNadchodzace(nadchodzace);
-            setZapisyPrzeszle(przeszle);
+              setZapisyNadchodzace(nadchodzace);
+              setZapisyPrzeszle(przeszle);
+            }
           }
         }
+      } catch (userErr) {
+        console.error("Błąd ładowania profilu użytkownika:", userErr);
       }
 
-      // Pobieranie danych do globalnego rankingu
-      const [{ data: allRecords }, { data: allClients }] = await Promise.all([
-        supabase.from('zapisy_zajec').select('klient_id, obecny, class_key'),
-        supabase.from('klienci').select('id, Imię, Nazwisko, firstName, lastName')
-      ]);
+      // 3. Pobieranie danych do globalnego rankingu klubowiczów (niezależnie od sesji)
+      try {
+        const [{ data: allRecords, error: errRecords }, { data: allClients, error: errClients }] = await Promise.all([
+          supabase.from('zapisy_zajec').select('*'),
+          supabase.from('klienci').select('*')
+        ]);
 
-      console.log("Pobrane rekordy zapisów do rankingu:", allRecords);
-      console.log("Pobrani klienci do rankingu:", allClients);
+        if (errRecords) console.error("Błąd pobierania zapisy_zajec do rankingu:", errRecords);
+        if (errClients) console.error("Błąd pobierania klienci do rankingu:", errClients);
 
-      if (allRecords && allClients) {
-        const rankingMap: Record<number, any> = {};
-        
-        allRecords.filter((r: any) => r.obecny === true || r.obecny === 1 || r.obecny === 'true' || r.obecny === 'TRUE' || r.obecny === '1').forEach((r: any) => {
-          if (!rankingMap[r.klient_id]) {
-            const client = allClients.find((c: any) => String(c.id) === String(r.klient_id)) as any;
-            const imie = client ? (client.Imię || client.firstName || '') : '';
-            const nazwisko = client ? (client.Nazwisko || client.lastName || '') : '';
-            const fullName = `${imie} ${nazwisko}`.trim();
+        if (allRecords && allClients) {
+          const rankingMap: Record<string, any> = {};
 
-            rankingMap[r.klient_id] = {
-              name: fullName || `Klubowicz ID: ${r.klient_id}`,
-              records: []
-            };
-          }
+          allRecords.forEach((r: any) => {
+            const isPresent = r.obecny === true || r.obecny === 1 || String(r.obecny).toLowerCase() === 'true';
+            if (!isPresent) return;
 
-          const dateObj = parseDateFromClassKey(r.class_key);
-          rankingMap[r.klient_id].records.push({ date: dateObj });
-        });
+            const kIdStr = String(r.klient_id);
 
-        setAllUsersAttendance(Object.values(rankingMap));
+            if (!rankingMap[kIdStr]) {
+              const client = allClients.find((c: any) => String(c.id) === kIdStr) as any;
+              const imie = client ? (client['Imię'] || client.Imię || client.firstName || '') : '';
+              const nazwisko = client ? (client['Nazwisko'] || client.Nazwisko || client.lastName || '') : '';
+              const fullName = `${imie} ${nazwisko}`.trim();
+
+              rankingMap[kIdStr] = {
+                id: kIdStr,
+                name: fullName || `Klubowicz ID: ${kIdStr}`,
+                records: []
+              };
+            }
+
+            const dateObj = parseDateFromClassKey(r.class_key);
+            rankingMap[kIdStr].records.push({ date: dateObj });
+          });
+
+          setAllUsersAttendance(Object.values(rankingMap));
+        }
+      } catch (rankingErr) {
+        console.error("Błąd przetwarzania rankingu:", rankingErr);
       }
 
     } catch (err) {
-      console.error("Błąd ładowania danych:", err);
+      console.error("Ogólny błąd loadData:", err);
     } finally {
       setIsLoading(false);
     }
@@ -344,8 +370,8 @@ export default function MojeZapisyPage() {
           .single();
 
         const pClient = promotedClient as any;
-        const imieP = pClient ? (pClient.Imię || pClient.firstName || '') : '';
-        const nazwiskoP = pClient ? (pClient.Nazwisko || pClient.lastName || '') : '';
+        const imieP = pClient ? (pClient['Imię'] || pClient.Imię || pClient.firstName || '') : '';
+        const nazwiskoP = pClient ? (pClient['Nazwisko'] || pClient.Nazwisko || pClient.lastName || '') : '';
         const name = `${imieP} ${nazwiskoP}`.trim() || `ID: ${firstWaitlist.klient_id}`;
 
         await supabase.from('transakcje').insert([{
@@ -597,7 +623,7 @@ export default function MojeZapisyPage() {
                   <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Miesięczne podsumowanie</h3>
                   <select 
                     value={statsMonth}
-                    onChange={(e) => setStatsMonth(parseInt(e.target.value))}
+                    onChange={(e) => setStatsMonth(parseInt(e.target.value, 10))}
                     className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
                   >
                     {Array.from({ length: 12 }).map((_, mIdx) => (
@@ -635,7 +661,7 @@ export default function MojeZapisyPage() {
                   <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Roczne podsumowanie</h3>
                   <select 
                     value={statsYear}
-                    onChange={(e) => setStatsYear(parseInt(e.target.value))}
+                    onChange={(e) => setStatsYear(parseInt(e.target.value, 10))}
                     className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
                   >
                     {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map(y => (
@@ -688,7 +714,7 @@ export default function MojeZapisyPage() {
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Ranking Miesięczny</h3>
                 <select 
                   value={rankingFilterMonth}
-                  onChange={(e) => setRankingFilterMonth(parseInt(e.target.value))}
+                  onChange={(e) => setRankingFilterMonth(parseInt(e.target.value, 10))}
                   className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
                 >
                   {Array.from({ length: 12 }).map((_, mIdx) => (
@@ -744,7 +770,7 @@ export default function MojeZapisyPage() {
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Ranking Roczny</h3>
                 <select 
                   value={rankingFilterYear}
-                  onChange={(e) => setRankingFilterYear(parseInt(e.target.value))}
+                  onChange={(e) => setRankingFilterYear(parseInt(e.target.value, 10))}
                   className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
                 >
                   {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map(y => (
