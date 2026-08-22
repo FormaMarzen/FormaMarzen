@@ -73,7 +73,7 @@ export default function DashboardPage() {
     }
   };
 
-  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
+  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE (Z POPRAWKĄ SERVICE WORKERA I DLA WSZYSTKICH KONT)
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return;
@@ -82,12 +82,17 @@ export default function DashboardPage() {
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') return;
 
+      // Jawna rejestracja pliku Service Workera z folderu public
+      await navigator.serviceWorker.register('/sw.js');
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
 
       if (!subscription) {
         const publicVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-        if (!publicVapidKey) return;
+        if (!publicVapidKey) {
+          console.warn('Brak NEXT_PUBLIC_VAPID_PUBLIC_KEY w zmiennych środowiskowych.');
+          return;
+        }
 
         const convertedVapidKey = urlBase64ToUint8Array(publicVapidKey);
         subscription = await registration.pushManager.subscribe({
@@ -915,7 +920,7 @@ export default function DashboardPage() {
         };
       });
       setKlienciList(enriched);
-      if (userEmail && userEmail !== 'maciejklaput@gmail.com') {
+      if (userEmail) {
         const myUser = enriched.find((c: any) => c.email === userEmail);
         if (myUser) {
           setCurrentUser(myUser);
