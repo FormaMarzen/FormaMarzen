@@ -9,7 +9,7 @@ import AuthGuard from "../components/AuthGuard";
 import { supabase } from "./raporty/klienci/supabase";
 import ClubChat from "../components/ClubChat";
 
-// Pomocnicza funkcja konwertująca klucz VAPID Base64URL na Uint8Array wymagany przez przeglądarkę
+// Pomocnicza funkcja konwertująca klucz VAPID Base64URL na Uint8Array
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
@@ -58,7 +58,6 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Ujednolicona, bezpieczna dla SSR weryfikacja ścieżki publicznej
   const isPublicPage = (() => {
     const cleanPath = (pathname || '').toLowerCase();
     return (
@@ -69,10 +68,17 @@ export default function RootLayout({
     );
   })();
 
-  // Funkcja aktywująca i rejestrująca subskrypcję Web Push w przeglądarce
+  // Funkcja aktywująca i prosząca o uprawnienia Web Push w przeglądarce
   const subscribeToPushNotifications = async (clientId: string | number) => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
+      // 1. Poproś użytkownika o zgodę na powiadomienia
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        console.warn('Użytkownik odmówił zgody na powiadomienia Push.');
+        return;
+      }
+
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
 
@@ -90,7 +96,6 @@ export default function RootLayout({
       }
 
       if (subscription && clientId) {
-        // Zapisujemy subskrypcję w bazie Supabase w kolumnie push_subscription
         await supabase
           .from('klienci')
           .update({ push_subscription: JSON.stringify(subscription) })
@@ -226,7 +231,6 @@ export default function RootLayout({
           if (k['Numer tel.'] && k['Numer tel.'] !== '-') setProfilePhone(k['Numer tel.']);
           if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
 
-          // Wywołujemy subskrypcję powiadomień Push dla zalogowanego klienta
           subscribeToPushNotifications(k.id);
         }
 
@@ -235,7 +239,6 @@ export default function RootLayout({
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
 
-          // Jeśli admin ma też swój rekord w klienci, subskrybujemy powiadomienia
           if (klientData) {
             subscribeToPushNotifications((klientData as any).id);
           }
