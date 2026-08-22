@@ -9,6 +9,18 @@ import AuthGuard from "../components/AuthGuard";
 import { supabase } from "./raporty/klienci/supabase";
 import ClubChat from "../components/ClubChat";
 
+// Pomocnicza funkcja konwertująca klucz VAPID Base64URL na Uint8Array wymagany przez przeglądarkę
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export default function RootLayout({
   children,
 }: {
@@ -46,7 +58,7 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Ujednolicona, bezpieczna dla SSR weryfikacja ścieżki publicznej (bez użycia window.location)
+  // Ujednolicona, bezpieczna dla SSR weryfikacja ścieżki publicznej
   const isPublicPage = (() => {
     const cleanPath = (pathname || '').toLowerCase();
     return (
@@ -57,7 +69,39 @@ export default function RootLayout({
     );
   })();
 
-  // Obsługa gestu Pull-to-Refresh (przeciągnięcie w dół z góry ekranu)
+  // Funkcja aktywująca i rejestrująca subskrypcję Web Push w przeglądarce
+  const subscribeToPushNotifications = async (clientId: string | number) => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (!subscription) {
+        const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+        if (!vapidPublicKey) {
+          console.warn("Brak skonfigurowanego klucza NEXT_PUBLIC_VAPID_PUBLIC_KEY");
+          return;
+        }
+        const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: convertedVapidKey,
+        });
+      }
+
+      if (subscription && clientId) {
+        // Zapisujemy subskrypcję w bazie Supabase w kolumnie push_subscription
+        await supabase
+          .from('klienci')
+          .update({ push_subscription: JSON.stringify(subscription) })
+          .eq('id', clientId);
+      }
+    } catch (err) {
+      console.error("Błąd podczas aktywacji powiadomień Push:", err);
+    }
+  };
+
+  // Obsługa gestu Pull-to-Refresh
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1 && window.scrollY <= 0) {
@@ -181,12 +225,20 @@ export default function RootLayout({
           if (k.gender) setProfileGender(k.gender);
           if (k['Numer tel.'] && k['Numer tel.'] !== '-') setProfilePhone(k['Numer tel.']);
           if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+
+          // Wywołujemy subskrypcję powiadomień Push dla zalogowanego klienta
+          subscribeToPushNotifications(k.id);
         }
 
         const cleanEmail = userEmail.toLowerCase().trim();
         if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
+
+          // Jeśli admin ma też swój rekord w klienci, subskrybujemy powiadomienia
+          if (klientData) {
+            subscribeToPushNotifications((klientData as any).id);
+          }
         } else {
           const { data: trenerData } = await supabase
             .from('trenerzy')
