@@ -2127,7 +2127,7 @@ export default function KarnetyPage() {
               onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
               className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-sm transition-colors cursor-pointer flex items-center gap-2"
             >
-              <span className="text-lg leading-none rounded-full bg-white/20 w-4 h-4 flex items-center justify-center">+</span> DOKUP DODATKOWY KARNET
+              <span className="text-lg leading-none rounded-full bg-white/20 w-4 h-4 flex items-center justify-center">+</span> KUP NOWY KARNET
             </button>
           </div>
         </div>
