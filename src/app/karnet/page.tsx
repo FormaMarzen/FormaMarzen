@@ -574,7 +574,7 @@ export default function KarnetyPage() {
         }
       }
 
-      // Pobieranie karnetów
+      // Pobieranie definicji karnetów z bazy
       const { data: karnetyData, error: karnetyError } = await supabase
         .from('karnety')
         .select('*')
@@ -756,30 +756,32 @@ export default function KarnetyPage() {
     karnetNazwa: susp.karnetNazwa || 'Karnet'
   })).sort((a: any, b: any) => new Date(b.utworzono || 0).getTime() - new Date(a.utworzono || 0).getTime());
 
-  // PRECYZYJNE EGZEKWOWANIE 4 REGUŁ SPRZEDAŻY ONLINE
+  // PRECYZYJNE EGZEKWOWANIE 4 REGUŁ SPRZEDAŻY ONLINE (Z UWZGLĘDNIENIEM WYGAŚNIĘCIA STARYCH UMÓW)
   const dostepneKarnetyDoZakupu = dostepneKarnety.filter((defKarnetu) => {
     if (defKarnetu.dostepnyOnline === false) return false;
 
-    const alreadyOwnedThis = karnetyList.some((k: any) => k.nazwa === defKarnetu.nazwa);
-    if (alreadyOwnedThis && defKarnetu.ponownyZakup === false) return false;
+    const activeOwnedThis = karnetyList.some((k: any) => k.nazwa === defKarnetu.nazwa && (!k.waznyDo || k.waznyDo >= todayStr));
+    if (activeOwnedThis && defKarnetu.ponownyZakup === false) return false;
 
     if (karnetyList.length > 0) {
       const anyOwnedBlocksChange = karnetyList.some((k: any) => {
+        if (k.waznyDo && k.waznyDo < todayStr) return false;
         const ownedDef = dostepneKarnety.find(dk => dk.nazwa === k.nazwa);
         return ownedDef && ownedDef.zmianaNaInny === false;
       });
-      if (anyOwnedBlocksChange && !alreadyOwnedThis) return false;
+      if (anyOwnedBlocksChange && !activeOwnedThis) return false;
 
-      const hasOtherPass = karnetyList.some((k: any) => k.nazwa !== defKarnetu.nazwa);
-      if (hasOtherPass && defKarnetu.kupInnyKarnet === false) return false;
+      const hasOtherActivePass = karnetyList.some((k: any) => k.nazwa !== defKarnetu.nazwa && (!k.waznyDo || k.waznyDo >= todayStr));
+      if (hasOtherActivePass && defKarnetu.kupInnyKarnet === false) return false;
     }
 
     const limitWejscBaza = defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null;
     const isTimeBased = limitWejscBaza === null || limitWejscBaza === '';
-    if (isTimeBased && alreadyOwnedThis && defKarnetu.ponownyZakup === false) return false;
+    if (isTimeBased && activeOwnedThis && defKarnetu.ponownyZakup === false) return false;
 
     return true;
   });
+
   // PRZEDŁUŻENIE KARNETU ORAZ OPŁACENIE KOLEJNEJ RATY UMOWY 12M
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -813,23 +815,30 @@ export default function KarnetyPage() {
 
       const totalSuspUsed = passToExtend.totalSuspendedDaysUsed || (30 - (passToExtend.contractSuspensionDaysLeft ?? 30)) || 0;
 
-      if (curRataNum >= 12 && totalSuspUsed > 0) {
-        // 13. RATA - OKRES BONUSOWY Z ZAWIESZENIA (0.00 PLN)
-        isBonus13thPeriod = true;
-        bonusDaysAmount = totalSuspUsed;
-        nextRataStr = 'Bonus / 12';
+      if (curRataNum >= 12) {
+        if (totalSuspUsed > 0 && passToExtend.rata !== 'Bonus / 12') {
+          // 13. OKRES BONUSOWY Z TYTUŁU ZAWIESZENIA (0.00 PLN)
+          isBonus13thPeriod = true;
+          bonusDaysAmount = totalSuspUsed;
+          nextRataStr = 'Bonus / 12';
 
-        let baseDate = new Date();
-        if (passToExtend.waznyDo) {
-          const parts = passToExtend.waznyDo.split('-');
-          if (parts.length === 3) {
-            const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            if (exp > baseDate) baseDate = exp;
+          let baseDate = new Date();
+          if (passToExtend.waznyDo) {
+            const parts = passToExtend.waznyDo.split('-');
+            if (parts.length === 3) {
+              const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+              if (exp > baseDate) baseDate = exp;
+            }
           }
+          baseDate.setDate(baseDate.getDate() + bonusDaysAmount);
+          nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+          basePriceNum = 0; // Okres bonusowy jest całkowicie bezpłatny
+        } else {
+          // Umowa została w pełni zrealizowana (12/12 i brak dalszego bonusu) - nie zapętlamy do 1/12!
+          showToast("Ta umowa 12M została w pełni zrealizowana. Możesz zakupić nową umowę.", 'info');
+          setIsExtendModalOpen(false);
+          return;
         }
-        baseDate.setDate(baseDate.getDate() + bonusDaysAmount);
-        nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
-        basePriceNum = 0; // Okres bonusowy z zawieszenia jest całkowicie bezpłatny
       } else {
         const nextRataNum = Math.min(12, curRataNum + 1);
         nextRataStr = `${nextRataNum} / 12`;
@@ -1052,7 +1061,6 @@ export default function KarnetyPage() {
       else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
       else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
     }
-
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
@@ -2180,7 +2188,7 @@ export default function KarnetyPage() {
           }
 
           const totalSuspUsed = passToExtend.totalSuspendedDaysUsed || (30 - (passToExtend.contractSuspensionDaysLeft ?? 30)) || 0;
-          const isBonus13Period = isContract && curRataNum >= 12 && totalSuspUsed > 0;
+          const isBonus13Period = isContract && curRataNum >= 12 && totalSuspUsed > 0 && passToExtend.rata !== 'Bonus / 12';
 
           if (isBonus13Period) {
             basePrice = 0; // Okres bonusowy z zawieszenia wynosi 0.00 PLN
