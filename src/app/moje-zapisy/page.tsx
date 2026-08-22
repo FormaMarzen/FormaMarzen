@@ -20,10 +20,12 @@ export default function MojeZapisyPage() {
   const [zapisyPrzeszle, setZapisyPrzeszle] = useState<any[]>([]);
   const [itemToUnregister, setItemToUnregister] = useState<any | null>(null);
 
-  // Ranking globalny
+  // Ranking globalny i wyszukiwarki
   const [allUsersAttendance, setAllUsersAttendance] = useState<any[]>([]);
   const [rankingFilterMonth, setRankingFilterMonth] = useState(new Date().getMonth());
   const [rankingFilterYear, setRankingFilterYear] = useState(new Date().getFullYear());
+  const [rankingSearchMonth, setRankingSearchMonth] = useState('');
+  const [rankingSearchYear, setRankingSearchYear] = useState('');
 
   // Statystyki użytkownika
   const [statsMonth, setStatsMonth] = useState(new Date().getMonth());
@@ -44,10 +46,11 @@ export default function MojeZapisyPage() {
   });
 
   useEffect(() => {
-    // Sprawdzenie czy widok jest uruchomiony w menu administratora (ścieżka zawiera 'admin' lub 'ranking')
+    // Sprawdzenie czy widok jest uruchomiony z parametrem w adresie lub w menu administratora
     if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
       const path = window.location.pathname.toLowerCase();
-      if (path.includes('admin') || path.includes('ranking')) {
+      if (params.get('ranking') === 'true' || path.includes('admin') || path.includes('ranking')) {
         setIsOnlyRanking(true);
         setActiveTab('ranking');
       }
@@ -394,12 +397,29 @@ export default function MojeZapisyPage() {
   const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [allUsersAttendance, rankingFilterYear, rankingFilterMonth]);
   const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [allUsersAttendance, rankingFilterYear]);
 
+  // Przygotowanie danych z zachowaniem rzeczywistego miejsca przy wyszukiwaniu
+  const filteredRankingMonth = useMemo(() => {
+    return rankingMonthData.map(([name, count], idx) => ({
+      name,
+      count,
+      position: idx + 1
+    })).filter(item => item.name.toLowerCase().includes(rankingSearchMonth.toLowerCase()));
+  }, [rankingMonthData, rankingSearchMonth]);
+
+  const filteredRankingYear = useMemo(() => {
+    return rankingYearData.map(([name, count], idx) => ({
+      name,
+      count,
+      position: idx + 1
+    })).filter(item => item.name.toLowerCase().includes(rankingSearchYear.toLowerCase()));
+  }, [rankingYearData, rankingSearchYear]);
+
   if (isLoading) {
     return <div className="p-16 text-center text-slate-400 font-bold uppercase tracking-widest text-xs">Ładowanie panelu klubowicza...</div>;
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
+    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
       {/* NAGŁÓWEK ORAZ GŁÓWNA NAWIGACJA / ZAKŁADKI (Ukrywane w trybie administratora) */}
       {!isOnlyRanking && (
@@ -428,7 +448,7 @@ export default function MojeZapisyPage() {
       {/* NAGŁÓWEK DLA PANELU ADMINISTRATORA */}
       {isOnlyRanking && (
         <div className="border-b border-slate-200 pb-5">
-          <h1 className="text-xl font-black text-slate-900 tracking-tight">Globalny Ranking Klubowiczów (Panel Administratora)</h1>
+          <h1 className="text-xl font-black text-slate-900 tracking-tight">Globalny Ranking Klubowiczów</h1>
           <p className="text-xs text-slate-500 font-medium">Zestawienie aktywności i frekwencji wszystkich klubowiczów w klubie.</p>
         </div>
       )}
@@ -640,17 +660,18 @@ export default function MojeZapisyPage() {
         </div>
       ) : (
         
-        /* SEKCJA ZAKŁADKI: GLOBALNY RANKING KLUBOWICZÓW (WIDOCZNY RÓWNIEŻ JAKO JEDYNY W ADMINIE) */
-        <div className="space-y-10 animate-in fade-in">
+        /* SEKCJA ZAKŁADKI: GLOBALNY RANKING KLUBOWICZÓW (OBOK SIEBIE Z WYSZUKIWARKĄ) */
+        <div className="space-y-6 animate-in fade-in">
           
-          <div className="space-y-6">
-            {!isOnlyRanking && (
-              <div>
-                <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">GLOBALNY RANKING KLUBOWICZÓW</h2>
-                <p className="text-xs text-slate-500 mt-1">Zestawienie najbardziej aktywnych klubowiczów na podstawie obecności potwierdzonych przez trenera.</p>
-              </div>
-            )}
+          {!isOnlyRanking && (
+            <div>
+              <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">GLOBALNY RANKING KLUBOWICZÓW</h2>
+              <p className="text-xs text-slate-500 mt-1">Zestawienie najbardziej aktywnych klubowiczów na podstawie obecności potwierdzonych przez trenera.</p>
+            </div>
+          )}
 
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            
             {/* Tabela 1: Ranking Miesięczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
@@ -668,28 +689,39 @@ export default function MojeZapisyPage() {
                 </select>
               </div>
 
-              <div className="overflow-x-auto text-xs">
+              {/* Wyszukiwarka w rankingu miesięcznym */}
+              <div>
+                <input 
+                  type="text"
+                  placeholder="🔍 Wyszukaj siebie lub klubowicza..."
+                  value={rankingSearchMonth}
+                  onChange={(e) => setRankingSearchMonth(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3.5 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              <div className="overflow-x-auto text-xs max-h-[450px] overflow-y-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                      <th className="py-3 px-4 w-16">Pozycja</th>
-                      <th className="py-3 px-4">Klubowicz</th>
-                      <th className="py-3 px-4 text-right">Liczba obecności</th>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px] sticky top-0">
+                      <th className="py-3 px-3 w-16">Pozycja</th>
+                      <th className="py-3 px-3">Klubowicz</th>
+                      <th className="py-3 px-3 text-right">Liczba obecności</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {rankingMonthData.length === 0 ? (
+                    {filteredRankingMonth.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych obecności w wybranym miesiącu.</td>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników wyszukiwania lub obecności w wybranym miesiącu.</td>
                       </tr>
                     ) : (
-                      rankingMonthData.map(([name, count]: any, idx: number) => (
-                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-3.5 px-4 font-mono font-bold text-slate-500">
-                            {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `${idx + 1}.`}
+                      filteredRankingMonth.map((item: any, idx: number) => (
+                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
+                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                            {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
                           </td>
-                          <td className="py-3.5 px-4 font-bold text-slate-900">{name}</td>
-                          <td className="py-3.5 px-4 text-right font-black text-sky-600 text-sm">{count} treningów</td>
+                          <td className="py-3.5 px-3 font-bold text-slate-900">{item.name}</td>
+                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count} treningów</td>
                         </tr>
                       ))
                     )}
@@ -713,28 +745,39 @@ export default function MojeZapisyPage() {
                 </select>
               </div>
 
-              <div className="overflow-x-auto text-xs">
+              {/* Wyszukiwarka w rankingu rocznym */}
+              <div>
+                <input 
+                  type="text"
+                  placeholder="🔍 Wyszukaj siebie lub klubowicza..."
+                  value={rankingSearchYear}
+                  onChange={(e) => setRankingSearchYear(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3.5 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              <div className="overflow-x-auto text-xs max-h-[450px] overflow-y-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                      <th className="py-3 px-4 w-16">Pozycja</th>
-                      <th className="py-3 px-4">Klubowicz</th>
-                      <th className="py-3 px-4 text-right">Liczba obecności</th>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px] sticky top-0">
+                      <th className="py-3 px-3 w-16">Pozycja</th>
+                      <th className="py-3 px-3">Klubowicz</th>
+                      <th className="py-3 px-3 text-right">Liczba obecności</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {rankingYearData.length === 0 ? (
+                    {filteredRankingYear.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych obecności w wybranym roku.</td>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników wyszukiwania lub obecności w wybranym roku.</td>
                       </tr>
                     ) : (
-                      rankingYearData.map(([name, count]: any, idx: number) => (
-                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-3.5 px-4 font-mono font-bold text-slate-500">
-                            {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `${idx + 1}.`}
+                      filteredRankingYear.map((item: any, idx: number) => (
+                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
+                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                            {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
                           </td>
-                          <td className="py-3.5 px-4 font-bold text-slate-900">{name}</td>
-                          <td className="py-3.5 px-4 text-right font-black text-sky-600 text-sm">{count} treningów</td>
+                          <td className="py-3.5 px-3 font-bold text-slate-900">{item.name}</td>
+                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count} treningów</td>
                         </tr>
                       ))
                     )}
