@@ -298,6 +298,7 @@ export default function RootLayout({
         { href: '/', label: 'Panel główny', icon: '📊' },
         { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
+        { href: '/moje-zapisy?ranking=true', label: 'Ranking Klubowiczów', icon: '👑' },
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
@@ -591,7 +592,7 @@ export default function RootLayout({
                         )}
                         <div className="space-y-1">
                           {section.items.map((item) => {
-                            const isActive = pathname === item.href;
+                            const isActive = pathname === item.href.split('?')[0];
                             return (
                               <Link
                                 key={item.href}

@@ -10,6 +10,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function MojeZapisyPage() {
   const [activeTab, setActiveTab] = useState<'zapisy' | 'ranking'>('zapisy');
+  const [isOnlyRanking, setIsOnlyRanking] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   
@@ -43,6 +44,14 @@ export default function MojeZapisyPage() {
   });
 
   useEffect(() => {
+    // Sprawdzenie czy widok jest uruchomiony w menu administratora (ścieżka zawiera 'admin' lub 'ranking')
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      if (path.includes('admin') || path.includes('ranking')) {
+        setIsOnlyRanking(true);
+        setActiveTab('ranking');
+      }
+    }
     loadData();
   }, []);
 
@@ -392,29 +401,39 @@ export default function MojeZapisyPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
-      {/* NAGŁÓWEK ORAZ GŁÓWNA NAWIGACJA / ZAKŁADKI */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
-        <div>
-          <h1 className="text-xl font-black text-slate-900 tracking-tight">Panel Klubowicza</h1>
-          <p className="text-xs text-slate-500 font-medium">Zarządzaj swoimi zapisami, sprawdzaj historię i śledź ranking klubowy.</p>
+      {/* NAGŁÓWEK ORAZ GŁÓWNA NAWIGACJA / ZAKŁADKI (Ukrywane w trybie administratora) */}
+      {!isOnlyRanking && (
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
+          <div>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight">Panel Klubowicza</h1>
+            <p className="text-xs text-slate-500 font-medium">Zarządzaj swoimi zapisami, sprawdzaj historię i śledź ranking klubowy.</p>
+          </div>
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <button 
+              onClick={() => setActiveTab('zapisy')} 
+              className={`px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'zapisy' ? 'bg-white text-sky-950 shadow-sm border border-slate-200/60' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              Moje Zapisy
+            </button>
+            <button 
+              onClick={() => setActiveTab('ranking')} 
+              className={`px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'ranking' ? 'bg-white text-sky-950 shadow-sm border border-slate-200/60' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              Ranking Klubowiczów
+            </button>
+          </div>
         </div>
-        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-          <button 
-            onClick={() => setActiveTab('zapisy')} 
-            className={`px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'zapisy' ? 'bg-white text-sky-950 shadow-sm border border-slate-200/60' : 'text-slate-500 hover:text-slate-800'}`}
-          >
-            Moje Zapisy
-          </button>
-          <button 
-            onClick={() => setActiveTab('ranking')} 
-            className={`px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'ranking' ? 'bg-white text-sky-950 shadow-sm border border-slate-200/60' : 'text-slate-500 hover:text-slate-800'}`}
-          >
-            Ranking Klubowiczów
-          </button>
-        </div>
-      </div>
+      )}
 
-      {activeTab === 'zapisy' ? (
+      {/* NAGŁÓWEK DLA PANELU ADMINISTRATORA */}
+      {isOnlyRanking && (
+        <div className="border-b border-slate-200 pb-5">
+          <h1 className="text-xl font-black text-slate-900 tracking-tight">Globalny Ranking Klubowiczów (Panel Administratora)</h1>
+          <p className="text-xs text-slate-500 font-medium">Zestawienie aktywności i frekwencji wszystkich klubowiczów w klubie.</p>
+        </div>
+      )}
+
+      {activeTab === 'zapisy' && !isOnlyRanking ? (
         <div className="space-y-12">
           
           {/* SEKCJA 1: AKTYWNE ZAPISY (NADCHODZĄCE) - 4 PIERWSZE + ROZWIJANA LISTA */}
@@ -482,7 +501,7 @@ export default function MojeZapisyPage() {
             </div>
           </div>
 
-          {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) - OD POCZĄTKU KONTRA, BEZ USUWANIA */}
+          {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) - OD POCZĄTKU KONTA, BEZ USUWANIA */}
           <div className="space-y-4">
             <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
             
@@ -621,14 +640,16 @@ export default function MojeZapisyPage() {
         </div>
       ) : (
         
-        /* SEKCJA ZAKŁADKI: GLOBALNY RANKING KLUBOWICZÓW */
+        /* SEKCJA ZAKŁADKI: GLOBALNY RANKING KLUBOWICZÓW (WIDOCZNY RÓWNIEŻ JAKO JEDYNY W ADMINIE) */
         <div className="space-y-10 animate-in fade-in">
           
           <div className="space-y-6">
-            <div>
-              <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">GLOBALNY RANKING KLUBOWICZÓW</h2>
-              <p className="text-xs text-slate-500 mt-1">Zestawienie najbardziej aktywnych klubowiczów na podstawie obecności potwierdzonych przez trenera.</p>
-            </div>
+            {!isOnlyRanking && (
+              <div>
+                <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">GLOBALNY RANKING KLUBOWICZÓW</h2>
+                <p className="text-xs text-slate-500 mt-1">Zestawienie najbardziej aktywnych klubowiczów na podstawie obecności potwierdzonych przez trenera.</p>
+              </div>
+            )}
 
             {/* Tabela 1: Ranking Miesięczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
