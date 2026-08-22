@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
@@ -9,11 +9,24 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function MojeZapisyPage() {
+  const [activeTab, setActiveTab] = useState<'zapisy' | 'ranking'>('zapisy');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Zapisy i interakcje
   const [zapisyNadchodzace, setZapisyNadchodzace] = useState<any[]>([]);
+  const [showAllActive, setShowAllActive] = useState(false);
   const [zapisyPrzeszle, setZapisyPrzeszle] = useState<any[]>([]);
   const [itemToUnregister, setItemToUnregister] = useState<any | null>(null);
+
+  // Ranking globalny
+  const [allUsersAttendance, setAllUsersAttendance] = useState<any[]>([]);
+  const [rankingFilterMonth, setRankingFilterMonth] = useState(new Date().getMonth());
+  const [rankingFilterYear, setRankingFilterYear] = useState(new Date().getFullYear());
+
+  // Statystyki użytkownika
+  const [statsMonth, setStatsMonth] = useState(new Date().getMonth());
+  const [statsYear, setStatsYear] = useState(new Date().getFullYear());
 
   // Stan nadrzędnych reguł rezerwacji
   const [bookingRules, setBookingRules] = useState<any>({
@@ -34,6 +47,7 @@ export default function MojeZapisyPage() {
   }, []);
 
   const loadData = async () => {
+    setIsLoading(true);
     try {
       // 1. Pobranie nadrzędnych zasad z club_booking_rules
       const { data: rulesData } = await supabase
@@ -58,7 +72,7 @@ export default function MojeZapisyPage() {
         });
       }
 
-      // 2. Pobranie zalogowanego użytkownika
+      // 2. Pobranie zalogowanego użytkownika z tabeli klienci
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
@@ -86,7 +100,7 @@ export default function MojeZapisyPage() {
           };
           setCurrentUser(parsedClient);
 
-          // 3. Pobranie grafików, zajęć jednorazowych, nadpisań i zapisów
+          // 3. Pobranie grafików, zajęć jednorazowych, nadpisań i zapisów użytkownika
           const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
             supabase.from('grafik_zajec').select('*'),
             supabase.from('zajecia_jednorazowe').select('*'),
@@ -144,13 +158,14 @@ export default function MojeZapisyPage() {
 
               const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
               const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
-              
               const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
+
+              const obecnoscText = z.obecny ? 'Obecny' : (z.nieobecny ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
 
               const itemObj = {
                 id: z.id,
                 classKey: z.class_key,
-                rawClassTitle: znalezionaNazwa || '',
+                rawClassTitle: znalezionaNazwa || 'Trening',
                 limit: limitMiejsc,
                 data: formatDataPL,
                 dzienTygodnia: dzienTygodniaPL.charAt(0).toUpperCase() + dzienTygodniaPL.slice(1),
@@ -159,7 +174,7 @@ export default function MojeZapisyPage() {
                 zajecia: nazwaZGodzina,
                 statusZapisu: z.status,
                 karnet: parsedClient.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
-                obecnosc: z.obecny ? 'Obecny' : (z.nieobecny ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'))
+                obecnosc: obecnoscText
               };
 
               if (fullStartDateTime >= new Date()) {
@@ -177,8 +192,48 @@ export default function MojeZapisyPage() {
           }
         }
       }
+
+      // 4. Pobieranie danych do globalnego rankingu klubowiczów ze wszystkich zapisów i klientów
+      const [{ data: allRecords }, { data: allClients }] = await Promise.all([
+        supabase.from('zapisy_zajec').select('klient_id, obecny, class_key'),
+        supabase.from('klienci').select('id, Imię, Nazwisko, firstName, lastName')
+      ]);
+
+      if (allRecords && allClients) {
+        const rankingMap: Record<number, any> = {};
+        
+        allRecords.filter((r: any) => r.obecny).forEach((r: any) => {
+          if (!rankingMap[r.klient_id]) {
+            const client = allClients.find((c: any) => String(c.id) === String(r.klient_id)) as any;
+            const imie = client ? (client.Imię || client.firstName || '') : '';
+            const nazwisko = client ? (client.Nazwisko || client.lastName || '') : '';
+            const fullName = `${imie} ${nazwisko}`.trim();
+
+            rankingMap[r.klient_id] = {
+              name: fullName || `Klubowicz ID: ${r.klient_id}`,
+              records: []
+            };
+          }
+
+          const parts = r.class_key ? r.class_key.split('_') : [];
+          const datePart = parts[1] || '';
+          let dateObj = new Date();
+          if (datePart) {
+            if (datePart.includes('/')) {
+              const [d, m] = datePart.split('/');
+              dateObj = new Date(new Date().getFullYear(), parseInt(m) - 1, parseInt(d));
+            } else if (datePart.includes('-')) {
+              dateObj = new Date(datePart);
+            }
+          }
+          rankingMap[r.klient_id].records.push({ date: dateObj });
+        });
+
+        setAllUsersAttendance(Object.values(rankingMap));
+      }
+
     } catch (err) {
-      console.error("Błąd podczas ładowania zapisów:", err);
+      console.error("Błąd ładowania danych:", err);
     } finally {
       setIsLoading(false);
     }
@@ -187,7 +242,6 @@ export default function MojeZapisyPage() {
   const handleConfirmWypisanie = async () => {
     if (!currentUser || !itemToUnregister) return;
 
-    // 1. Sprawdzenie nadrzędnego limitu minimalnego czasu do wypisu
     const trainingName = itemToUnregister.rawClassTitle || '';
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[trainingName] ?? bookingRules.cancel_deadline_minutes ?? 90;
     const now = new Date();
@@ -202,13 +256,11 @@ export default function MojeZapisyPage() {
     const classKey = itemToUnregister.classKey;
     const limitZajec = itemToUnregister.limit || 12;
 
-    // 2. Pobranie aktualnych uczestników przed usunięciem (do awansu z krzesełka)
     const { data: allParticipants } = await supabase
       .from('zapisy_zajec')
       .select('*')
       .eq('class_key', classKey);
 
-    // 3. Usunięcie rezerwacji
     const { error } = await supabase
       .from('zapisy_zajec')
       .delete()
@@ -220,7 +272,6 @@ export default function MojeZapisyPage() {
       return;
     }
 
-    // 4. Zwrot wejścia na karnet ilościowy
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -235,7 +286,6 @@ export default function MojeZapisyPage() {
       }
     }
 
-    // 5. Rejestracja w transakcjach
     await supabase.from('transakcje').insert([{
       klient_id: currentUser.id,
       typ_operacji: 'zajecia_wypis',
@@ -243,7 +293,6 @@ export default function MojeZapisyPage() {
       opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${itemToUnregister.zajecia} (${itemToUnregister.data}). Zwrócono 1 wejście.`
     }]);
 
-    // 6. Rejestracja w logach zasad nadrzędnych
     await supabase.from('booking_logs').insert([{
       action_type: 'CANCEL_SUCCESS',
       status: 'SUCCESS',
@@ -252,7 +301,6 @@ export default function MojeZapisyPage() {
       payload: { klient_id: currentUser.id, class_key: classKey }
     }]);
 
-    // 7. Automatyczny awans pierwszej osoby z listy rezerwowej (krzesełka)
     if (allParticipants) {
       const pozostali = allParticipants.filter((p: any) => p.klient_id !== currentUser.id);
       const mainList = pozostali.filter((p: any) => p.status === 'zapisany');
@@ -272,9 +320,9 @@ export default function MojeZapisyPage() {
           .single();
 
         const pClient = promotedClient as any;
-        const name = pClient 
-          ? `${pClient.Imię || pClient.firstName || ''} ${pClient.Nazwisko || pClient.lastName || ''}`.trim() 
-          : `ID: ${firstWaitlist.klient_id}`;
+        const imieP = pClient ? (pClient.Imię || pClient.firstName || '') : '';
+        const nazwiskoP = pClient ? (pClient.Nazwisko || pClient.lastName || '') : '';
+        const name = `${imieP} ${nazwiskoP}`.trim() || `ID: ${firstWaitlist.klient_id}`;
 
         await supabase.from('transakcje').insert([{
           klient_id: firstWaitlist.klient_id,
@@ -297,120 +345,390 @@ export default function MojeZapisyPage() {
     loadData();
   };
 
+  // Kalkulacja statystyk użytkownika z rozpiską na rodzaje ćwiczeń
+  const getUserStatsForRange = (isYear: boolean, year: number, month?: number) => {
+    const filtered = zapisyPrzeszle.filter(item => {
+      const d = item.fullStartDateTime;
+      if (d.getFullYear() !== year) return false;
+      if (!isYear && d.getMonth() !== month) return false;
+      return item.obecnosc === 'Obecny';
+    });
+
+    const count = filtered.length;
+    const breakdown: Record<string, number> = {};
+    filtered.forEach(item => {
+      const type = item.rawClassTitle || 'Trening ogólny';
+      breakdown[type] = (breakdown[type] || 0) + 1;
+    });
+    return { count, breakdown };
+  };
+
+  const userStatsMonth = useMemo(() => getUserStatsForRange(false, statsYear, statsMonth), [zapisyPrzeszle, statsYear, statsMonth]);
+  const userStatsYear = useMemo(() => getUserStatsForRange(true, statsYear), [zapisyPrzeszle, statsYear]);
+
+  // Kalkulacja globalnego rankingu klubowiczów
+  const getGlobalRanking = (isYear: boolean, year: number, month?: number) => {
+    const results: Record<string, number> = {};
+    allUsersAttendance.forEach(u => {
+      const validRecords = u.records.filter((r: any) => {
+        if (r.date.getFullYear() !== year) return false;
+        if (!isYear && r.date.getMonth() !== month) return false;
+        return true;
+      });
+      if (validRecords.length > 0) {
+        results[u.name] = validRecords.length;
+      }
+    });
+    return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
+  };
+
+  const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [allUsersAttendance, rankingFilterYear, rankingFilterMonth]);
+  const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [allUsersAttendance, rankingFilterYear]);
+
   if (isLoading) {
-    return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie zapisów z bazy...</div>;
+    return <div className="p-16 text-center text-slate-400 font-bold uppercase tracking-widest text-xs">Ładowanie panelu klubowicza...</div>;
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
+    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
-      {/* SEKCJA 1: AKTYWNE ZAPISY (NADCHODZĄCE) */}
-      <div className="space-y-4">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">AKTYWNE ZAPISY NA ZAJĘCIA</h2>
-        
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-max">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                  <th className="py-4 px-5 w-12">#</th>
-                  <th className="py-4 px-5">DATA ZAJĘĆ</th>
-                  <th className="py-4 px-5">ZAJĘCIA</th>
-                  <th className="py-4 px-5">KARNET</th>
-                  <th className="py-4 px-5 text-right">AKCJA</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
-                {zapisyNadchodzace.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-8 text-center text-slate-400">Brak nadchodzących zapisów na zajęcia.</td>
-                  </tr>
-                ) : (
-                  zapisyNadchodzace.map((item: any, index: number) => (
-                    <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
-                      <td className="py-4 px-5">
-                        <div className="font-mono font-bold text-slate-900">{item.data}</div>
-                        <div className="text-[10px] text-slate-500 font-semibold uppercase">{item.dzienTygodnia}</div>
-                      </td>
-                      <td className="py-4 px-5 font-bold text-sky-950">
-                        {item.zajecia}
-                        {item.statusZapisu === 'krzesełko' && (
-                          <span className="ml-2 bg-blue-100 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded border border-blue-200">
-                            🪑 Krzesełko
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-4 px-5 font-semibold text-slate-600">{item.karnet}</td>
-                      <td className="py-4 px-5 text-right">
-                        <button 
-                          onClick={() => setItemToUnregister(item)}
-                          className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3.5 py-2 rounded-xl transition-colors cursor-pointer border border-rose-200 shadow-sm uppercase tracking-wider text-[10px]"
-                        >
-                          Wypisz się
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+      {/* NAGŁÓWEK ORAZ GŁÓWNA NAWIGACJA / ZAKŁADKI */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
+        <div>
+          <h1 className="text-xl font-black text-slate-900 tracking-tight">Panel Klubowicza</h1>
+          <p className="text-xs text-slate-500 font-medium">Zarządzaj swoimi zapisami, sprawdzaj historię i śledź ranking klubowy.</p>
+        </div>
+        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <button 
+            onClick={() => setActiveTab('zapisy')} 
+            className={`px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'zapisy' ? 'bg-white text-sky-950 shadow-sm border border-slate-200/60' : 'text-slate-500 hover:text-slate-800'}`}
+          >
+            Moje Zapisy
+          </button>
+          <button 
+            onClick={() => setActiveTab('ranking')} 
+            className={`px-5 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'ranking' ? 'bg-white text-sky-950 shadow-sm border border-slate-200/60' : 'text-slate-500 hover:text-slate-800'}`}
+          >
+            Ranking Klubowiczów
+          </button>
         </div>
       </div>
 
-      {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) */}
-      <div className="space-y-4">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
-        
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-max">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                  <th className="py-4 px-5 w-12">#</th>
-                  <th className="py-4 px-5">DATA ZAJĘĆ</th>
-                  <th className="py-4 px-5">ZAJĘCIA</th>
-                  <th className="py-4 px-5">KARNET</th>
-                  <th className="py-4 px-5">STATUS / OBECNOŚĆ</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
-                {zapisyPrzeszle.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-8 text-center text-slate-400">Brak historii odbytych zajęć.</td>
-                  </tr>
-                ) : (
-                  zapisyPrzeszle.map((item: any, index: number) => (
-                    <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
-                      <td className="py-4 px-5">
-                        <div className="font-mono font-bold text-slate-900">{item.data}</div>
-                        <div className="text-[10px] text-slate-500 font-semibold uppercase">{item.dzienTygodnia}</div>
-                      </td>
-                      <td className="py-4 px-5 font-bold text-slate-900">{item.zajecia}</td>
-                      <td className="py-4 px-5 text-slate-600">{item.karnet}</td>
-                      <td className="py-4 px-5">
-                        <span className={`font-bold px-2.5 py-1 rounded-md border text-[10px] ${
-                          item.obecnosc === 'Obecny'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : item.obecnosc === 'Nieobecny'
-                            ? 'bg-rose-50 text-rose-700 border-rose-200'
-                            : 'bg-slate-100 text-slate-700 border-slate-200'
-                        }`}>
-                          {item.obecnosc}
-                        </span>
-                      </td>
+      {activeTab === 'zapisy' ? (
+        <div className="space-y-12">
+          
+          {/* SEKCJA 1: AKTYWNE ZAPISY (NADCHODZĄCE) - 4 PIERWSZE + ROZWIJANA LISTA */}
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">AKTYWNE ZAPISY NA ZAJĘCIA</h2>
+              {zapisyNadchodzace.length > 4 && (
+                <button 
+                  onClick={() => setShowAllActive(!showAllActive)}
+                  className="text-xs font-bold text-sky-600 hover:text-sky-800 cursor-pointer uppercase tracking-wider"
+                >
+                  {showAllActive ? 'Zwiń listę ↑' : `Pokaż wszystkie (${zapisyNadchodzace.length}) ↓`}
+                </button>
+              )}
+            </div>
+            
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-max">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-4 px-5 w-12">#</th>
+                      <th className="py-4 px-5">DATA ZAJĘĆ</th>
+                      <th className="py-4 px-5">ZAJĘCIA</th>
+                      <th className="py-4 px-5">KARNET</th>
+                      <th className="py-4 px-5 text-right">AKCJA</th>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {zapisyNadchodzace.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-400 font-medium">Brak nadchodzących zapisów na zajęcia.</td>
+                      </tr>
+                    ) : (
+                      (showAllActive ? zapisyNadchodzace : zapisyNadchodzace.slice(0, 4)).map((item: any, index: number) => (
+                        <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
+                          <td className="py-4 px-5">
+                            <div className="font-mono font-bold text-slate-900">{item.data}</div>
+                            <div className="text-[10px] text-slate-500 font-semibold uppercase">{item.dzienTygodnia}</div>
+                          </td>
+                          <td className="py-4 px-5 font-bold text-sky-950">
+                            {item.zajecia}
+                            {item.statusZapisu === 'krzesełko' && (
+                              <span className="ml-2 bg-blue-100 text-blue-900 text-[10px] font-black px-2 py-0.5 rounded border border-blue-200">
+                                🪑 Krzesełko
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-5 font-semibold text-slate-600">{item.karnet}</td>
+                          <td className="py-4 px-5 text-right">
+                            <button 
+                              onClick={() => setItemToUnregister(item)}
+                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3.5 py-2 rounded-xl transition-colors cursor-pointer border border-rose-200 shadow-sm uppercase tracking-wider text-[10px]"
+                            >
+                              Wypisz się
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* MODAL POTWIERDZENIA WYPISANIA */}
+          {/* SEKCJA 2: HISTORIA ZAPISÓW (PRZESZŁE) - OD POCZĄTKU KONTRA, BEZ USUWANIA */}
+          <div className="space-y-4">
+            <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
+            
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-max">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-4 px-5 w-12">#</th>
+                      <th className="py-4 px-5">DATA ZAJĘĆ</th>
+                      <th className="py-4 px-5">ZAJĘCIA</th>
+                      <th className="py-4 px-5">KARNET</th>
+                      <th className="py-4 px-5">STATUS / OBECNOŚĆ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {zapisyPrzeszle.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-400 font-medium">Brak historii odbytych zajęć od początku istnienia konta.</td>
+                      </tr>
+                    ) : (
+                      zapisyPrzeszle.map((item: any, index: number) => (
+                        <tr key={item.id || index} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-4 px-5 font-medium text-slate-400">{index + 1}.</td>
+                          <td className="py-4 px-5">
+                            <div className="font-mono font-bold text-slate-900">{item.data}</div>
+                            <div className="text-[10px] text-slate-500 font-semibold uppercase">{item.dzienTygodnia}</div>
+                          </td>
+                          <td className="py-4 px-5 font-bold text-slate-900">{item.zajecia}</td>
+                          <td className="py-4 px-5 text-slate-600">{item.karnet}</td>
+                          <td className="py-4 px-5">
+                            <span className={`font-bold px-2.5 py-1 rounded-md border text-[10px] ${
+                              item.obecnosc === 'Obecny'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : item.obecnosc === 'Nieobecny'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-slate-100 text-slate-700 border-slate-200'
+                            }`}>
+                              {item.obecnosc}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* SEKCJA 3: STATYSTYKI UŻYTKOWNIKA (MIESIĘCZNE I ROCZNE Z ROZPISKĄ NA RODZAJE ĆWICZEŃ) */}
+          <div className="space-y-4 pt-2">
+            <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">TWOJE STATYSTYKI TRENINGOWE</h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              
+              {/* Statystyki Miesięczne */}
+              <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Miesięczne podsumowanie</h3>
+                  <select 
+                    value={statsMonth}
+                    onChange={(e) => setStatsMonth(parseInt(e.target.value))}
+                    className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                  >
+                    {Array.from({ length: 12 }).map((_, mIdx) => (
+                      <option key={mIdx} value={mIdx}>
+                        {new Date(2026, mIdx, 1).toLocaleString('pl-PL', { month: 'long' }).toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-baseline gap-2 pt-2">
+                  <span className="text-4xl font-black text-sky-600">{userStatsMonth.count}</span>
+                  <span className="text-xs font-bold text-slate-500 uppercase">odbytych treningów (Obecny)</span>
+                </div>
+
+                <div className="border-t border-slate-100 pt-3 space-y-2">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Rozpiska według rodzajów ćwiczeń:</div>
+                  {Object.keys(userStatsMonth.breakdown).length === 0 ? (
+                    <div className="text-xs text-slate-400 italic">Brak obecności w wybranym miesiącu.</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(userStatsMonth.breakdown).map(([typeName, countVal]: any) => (
+                        <div key={typeName} className="flex justify-between items-center text-xs bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+                          <span className="font-bold text-slate-700">{typeName}</span>
+                          <span className="bg-sky-100 text-sky-800 font-black px-2 py-0.5 rounded-md text-[11px]">{countVal}x</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Statystyki Roczne */}
+              <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Roczne podsumowanie</h3>
+                  <select 
+                    value={statsYear}
+                    onChange={(e) => setStatsYear(parseInt(e.target.value))}
+                    className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                  >
+                    {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map(y => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-baseline gap-2 pt-2">
+                  <span className="text-4xl font-black text-sky-600">{userStatsYear.count}</span>
+                  <span className="text-xs font-bold text-slate-500 uppercase">odbytych treningów w roku {statsYear}</span>
+                </div>
+
+                <div className="border-t border-slate-100 pt-3 space-y-2">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Rozpiska według rodzajów ćwiczeń:</div>
+                  {Object.keys(userStatsYear.breakdown).length === 0 ? (
+                    <div className="text-xs text-slate-400 italic">Brak obecności w wybranym roku.</div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                      {Object.entries(userStatsYear.breakdown).map(([typeName, countVal]: any) => (
+                        <div key={typeName} className="flex justify-between items-center text-xs bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+                          <span className="font-bold text-slate-700">{typeName}</span>
+                          <span className="bg-sky-100 text-sky-800 font-black px-2 py-0.5 rounded-md text-[11px]">{countVal}x</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      ) : (
+        
+        /* SEKCJA ZAKŁADKI: GLOBALNY RANKING KLUBOWICZÓW */
+        <div className="space-y-10 animate-in fade-in">
+          
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">GLOBALNY RANKING KLUBOWICZÓW</h2>
+              <p className="text-xs text-slate-500 mt-1">Zestawienie najbardziej aktywnych klubowiczów na podstawie obecności potwierdzonych przez trenera.</p>
+            </div>
+
+            {/* Tabela 1: Ranking Miesięczny */}
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Ranking Miesięczny</h3>
+                <select 
+                  value={rankingFilterMonth}
+                  onChange={(e) => setRankingFilterMonth(parseInt(e.target.value))}
+                  className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                >
+                  {Array.from({ length: 12 }).map((_, mIdx) => (
+                    <option key={mIdx} value={mIdx}>
+                      {new Date(2026, mIdx, 1).toLocaleString('pl-PL', { month: 'long' }).toUpperCase()} {rankingFilterYear}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="overflow-x-auto text-xs">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-4 w-16">Pozycja</th>
+                      <th className="py-3 px-4">Klubowicz</th>
+                      <th className="py-3 px-4 text-right">Liczba obecności</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {rankingMonthData.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych obecności w wybranym miesiącu.</td>
+                      </tr>
+                    ) : (
+                      rankingMonthData.map(([name, count]: any, idx: number) => (
+                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-3.5 px-4 font-mono font-bold text-slate-500">
+                            {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `${idx + 1}.`}
+                          </td>
+                          <td className="py-3.5 px-4 font-bold text-slate-900">{name}</td>
+                          <td className="py-3.5 px-4 text-right font-black text-sky-600 text-sm">{count} treningów</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Tabela 2: Ranking Roczny */}
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Ranking Roczny</h3>
+                <select 
+                  value={rankingFilterYear}
+                  onChange={(e) => setRankingFilterYear(parseInt(e.target.value))}
+                  className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                >
+                  {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="overflow-x-auto text-xs">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-4 w-16">Pozycja</th>
+                      <th className="py-3 px-4">Klubowicz</th>
+                      <th className="py-3 px-4 text-right">Liczba obecności</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {rankingYearData.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych obecności w wybranym roku.</td>
+                      </tr>
+                    ) : (
+                      rankingYearData.map(([name, count]: any, idx: number) => (
+                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-3.5 px-4 font-mono font-bold text-slate-500">
+                            {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `${idx + 1}.`}
+                          </td>
+                          <td className="py-3.5 px-4 font-bold text-slate-900">{name}</td>
+                          <td className="py-3.5 px-4 text-right font-black text-sky-600 text-sm">{count} treningów</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+      {/* MODAL POTWIERDZENIA WYPISANIA Z ZAJĘĆ */}
       {itemToUnregister && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
