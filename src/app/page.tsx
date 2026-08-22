@@ -3463,7 +3463,20 @@ export default function DashboardPage() {
                                 Wygasa: {ostatecznaData}
                               </span>
                             )}
-                            {/* WEJŚCIA POKAZUJEMY TYLKO DLA KARNETÓW NA ILOŚĆ WEJŚĆ (UKRYTE DLA 12M I NA CZAS) */}
+                            {/* DLA UMÓW 12M: RATA I POZOSTAŁE DNI ZAWIESZENIA Z 30 DNI */}
+                            {maKarnet && firstPass && isContractPass(firstPass) && (
+                              <>
+                                <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-amber-200 flex items-center gap-1">
+                                  <span>💳 Rata:</span>
+                                  <span className="text-amber-950 font-bold">{firstPass.rata || '1 / 12'}</span>
+                                </span>
+                                <span className="bg-sky-100 text-sky-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-sky-200 flex items-center gap-1">
+                                  <span>❄️ Zawieszenie:</span>
+                                  <span className="text-sky-950 font-bold">{firstPass.contractSuspensionDaysLeft !== undefined ? firstPass.contractSuspensionDaysLeft : 30} / 30 dni</span>
+                                </span>
+                              </>
+                            )}
+                            {/* DLA KARNETÓW ILOŚCIOWYCH: LICZNIK WEJŚĆ */}
                             {maKarnet && firstPass && isQuantityPass(firstPass) && firstPass.pozostaloWejsc !== null && firstPass.pozostaloWejsc !== undefined && (
                               <span className="bg-sky-100 text-sky-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-sky-200 flex items-center gap-1">
                                 <span>🎟️ Wejścia:</span>
