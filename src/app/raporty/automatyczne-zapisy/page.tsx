@@ -46,7 +46,7 @@ export default function AutomatyczneZapisyPage() {
       // 1. Pobierz klientów
       const { data: klienciData, error: klienciErr } = await supabase
         .from('klienci')
-        .select('id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace');
+        .select('id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza');
       
       if (klienciErr) console.error('Błąd pobierania klientów:', klienciErr);
       if (klienciData) {
@@ -143,7 +143,6 @@ export default function AutomatyczneZapisyPage() {
           const isAlreadyBooked = bookedKeys.has(classKeyDisplay) || bookedKeys.has(classKeyIso);
           const wasManuallyCancelled = cancelledKeys.has(classKeyDisplay) || cancelledKeys.has(classKeyIso);
 
-          // Zapisuj tylko jeśli nie jest zapisany I nie wypisał się samodzielnie/administracyjnie
           if (!isAlreadyBooked && !wasManuallyCancelled) {
             await supabase.from('zapisy_zajec').insert([
               {
@@ -305,15 +304,130 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
+  // Usunięcie reguły oraz automatyczne wypisanie z przyszłych nieodbytych treningów
   const handleRemoveAutoBooking = async (id: number) => {
     try {
-      const { error } = await supabase.from('automatyczne_zapisy').delete().eq('id', id);
-      if (error) throw error;
+      const ruleToDelete = autoBookingsList.find(r => r.id === id);
+      if (!ruleToDelete) {
+        showToast('Nie znaleziono reguły do usunięcia.', 'error');
+        return;
+      }
 
-      showToast('Usunięto regułę automatycznego zapisu.');
+      if (!confirm(`Czy na pewno chcesz usunąć regułę automatycznego zapisu dla: ${ruleToDelete.client_name}? Klubowicz zostanie automatycznie wypisany ze wszystkich przyszłych terminów tych zajęć.`)) {
+        return;
+      }
+
+      const klientId = Number(ruleToDelete.klient_id);
+      const grafikId = String(ruleToDelete.grafik_id);
+      const classObj = grafikItems.find(c => String(c.id) === grafikId);
+      const now = new Date();
+      const currentYear = now.getFullYear();
+
+      // 1. Pobierz wszystkie zapisy tego klienta
+      const { data: userBookings } = await supabase
+        .from('zapisy_zajec')
+        .select('*')
+        .eq('klient_id', klientId);
+
+      const keysToDelete: string[] = [];
+      let cancelledCount = 0;
+
+      (userBookings || []).forEach((b: any) => {
+        const key = b.class_key || '';
+        if (key.startsWith(`${grafikId}_`)) {
+          const datePart = key.split('_')[1];
+          if (datePart) {
+            let m = 0;
+            let d = 0;
+            let yr = currentYear;
+
+            if (datePart.includes('/')) {
+              const p = datePart.split('/').map(Number);
+              d = p[0];
+              m = p[1];
+            } else if (datePart.includes('-')) {
+              const p = datePart.split('-').map(Number);
+              yr = p[0];
+              m = p[1];
+              d = p[2];
+            }
+
+            const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || '00:00').split(':');
+            const classDateTime = new Date(yr, m - 1, d, parseInt(sh), parseInt(sm), 0);
+
+            // Jeśli trening jest w przyszłości - kwalifikuje się do usunięcia
+            if (classDateTime > now) {
+              keysToDelete.push(key);
+              cancelledCount++;
+            }
+          }
+        }
+      });
+
+      // 2. Usuń przyszłe rezerwacje z tabeli zapisy_zajec
+      if (keysToDelete.length > 0) {
+        await supabase
+          .from('zapisy_zajec')
+          .delete()
+          .in('class_key', keysToDelete)
+          .eq('klient_id', klientId);
+      }
+
+      // 3. Zaktualizuj tablicę zapisyNadchodzace w profilu klienta
+      const clientObj = klienciList.find(k => Number(k.id) === klientId);
+      if (clientObj) {
+        let currentNadchodzace = clientObj.zapisyNadchodzace || [];
+        if (typeof currentNadchodzace === 'string') {
+          try { currentNadchodzace = JSON.parse(currentNadchodzace); } catch(e) { currentNadchodzace = []; }
+        }
+
+        const classTitleToMatch = (ruleToDelete.class_title || classObj?.title || '').trim().toLowerCase();
+        
+        const filteredNadchodzace = (currentNadchodzace || []).filter((z: any) => {
+          const zTitle = (z.zajecia || '').trim().toLowerCase();
+          if (zTitle !== classTitleToMatch) return true;
+          
+          if (!z.data) return false;
+          let m = 0;
+          let d = 0;
+          let yr = currentYear;
+          if (z.data.includes('/')) {
+            const p = z.data.split('/').map(Number);
+            d = p[0];
+            m = p[1];
+          } else if (z.data.includes('-')) {
+            const p = z.data.split('-').map(Number);
+            yr = p[0];
+            m = p[1];
+            d = p[2];
+          }
+          const itemDateTime = new Date(yr, m - 1, d, 23, 59, 59);
+          return itemDateTime < now;
+        });
+
+        await supabase
+          .from('klienci')
+          .update({ zapisyNadchodzace: filteredNadchodzace })
+          .eq('id', klientId);
+      }
+
+      // 4. Usuń regułę z tabeli automatyczne_zapisy
+      const { error: delErr } = await supabase.from('automatyczne_zapisy').delete().eq('id', id);
+      if (delErr) throw delErr;
+
+      // 5. Zarejestruj transakcję informacyjną
+      if (cancelledCount > 0) {
+        await supabase.from('transakcje').insert([{
+          klient_id: klientId,
+          typ_operacji: 'zajecia_wypis',
+          opis: `Usunięto regułę automatycznych zapisów (${ruleToDelete.class_title}). Automatycznie wypisano z ${cancelledCount} przyszłych treningów.`
+        }]);
+      }
+
+      showToast(`Usunięto regułę! Wypisano klubowicza z ${cancelledCount} przyszłych treningów.`);
       await loadData();
     } catch (err: any) {
-      console.error('Błąd usuwania:', err);
+      console.error('Błąd usuwania reguły:', err);
       showToast('Nie udało się usunąć reguły: ' + (err.message || ''), 'error');
     }
   };
@@ -367,7 +481,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System synchronizuje terminy do końca ważności karnetu. Wypisanie się z pojedynczych zajęć trwale zwalnia miejsce.
+            System synchronizuje terminy do końca ważności karnetu. Usunięcie reguły automatycznie wypisuje klubowicza ze wszystkich przyszłych terminów.
           </p>
         </div>
       </div>
