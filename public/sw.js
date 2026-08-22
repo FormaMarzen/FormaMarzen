@@ -7,9 +7,7 @@ self.addEventListener('push', function (event) {
     const title = data.title || 'FORMA MARZEŃ';
     const options = {
       body: data.body || '',
-      icon: '/icon-192x192.png',
-      badge: '/icon-192x192.png',
-      vibrate: [100, 50, 100],
+      vibrate: [200, 100, 200],
       data: {
         url: data.url || '/'
       }
