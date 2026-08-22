@@ -46,6 +46,39 @@ export default function MojeZapisyPage() {
     max_daily_same_type_bookings: 1
   });
 
+  // Pomocnicza funkcja do bezpiecznego parsowania daty z class_key
+  const parseDateFromClassKey = (classKey: string) => {
+    const parts = classKey ? classKey.split('_') : [];
+    const datePart = parts[1] || '';
+    const currentYear = new Date().getFullYear();
+
+    if (!datePart) return new Date();
+
+    if (datePart.includes('/')) {
+      const segments = datePart.split('/');
+      if (segments.length === 2) {
+        const [d, m] = segments;
+        return new Date(currentYear, parseInt(m) - 1, parseInt(d));
+      } else if (segments.length === 3) {
+        const [d, m, y] = segments;
+        const fullYear = y.length === 2 ? 2000 + parseInt(y) : parseInt(y);
+        return new Date(fullYear, parseInt(m) - 1, parseInt(d));
+      }
+    } else if (datePart.includes('-')) {
+      const segments = datePart.split('-');
+      if (segments.length === 3) {
+        // YYYY-MM-DD
+        const [y, m, d] = segments;
+        return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+      } else if (segments.length === 2) {
+        // DD-MM
+        const [d, m] = segments;
+        return new Date(currentYear, parseInt(m) - 1, parseInt(d));
+      }
+    }
+    return new Date();
+  };
+
   useEffect(() => {
     // Sprawdzenie czy widok jest uruchomiony z parametrem w adresie lub w menu administratora
     if (typeof window !== 'undefined') {
@@ -130,8 +163,6 @@ export default function MojeZapisyPage() {
             zData.forEach((z: any) => {
               const parts = z.class_key ? z.class_key.split('_') : [];
               const classId = parts[0];
-              let dataZajecStr = parts[1] || ''; 
-              
               let znalezionaNazwa = z.tytul || z.zajecia || null;
               let znalezionaGodzina = '';
               let limitMiejsc = 12;
@@ -158,14 +189,7 @@ export default function MojeZapisyPage() {
                 }
               }
 
-              let dataObj = new Date();
-              if (dataZajecStr.includes('/')) {
-                const [d, m] = dataZajecStr.split('/');
-                dataObj = new Date(dzis.getFullYear(), parseInt(m) - 1, parseInt(d));
-              } else if (dataZajecStr.includes('-')) {
-                dataObj = new Date(dataZajecStr);
-              }
-
+              const dataObj = parseDateFromClassKey(z.class_key);
               const [sh = '00', sm = '00'] = (znalezionaGodzina || '00:00').split(':');
               const fullStartDateTime = new Date(dataObj.getFullYear(), dataObj.getMonth(), dataObj.getDate(), parseInt(sh), parseInt(sm), 0);
 
@@ -173,7 +197,7 @@ export default function MojeZapisyPage() {
               const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
               const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
 
-              const obecnoscText = z.obecny ? 'Obecny' : (z.nieobecny ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
+              const obecnoscText = (z.obecny === true || z.obecny === 1 || z.obecny === 'true' || z.obecny === 'TRUE' || z.obecny === '1') ? 'Obecny' : (z.nieobecny ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
 
               const itemObj = {
                 id: z.id,
@@ -228,26 +252,7 @@ export default function MojeZapisyPage() {
             };
           }
 
-          const parts = r.class_key ? r.class_key.split('_') : [];
-          const datePart = parts[1] || '';
-          let dateObj = new Date();
-          if (datePart) {
-            if (datePart.includes('/')) {
-              const segments = datePart.split('/');
-              if (segments.length === 2) {
-                const [d, m] = segments;
-                dateObj = new Date(new Date().getFullYear(), parseInt(m) - 1, parseInt(d));
-              } else if (segments.length === 3) {
-                const [d, m, y] = segments;
-                dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-              }
-            } else if (datePart.includes('-')) {
-              dateObj = new Date(datePart);
-            }
-          }
-          if (isNaN(dateObj.getTime())) {
-            dateObj = new Date();
-          }
+          const dateObj = parseDateFromClassKey(r.class_key);
           rankingMap[r.klient_id].records.push({ date: dateObj });
         });
 
@@ -637,7 +642,7 @@ export default function MojeZapisyPage() {
                 </div>
               </div>
 
-              {/* Statystyki Roczne (pełna wysokość bez zwijania/scrolla) */}
+              {/* Statystyki Roczne */}
               <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4">
                 <div className="flex justify-between items-center">
                   <h3 className="font-black text-xs text-slate-900 uppercase tracking-wider">Roczne podsumowanie</h3>
