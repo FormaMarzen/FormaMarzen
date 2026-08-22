@@ -46,8 +46,11 @@ export default function ClubChat() {
         query = query.eq("id", recipientId);
       }
 
-      const { data: clients } = await query;
-      if (!clients || clients.length === 0) return;
+      const { data: clients, error: clientErr } = await query;
+      if (clientErr || !clients || clients.length === 0) {
+        console.warn("Brak danych klienta lub błąd pobierania subskrypcji:", clientErr);
+        return;
+      }
 
       const subscriptions = clients
         .map((c: any) => {
@@ -62,11 +65,14 @@ export default function ClubChat() {
         })
         .filter(Boolean);
 
-      if (subscriptions.length === 0) return;
+      if (subscriptions.length === 0) {
+        console.warn("Użytkownik docelowy nie posiada zapisanej subskrypcji Push w kolumnie push_subscription.");
+        return;
+      }
 
       const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
 
-      await fetch("/api/push/send", {
+      const res = await fetch("/api/push/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -78,8 +84,13 @@ export default function ClubChat() {
           },
         }),
       });
+
+      const resJson = await res.json();
+      if (!res.ok || !resJson.success) {
+        console.error("Błąd odpowiedzi serwera przy wysyłce Push:", resJson);
+      }
     } catch (err) {
-      console.error("Błąd wysyłania powiadomienia Push z czatu:", err);
+      console.error("Błąd podczas wysyłania powiadomienia Push z czatu:", err);
     }
   };
 
@@ -105,7 +116,6 @@ export default function ClubChat() {
           isSystem: Number(c.id) === SYSTEM_ID,
         }));
 
-        // Zapewniamy obecność oficjalnego konta systemowego w liście kontaktów
         const hasSystemAccount = enriched.some((c: any) => Number(c.id) === SYSTEM_ID);
         const allUsers = hasSystemAccount
           ? enriched
@@ -245,7 +255,6 @@ export default function ClubChat() {
     if (!error) {
       setNewMessage("");
       fetchMessages();
-      // Wysłanie powiadomienia Push do odbiorcy
       sendChatPushNotification(selectedUser.id, currentUserName, messageText);
     }
   };
@@ -257,7 +266,6 @@ export default function ClubChat() {
     secondaryUserId ? String(secondaryUserId) : null,
   ].filter(Boolean);
 
-  // Filtrowanie aktywnej konwersacji (uwzględnia również konto Systemowe 5000)
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     const isSenderMe = effectiveIds.includes(String(m.nadawca_id));
@@ -269,7 +277,6 @@ export default function ClubChat() {
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
-  // SORTOWANIE DOMKÓW: Zbieranie czasu ostatniej wiadomości dla każdego kontaktu
   const latestMessageMap = new Map();
   messages.forEach((m: any) => {
     const otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
@@ -279,7 +286,6 @@ export default function ClubChat() {
     }
   });
 
-  // Zbieranie ID osób z historią konwersacji
   const chattedUserIds = new Set<string | number>();
   messages.forEach((m: any) => {
     if (effectiveIds.includes(String(m.nadawca_id))) {
@@ -292,7 +298,6 @@ export default function ClubChat() {
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
-      // Konto systemowe jest zawsze dostępne na liście kontaktów
       if (Number(k.id) === SYSTEM_ID) return true;
 
       const q = searchQuery.trim().toLowerCase();
@@ -319,17 +324,13 @@ export default function ClubChat() {
       return k.name?.toLowerCase().includes(q);
     })
     .sort((a, b) => {
-      // Sortowanie: najnowsza wiadomość na górze
       const timeA = latestMessageMap.get(a.id) || 0;
       const timeB = latestMessageMap.get(b.id) || 0;
       return timeB - timeA;
     });
 
-  // Renderowanie kart powiadomień: urodziny, odznaki, wyzwania i standardowe wiadomości
   const renderMessageContent = (msg: any, isMe: boolean) => {
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
-    
-    // Sprawdzamy treść i czy nadawcą jest system
     const isBirthdayNotification = isSystemSender && (msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin"));
     const isBadgeNotification = isSystemSender && (msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową"));
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
@@ -415,7 +416,7 @@ export default function ClubChat() {
                 <>
                   <button
                     onClick={() => setSelectedUser(null)}
-                    className="text-amber-400 hover:text-white w-10 h-10 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-2xl cursor-pointer transition-colors shadow-md border border-slate-700 shrink-0"
+                    className="text-slate-300 hover:text-white p-1 cursor-pointer transition-colors"
                     title="Wróć do listy"
                   >
                     ←
@@ -430,7 +431,7 @@ export default function ClubChat() {
                     )}
                   </div>
                   <div className="overflow-hidden">
-                    <div className="font-bold text-xs truncate max-w-[150px]">{selectedUser.name}</div>
+                    <div className="font-bold text-xs truncate max-w-[170px]">{selectedUser.name}</div>
                     <div className="text-[10px] font-medium flex items-center gap-1">
                       {Number(selectedUser.id) === SYSTEM_ID ? (
                         <span className="text-amber-400 font-bold">Konto Systemowe</span>
