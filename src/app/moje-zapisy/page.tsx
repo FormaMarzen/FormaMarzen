@@ -215,7 +215,7 @@ export default function MojeZapisyPage() {
       if (allRecords && allClients) {
         const rankingMap: Record<number, any> = {};
         
-        allRecords.filter((r: any) => r.obecny).forEach((r: any) => {
+        allRecords.filter((r: any) => r.obecny === true || r.obecny === 1 || r.obecny === 'true' || r.obecny === 'TRUE' || r.obecny === '1').forEach((r: any) => {
           if (!rankingMap[r.klient_id]) {
             const client = allClients.find((c: any) => String(c.id) === String(r.klient_id)) as any;
             const imie = client ? (client.Imię || client.firstName || '') : '';
@@ -233,11 +233,20 @@ export default function MojeZapisyPage() {
           let dateObj = new Date();
           if (datePart) {
             if (datePart.includes('/')) {
-              const [d, m] = datePart.split('/');
-              dateObj = new Date(new Date().getFullYear(), parseInt(m) - 1, parseInt(d));
+              const segments = datePart.split('/');
+              if (segments.length === 2) {
+                const [d, m] = segments;
+                dateObj = new Date(new Date().getFullYear(), parseInt(m) - 1, parseInt(d));
+              } else if (segments.length === 3) {
+                const [d, m, y] = segments;
+                dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+              }
             } else if (datePart.includes('-')) {
               dateObj = new Date(datePart);
             }
+          }
+          if (isNaN(dateObj.getTime())) {
+            dateObj = new Date();
           }
           rankingMap[r.klient_id].records.push({ date: dateObj });
         });
