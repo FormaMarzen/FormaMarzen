@@ -29,6 +29,7 @@ export default function RootLayout({
   const [profileEmail, setProfileEmail] = useState('');
   const [profilePhone, setProfilePhone] = useState('-');
   const [profileBirth, setProfileBirth] = useState('');
+  const [profileGender, setProfileGender] = useState('');
   const [profileLang, setProfileLang] = useState('Polski');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
@@ -59,7 +60,6 @@ export default function RootLayout({
   // Obsługa gestu Pull-to-Refresh (przeciągnięcie w dół z góry ekranu)
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
-      // Reagujemy tylko przy jednym palcu i gdy przewinięcie jest na samej górze
       if (e.touches.length === 1 && window.scrollY <= 0) {
         touchStartY.current = e.touches[0].clientY;
         isPulling.current = true;
@@ -74,9 +74,7 @@ export default function RootLayout({
       const currentY = e.touches[0].clientY;
       const diffY = currentY - touchStartY.current;
 
-      // Ciągniemy w dół, będąc na samej górze ekranu
       if (diffY > 0 && window.scrollY <= 0) {
-        // Tłumienie oporu (współczynnik 0.4 dla naturalnego efektu sprężystości)
         const dampedPull = Math.min(diffY * 0.4, 90);
         setPullDistance(dampedPull);
       } else {
@@ -91,7 +89,6 @@ export default function RootLayout({
         setIsRefreshing(true);
         setPullDistance(60);
         
-        // Wywołanie pełnego odświeżenia aplikacji
         setTimeout(() => {
           window.location.reload();
         }, 400);
@@ -112,7 +109,7 @@ export default function RootLayout({
     };
   }, [pullDistance, isRefreshing]);
 
-  // Blokada skalowania, podwójnego tapnięcia i pinch-to-zoom na urządzeniach mobilnych
+  // Blokada skalowania i pinch-to-zoom na urządzeniach mobilnych
   useEffect(() => {
     const handleGesture = (e: Event) => {
       e.preventDefault();
@@ -151,7 +148,6 @@ export default function RootLayout({
   useEffect(() => {
     setIsMounted(true);
 
-    // Rejestracja Service Workera dla powiadomień Push
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch((err) => {
         console.error('Service Worker registration failed:', err);
@@ -174,7 +170,7 @@ export default function RootLayout({
         
         const { data: klientData } = await supabase
           .from('klienci')
-          .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, avatarUrl')
+          .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl')
           .ilike('E-mail', userEmail.trim())
           .maybeSingle();
 
@@ -182,6 +178,7 @@ export default function RootLayout({
           const k = klientData as any;
           setCurrentClientId(k.id);
           if (k.Urodziny) setProfileBirth(k.Urodziny);
+          if (k.gender) setProfileGender(k.gender);
           if (k['Numer tel.'] && k['Numer tel.'] !== '-') setProfilePhone(k['Numer tel.']);
           if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
         }
@@ -516,7 +513,6 @@ export default function RootLayout({
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="HandheldFriendly" content="true" />
         
-        {/* Open Graph Meta Tags for Social Media Preview */}
         <meta property="og:title" content="Forma Marzeń" />
         <meta property="og:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
         <meta property="og:image" content="https://forma-marzen.vercel.app/logo.png" />
@@ -915,6 +911,19 @@ export default function RootLayout({
                 </div>
 
                 <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Płeć</label>
+                  <select 
+                    value={profileGender}
+                    onChange={(e) => setProfileGender(e.target.value)}
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
+                  >
+                    <option value="">-- Wybierz płeć --</option>
+                    <option value="Mężczyzna">Mężczyzna</option>
+                    <option value="Kobieta">Kobieta</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
                   <label className="font-bold text-slate-700 block">Urodziny</label>
                   <input 
                     type="date" 
@@ -958,7 +967,8 @@ export default function RootLayout({
                       .from('klienci')
                       .update({
                         'Numer tel.': profilePhone,
-                        Urodziny: profileBirth
+                        Urodziny: profileBirth,
+                        gender: profileGender
                       });
 
                     if (currentClientId) {
@@ -987,7 +997,8 @@ export default function RootLayout({
                           .from('klienci')
                           .update({
                             'Numer tel.': profilePhone,
-                            Urodziny: profileBirth
+                            Urodziny: profileBirth,
+                            gender: profileGender
                           })
                           .eq('id', existingClient.id);
                       }
@@ -998,7 +1009,7 @@ export default function RootLayout({
                       .update({ telefon: profilePhone })
                       .ilike('email', cleanEmail);
 
-                    alert("Profil oraz data urodzin zostały zapisane pomyślnie!");
+                    alert("Profil, płeć oraz data urodzin zostały zapisane pomyślnie!");
                     setIsProfileModalOpen(false);
                     window.location.reload();
                   }}
