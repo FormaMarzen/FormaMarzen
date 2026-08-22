@@ -73,7 +73,7 @@ export default function DashboardPage() {
     }
   };
 
-  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE (Z POPRAWKĄ SERVICE WORKERA I DLA WSZYSTKICH KONT)
+  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return;
@@ -82,7 +82,6 @@ export default function DashboardPage() {
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') return;
 
-      // Jawna rejestracja pliku Service Workera z folderu public
       await navigator.serviceWorker.register('/sw.js');
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
@@ -168,7 +167,7 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
-  // STAN WYBORU CZASU WYPISU Z KRZESEŁKA (NOWY ZAPIS ORAZ EDYCJA ISTNIEJĄCEGO)
+  // STAN WYBORU CZASU WYPISU Z KRZESEŁKA
   const [isWaitlistModalOpen, setIsWaitlistModalOpen] = useState(false);
   const [selectedWaitlistCutoff, setSelectedWaitlistCutoff] = useState<number>(30);
   const [isEditWaitlistModalOpen, setIsEditWaitlistModalOpen] = useState(false);
@@ -362,7 +361,7 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
-  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB, ZWROTU WEJŚĆ I POWIADOMIEŃ PUSH
+  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -804,6 +803,7 @@ export default function DashboardPage() {
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
+    // POBIERANIE I PODWÓJNE MAPOWANIE ZAPISÓW NA ZAJĘCIA (KOMPATYBILNOŚĆ DD/MM ORAZ YYYY-MM-DD)
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const groupedZapisy: { [key: string]: any[] } = {};
     if (zapisyData) {
@@ -812,16 +812,45 @@ export default function DashboardPage() {
         if (a.id && b.id) return Number(a.id) - Number(b.id);
         return 0;
       });
+
       sortedZapisy.forEach((z: any) => {
-        if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
-        groupedZapisy[z.class_key].push({
+        const entry = {
           ...z,
           id: z.klient_id,
           status: z.status || 'zapisany',
           waitlist_cutoff_minutes: z.waitlist_cutoff_minutes !== undefined && z.waitlist_cutoff_minutes !== null ? Number(z.waitlist_cutoff_minutes) : 30,
           obecny: z.obecny,
           nieobecny: z.nieobecny
-        });
+        };
+
+        // Zapisz pod oryginalnym kluczem
+        if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
+        groupedZapisy[z.class_key].push(entry);
+
+        // Zunifikowane mapowanie między YYYY-MM-DD oraz DD/MM
+        if (z.class_key && z.class_key.includes('_')) {
+          const [classId, datePart] = z.class_key.split('_');
+          if (datePart && datePart.includes('-')) {
+            const parts = datePart.split('-');
+            if (parts.length === 3) {
+              const altKey = `${classId}_${parts[2]}/${parts[1]}`;
+              if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
+              if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
+                groupedZapisy[altKey].push(entry);
+              }
+            }
+          } else if (datePart && datePart.includes('/')) {
+            const parts = datePart.split('/');
+            if (parts.length === 2) {
+              const year = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+              const altKey = `${classId}_${year}-${parts[1]}-${parts[0]}`;
+              if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
+              if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
+                groupedZapisy[altKey].push(entry);
+              }
+            }
+          }
+        }
       });
       setZapisyNaZajecia(groupedZapisy);
     }
@@ -935,7 +964,6 @@ export default function DashboardPage() {
       }
     }
 
-    // POBIERANIE I PARSOWANIE USTAWIEŃ RODZAJÓW ZAJĘĆ (PROGRAMOWANIE TRENINGÓW)
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) {
       const parsedRodzaje = rodzajeData.map((item: any) => {
@@ -961,10 +989,23 @@ export default function DashboardPage() {
     }
   };
 
+  // REALTIME SUBSKRYPCJA ZMIAN
   useEffect(() => {
     loadData();
+
+    const channel = supabase
+      .channel('realtime-dashboard')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
+      .subscribe();
+
     window.addEventListener('storage', loadData);
-    return () => window.removeEventListener('storage', loadData);
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener('storage', loadData);
+    };
   }, [selectedWeekDate]);
 
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
@@ -1010,7 +1051,18 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          const [d, m] = dateStr.split('/').map(Number);
+          let m: number = 0;
+          let d: number = 0;
+          if (dateStr.includes('/')) {
+            const p = dateStr.split('/').map(Number);
+            d = p[0];
+            m = p[1];
+          } else if (dateStr.includes('-')) {
+            const p = dateStr.split('-').map(Number);
+            m = p[1];
+            d = p[2];
+          }
+
           const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
           const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
           const override = nadpisaneZajeciaDni[signup.class_key];
@@ -1068,7 +1120,18 @@ export default function DashboardPage() {
         const parts = (signup.class_key || '').split('_');
         const dateStr = parts[1];
         if (dateStr) {
-          const [d, m] = dateStr.split('/').map(Number);
+          let m: number = 0;
+          let d: number = 0;
+          if (dateStr.includes('/')) {
+            const p = dateStr.split('/').map(Number);
+            d = p[0];
+            m = p[1];
+          } else if (dateStr.includes('-')) {
+            const p = dateStr.split('-').map(Number);
+            m = p[1];
+            d = p[2];
+          }
+
           const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
           const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
           const classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
@@ -1397,7 +1460,18 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          const [d, m] = dateStr.split('/').map(Number);
+          let m: number = 0;
+          let d: number = 0;
+          if (dateStr.includes('/')) {
+            const p = dateStr.split('/').map(Number);
+            d = p[0];
+            m = p[1];
+          } else if (dateStr.includes('-')) {
+            const p = dateStr.split('-').map(Number);
+            m = p[1];
+            d = p[2];
+          }
+
           const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
           const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
           const override = nadpisaneZajeciaDni[signup.class_key];
@@ -1584,7 +1658,18 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          const [d, m] = dateStr.split('/').map(Number);
+          let m: number = 0;
+          let d: number = 0;
+          if (dateStr.includes('/')) {
+            const p = dateStr.split('/').map(Number);
+            d = p[0];
+            m = p[1];
+          } else if (dateStr.includes('-')) {
+            const p = dateStr.split('-').map(Number);
+            m = p[1];
+            d = p[2];
+          }
+
           const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
           const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
           const override = nadpisaneZajeciaDni[signup.class_key];
@@ -1690,7 +1775,18 @@ export default function DashboardPage() {
       const classId = parts[0];
       const dateStr = parts[1];
       if (dateStr) {
-        const [d, m] = dateStr.split('/').map(Number);
+        let m: number = 0;
+        let d: number = 0;
+        if (dateStr.includes('/')) {
+          const p = dateStr.split('/').map(Number);
+          d = p[0];
+          m = p[1];
+        } else if (dateStr.includes('-')) {
+          const p = dateStr.split('-').map(Number);
+          m = p[1];
+          d = p[2];
+        }
+
         const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
         const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
         const override = nadpisaneZajeciaDni[classKey];
@@ -1731,7 +1827,6 @@ export default function DashboardPage() {
     }
   };
 
-  // GŁÓWNA LOGIKA ZAPISU KLUBOWICZA ZE STRONY GŁÓWNEJ
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -1802,7 +1897,14 @@ export default function DashboardPage() {
     const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
     const parts = classKeyStr.split('_');
     const dateStr = parts[1];
-    const [d, m] = dateStr.split('/').map(Number);
+    let d = 1, m = 1;
+    if (dateStr.includes('/')) {
+      [d, m] = dateStr.split('/').map(Number);
+    } else if (dateStr.includes('-')) {
+      const p = dateStr.split('-').map(Number);
+      m = p[1];
+      d = p[2];
+    }
     const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
     const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
     const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
@@ -2073,7 +2175,6 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
-  // EDYCJA CZASU WYPISU Z LISTY REZERWOWEJ BEZ UTRATY MIEJSCA W KOLEJCE
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
 
@@ -2320,7 +2421,14 @@ export default function DashboardPage() {
     const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
     const parts = classKeyStr.split('_');
     const dateStr = parts[1];
-    const [d, m] = dateStr.split('/').map(Number);
+    let d = 1, m = 1;
+    if (dateStr.includes('/')) {
+      [d, m] = dateStr.split('/').map(Number);
+    } else if (dateStr.includes('-')) {
+      const p = dateStr.split('-').map(Number);
+      m = p[1];
+      d = p[2];
+    }
     const classDateObj = new Date(new Date().getFullYear(), m - 1, d);
     const calcClassDateStr = `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
 
@@ -2647,7 +2755,15 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          const [d, m] = dateStr.split('/').map(Number);
+          let d = 1, m = 1;
+          if (dateStr.includes('/')) {
+            [d, m] = dateStr.split('/').map(Number);
+          } else if (dateStr.includes('-')) {
+            const p = dateStr.split('-').map(Number);
+            m = p[1];
+            d = p[2];
+          }
+
           const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
           const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
           let classInfo = stdClass || jednorazClass;
@@ -2663,18 +2779,21 @@ export default function DashboardPage() {
 
               if (classStartDateTime >= now) {
                 const targetIso = `${now.getFullYear()}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                const progWorkout = getProgrammedWorkout(classInfo, targetIso, dateStr);
+                const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
+                const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
 
-                myUpcomingClasses.push({
-                  ...classInfo,
-                  classKey,
-                  displayDate: dateStr,
-                  fullDateObj: new Date(now.getFullYear(), m - 1, d),
-                  signupStatus: mojZapis.status || 'zapisany',
-                  isKrzeselko: mojZapis.status === 'krzesełko',
-                  waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30,
-                  programmedWorkout: progWorkout
-                });
+                if (!myUpcomingClasses.some((existing: any) => existing.classKey === classKey)) {
+                  myUpcomingClasses.push({
+                    ...classInfo,
+                    classKey,
+                    displayDate: displayFormatted,
+                    fullDateObj: new Date(now.getFullYear(), m - 1, d),
+                    signupStatus: mojZapis.status || 'zapisany',
+                    isKrzeselko: mojZapis.status === 'krzesełko',
+                    waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30,
+                    programmedWorkout: progWorkout
+                  });
+                }
               }
             }
           }
@@ -3167,7 +3286,6 @@ export default function DashboardPage() {
                       const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
                       const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
                       
-                      // POBIERAMY ZAPROGRAMOWANĄ JEDNOSTKĘ DLA TEGO TRENINGU
                       const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
 
                       return (
@@ -3468,7 +3586,6 @@ export default function DashboardPage() {
                                 Wygasa: {ostatecznaData}
                               </span>
                             )}
-                            {/* DLA UMÓW 12M: RATA I POZOSTAŁE DNI ZAWIESZENIA Z 30 DNI */}
                             {maKarnet && firstPass && isContractPass(firstPass) && (
                               <>
                                 <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-amber-200 flex items-center gap-1">
@@ -3481,7 +3598,6 @@ export default function DashboardPage() {
                                 </span>
                               </>
                             )}
-                            {/* DLA KARNETÓW ILOŚCIOWYCH: LICZNIK WEJŚĆ */}
                             {maKarnet && firstPass && isQuantityPass(firstPass) && firstPass.pozostaloWejsc !== null && firstPass.pozostaloWejsc !== undefined && (
                               <span className="bg-sky-100 text-sky-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-sky-200 flex items-center gap-1">
                                 <span>🎟️ Wejścia:</span>
@@ -3688,7 +3804,6 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* WYRÓŻNIONA KARTA PROGRAMOWANIA TRENINGÓW W MODALU */}
               {selectedClass.programmedWorkout && (
                 <div className="bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-white border-2 border-amber-300 rounded-2xl p-4 shadow-sm space-y-1.5 animate-in fade-in">
                   <div className="flex items-center justify-between">
@@ -3933,11 +4048,7 @@ export default function DashboardPage() {
 
               {['klubowicz', 'trener'].includes(appRole) ? (
                 <div className="pt-2">
-                  {selectedClass.isLockedForClient ? (
-                    <div className="w-full bg-slate-100 border border-slate-200 text-slate-500 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
-                      🔒 Czas na zapisy/wypisy minął (Zajęcia historyczne)
-                    </div>
-                  ) : !isUserSignedUp ? (
+                  {!isUserSignedUp ? (
                     (() => {
                       const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
                       if (wVal < 0) {
@@ -4119,7 +4230,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: EDYCJA CZASU WYPISU Z LISTY REZERWOWEJ (BEZ UTRATY KOLEJKI) */}
+      {/* MODAL: EDYCJA CZASU WYPISU Z LISTY REZERWOWEJ */}
       {isEditWaitlistModalOpen && editWaitlistTarget && (
         <div className="fixed inset-0 bg-slate-950/70 z-[70] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-blue-200">
@@ -4196,7 +4307,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: AKCJE KLUBOWICZA W TABELI (UPROSZCZONE WG WYTYCZNYCH) */}
+      {/* MODAL: AKCJE KLUBOWICZA W TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
@@ -4282,7 +4393,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: PROFIL KLUBOWICZA (ODCHUDZONY PODGLĄD NA STRONIE GŁÓWNEJ) */}
+      {/* MODAL: PROFIL KLUBOWICZA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto">
