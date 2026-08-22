@@ -1,16 +1,20 @@
 import { NextResponse } from 'next/server';
 import webpush from 'web-push';
 
-const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
-const privateKey = process.env.VAPID_PRIVATE_KEY || '';
-const subject = process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl';
-
-if (publicKey && privateKey) {
-  webpush.setVapidDetails(subject, publicKey, privateKey);
-}
-
 export async function POST(request: Request) {
   try {
+    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
+    const privateKey = process.env.VAPID_PRIVATE_KEY || '';
+    const subject = process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl';
+
+    if (!publicKey || !privateKey) {
+      console.error('Brak skonfigurowanych kluczy VAPID w zmiennych środowiskowych Vercel.');
+      return NextResponse.json({ success: false, error: 'Brak konfiguracji VAPID na serwerze' }, { status: 500 });
+    }
+
+    // Inicjalizacja kluczy VAPID bezpośrednio w żądaniu
+    webpush.setVapidDetails(subject, publicKey, privateKey);
+
     const { subscriptions, payload } = await request.json();
 
     if (!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) {
@@ -25,7 +29,7 @@ export async function POST(request: Request) {
 
     const sendPromises = subscriptions.map((sub: any) =>
       webpush.sendNotification(sub, notificationPayload).catch((err: any) => {
-        console.error('Błąd wysyłania do subskrypcji:', err.statusCode || err);
+        console.error('Błąd wysyłania do subskrypcji (status):', err.statusCode || err);
       })
     );
 
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    console.error('Błąd endpointu /api/push/send:', error);
+    console.error('Błąd krytyczny endpointu /api/push/send:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
