@@ -108,6 +108,100 @@ const isPassActive = (k: any) => {
   return true;
 };
 
+// POMOCNICZE FUNKCJE GRAMATYCZNE I DYNAMICZNEGO PRZELICZANIA WAŻNOŚCI KARNETÓW
+const formatOkresGramatyka = (ilosc: number, jednostka: string): string => {
+  if (jednostka === 'Dzień') {
+    return ilosc === 1 ? 'dzień' : 'dni';
+  }
+  if (ilosc === 1) return 'miesiąc';
+  const rem10 = ilosc % 10;
+  const rem100 = ilosc % 100;
+  if (rem10 >= 2 && rem10 <= 4 && (rem100 < 10 || rem100 >= 20)) {
+    return 'miesiące';
+  }
+  return 'miesięcy';
+};
+
+const parsujOkresZDlugosci = (dlugoscStr: string) => {
+  if (!dlugoscStr) return { ilosc: '1', jednostka: 'Miesiąc' };
+  const match = dlugoscStr.match(/(\d+)\s*(dzień|dni|miesiąc|miesiące|miesięcy|m|d)/i);
+  if (match) {
+    const isDay = match[2].toLowerCase().startsWith('d');
+    return {
+      ilosc: match[1],
+      jednostka: isDay ? 'Dzień' : 'Miesiąc'
+    };
+  }
+  return { ilosc: '1', jednostka: 'Miesiąc' };
+};
+
+// DYNAMICZNY I NIEZAWODNY KALKULATOR DATY WYGAŚNIĘCIA KARNETU (NP. 6 MIESIĘCY, 1 ROK, 14 DNI)
+const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date => {
+  let meta: Record<string, any> = {};
+  if (passDef?.inne_ustawienia) {
+    try {
+      meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : passDef.inne_ustawienia;
+    } catch(e) {}
+  }
+
+  const typ = passDef?.typKarnetu || passDef?.typ_karnetu;
+  const czasIlosc = parseInt(String(passDef?.czasIlosc || meta?.czasIlosc || ''), 10);
+  const czasJednostka = passDef?.czasJednostka || meta?.czasJednostka;
+
+  const limitIlosc = parseInt(String(passDef?.limitIlosc || meta?.limitIlosc || ''), 10);
+  const limitOkres = passDef?.limitOkres || meta?.limitOkres;
+
+  const targetDate = new Date(baseDate.getTime());
+
+  if (typ === 'Na czas' && !isNaN(czasIlosc) && czasIlosc > 0) {
+    if (czasJednostka === 'Dzień') {
+      targetDate.setDate(targetDate.getDate() + czasIlosc);
+      return targetDate;
+    } else {
+      targetDate.setMonth(targetDate.getMonth() + czasIlosc);
+      return targetDate;
+    }
+  }
+
+  if (typ === 'Na ilość treningów' && !isNaN(limitIlosc) && limitIlosc > 0) {
+    if (limitOkres === 'Dzień') {
+      targetDate.setDate(targetDate.getDate() + limitIlosc);
+      return targetDate;
+    } else {
+      targetDate.setMonth(targetDate.getMonth() + limitIlosc);
+      return targetDate;
+    }
+  }
+
+  // Fallback z tekstu długości (np. '6 miesięcy', '3 miesiące', '14 dni')
+  const dlugoscStr = (passDef?.dlugosc || passDef?.limitCzasowy || '').toLowerCase();
+  
+  const matchMonths = dlugoscStr.match(/(\d+)\s*(mies|m-c|rok|lat)/i);
+  if (matchMonths) {
+    let months = parseInt(matchMonths[1], 10) || 1;
+    if (matchMonths[2].toLowerCase().startsWith('rok') || matchMonths[2].toLowerCase().startsWith('lat')) {
+      months *= 12;
+    }
+    targetDate.setMonth(targetDate.getMonth() + months);
+    return targetDate;
+  }
+
+  const matchDays = dlugoscStr.match(/(\d+)\s*(dni|dzień|d)/i);
+  if (matchDays) {
+    const days = parseInt(matchDays[1], 10) || 30;
+    targetDate.setDate(targetDate.getDate() + days);
+    return targetDate;
+  }
+
+  if (dlugoscStr.includes('rok')) {
+    targetDate.setFullYear(targetDate.getFullYear() + 1);
+    return targetDate;
+  }
+
+  targetDate.setMonth(targetDate.getMonth() + 1);
+  return targetDate;
+};
+
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
@@ -443,7 +537,6 @@ export default function KarnetyPage() {
     const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
-    // Dla umów 12M rabat ciągłościowy wynosi ZAWSZE 0%
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
@@ -644,6 +737,7 @@ export default function KarnetyPage() {
           } catch (e) {}
 
           const is12M = item.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true;
+          const fallbackCzas = parsujOkresZDlugosci(item.dlugosc);
 
           return {
             id: item.id,
@@ -652,6 +746,10 @@ export default function KarnetyPage() {
             cena: item.cena_brutto ? item.cena_brutto.toString() : '0',
             typKarnetu: item.typ_karnetu,
             limitCzasowy: item.dlugosc,
+            czasIlosc: meta.czasIlosc || fallbackCzas.ilosc,
+            czasJednostka: meta.czasJednostka || fallbackCzas.jednostka,
+            limitIlosc: meta.limitIlosc || '1',
+            limitOkres: meta.limitOkres || 'Miesiąc',
             dostepDo: item.dostep_do_zajec,
             dostepnyOnline: item.sprzedaz_online !== undefined ? item.sprzedaz_online : (meta.dostepnyOnline ?? true),
             ponownyZakup: meta.ponownyZakup !== undefined ? meta.ponownyZakup : true,
@@ -726,7 +824,6 @@ export default function KarnetyPage() {
   const [opis, setOpis] = useState('');
   const [obrazekUrl, setObrazekUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   const handleOpenAdd = () => {
     setEditingId(null);
     setNazwa(''); setCena(''); setStawkaVat('8%'); setTypKarnetu('Na czas'); setCzasIlosc('1'); setCzasJednostka('Miesiąc'); setIloscTreningow('10'); setDodajLimitCzasowy(true); setLimitIlosc('1'); setLimitOkres('Miesiąc'); setDostepDo('wszystkich zajęć'); setZaznaczoneZajecia([]); setLimitCzasowyZapisow('Domyślny (14 dni)'); setNiestandardowyDni('14'); setTygodniowyLimit('Bez limitu'); setDziennyLimit('Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc('1'); setBlokujPortfel(false); setPortfelPrógKwota('0'); setDostepnyOnline(true); setPonownyZakup(true); setZmianaNaInny(true); setKupInnyKarnet(true); setOpis(''); setObrazekUrl(null);
@@ -735,7 +832,34 @@ export default function KarnetyPage() {
 
   const handleOpenEdit = (item: any) => {
     setEditingId(item.id);
-    setNazwa(item.nazwa || ''); setCena(item.cena || ''); setStawkaVat(item.stawkaVat || '8%'); setTypKarnetu(item.typKarnetu || 'Na czas'); setCzasIlosc(item.czasIlosc || '1'); setCzasJednostka(item.czasJednostka || 'Miesiąc'); setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10'); setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); setLimitIlosc(item.limitIlosc || '1'); setLimitOkres(item.limitOkres || 'Miesiąc'); setDostepDo(item.dostepDo || 'wszystkich zajęć'); setZaznaczoneZajecia(item.zaznaczoneZajecia || []); setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); setNiestandardowyDni(item.niestandardowyDni || '14'); setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); setBlokujPortfel(item.blokujPortfel ?? false); setPortfelPrógKwota(item.portfelPrógKwota || '0'); setDostepnyOnline(item.dostepnyOnline ?? true); setPonownyZakup(item.ponownyZakup ?? true); setZmianaNaInny(item.zmianaNaInny ?? true); setKupInnyKarnet(item.kupInnyKarnet ?? true); setOpis(item.opis || ''); setObrazekUrl(item.obrazekUrl || null);
+    setNazwa(item.nazwa || ''); 
+    setCena(item.cena || ''); 
+    setStawkaVat(item.stawkaVat || '8%'); 
+    setTypKarnetu(item.typKarnetu || item.typ_karnetu || 'Na czas');
+
+    const parsedCzas = parsujOkresZDlugosci(item.dlugosc || item.limitCzasowy);
+    setCzasIlosc(item.czasIlosc ? String(item.czasIlosc) : parsedCzas.ilosc);
+    setCzasJednostka(item.czasJednostka || parsedCzas.jednostka);
+
+    setIloscTreningow(item.iloscTreningow || item.ilosc_wejsc || '10'); 
+    setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); 
+    setLimitIlosc(item.limitIlosc ? String(item.limitIlosc) : '1'); 
+    setLimitOkres(item.limitOkres || 'Miesiąc'); 
+    setDostepDo(item.dostepDo || item.dostep_do_zajec || 'wszystkich zajęć'); 
+    setZaznaczoneZajecia(item.zaznaczoneZajecia || []); 
+    setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); 
+    setNiestandardowyDni(item.niestandardowyDni || '14'); 
+    setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); 
+    setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); 
+    setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); 
+    setBlokujPortfel(item.blokujPortfel ?? false); 
+    setPortfelPrógKwota(item.portfelPrógKwota || '0'); 
+    setDostepnyOnline(item.dostepnyOnline ?? true); 
+    setPonownyZakup(item.ponownyZakup ?? true); 
+    setZmianaNaInny(item.zmianaNaInny ?? true); 
+    setKupInnyKarnet(item.kupInnyKarnet ?? true); 
+    setOpis(item.opis || ''); 
+    setObrazekUrl(item.obrazekUrl || null);
     setIsModalOpen(true);
   };
 
@@ -847,13 +971,11 @@ export default function KarnetyPage() {
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
     const isContract = passToExtend.isContract12M || defKarnetu?.isContract12M || defKarnetu?.typKarnetu === 'Umowa 12 miesięcy';
     
-    let dniWażności = 30;
     let nextRataStr = '1 / 1';
     let nowaDataWygasnieciaStr = '';
     let isBonus13thPeriod = false;
     let bonusDaysAmount = 0;
 
-    // Pobieramy stawkę bazową
     let basePriceNum = 0;
     if (isContract && passToExtend.cena) {
       basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
@@ -867,7 +989,6 @@ export default function KarnetyPage() {
       const contractInfo = getContractRataInfo(passToExtend);
 
       if (contractInfo.canActivateBonus) {
-        // 13. RATA - OKRES BONUSOWY Z ZAWIESZENIA (0.00 PLN)
         isBonus13thPeriod = true;
         bonusDaysAmount = contractInfo.totalSuspUsed;
         nextRataStr = 'Bonus / 12';
@@ -882,7 +1003,7 @@ export default function KarnetyPage() {
         }
         baseDate.setDate(baseDate.getDate() + bonusDaysAmount);
         nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
-        basePriceNum = 0; // Okres bonusowy z zawieszenia jest całkowicie bezpłatny
+        basePriceNum = 0;
       } else {
         const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
         nextRataStr = `${nextRataNum} / 12`;
@@ -899,16 +1020,6 @@ export default function KarnetyPage() {
         nowaDataWygasnieciaStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
       }
     } else {
-      if (defKarnetu && defKarnetu.dlugosc) {
-        const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
-        if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
-        else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
-        else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
-        else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
-        else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
-        else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
-      }
-
       let baseDate = new Date();
       if (passToExtend.waznyDo) {
         const parts = passToExtend.waznyDo.split('-');
@@ -917,8 +1028,9 @@ export default function KarnetyPage() {
           if (currentExp > baseDate) baseDate = currentExp;
         }
       }
-      baseDate.setDate(baseDate.getDate() + dniWażności);
-      nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+      
+      const calcTargetDate = calculatePassValidityDaysOrEndDate(baseDate, defKarnetu || passToExtend);
+      nowaDataWygasnieciaStr = `${calcTargetDate.getFullYear()}-${String(calcTargetDate.getMonth() + 1).padStart(2, '0')}-${String(calcTargetDate.getDate()).padStart(2, '0')}`;
     }
 
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
@@ -992,12 +1104,10 @@ export default function KarnetyPage() {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
     };
     
-    // ZAPIS JEDNORAZOWEGO WYKORZYSTANIA RABATU URODZINOWEGO
     if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
       dbPayload.urodziny_rabat_rok = currentYear;
     }
 
-    // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI W SUPABASE
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
@@ -1096,17 +1206,6 @@ export default function KarnetyPage() {
     if (!currentUser || !selectedBuyPass) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
-    let dniWażności = 30;
-
-    if (defKarnetu && defKarnetu.dlugosc) {
-      const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
-      if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
-      else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
-      else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
-      else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
-      else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
-      else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
-    }
 
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza].filter(isPassActive) : [];
     
@@ -1131,7 +1230,6 @@ export default function KarnetyPage() {
 
     let nowaDataWygasnieciaStr = '';
 
-    // WYLICZENIE CYKLU W STRUKTURZE KARNETÓW
     let baseCykl = 1;
     if (updatedKarnetyList.length > 0) {
       const highestCykl = Math.max(...updatedKarnetyList.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
@@ -1153,7 +1251,7 @@ export default function KarnetyPage() {
           waznyDo: nowaDataWygasnieciaStr,
           pozostaloWejsc: null,
           poczatkoweWejsc: null,
-          cena: `${basePriceNum.toFixed(2)} PLN`, // Zachowujemy pełną comiesięczną stawkę w profilu karnetu
+          cena: `${basePriceNum.toFixed(2)} PLN`,
           cykl: 1,
           znizkaProcentowa: appliedLabel,
           rata: '0 / 12',
@@ -1183,8 +1281,9 @@ export default function KarnetyPage() {
               baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
             }
           }
-          baseDate.setDate(baseDate.getDate() + dniWażności);
-          nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+          
+          const calcTargetDate = calculatePassValidityDaysOrEndDate(baseDate, defKarnetu || k);
+          nowaDataWygasnieciaStr = `${calcTargetDate.getFullYear()}-${String(calcTargetDate.getMonth() + 1).padStart(2, '0')}-${String(calcTargetDate.getDate()).padStart(2, '0')}`;
 
           const nowaHistoria = [...(k.historiaPrzedluzen || []), {
             data: todayStr,
@@ -1214,9 +1313,8 @@ export default function KarnetyPage() {
         baseStartDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
       }
 
-      const dataWygasniecia = new Date(baseStartDate);
-      dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-      nowaDataWygasnieciaStr = `${dataWygasniecia.getFullYear()}-${String(dataWygasniecia.getMonth() + 1).padStart(2, '0')}-${String(dataWygasniecia.getDate()).padStart(2, '0')}`;
+      const calcTargetDate = calculatePassValidityDaysOrEndDate(baseStartDate, defKarnetu);
+      nowaDataWygasnieciaStr = `${calcTargetDate.getFullYear()}-${String(calcTargetDate.getMonth() + 1).padStart(2, '0')}-${String(calcTargetDate.getDate()).padStart(2, '0')}`;
 
       statusTekst = activationMode === 'after' 
         ? `Oczekujący (Ważny od: ${maxDateStr} do: ${nowaDataWygasnieciaStr})`
@@ -1250,12 +1348,10 @@ export default function KarnetyPage() {
       karnetyKlubowicza: typeof currentUser.karnetyKlubowicza === 'string' ? JSON.stringify(updatedKarnetyList) : updatedKarnetyList,
     };
     
-    // ZAPIS JEDNORAZOWEGO WYKORZYSTANIA RABATU URODZINOWEGO
     if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
       dbPayload.urodziny_rabat_rok = currentYear;
     }
 
-    // AKTUALIZACJA BAZY RABATU CIĄGŁOŚCI W SUPABASE
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
@@ -1421,7 +1517,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA) - Z UWZGLĘDNIENIEM UMÓW 12M
+  // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -1579,7 +1675,7 @@ export default function KarnetyPage() {
     setSuspendEndDate('');
   };
 
-  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA) - Z UWZGLĘDNIENIEM BENEFITU ZAWIESZENIA DLA 12M
+  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA)
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -1683,24 +1779,30 @@ export default function KarnetyPage() {
   });
 
   const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd);
-
-  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin - z pełnymi flagami sprzedaży online)
+  // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nazwa.trim() || !cena.trim()) return;
 
     let wyliczonaDlugosc = '';
-    let dodanaIloscWejsc = null;
+    let dodanaIloscWejsc: number | null = null;
     const isContract = typKarnetu === 'Umowa 12 miesięcy';
+
+    const intCzasIlosc = parseInt(czasIlosc, 10) || 1;
+    const intLimitIlosc = parseInt(limitIlosc, 10) || 1;
 
     if (isContract) {
       wyliczonaDlugosc = 'Umowa 12 miesięcy (Cykliczna)';
+      dodanaIloscWejsc = null;
     } else if (typKarnetu === 'Na czas') {
-      wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
+      const okresTekst = formatOkresGramatyka(intCzasIlosc, czasJednostka);
+      wyliczonaDlugosc = `${intCzasIlosc} ${okresTekst}`;
+      dodanaIloscWejsc = null;
     } else {
       dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
       if (dodajLimitCzasowy) {
-        wyliczonaDlugosc = `${iloscTreningow} wejść / ${limitIlosc} ${limitOkres.toLowerCase()}${parseInt(limitIlosc) > 1 && limitOkres === 'Miesiąc' ? 'e' : ''}`;
+        const okresLimitTekst = formatOkresGramatyka(intLimitIlosc, limitOkres);
+        wyliczonaDlugosc = `${iloscTreningow} wejść / ${intLimitIlosc} ${okresLimitTekst}`;
       } else {
         wyliczonaDlugosc = `${iloscTreningow} wejść (bez limitu czasu)`;
       }
@@ -1708,14 +1810,16 @@ export default function KarnetyPage() {
 
     const metaDane = {
       stawkaVat,
-      czasIlosc,
+      czasIlosc: String(intCzasIlosc),
       czasJednostka,
       iloscTreningow,
       ilosc_wejsc: isContract ? null : dodanaIloscWejsc,
       dodajLimitCzasowy,
-      limitIlosc,
+      limitIlosc: String(intLimitIlosc),
       limitOkres,
-      zaznaczoneZajecia,
+      dlugoscDni: typKarnetu === 'Na czas' ? (czasJednostka === 'Dzień' ? intCzasIlosc : intCzasIlosc * 30) : null,
+      dlugoscMiesiace: typKarnetu === 'Na czas' && czasJednostka === 'Miesiąc' ? intCzasIlosc : null,
+      zaznaczoneZajecia: dostepDo === 'określonych zajęć' ? zaznaczoneZajecia : [],
       limitCzasowyZapisow,
       niestandardowyDni,
       tygodniowyLimit,
@@ -1730,11 +1834,13 @@ export default function KarnetyPage() {
       opis,
       obrazekUrl, 
       isContract12M: isContract,
+      contractSuspensionDaysLeft: isContract ? 30 : null,
+      totalSuspendedDaysUsed: 0,
       wUzyciu: 0
     };
 
     const supabasePayload = {
-      nazwa: nazwa,
+      nazwa: nazwa.trim(),
       cena_brutto: parseFloat(cena) || 0,
       typ_karnetu: typKarnetu,
       dlugosc: wyliczonaDlugosc,
@@ -1751,9 +1857,32 @@ export default function KarnetyPage() {
       } else {
         const { error } = await supabase.from('karnety').insert([supabasePayload]);
         if (error) throw error;
+
+        const { data: rulesData } = await supabase
+          .from('club_booking_rules')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (rulesData) {
+          const currentWindowMap = rulesData.booking_window_per_pass || {};
+          const currentGraceMap = rulesData.expired_pass_grace_per_pass || {};
+
+          await supabase.from('club_booking_rules').update({
+            booking_window_per_pass: {
+              ...currentWindowMap,
+              [nazwa.trim()]: rulesData.booking_window_days ?? 14
+            },
+            expired_pass_grace_per_pass: {
+              ...currentGraceMap,
+              [nazwa.trim()]: rulesData.expired_pass_grace_days ?? 15
+            }
+          }).eq('id', rulesData.id);
+        }
       }
 
-      loadData(); 
+      await loadData(); 
       setIsModalOpen(false);
       showToast("Zapisano pomyślnie!", 'success');
       
@@ -1767,7 +1896,7 @@ export default function KarnetyPage() {
       try {
         const { error } = await supabase.from('karnety').delete().eq('id', id);
         if (error) throw error;
-        loadData();
+        await loadData();
         showToast("Usunięto pomyślnie!", 'success');
       } catch (error: any) {
         showToast(`Nie udało się usunąć: ${error.message}`, 'error');
@@ -2237,7 +2366,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M Z OBSŁUGĄ RATY BONUSOWEJ (0.00 PLN) */}
+        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ 12M */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
           const contractInfo = getContractRataInfo(passToExtend);
@@ -2256,7 +2385,7 @@ export default function KarnetyPage() {
           const isBonus13Period = contractInfo.canActivateBonus;
 
           if (isBonus13Period) {
-            basePrice = 0; // Okres bonusowy z zawieszenia wynosi 0.00 PLN
+            basePrice = 0;
           }
 
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
@@ -2433,7 +2562,6 @@ export default function KarnetyPage() {
                     </select>
                   </div>
 
-                  {/* Szczegóły rozliczenia pro-rata dla umów 12 miesięcy */}
                   {selectedBuyPass && isContract && contractInfo && (
                     <div className="bg-amber-50/80 p-4 rounded-xl border border-amber-200 space-y-2 text-amber-950">
                       <div className="font-black uppercase tracking-wider text-[11px]">Kalkulacja umowy 12 miesięcy:</div>
@@ -2749,7 +2877,7 @@ export default function KarnetyPage() {
                     placeholder="np. OPEN, 10 wejść"
                     value={nazwa}
                     onChange={(e) => setNazwa(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
                   />
                 </div>
 
@@ -2765,7 +2893,7 @@ export default function KarnetyPage() {
                         placeholder="0.00"
                         value={cena}
                         onChange={(e) => setCena(e.target.value)}
-                        className="w-full bg-sky-50/50 border border-sky-200 rounded-r-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500"
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-r-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
                       />
                     </div>
                   </div>
@@ -2777,7 +2905,7 @@ export default function KarnetyPage() {
                       placeholder="np. 8%, 23%, ZW"
                       value={stawkaVat}
                       onChange={(e) => setStawkaVat(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
                     />
                   </div>
                 </div>
@@ -2991,7 +3119,7 @@ export default function KarnetyPage() {
                           min="1"
                           value={niestandardowyDziennyIlosc}
                           onChange={(e) => setNiestandardowyDziennyIlosc(e.target.value)}
-                          className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold"
+                          className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
                         />
                       </div>
                     )}
@@ -3118,7 +3246,7 @@ export default function KarnetyPage() {
                     placeholder="Opis karnetu..."
                     value={opis}
                     onChange={(e) => setOpis(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-3 text-slate-800 focus:outline-none focus:border-sky-500"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-3 text-slate-800 focus:outline-none focus:border-sky-500 font-medium"
                   />
                 </div>
               </div>
