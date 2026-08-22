@@ -96,7 +96,7 @@ export default function KarnetyPage() {
             wUzyciu: item.wUzyciu || 0,
             ilosc_wejsc: item.typ_karnetu === 'Na ilość treningów' ? (item.ilosc_wejsc || meta.ilosc_wejsc || null) : null,
             isContract12M: item.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true,
-            ...meta 
+            ...meta
           };
         });
         setKarnety(parsedData);
@@ -163,60 +163,60 @@ export default function KarnetyPage() {
 
   const handleOpenAdd = () => {
     setEditingId(null);
-    setNazwa(''); 
-    setCena(''); 
-    setStawkaVat('8%'); 
-    setTypKarnetu('Na czas'); 
-    setCzasIlosc('1'); 
-    setCzasJednostka('Miesiąc'); 
-    setIloscTreningow('10'); 
-    setDodajLimitCzasowy(true); 
-    setLimitIlosc('1'); 
-    setLimitOkres('Miesiąc'); 
-    setDostepDo('wszystkich zajęć'); 
-    setZaznaczoneZajecia([]); 
-    setLimitCzasowyZapisow('Domyślny (14 dni)'); 
-    setNiestandardowyDni('14'); 
-    setTygodniowyLimit('Bez limitu'); 
-    setDziennyLimit('Domyślny (Bez limitu)'); 
-    setNiestandardowyDziennyIlosc('1'); 
-    setBlokujPortfel(false); 
-    setPortfelPrógKwota('0'); 
-    setDostepnyOnline(false); 
-    setPonownyZakup(true); 
-    setZmianaNaInny(true); 
-    setKupInnyKarnet(true); 
-    setOpis(''); 
+    setNazwa('');
+    setCena('');
+    setStawkaVat('8%');
+    setTypKarnetu('Na czas');
+    setCzasIlosc('1');
+    setCzasJednostka('Miesiąc');
+    setIloscTreningow('10');
+    setDodajLimitCzasowy(true);
+    setLimitIlosc('1');
+    setLimitOkres('Miesiąc');
+    setDostepDo('wszystkich zajęć');
+    setZaznaczoneZajecia([]);
+    setLimitCzasowyZapisow('Domyślny (14 dni)');
+    setNiestandardowyDni('14');
+    setTygodniowyLimit('Bez limitu');
+    setDziennyLimit('Domyślny (Bez limitu)');
+    setNiestandardowyDziennyIlosc('1');
+    setBlokujPortfel(false);
+    setPortfelPrógKwota('0');
+    setDostepnyOnline(false);
+    setPonownyZakup(true);
+    setZmianaNaInny(true);
+    setKupInnyKarnet(true);
+    setOpis('');
     setObrazekUrl(null);
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (item: any) => {
     setEditingId(item.id);
-    setNazwa(item.nazwa || ''); 
-    setCena(item.cena || ''); 
-    setStawkaVat(item.stawkaVat || '8%'); 
-    setTypKarnetu(item.typKarnetu || 'Na czas'); 
-    setCzasIlosc(item.czasIlosc || '1'); 
-    setCzasJednostka(item.czasJednostka || 'Miesiąc'); 
-    setIloscTreningow(item.iloscTreningow || (item.ilosc_wejsc ? item.ilosc_wejsc.toString() : '10')); 
-    setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true); 
-    setLimitIlosc(item.limitIlosc || '1'); 
-    setLimitOkres(item.limitOkres || 'Miesiąc'); 
-    setDostepDo(item.dostepDo || item.dostep_do_zajec || 'wszystkich zajęć'); 
-    setZaznaczoneZajecia(item.zaznaczoneZajecia || []); 
-    setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)'); 
-    setNiestandardowyDni(item.niestandardowyDni || '14'); 
-    setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu'); 
-    setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)'); 
-    setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1'); 
-    setBlokujPortfel(item.blokujPortfel ?? false); 
-    setPortfelPrógKwota(item.portfelPrógKwota || '0'); 
-    setDostepnyOnline(item.dostepnyOnline ?? item.sprzedaz_online ?? false); 
-    setPonownyZakup(item.ponownyZakup ?? true); 
-    setZmianaNaInny(item.zmianaNaInny ?? true); 
-    setKupInnyKarnet(item.kupInnyKarnet ?? true); 
-    setOpis(item.opis || ''); 
+    setNazwa(item.nazwa || '');
+    setCena(item.cena || '');
+    setStawkaVat(item.stawkaVat || '8%');
+    setTypKarnetu(item.typKarnetu || 'Na czas');
+    setCzasIlosc(item.czasIlosc || '1');
+    setCzasJednostka(item.czasJednostka || 'Miesiąc');
+    setIloscTreningow(item.iloscTreningow || (item.ilosc_wejsc ? item.ilosc_wejsc.toString() : '10'));
+    setDodajLimitCzasowy(item.dodajLimitCzasowy ?? true);
+    setLimitIlosc(item.limitIlosc || '1');
+    setLimitOkres(item.limitOkres || 'Miesiąc');
+    setDostepDo(item.dostepDo || item.dostep_do_zajec || 'wszystkich zajęć');
+    setZaznaczoneZajecia(item.zaznaczoneZajecia || []);
+    setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)');
+    setNiestandardowyDni(item.niestandardowyDni || '14');
+    setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu');
+    setDziennyLimit(item.dziennyLimit || 'Domyślny (Bez limitu)');
+    setNiestandardowyDziennyIlosc(item.niestandardowyDziennyIlosc || '1');
+    setBlokujPortfel(item.blokujPortfel ?? false);
+    setPortfelPrógKwota(item.portfelPrógKwota || '0');
+    setDostepnyOnline(item.dostepnyOnline ?? item.sprzedaz_online ?? false);
+    setPonownyZakup(item.ponownyZakup ?? true);
+    setZmianaNaInny(item.zmianaNaInny ?? true);
+    setKupInnyKarnet(item.kupInnyKarnet ?? true);
+    setOpis(item.opis || '');
     setObrazekUrl(item.obrazekUrl || null);
     setIsModalOpen(true);
   };
@@ -238,7 +238,7 @@ export default function KarnetyPage() {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 250; 
+        const MAX_WIDTH = 250;
         const MAX_HEIGHT = 250;
         let width = img.width;
         let height = img.height;
@@ -331,9 +331,9 @@ export default function KarnetyPage() {
         }
       }
 
-      await supabase.from('klienci').update({ 
+      await supabase.from('klienci').update({
         karnetyKlubowicza: updatedKarnety,
-        zapisyNadchodzace: updatedNadchodzace 
+        zapisyNadchodzace: updatedNadchodzace
       }).eq('id', klientId);
     }
 
@@ -346,20 +346,33 @@ export default function KarnetyPage() {
     }
   };
 
-  // Obsługa samodzielnego zawieszania karnetu przez klubowicza
+  // Obsługa samodzielnego zawieszania karnetu przez klubowicza z uwzględnieniem puli 30 dni dla Umów 12M
   const handleClientSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !currentUser.karnetyKlubowicza || currentUser.karnetyKlubowicza.length === 0) return;
     
+    const targetKarnet = currentUser.karnetyKlubowicza[0];
+    const isContract = targetKarnet.isContract12M || targetKarnet.typKarnetu === 'Umowa 12 miesięcy';
+    const suspensionDaysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
+
     let sOd = clientSuspendStartDate || todayStr;
     let sDo = clientSuspendEndDate;
+    let requestedDays = 0;
+
     if (clientSuspendMode === 'days') {
       sOd = todayStr;
       const dni = parseInt(clientSuspendDays || '0', 10);
       if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      requestedDays = dni;
       const endDate = new Date();
-      endDate.setDate(endDate.getDate() + dni);
+      endDate.setDate(endDate.getDate() + (dni - 1));
       sDo = endDate.toISOString().split('T')[0];
+    } else {
+      const d1 = new Date(sOd);
+      const d2 = new Date(sDo);
+      d1.setHours(0,0,0,0);
+      d2.setHours(0,0,0,0);
+      requestedDays = Math.round(Math.abs((d2.getTime() - d1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
     }
     
     if (sOd < todayStr) {
@@ -371,11 +384,21 @@ export default function KarnetyPage() {
       return;
     }
 
-    if (!confirm(`Czy na pewno chcesz zawiesić swój karnet od ${sOd} do ${sDo}?`)) return;
+    if (isContract && requestedDays > suspensionDaysLeft) {
+      alert(`Nie możesz zawiesić karnetu na ${requestedDays} dni. Pozostało Ci ${suspensionDaysLeft} dni z rocznej puli 30 dni.`);
+      return;
+    }
+
+    if (!confirm(`Czy na pewno chcesz zawiesić swój karnet od ${sOd} do ${sDo} (łącznie ${requestedDays} dni)?`)) return;
 
     const updatedKarnety = currentUser.karnetyKlubowicza.map((k: any, idx: number) => {
       if (idx === 0) {
-        return { ...k, zawieszonyOd: sOd, zawieszonyDo: sDo };
+        return { 
+          ...k, 
+          zawieszonyOd: sOd, 
+          zawieszonyDo: sDo,
+          statusTekst: `Zawieszony (od ${sOd} do ${sDo})`
+        };
       }
       return k;
     });
@@ -393,13 +416,18 @@ export default function KarnetyPage() {
     loadData();
   };
 
+  // Odwieszanie karnetu z sumowaniem dni zawieszenia do bezpłatnego okresu bonusowego
   const handleClientOdwiesKarnet = async (karnetTarget: any) => {
     if (!currentUser || !karnetTarget.zawieszonyOd) return;
     const dzisiaj = new Date();
     const start = new Date(karnetTarget.zawieszonyOd);
-    dzisiaj.setHours(0, 0, 0, 0); start.setHours(0, 0, 0, 0);
-    let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) diffDays = 0;
+    dzisiaj.setHours(0, 0, 0, 0); 
+    start.setHours(0, 0, 0, 0);
+    
+    let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (diffDays < 1) diffDays = 1;
+
+    const isContract = karnetTarget.isContract12M || karnetTarget.typKarnetu === 'Umowa 12 miesięcy';
     
     if (!confirm(`Karnet był zawieszony od ${karnetTarget.zawieszonyOd} (łącznie ${diffDays} dni). \nCzy chcesz go teraz odwiesić i przedłużyć jego ważność o ${diffDays} dni?`)) return;
     
@@ -408,15 +436,28 @@ export default function KarnetyPage() {
     const newExpDateStr = currentExpDate.toISOString().split('T')[0];
     const historiaEntry = { id: Date.now(), od: karnetTarget.zawieszonyOd, do: todayStr, dni: diffDays };
 
+    let updatedSuspensionDaysLeft = karnetTarget.contractSuspensionDaysLeft;
+    let updatedTotalSuspendedDaysUsed = karnetTarget.totalSuspendedDaysUsed || 0;
+
+    if (isContract) {
+      const currentPool = karnetTarget.contractSuspensionDaysLeft !== undefined ? karnetTarget.contractSuspensionDaysLeft : 30;
+      updatedSuspensionDaysLeft = Math.max(0, currentPool - diffDays);
+      updatedTotalSuspendedDaysUsed += diffDays;
+    }
+
     const updatedKarnety = currentUser.karnetyKlubowicza.map((k: any) => {
       if (k.id === karnetTarget.id) {
-        return { 
-          ...k, 
-          waznyDo: newExpDateStr, 
-          statusTekst: `Ważny do: ${newExpDateStr}`, 
-          zawieszonyOd: null, 
-          zawieszonyDo: null, 
-          historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])] 
+        return {
+          ...k,
+          waznyDo: newExpDateStr,
+          statusTekst: isContract 
+            ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${newExpDateStr})`
+            : `Ważny do: ${newExpDateStr}`,
+          zawieszonyOd: null,
+          zawieszonyDo: null,
+          contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
+          totalSuspendedDaysUsed: updatedTotalSuspendedDaysUsed,
+          historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])]
         };
       }
       return k;
@@ -428,7 +469,7 @@ export default function KarnetyPage() {
       return;
     }
 
-    alert(`Karnet został odwieszony! Ważność przedłużona o ${diffDays} dni.`);
+    alert(`Karnet został odwieszony! Ważność przedłużona o ${diffDays} dni (zostaną one także automatycznie doliczone jako darmowy bonus po 12. racie).`);
     loadData();
   };
 
@@ -443,10 +484,10 @@ export default function KarnetyPage() {
 
     if (isContract) {
       wyliczonaDlugosc = 'Umowa 12 miesięcy (Cykliczna)';
-      dodanaIloscWejsc = null; // Karnety na umowę nie mają licznika wejść
+      dodanaIloscWejsc = null;
     } else if (typKarnetu === 'Na czas') {
       wyliczonaDlugosc = `${czasIlosc} ${czasJednostka.toLowerCase()}${parseInt(czasIlosc) > 1 && czasJednostka === 'Miesiąc' ? 'e' : ''}`;
-      dodanaIloscWejsc = null; // Karnety na czas nie mają licznika wejść
+      dodanaIloscWejsc = null;
     } else {
       dodanaIloscWejsc = parseInt(iloscTreningow, 10) || 10;
       if (dodajLimitCzasowy) {
@@ -478,8 +519,10 @@ export default function KarnetyPage() {
       zmianaNaInny,
       kupInnyKarnet,
       opis,
-      obrazekUrl, 
+      obrazekUrl,
       isContract12M: isContract,
+      contractSuspensionDaysLeft: isContract ? 30 : null,
+      totalSuspendedDaysUsed: 0,
       wUzyciu: 0
     };
 
@@ -527,7 +570,7 @@ export default function KarnetyPage() {
         }
       }
 
-      await loadData(); 
+      await loadData();
       setIsModalOpen(false);
       
     } catch (error: any) {
@@ -559,6 +602,11 @@ export default function KarnetyPage() {
     const aktywnyKarnet = currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 ? currentUser.karnetyKlubowicza[0] : null;
     const czyZawieszony = aktywnyKarnet && !!aktywnyKarnet.zawieszonyOd;
     const czyZablokowany = aktywnyKarnet && aktywnyKarnet.blokadaDo && aktywnyKarnet.blokadaDo >= todayStr;
+    const isContract = aktywnyKarnet && (aktywnyKarnet.isContract12M || aktywnyKarnet.typKarnetu === 'Umowa 12 miesięcy');
+    const suspensionDaysLeft = isContract ? (aktywnyKarnet.contractSuspensionDaysLeft !== undefined ? aktywnyKarnet.contractSuspensionDaysLeft : 30) : null;
+    const totalSuspUsed = isContract ? (aktywnyKarnet.totalSuspendedDaysUsed || 0) : 0;
+    const curRataNum = aktywnyKarnet?.rata ? parseInt(String(aktywnyKarnet.rata).match(/(\d+)\s*\/\s*12/)?.[1] || '0', 10) : 0;
+    const isBonusActive = isContract && curRataNum >= 12 && totalSuspUsed > 0;
 
     return (
       <div className="max-w-[1700px] mx-auto space-y-6 pb-24 animate-in fade-in font-sans antialiased text-slate-800">
@@ -573,7 +621,14 @@ export default function KarnetyPage() {
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
-                  <h3 className="text-xl font-black text-slate-900 uppercase">{aktywnyKarnet.nazwa}</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xl font-black text-slate-900 uppercase">{aktywnyKarnet.nazwa}</h3>
+                    {isContract && (
+                      <span className="bg-amber-500/20 text-amber-900 text-[10px] font-black px-2.5 py-0.5 rounded-md border border-amber-300 uppercase">
+                        {isBonusActive ? 'Umowa 12M • Dni bonusowe' : `Umowa 12M • Rata ${aktywnyKarnet.rata || '0/12'}`}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-2 mt-2">
                     {aktywnyKarnet.pozostaloWejsc !== null && aktywnyKarnet.pozostaloWejsc !== undefined && (
                       <span className="bg-sky-100 text-sky-900 px-3 py-1 rounded-full text-xs font-black border border-sky-200">
@@ -583,6 +638,18 @@ export default function KarnetyPage() {
                     <span className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold border border-slate-200">
                       Ważny do: {aktywnyKarnet.waznyDo}
                     </span>
+                    {isContract && (
+                      <>
+                        <span className="bg-sky-50 text-sky-800 font-bold px-3 py-1 rounded-full text-xs border border-sky-200">
+                          Pula zawieszenia: <strong className="text-sky-950">{suspensionDaysLeft} dni</strong>
+                        </span>
+                        {totalSuspUsed > 0 && (
+                          <span className="bg-purple-50 text-purple-900 font-bold px-3 py-1 rounded-full text-xs border border-purple-200">
+                            Wykorzystany bonus: +{totalSuspUsed} dni (0.00 PLN)
+                          </span>
+                        )}
+                      </>
+                    )}
                     {czyZawieszony && (
                       <span className="bg-amber-100 text-amber-900 px-3 py-1 rounded-full text-xs font-black border border-amber-200">
                         ⏸️ ZAWIESZONE: OD {aktywnyKarnet.zawieszonyOd} {aktywnyKarnet.zawieszonyDo ? `DO ${aktywnyKarnet.zawieszonyDo}` : ''}
@@ -598,14 +665,14 @@ export default function KarnetyPage() {
 
                 <div className="flex items-center gap-2">
                   {czyZawieszony ? (
-                    <button 
+                    <button
                       onClick={() => handleClientOdwiesKarnet(aktywnyKarnet)}
                       className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-5 py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-sm transition-colors"
                     >
                       ▶️ Odwieś karnet
                     </button>
                   ) : (
-                    <button 
+                    <button
                       onClick={() => {
                         setClientSuspendStartDate(todayStr);
                         setClientSuspendEndDate(todayStr);
@@ -636,9 +703,13 @@ export default function KarnetyPage() {
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
               <h4 className="font-bold text-slate-900 text-sm">Chcesz zamrozić swój karnet?</h4>
-              <p className="text-xs text-slate-500 mt-0.5">Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isContract 
+                  ? `Dla umów 12M przysługuje Ci 30 dni w roku. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną automatycznie doliczone jako darmowy okres bonusowy (0.00 PLN).` 
+                  : `Niewykorzystane dni zostaną automatycznie doliczone do daty wygaśnięcia po Twoim powrocie (odwieszeniu).`}
+              </p>
             </div>
-            <button 
+            <button
               onClick={() => {
                 if (!aktywnyKarnet) {
                   alert("Nie posiadasz aktywnego karnetu.");
@@ -666,6 +737,11 @@ export default function KarnetyPage() {
                 <button onClick={() => setIsClientSuspendModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
               </div>
               <form onSubmit={handleClientSuspendSubmit} className="space-y-4 text-xs">
+                {isContract && (
+                  <div className="bg-sky-50 p-3 rounded-xl border border-sky-200 text-sky-900">
+                    Pozostało Ci <strong>{suspensionDaysLeft} dni</strong> zawieszenia z rocznej puli 30 dni.
+                  </div>
+                )}
                 <div className="flex bg-slate-100 rounded-xl p-1 font-bold">
                   <button type="button" onClick={() => setClientSuspendMode('days')} className={`flex-1 py-2 rounded-lg cursor-pointer transition-colors ${clientSuspendMode === 'days' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}>Liczba dni</button>
                   <button type="button" onClick={() => setClientSuspendMode('dates')} className={`flex-1 py-2 rounded-lg cursor-pointer transition-colors ${clientSuspendMode === 'dates' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}>Zakres dat</button>
@@ -673,17 +749,17 @@ export default function KarnetyPage() {
                 {clientSuspendMode === 'days' ? (
                   <div className="space-y-1">
                     <label className="font-bold text-slate-700">Liczba dni zawieszenia</label>
-                    <input type="number" min="1" required value={clientSuspendDays} onChange={(e) => setClientSuspendDays(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
+                    <input type="number" min="1" max={isContract ? (suspensionDaysLeft || 30) : undefined} required value={clientSuspendDays} onChange={(e) => setClientSuspendDays(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold" />
                   </div>
                 ) : (
                   <>
                     <div className="space-y-1">
                       <label className="font-bold text-slate-700">Zawieszony od</label>
-                      <input type="date" required value={clientSuspendStartDate} onChange={(e) => setClientSuspendStartDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" />
+                      <input type="date" min={todayStr} required value={clientSuspendStartDate} onChange={(e) => setClientSuspendStartDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" />
                     </div>
                     <div className="space-y-1">
                       <label className="font-bold text-slate-700">Zawieszony do</label>
-                      <input type="date" required value={clientSuspendEndDate} onChange={(e) => setClientSuspendEndDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" />
+                      <input type="date" min={clientSuspendStartDate || todayStr} required value={clientSuspendEndDate} onChange={(e) => setClientSuspendEndDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer" />
                     </div>
                   </>
                 )}
@@ -709,7 +785,7 @@ export default function KarnetyPage() {
           KARNETY
         </h1>
         <div className="flex items-center gap-2">
-          <button 
+          <button
             onClick={handleOpenAdd}
             className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
           >
@@ -787,7 +863,7 @@ export default function KarnetyPage() {
                   </td>
                   <td className="py-4 px-4 text-[11px] space-y-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-slate-500">• Rejestracja online:</span> 
+                      <span className="text-slate-500">• Rejestracja online:</span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${item.dostepnyOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
                         {item.dostepnyOnline ? 'Tak' : 'Nie'}
                       </span>
@@ -796,16 +872,16 @@ export default function KarnetyPage() {
                   <td className="py-4 px-4 text-center font-bold text-slate-900">{item.wUzyciu || 0}</td>
                   <td className="py-4 px-4 text-right">
                     <div className="flex items-center justify-end gap-1.5">
-                      <button 
+                      <button
                         onClick={() => handleOpenEdit(item)}
-                        className="w-7 h-7 bg-amber-800 hover:bg-amber-900 text-white rounded-lg flex items-center justify-center transition-colors shadow-sm cursor-pointer" 
+                        className="w-7 h-7 bg-amber-800 hover:bg-amber-900 text-white rounded-lg flex items-center justify-center transition-colors shadow-sm cursor-pointer"
                         title="Edytuj"
                       >
                         ✏️
                       </button>
-                      <button 
+                      <button
                         onClick={() => handleDelete(item.id)}
-                        className="w-7 h-7 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center border border-rose-200 transition-colors cursor-pointer" 
+                        className="w-7 h-7 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center border border-rose-200 transition-colors cursor-pointer"
                         title="Usuń"
                       >
                         🗑️
@@ -830,14 +906,14 @@ export default function KarnetyPage() {
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-3xl w-full p-8 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto">
-            
+          
             {/* Nagłówek modalu */}
             <div className="flex items-center justify-between border-b border-sky-100 pb-4 sticky top-0 bg-white z-10">
               <h3 className="font-black text-sm text-sky-950 uppercase">
                 {editingId !== null ? 'Edytuj karnet' : 'Dodaj nowy karnet'}
               </h3>
               <div className="flex items-center gap-3">
-                <button 
+                <button
                   onClick={handleSave}
                   className="bg-amber-800 hover:bg-amber-900 text-white font-black px-6 py-2 rounded-xl text-xs transition-colors shadow-sm cursor-pointer"
                 >
@@ -848,7 +924,7 @@ export default function KarnetyPage() {
             </div>
 
             <form onSubmit={handleSave} className="space-y-6 text-xs">
-              
+            
               {/* PODSTAWOWE INFORMACJE */}
               <div className="space-y-4">
                 <h4 className="font-extrabold text-sky-900 uppercase tracking-wider text-[11px] border-b border-sky-100 pb-1">
@@ -857,7 +933,7 @@ export default function KarnetyPage() {
 
                 <div className="space-y-1">
                   <label className="font-bold text-slate-800 block">Nazwa *</label>
-                  <input 
+                  <input
                     type="text"
                     required
                     placeholder="np. OPEN, 10 wejść"
@@ -872,7 +948,7 @@ export default function KarnetyPage() {
                     <label className="font-bold text-slate-800 block">Cena brutto *</label>
                     <div className="flex">
                       <span className="bg-slate-100 border border-r-0 border-sky-200 rounded-l-xl px-3 py-2 text-slate-600 font-bold flex items-center">PLN</span>
-                      <input 
+                      <input
                         type="number"
                         step="0.01"
                         required
@@ -886,7 +962,7 @@ export default function KarnetyPage() {
 
                   <div className="space-y-1">
                     <label className="font-bold text-slate-800 block">Stawka VAT</label>
-                    <input 
+                    <input
                       type="text"
                       placeholder="np. 8%, 23%, ZW"
                       value={stawkaVat}
@@ -898,7 +974,7 @@ export default function KarnetyPage() {
 
                 <div className="space-y-1">
                   <label className="font-bold text-slate-800 block">Typ karnetu *</label>
-                  <select 
+                  <select
                     value={typKarnetu}
                     onChange={(e) => setTypKarnetu(e.target.value)}
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold cursor-pointer"
@@ -913,16 +989,16 @@ export default function KarnetyPage() {
                   <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200 text-amber-900 space-y-2">
                     <p className="font-bold text-sm">Karnet na umowę cykliczną (12 miesięcy)</p>
                     <p className="text-[11px] leading-relaxed font-medium">
-                      Wybór tej opcji oznacza, że karnet podlega pod zasady rozliczeń ratalnych z uwzględnieniem wyrównania za bieżący miesiąc (pro-rata). 
-                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na zawieszenie. System przy zakupie wyliczy stawkę automatycznie.
+                      Karnet podlega pod zasady rozliczeń ratalnych z uwzględnieniem wyrównania za bieżący miesiąc (pro-rata).
+                      Klubowicz z tym karnetem otrzymuje roczną pulę <strong>30 dni bezpłatnego zawieszenia</strong>. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną automatycznie doliczone jako <strong>darmowy okres bonusowy (0.00 PLN)</strong> przedłużający ważność karnetu.
                     </p>
                   </div>
                 ) : typKarnetu === 'Na czas' ? (
                   <div className="grid grid-cols-2 gap-3 bg-sky-50/60 p-4 rounded-2xl border border-sky-200">
                     <div className="space-y-1">
                       <label className="font-bold text-slate-800 block">Ilość *</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         min="1"
                         value={czasIlosc}
                         onChange={(e) => setCzasIlosc(e.target.value)}
@@ -931,7 +1007,7 @@ export default function KarnetyPage() {
                     </div>
                     <div className="space-y-1">
                       <label className="font-bold text-slate-800 block">Okres *</label>
-                      <select 
+                      <select
                         value={czasJednostka}
                         onChange={(e) => setCzasJednostka(e.target.value)}
                         className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold cursor-pointer"
@@ -945,8 +1021,8 @@ export default function KarnetyPage() {
                   <div className="bg-sky-50/60 p-4 rounded-2xl border border-sky-200 space-y-4">
                     <div className="space-y-1">
                       <label className="font-bold text-slate-800 block">Ilość treningów *</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         min="1"
                         placeholder="np. 10"
                         value={iloscTreningow}
@@ -957,8 +1033,8 @@ export default function KarnetyPage() {
 
                     <div className="space-y-3 pt-1">
                       <label className="flex items-center gap-2.5 cursor-pointer">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={dodajLimitCzasowy}
                           onChange={(e) => setDodajLimitCzasowy(e.target.checked)}
                           className="w-4 h-4 accent-amber-700 rounded cursor-pointer"
@@ -970,8 +1046,8 @@ export default function KarnetyPage() {
                         <div className="grid grid-cols-2 gap-3 pl-6 pt-1">
                           <div className="space-y-1">
                             <label className="font-bold text-slate-700 block">Ilość *</label>
-                            <input 
-                              type="number" 
+                            <input
+                              type="number"
                               min="1"
                               value={limitIlosc}
                               onChange={(e) => setLimitIlosc(e.target.value)}
@@ -980,7 +1056,7 @@ export default function KarnetyPage() {
                           </div>
                           <div className="space-y-1">
                             <label className="font-bold text-slate-700 block">Okres *</label>
-                            <select 
+                            <select
                               value={limitOkres}
                               onChange={(e) => setLimitOkres(e.target.value)}
                               className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold cursor-pointer"
@@ -1005,7 +1081,7 @@ export default function KarnetyPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1 relative">
                     <label className="font-bold text-slate-800 block">Dostęp do:</label>
-                    <select 
+                    <select
                       value={dostepDo}
                       onChange={(e) => {
                         setDostepDo(e.target.value);
@@ -1026,7 +1102,7 @@ export default function KarnetyPage() {
                         </div>
                         {dostepneRodzajeZajec.map((zaj) => (
                           <label key={zaj.id || zaj.nazwa} className="flex items-center gap-2.5 py-1.5 px-2 hover:bg-sky-50 rounded-xl cursor-pointer transition-colors">
-                            <input 
+                            <input
                               type="checkbox"
                               checked={zaznaczoneZajecia.includes(zaj.nazwa)}
                               onChange={() => handleToggleZajecie(zaj.nazwa)}
@@ -1041,7 +1117,7 @@ export default function KarnetyPage() {
 
                   <div className="space-y-1">
                     <label className="font-bold text-slate-800 block">Limit czasowy zapisów:</label>
-                    <select 
+                    <select
                       value={limitCzasowyZapisow}
                       onChange={(e) => setLimitCzasowyZapisow(e.target.value)}
                       className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold cursor-pointer"
@@ -1057,7 +1133,7 @@ export default function KarnetyPage() {
                         </div>
                         <div className="space-y-1">
                           <label className="font-bold text-slate-700 block text-[10px] uppercase">Liczba dni *</label>
-                          <input 
+                          <input
                             type="number"
                             min="0"
                             value={niestandardowyDni}
@@ -1073,7 +1149,7 @@ export default function KarnetyPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className="font-bold text-slate-800 block">Tygodniowy limit zapisów:</label>
-                    <select 
+                    <select
                       value={tygodniowyLimit}
                       onChange={(e) => setTygodniowyLimit(e.target.value)}
                       className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 cursor-pointer font-medium"
@@ -1087,7 +1163,7 @@ export default function KarnetyPage() {
 
                   <div className="space-y-1">
                     <label className="font-bold text-slate-800 block">Dzienny limit zapisów:</label>
-                    <select 
+                    <select
                       value={dziennyLimit}
                       onChange={(e) => setDziennyLimit(e.target.value)}
                       className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold cursor-pointer"
@@ -1103,7 +1179,7 @@ export default function KarnetyPage() {
                         </div>
                         <div className="space-y-1">
                           <label className="font-bold text-slate-700 block text-[10px] uppercase">Numer *</label>
-                          <input 
+                          <input
                             type="number"
                             min="1"
                             value={niestandardowyDziennyIlosc}
@@ -1121,8 +1197,8 @@ export default function KarnetyPage() {
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-800">Blokuj zapisy w zależności od stanu portfela</span>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         checked={blokujPortfel}
                         onChange={(e) => setBlokujPortfel(e.target.checked)}
                         className="sr-only peer"
@@ -1134,7 +1210,7 @@ export default function KarnetyPage() {
                   {blokujPortfel && (
                     <div className="space-y-1 pt-1">
                       <label className="font-bold text-slate-700 block text-[10px] uppercase">Blokuj zapisy gdy stan portfela jest mniejszy niż *</label>
-                      <input 
+                      <input
                         type="number"
                         step="0.01"
                         value={portfelPrógKwota}
@@ -1157,8 +1233,8 @@ export default function KarnetyPage() {
                   <div className="flex items-center justify-between py-1">
                     <span className="font-medium text-slate-800">Karnet dostępny do sprzedaży przy rejestracji online:</span>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         checked={dostepnyOnline}
                         onChange={(e) => setDostepnyOnline(e.target.checked)}
                         className="sr-only peer"
@@ -1170,8 +1246,8 @@ export default function KarnetyPage() {
                   <div className="flex items-center justify-between py-1">
                     <span className="font-medium text-slate-800">Klubowicz z tym karnetem, może kupić ten karnet ponownie:</span>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         checked={ponownyZakup}
                         onChange={(e) => setPonownyZakup(e.target.checked)}
                         className="sr-only peer"
@@ -1183,8 +1259,8 @@ export default function KarnetyPage() {
                   <div className="flex items-center justify-between py-1">
                     <span className="font-medium text-slate-800">Klubowicz z tym karnetem, może zmienić ten karnet na inny:</span>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         checked={zmianaNaInny}
                         onChange={(e) => setZmianaNaInny(e.target.checked)}
                         className="sr-only peer"
@@ -1196,8 +1272,8 @@ export default function KarnetyPage() {
                   <div className="flex items-center justify-between py-1">
                     <span className="font-medium text-slate-800">Klubowicz z innym karnetem, może kupić ten karnet:</span>
                     <label className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         checked={kupInnyKarnet}
                         onChange={(e) => setKupInnyKarnet(e.target.checked)}
                         className="sr-only peer"
@@ -1223,23 +1299,23 @@ export default function KarnetyPage() {
                       </div>
                     )}
                     <div className="flex flex-col items-start gap-1">
-                      <input 
-                        type="file" 
+                      <input
+                        type="file"
                         accept="image/*"
                         ref={fileInputRef}
                         onChange={handleImageChange}
                         className="hidden"
                       />
-                      <button 
-                        type="button" 
+                      <button
+                        type="button"
                         onClick={() => fileInputRef.current?.click()}
                         className="bg-sky-50 hover:bg-sky-100 border border-sky-200 px-4 py-2 rounded-xl text-xs font-bold text-sky-900 transition-colors cursor-pointer"
                       >
                         🖼️ Wybierz obrazek
                       </button>
                       {obrazekUrl && (
-                        <button 
-                          type="button" 
+                        <button
+                          type="button"
                           onClick={() => setObrazekUrl(null)}
                           className="text-[10px] text-rose-600 font-bold hover:underline cursor-pointer ml-1"
                         >
@@ -1252,7 +1328,7 @@ export default function KarnetyPage() {
 
                 <div className="space-y-1">
                   <label className="font-bold text-slate-800 block">Opis</label>
-                  <textarea 
+                  <textarea
                     rows={3}
                     placeholder="Opis karnetu..."
                     value={opis}
@@ -1264,14 +1340,14 @@ export default function KarnetyPage() {
 
               {/* Przyciski dolne */}
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-sky-100">
-                <button 
+                <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
                 >
                   Anuluj
                 </button>
-                <button 
+                <button
                   type="submit"
                   className="bg-amber-800 hover:bg-amber-900 text-white font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer"
                 >
