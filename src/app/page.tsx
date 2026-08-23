@@ -34,7 +34,7 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANCIÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
+  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANTÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
   const getKeysVariants = (classId: string | number, dateStr: string) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
@@ -136,14 +136,14 @@ export default function DashboardPage() {
     }
   };
 
-  // ODPORNY SILNIK NORMALIZACJI I DOPASOWYWANIA NAZW ZAJĘĆ
+  // SILNIK NORMALIZACJI I DOPASOWYWANIA NAZW ZAJĘĆ
   const normalizeText = (text: string): string => {
     if (!text) return '';
     return text
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // Usuwanie znaków diakrytycznych (ą->a, ę->e, ó->o itd.)
-      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ') // Zamiana separatorów na spacje
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -164,7 +164,6 @@ export default function DashboardPage() {
     if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
     if (normA.includes(normB) || normB.includes(normA)) return true;
 
-    // Obsługa nazw wieloczłonowych (np. "HIIT/TABATA", "Ogólnorozwojowe i rozciąganie")
     const subPartsA = nameA.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
     const subPartsB = nameB.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
 
@@ -187,16 +186,14 @@ export default function DashboardPage() {
     return false;
   };
 
-  // UNIWERSALNA I ODPORNA NA BŁĘDY FUNKCJA WERYFIKACJI UPRAWNIEŃ KARNETU
+  // WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ
   const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
     if (!passItem || !classTitle) return false;
     const passName = passItem.nazwa || passItem.pass || '';
     const normPassName = normalizeText(passName);
 
-    // Karnety typu OPEN lub MEDICOVER mają pełny dostęp do każdego treningu
     if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
 
-    // 1. Sprawdzanie bezpośrednio przypisanych uprawnień na karnecie (wzbogaconych w loadData)
     const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
     if (passAccessType.includes('wszystk') || passAccessType === 'all') {
       return true;
@@ -211,7 +208,6 @@ export default function DashboardPage() {
       if (isMatched) return true;
     }
 
-    // 2. Fallback: szukamy definicji w katalogu tabeli karnety po bezpiecznym dopasowaniu nazw (wielkość liter ignorowana)
     const def = allPassDefs.find((d: any) => {
       const defName = d.nazwa || '';
       return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName || defName.trim().toLowerCase() === passName.trim().toLowerCase();
@@ -230,7 +226,6 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      // Odczytujemy listę wybranych zajęć ze wszystkich wariantów kluczy
       const defAllowedList = 
         meta.zaznaczoneZajecia || meta.zaznaczone_zajecia ||
         meta.wybraneZajecia || meta.wybrane_zajecia || 
@@ -245,7 +240,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 3. Fallback bezpieczeństwa: czy nazwa karnetu tożsama z nazwą zajęć?
     if (areClassNamesMatching(passName, classTitle)) {
       return true;
     }
@@ -379,7 +373,7 @@ export default function DashboardPage() {
       targetDate = new Date();
     }
 
-    const baseDate = new Date(2026, 0, 5); // Poniedziałek, 5 stycznia 2026 jako baza cyklu
+    const baseDate = new Date(2026, 0, 5);
     const diffMs = targetDate.getTime() - baseDate.getTime();
     const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
     const dayOfWeek = targetDate.getDay();
@@ -1059,7 +1053,6 @@ export default function DashboardPage() {
             }
           }
 
-          // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ BEZPOŚREDNIO NA KARNECIE KLUBOWICZA
           k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
           k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || (pasujacyDef ? pasujacyDef.zaznaczoneZajecia : []);
 
@@ -1182,7 +1175,6 @@ export default function DashboardPage() {
     loadData();
     return true;
   };
-
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -2036,7 +2028,7 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ Z ZASTOSOWANIEM NOWEGO SILNIKA
+    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ
     const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
       if (k.waznyDo) {
@@ -2286,15 +2278,45 @@ export default function DashboardPage() {
     
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
+    // NATYCHMIASTOWE OPTYMISTYCZNE DOPISANIE DO STANU GRAFIKU
+    const optimisticEntry = {
+      id: currentUser.id,
+      klient_id: currentUser.id,
+      status: 'zapisany',
+      waitlist_cutoff_minutes: null,
+      obecny: false,
+      nieobecny: false,
+      firstName: currentUser.firstName,
+      lastName: currentUser.lastName,
+      pass: currentUser.pass,
+      avatarUrl: currentUser.avatarUrl,
+      wallet: currentUser.wallet,
+      birthDate: currentUser.birthDate,
+      karnetyKlubowicza: currentUser.karnetyKlubowicza
+    };
+
+    const keysToUpdate = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      keysToUpdate.forEach(k => {
+        const list = updated[k] ? [...updated[k]] : [];
+        if (!list.some(item => String(item.id) === String(currentUser.id))) {
+          list.push(optimisticEntry);
+        }
+        updated[k] = list;
+      });
+      return updated;
+    });
+
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
     ]);
     
     if (error) { 
       showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
+      loadData();
       return; 
     }
-
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -2337,12 +2359,42 @@ export default function DashboardPage() {
     const limitZajec = selectedClass.limit || 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
 
+    const optimisticWaitlistEntry = {
+      id: currentUser.id,
+      klient_id: currentUser.id,
+      status: 'krzesełko',
+      waitlist_cutoff_minutes: cutoffMinutes,
+      obecny: false,
+      nieobecny: false,
+      firstName: currentUser.firstName,
+      lastName: currentUser.lastName,
+      pass: currentUser.pass,
+      avatarUrl: currentUser.avatarUrl,
+      wallet: currentUser.wallet,
+      birthDate: currentUser.birthDate,
+      karnetyKlubowicza: currentUser.karnetyKlubowicza
+    };
+
+    const keysToUpdate = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      keysToUpdate.forEach(k => {
+        const list = updated[k] ? [...updated[k]] : [];
+        if (!list.some(item => String(item.id) === String(currentUser.id))) {
+          list.push(optimisticWaitlistEntry);
+        }
+        updated[k] = list;
+      });
+      return updated;
+    });
+
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
     ]);
 
     if (error) {
       showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
+      loadData();
       return;
     }
 
@@ -2445,7 +2497,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // Usunięcie z zapisyNadchodzace w profilu
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -2473,7 +2524,6 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
-    // Zapis transakcji z kluczem w celu blokady ponownego autozapisu
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
@@ -2583,7 +2633,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // Usunięcie z zapisyNadchodzace
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -2614,7 +2663,6 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
-    // Zapis transakcji z dwoma wariantami kluczy
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
@@ -2726,7 +2774,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ KARNETU KLIENTA Z WYKORZYSTANIEM NOWEGO SILNIKA
     const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
@@ -2847,7 +2894,6 @@ export default function DashboardPage() {
       }
     }
 
-    // Aktualizacja zapisyNadchodzace
     let updatedNadchodzace = clientToUnregister.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -3130,7 +3176,6 @@ export default function DashboardPage() {
                 const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
                 const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
 
-                // PRECYZYJNY WARUNEK ANTY-DUPLIKACYJNY PO ID ZAJĘĆ ORAZ DACIE
                 if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === displayFormatted)) {
                   myUpcomingClasses.push({
                     ...classInfo,
@@ -4220,6 +4265,7 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
+
               <div className="space-y-3">
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -4243,7 +4289,6 @@ export default function DashboardPage() {
 
                     const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
 
-                    // WYKRYWANIE KARNETU MEDICOVER I SKANOWANIA QR DLA TRENERA / ADMINA
                     const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                       (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
@@ -4256,7 +4301,6 @@ export default function DashboardPage() {
                             : 'bg-white border border-sky-200'
                         }`}
                       >
-                        {/* ADNOTACJA O SKANOWANIU KODU QR DLA MEDICOVER W WIDOKU TRENERA/ADMINA */}
                         {canManageClass && isMedicover && (
                           <div className="bg-emerald-500 text-slate-950 font-black text-[10px] px-3 py-1 rounded-xl uppercase tracking-wider flex items-center justify-between shadow-xs border border-emerald-400">
                             <span className="flex items-center gap-1.5">
@@ -4388,7 +4432,6 @@ export default function DashboardPage() {
                       const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
                       const cutoffMin = osobaZapisana.waitlist_cutoff_minutes || 30;
 
-                      // WYKRYWANIE MEDICOVER NA LIŚCIE REZERWOWEJ
                       const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                         (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
@@ -4510,7 +4553,6 @@ export default function DashboardPage() {
                           </div>
                         );
                       }
-                      
                       const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
                       const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
                       
@@ -4635,7 +4677,7 @@ export default function DashboardPage() {
               <div className="bg-sky-50 border border-sky-200/80 rounded-2xl p-4 text-slate-700 leading-relaxed">
                 <p className="font-bold text-sky-950 mb-1">Na ile przed rozpoczęciem treningu system ma Cię automatycznie wypisać?</p>
                 <p className="text-[11px] text-slate-500">
-                  Jeśli przed wybranym czasem nie zwolni się miejsce na listie głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
+                  Jeśli przed wybranym czasem nie zwolni się miejsce na liście głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
                 </p>
               </div>
 
