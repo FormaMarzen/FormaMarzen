@@ -1854,9 +1854,12 @@ export default function DashboardPage() {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
+  // PRECYZYJNE ZLICZANIE AKTYWNYCH ZAPISÓW (BEZ PODWAJANIA PRZEZ PODWÓJNE KLUCZE)
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
+    const countedNormalizedKeys = new Set<string>();
+
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
       const parts = classKey.split('_');
       const classId = parts[0];
@@ -1874,6 +1877,9 @@ export default function DashboardPage() {
           d = p[2];
         }
 
+        const normalizedKey = `${classId}_${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
+        if (countedNormalizedKeys.has(normalizedKey)) return;
+
         const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
         const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
         const override = nadpisaneZajeciaDni[classKey];
@@ -1883,7 +1889,10 @@ export default function DashboardPage() {
         const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
 
         if (classStartDateTime >= now) {
-          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) count++;
+          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) {
+            count++;
+            countedNormalizedKeys.add(normalizedKey);
+          }
         }
       }
     });
@@ -2158,10 +2167,16 @@ export default function DashboardPage() {
     }
 
     let userSignupsOnThisDate = 0;
+    const countedDayClassKeys = new Set<string>();
     Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
-      if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
-        if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
-          userSignupsOnThisDate++;
+      if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
+        const classId = cKey.split('_')[0];
+        const normalizedKey = `${classId}_${selectedClass.displayDate}`;
+        if (!countedDayClassKeys.has(normalizedKey)) {
+          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
+            userSignupsOnThisDate++;
+            countedDayClassKeys.add(normalizedKey);
+          }
         }
       }
     });
@@ -2676,9 +2691,17 @@ export default function DashboardPage() {
       }
     }
     let userSignupsOnThisDate = 0;
+    const countedDayKeys = new Set<string>();
     Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
-      if (cKey.endsWith(`_${selectedClass.displayDate}`)) {
-        if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) userSignupsOnThisDate++;
+      if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
+        const classId = cKey.split('_')[0];
+        const normalizedKey = `${classId}_${selectedClass.displayDate}`;
+        if (!countedDayKeys.has(normalizedKey)) {
+          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) {
+            userSignupsOnThisDate++;
+            countedDayKeys.add(normalizedKey);
+          }
+        }
       }
     });
     if (userSignupsOnThisDate >= dailyLimit) { showToast(`Nie można zapisać! Wykorzystano dzienny limit (${dailyLimit}).`, 'error'); return; }
