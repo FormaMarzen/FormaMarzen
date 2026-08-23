@@ -38,7 +38,7 @@ export default function OfertaKarnetowPage() {
     opis: "",
     cena: "199.00",
     typ_karnetu: "czas" as 'czas' | 'wejscia' | 'umowa',
-    dlugosc: "1 miesiąc (30 dni)",
+    dlugosc: "30 dni",
     ilosc_wejsc: "Bez limitu",
     dostep_zajecia_text: "Wszystkie zajęcia grupowe, Strefa Siłowa, Open Gym, Sauna",
     grafika_url: "" as string | null,
@@ -85,7 +85,7 @@ export default function OfertaKarnetowPage() {
       opis: "",
       cena: "199.00",
       typ_karnetu: "czas",
-      dlugosc: "1 miesiąc (30 dni)",
+      dlugosc: "30 dni",
       ilosc_wejsc: "Bez limitu",
       dostep_zajecia_text: "Wszystkie zajęcia grupowe, Strefa Siłowa, Open Gym, Sauna",
       grafika_url: null,
@@ -200,13 +200,13 @@ export default function OfertaKarnetowPage() {
   const getTypBadge = (typ: string) => {
     switch (typ) {
       case 'czas':
-        return { label: 'Czasowy', icon: '⏳', color: 'bg-sky-100 text-sky-900 border-sky-200' };
+        return { label: 'Czasowy', color: 'bg-sky-100 text-sky-900 border-sky-200' };
       case 'wejscia':
-        return { label: 'Pakiet wejść', icon: '🔢', color: 'bg-emerald-100 text-emerald-900 border-emerald-200' };
+        return { label: 'Pakiet wejść', color: 'bg-emerald-100 text-emerald-900 border-emerald-200' };
       case 'umowa':
-        return { label: 'Umowa cykliczna', icon: '📜', color: 'bg-purple-100 text-purple-900 border-purple-200' };
+        return { label: 'Umowa cykliczna', color: 'bg-purple-100 text-purple-900 border-purple-200' };
       default:
-        return { label: 'Karnet', icon: '🎟️', color: 'bg-slate-100 text-slate-900 border-slate-200' };
+        return { label: 'Karnet', color: 'bg-slate-100 text-slate-900 border-slate-200' };
     }
   };
 
@@ -292,9 +292,24 @@ export default function OfertaKarnetowPage() {
                 </span>
               </div>
             )}
-            <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
-              <span>{badge.icon}</span>
-              <span>{k.dlugosc || badge.label}</span>
+
+            {/* CZYTELNE OZNACZENIA NA GRAFICE */}
+            <div className="absolute bottom-3 left-3 flex flex-wrap items-center gap-2 z-10">
+              {/* Ważność / Czas */}
+              {k.dlugosc && (
+                <div className="bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-black text-sky-950 shadow-md flex items-center gap-1.5 border border-white/60">
+                  <span className="text-sm">📅</span>
+                  <span>{k.dlugosc}</span>
+                </div>
+              )}
+
+              {/* Ilość wejść */}
+              {k.ilosc_wejsc && (
+                <div className="bg-amber-400 text-slate-950 backdrop-blur-md px-3 py-1.5 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 border border-amber-300">
+                  <span className="text-sm">🎟️</span>
+                  <span>{k.ilosc_wejsc}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -304,11 +319,6 @@ export default function OfertaKarnetowPage() {
               <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${badge.color}`}>
                 {badge.label}
               </span>
-              {k.ilosc_wejsc && (
-                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200">
-                  🔢 {k.ilosc_wejsc}
-                </span>
-              )}
               {!k.aktywny && (
                 <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-slate-200 text-slate-700 border border-slate-300">
                   Ukryty dla klubowiczów
@@ -320,12 +330,12 @@ export default function OfertaKarnetowPage() {
               {k.nazwa}
             </h3>
 
-            {/* Opis zachowujący układ linijka po linijce */}
+            {/* Opis linijka po linijce */}
             <div className="text-xs text-slate-600 leading-relaxed whitespace-pre-line font-medium">
               {k.opis || "Nielimitowany dostęp do stref treningowych w ramach oferty."}
             </div>
 
-            {/* Dostępne strefy / zajęcia - mini tagi */}
+            {/* Dostępne strefy / zajęcia */}
             {zajeciaList.length > 0 && (
               <div className="pt-2 border-t border-sky-50 flex flex-wrap gap-1">
                 {zajeciaList.map((zajecie, i) => (
@@ -540,7 +550,7 @@ export default function OfertaKarnetowPage() {
               {/* Kafelki z kluczowymi informacjami */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-sky-100">
-                  <span className="text-2xl">{getTypBadge(selectedKarnet.typ_karnetu).icon}</span>
+                  <span className="text-2xl">📋</span>
                   <div>
                     <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest">
                       Typ karnetu
@@ -552,7 +562,7 @@ export default function OfertaKarnetowPage() {
                 </div>
 
                 <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-amber-100">
-                  <span className="text-2xl">⏳</span>
+                  <span className="text-2xl">📅</span>
                   <div>
                     <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">
                       Ważność
@@ -564,7 +574,7 @@ export default function OfertaKarnetowPage() {
                 </div>
 
                 <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-sky-100">
-                  <span className="text-2xl">🔢</span>
+                  <span className="text-2xl">🎟️</span>
                   <div>
                     <div className="text-[10px] font-bold text-sky-600 uppercase tracking-widest">
                       Ilość wejść
@@ -611,7 +621,7 @@ export default function OfertaKarnetowPage() {
                 </div>
               )}
 
-              {/* Sekcja opisu z pełnym zachowaniem wierszy */}
+              {/* Opis ze sformatowanym podziałem wierszy */}
               <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
                 <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2.5">
                   <span className="text-xl">📝</span> Szczegółowy opis
