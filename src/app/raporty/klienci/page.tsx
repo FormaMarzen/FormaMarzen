@@ -672,15 +672,46 @@ export default function KlienciPage() {
       const enriched = await Promise.all(enrichedPromises);
       setClients(enriched);
 
-      if (profileClient) {
-        const currentActive = enriched.find((c: any) => c.id === profileClient.id);
-        if (currentActive) setProfileClient(currentActive);
-      }
+      setProfileClient((prevProfile: any) => {
+        if (!prevProfile) return null;
+        const currentActive = enriched.find((c: any) => c.id === prevProfile.id);
+        return currentActive || prevProfile;
+      });
     }
   };
 
+  // --- SUPABASE REALTIME SUBSCRIPTION (AUTOMATYCZNA AKTUALIZACJA NA ŻYWO) ---
   useEffect(() => {
     loadData();
+
+    const realtimeChannel = supabase
+      .channel('realtime_klienci_zapisy_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'grafik_zajec' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zajecia_jednorazowe' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transakcje' }, () => {
+        loadData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(realtimeChannel);
+    };
   }, []);
 
   const openProfile = async (clientToOpen: any) => {
