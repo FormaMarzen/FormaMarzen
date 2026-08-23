@@ -65,6 +65,50 @@ export default function WyzwaniaPage() {
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
+  // Funkcja wysyłania powiadomień Push do klubowicza
+  const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
+    try {
+      const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
+      const validIds = rawIds.filter(id => Number(id) !== SYSTEM_ID && Number(id) !== 999999999);
+      if (validIds.length === 0) return;
+
+      const { data: clients } = await supabase
+        .from("klienci")
+        .select("id, push_subscription")
+        .in("id", validIds);
+
+      if (!clients || clients.length === 0) return;
+
+      const subscriptions = clients
+        .map((c: any) => {
+          if (!c.push_subscription) return null;
+          try {
+            return typeof c.push_subscription === "string" ? JSON.parse(c.push_subscription) : c.push_subscription;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      if (subscriptions.length === 0) return;
+
+      await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscriptions,
+          payload: {
+            title: payload.title || "FORMA MARZEŃ",
+            body: payload.body || "",
+            url: payload.url || "/wyzwania"
+          }
+        })
+      });
+    } catch (err) {
+      console.error("Błąd podczas wysyłania powiadomienia Push z modułu wyzwań:", err);
+    }
+  };
+
   // 1. Zoptymalizowana równoległa inicjalizacja danych
   useEffect(() => {
     const initData = async () => {
@@ -72,7 +116,7 @@ export default function WyzwaniaPage() {
       try {
         const [sessionRes, klienciRes] = await Promise.all([
           supabase.auth.getSession(),
-          supabase.from("klienci").select("*")
+          supabase.from("klienci").select("id, Imię, Nazwisko, E-mail, avatarUrl, push_subscription")
         ]);
 
         const userEmail = (sessionRes.data.session?.user?.email || "").toLowerCase().trim();
@@ -174,10 +218,6 @@ export default function WyzwaniaPage() {
     return [];
   };
 
-  const fetchWszystkiePrzydzieloneOdznaki = async () => {
-    return await fetchWszystkiePrzydzieloneOdznakiDirect();
-  };
-
   const fetchHistoriaOdznak = async () => {
     const { data } = await supabase.from("klub_odznaki_klubowicze").select(`*, klub_odznaki_definicje (nazwa), klienci (Imię, Nazwisko)`);
     if (data) setOdznakiHistoria(data);
@@ -261,7 +301,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika przypisywania odznaki + powiadomienie z konta systemowego
+  // 3. Logika przypisywania odznaki + powiadomienie Push i czat systemowy
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
@@ -286,7 +326,13 @@ export default function WyzwaniaPage() {
         }
       ]);
 
-      alert("Odznaka przyznana pomyślnie, a powiadomienie systemowe zostało wysłane na czat klubowicza!");
+      await sendPushNotification(userId, {
+        title: "🎖️ Nowa odznaka klubowa!",
+        body: `Gratulacje! Otrzymałeś nową odznakę: "${badgeName}"${badgePoints}!`,
+        url: "/wyzwania"
+      });
+
+      alert("Odznaka przyznana pomyślnie, a powiadomienie Push oraz wiadomość zostały wysłane!");
       fetchHistoriaOdznak();
       const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
       if (currentUserId) fetchOdznaki(currentUserId);
@@ -440,6 +486,15 @@ export default function WyzwaniaPage() {
       .eq("id", challengeToResolve.id);
 
     if (!error) {
+      const winnerName = getClientName(selectedWinnerId);
+      const participantIds = [challengeToResolve.tworca_id, challengeToResolve.przeciwnik_id];
+
+      await sendPushNotification(participantIds, {
+        title: "⚔️ Wynik wyzwania zweryfikowany!",
+        body: `Wyzwanie w dyscyplinie "${challengeToResolve.dyscyplina}" wygrywa ${winnerName}!`,
+        url: "/wyzwania"
+      });
+
       alert("Wynik zatwierdzony!");
       setIsWinnerModalOpen(false);
       setChallengeToResolve(null);
@@ -450,7 +505,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 9. Rzucenie nowego wyzwania
+  // 9. Rzucenie nowego wyzwania + Push
   const handleCreateChallenge = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
@@ -484,6 +539,12 @@ export default function WyzwaniaPage() {
       }
     ]);
 
+    await sendPushNotification(selectedOpponent.id, {
+      title: "⚔️ Nowe wyzwanie Head-to-Head!",
+      body: `${currentUserName} rzuca Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"!`,
+      url: "/wyzwania"
+    });
+
     alert("Wyzwanie zostało pomyślnie wysłane!");
     setIsModalOpen(false);
     setOpisWyzwania("");
@@ -492,7 +553,7 @@ export default function WyzwaniaPage() {
     fetchWyzwania();
   };
 
-  // 10. Zmiana statusu wyzwania
+  // 10. Zmiana statusu wyzwania + Push
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
     const { error } = await supabase
       .from("klub_wyzwania")
@@ -500,6 +561,15 @@ export default function WyzwaniaPage() {
       .eq("id", challengeId);
 
     if (!error) {
+      const challengeObj = wyzwania.find(w => w.id === challengeId);
+      if (challengeObj && newStatus === "aktywne") {
+        await sendPushNotification(challengeObj.tworca_id, {
+          title: "⚔️ Wyzwanie przyjęte!",
+          body: `${currentUserName} przyjął Twoje wyzwanie w dyscyplinie: "${challengeObj.dyscyplina}"! Do dzieła!`,
+          url: "/wyzwania"
+        });
+      }
+
       fetchWyzwania();
       fetchRankings(klienci);
     } else {
@@ -1155,7 +1225,7 @@ export default function WyzwaniaPage() {
                                 }} 
                               />
                               <label 
-                                htmlFor={`edit-badge-file-${def.id}`}
+                                htmlFor={`edit-badge-file-${def.id}`} 
                                 className="bg-slate-800 text-white font-bold text-[10px] px-3 py-2 rounded-xl cursor-pointer shrink-0"
                               >
                                 {isUploadingEditBadge ? "Wgrywanie..." : "📷 Zmień zdjęcie"}
