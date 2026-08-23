@@ -71,39 +71,17 @@ export default function KarnetyPage() {
         }
       }
 
-      const { data: klienciData } = await supabase.from('klienci').select('*');
-      if (klienciData && userEmail) {
-        const enriched = klienciData.map((c: any) => {
-          let parsedKarnety = [];
-          if (Array.isArray(c.karnetyKlubowicza)) {
-            parsedKarnety = c.karnetyKlubowicza;
-          } else if (typeof c.karnetyKlubowicza === 'string') {
-            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
-          }
-          return {
-            ...c,
-            id: c.id,
-            firstName: c.Imię || '',
-            lastName: c.Nazwisko || '',
-            email: c['E-mail'] || c.email || '',
-            karnetyKlubowicza: parsedKarnety,
-            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
-          };
-        });
-        const myUser = enriched.find((c: any) => c.email === userEmail);
-        if (myUser) setCurrentUser(myUser);
-      }
-
       // A. Pobieranie karnetów (cennik)
       const { data: karnetyData, error: karnetyError } = await supabase
         .from('karnety')
         .select('*')
         .order('id', { ascending: false });
 
+      let parsedKarnetyList: any[] = [];
       if (karnetyError) {
         console.error("Błąd pobierania karnetów:", karnetyError);
       } else if (karnetyData) {
-        const parsedData = karnetyData.map((item: any) => {
+        parsedKarnetyList = karnetyData.map((item: any) => {
           let meta: Record<string, any> = {};
           try {
             meta = JSON.parse(item.inne_ustawienia || '{}');
@@ -125,6 +103,7 @@ export default function KarnetyPage() {
             limitIlosc: meta.limitIlosc || '1',
             limitOkres: meta.limitOkres || 'Miesiąc',
             dostepDo: item.dostep_do_zajec || 'wszystkich zajęć',
+            zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
             dostepnyOnline: item.sprzedaz_online ?? meta.dostepnyOnline ?? false,
             wUzyciu: item.wUzyciu || 0,
             ilosc_wejsc: item.typ_karnetu === 'Na ilość treningów' ? (item.ilosc_wejsc || meta.ilosc_wejsc || null) : null,
@@ -132,10 +111,45 @@ export default function KarnetyPage() {
             ...meta
           };
         });
-        setKarnety(parsedData);
+        setKarnety(parsedKarnetyList);
       }
 
-      // B. Pobieranie rodzajów zajęć z bazy
+      // B. Pobieranie danych klientów i wzbogacanie ich karnetów o aktualne zaznaczoneZajecia z definicji
+      const { data: klienciData } = await supabase.from('klienci').select('*');
+      if (klienciData && userEmail) {
+        const enriched = klienciData.map((c: any) => {
+          let parsedKarnety = [];
+          if (Array.isArray(c.karnetyKlubowicza)) {
+            parsedKarnety = c.karnetyKlubowicza;
+          } else if (typeof c.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+          }
+
+          // Wzbogacenie o dozwolone zajęcia bezpośrednio z bazy definicji karnetów
+          parsedKarnety = parsedKarnety.map((k: any) => {
+            const def = parsedKarnetyList.find(dk => dk.nazwa?.trim().toLowerCase() === k.nazwa?.trim().toLowerCase());
+            return {
+              ...k,
+              zaznaczoneZajecia: k.zaznaczoneZajecia || def?.zaznaczoneZajecia || [],
+              dostepDo: k.dostepDo || def?.dostepDo || 'wszystkich zajęć'
+            };
+          });
+
+          return {
+            ...c,
+            id: c.id,
+            firstName: c.Imię || '',
+            lastName: c.Nazwisko || '',
+            email: c['E-mail'] || c.email || '',
+            karnetyKlubowicza: parsedKarnety,
+            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
+          };
+        });
+        const myUser = enriched.find((c: any) => c.email === userEmail);
+        if (myUser) setCurrentUser(myUser);
+      }
+
+      // C. Pobieranie rodzajów zajęć z bazy
       const { data: rodzajeData, error: rodzajeError } = await supabase
         .from('rodzaje_zajec')
         .select('*')
@@ -240,7 +254,7 @@ export default function KarnetyPage() {
     setLimitIlosc(item.limitIlosc ? String(item.limitIlosc) : '1');
     setLimitOkres(item.limitOkres || 'Miesiąc');
     setDostepDo(item.dostepDo || item.dostep_do_zajec || 'wszystkich zajęć');
-    setZaznaczoneZajecia(item.zaznaczoneZajecia || []);
+    setZaznaczoneZajecia(item.zaznaczoneZajecia || item.wybraneZajecia || []);
     setLimitCzasowyZapisow(item.limitCzasowyZapisow || 'Domyślny (14 dni)');
     setNiestandardowyDni(item.niestandardowyDni || '14');
     setTygodniowyLimit(item.tygodniowyLimit || 'Bez limitu');
@@ -1088,7 +1102,7 @@ export default function KarnetyPage() {
                       {dodajLimitCzasowy && (
                         <div className="grid grid-cols-2 gap-3 pl-6 pt-1">
                           <div className="space-y-1">
-                            <label className="font-bold text-slate-700 block">Ilość *</label>
+                            <label className="font-bold text-slate-700 block text-[10px] uppercase">Ilość *</label>
                             <input
                               type="number"
                               min="1"
@@ -1098,7 +1112,7 @@ export default function KarnetyPage() {
                             />
                           </div>
                           <div className="space-y-1">
-                            <label className="font-bold text-slate-700 block">Okres *</label>
+                            <label className="font-bold text-slate-700 block text-[10px] uppercase">Okres *</label>
                             <select
                               value={limitOkres}
                               onChange={(e) => setLimitOkres(e.target.value)}
