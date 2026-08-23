@@ -482,7 +482,7 @@ export default function OfertaKarnetowPage() {
       {standardowe.length > 0 && (
         <div className="space-y-6">
           <div className="flex items-center gap-3">
-            <h2 className="text-xl font-black text-sky-950 uppercase tracking-tight">📋 Pełny Katalog Ofertowy</h2>
+            <h2 className="text-xl font-black text-sky-950 uppercase tracking-tight">📋 POZOSTAŁE KARNETY </h2>
             <div className="h-px bg-sky-200 flex-grow"></div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
