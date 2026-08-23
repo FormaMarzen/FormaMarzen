@@ -393,7 +393,7 @@ export default function OfertaKarnetowPage() {
             Karnety
           </h1>
           <p className="text-slate-500 text-sm mt-2 font-medium max-w-2xl">
-            Poznaj naszą aktualną ofertę. Wybierz dogodny karnet czasowy, pakiet elastycznych wejść lub członkostwo klubowe.
+            Poznaj naszą aktualną ofertę. Wybierz dogodny karnet czasowy, pakiet elastycznych wejść lub umowę czasową.
           </p>
         </div>
 
