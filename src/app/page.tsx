@@ -142,8 +142,8 @@ export default function DashboardPage() {
     return text
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // Usuwanie ogonków (ą->a, ę->e, ó->o itd.)
-      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ') // Zamiana znaków specjalnych na spacje
+      .replace(/[\u0300-\u036f]/g, '') // Usuwanie znaków diakrytycznych (ą->a, ę->e, ó->o itd.)
+      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ') // Zamiana separatorów na spacje
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -164,7 +164,7 @@ export default function DashboardPage() {
     if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
     if (normA.includes(normB) || normB.includes(normA)) return true;
 
-    // Dopasowanie wieloczłonowe dla znaków takich jak / lub i (np. "HIIT/tabata", "Ogólnorozwojowe i rozciąganie")
+    // Obsługa nazw wieloczłonowych (np. "HIIT/TABATA", "Ogólnorozwojowe i rozciąganie")
     const subPartsA = nameA.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
     const subPartsB = nameB.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
 
@@ -193,10 +193,10 @@ export default function DashboardPage() {
     const passName = passItem.nazwa || passItem.pass || '';
     const normPassName = normalizeText(passName);
 
-    // Karnety typu OPEN lub MEDICOVER OPEN mają pełny dostęp
+    // Karnety typu OPEN lub MEDICOVER OPEN mają pełny dostęp do każdego treningu
     if (normPassName.includes('open')) return true;
 
-    // Szukamy pasującej definicji w katalogu tabeli karnety
+    // Szukamy definicji w katalogu tabeli karnety
     const def = allPassDefs.find((d: any) => {
       const defName = d.nazwa || '';
       return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName;
@@ -215,8 +215,10 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      // Sprawdzamy wszystkie potencjalne klucze w JSON
+      // Odczytujemy listę wybranych zajęć ze wszystkich wariantów kluczy (w tym zaznaczoneZajecia)
       const allowedList = 
+        meta.zaznaczoneZajecia ||
+        meta.zaznaczone_zajecia ||
         meta.wybraneZajecia || 
         meta.wybrane_zajecia || 
         meta.dostepneZajecia || 
@@ -237,7 +239,7 @@ export default function DashboardPage() {
         if (isMatched) return true;
       }
 
-      // Jeżeli zaznaczone checkboxy zapisały się jako mapa obiektów { "Nazwa": true }
+      // Jeżeli pozycje zapisały się jako mapa { "Nazwa": true }
       if (typeof allowedList === 'object' && !Array.isArray(allowedList) && allowedList !== null) {
         for (const [keyName, isChecked] of Object.entries(allowedList)) {
           if (isChecked && areClassNamesMatching(keyName, classTitle)) {
@@ -247,7 +249,7 @@ export default function DashboardPage() {
       }
     }
 
-    // Bezpośrednie dopasowanie nazwy karnetu do nazwy zajęć
+    // Bezpośrednie dopasowanie nazwy karnetu do nazwy treningu
     if (areClassNamesMatching(passName, classTitle)) {
       return true;
     }
@@ -2456,7 +2458,7 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
-    // Zapis transakcji z kluczem w celu trwałej blokady ponownego autozapisu na ten termin
+    // Zapis transakcji z kluczem w celu blokady ponownego autozapisu
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
