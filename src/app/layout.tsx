@@ -385,7 +385,7 @@ export default function RootLayout({
         { href: '/ustawienia/zasady-zapisow', label: 'Zasady zapisów', icon: '📋' },
         { href: '/ustawienia/rodzaje-zajec', label: 'Rodzaje zajęć', icon: '🏷️' },
         { href: '/ustawienia/karnety', label: 'Karnety', icon: '🎟️' },
-        { href: '/ustawienia/katalog-karnetow', label: 'Katalog karnetów (Oferta)', icon: '🎫' },
+        { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
         { href: '/ustawienia/integracja-www', label: 'Integracja WWW', icon: '🌐' },
         { href: '/ustawienia/platnosci-online', label: 'Płatności online', icon: '💳' },
