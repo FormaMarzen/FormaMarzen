@@ -656,7 +656,7 @@ export default function KlienciPage() {
           gender: c.płeć || c.gender || '',
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
           email: c['E-mail'] || c.email || '',
-          birthDate: c.birthDate || '',
+          birthDate: c.Urodziny || c.birthDate || '',
           blokadaDo: effectiveBanDate,
           powodBlokady: effectiveBanReason,
           isTrainer: !!powiazanyTrener,
@@ -877,7 +877,14 @@ export default function KlienciPage() {
   const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient) return;
-    await supabase.from('klienci').update({ Imię: profileClient.firstName, Nazwisko: profileClient.lastName, telefon: profileClient.phone, email: profileClient.email, płeć: profileClient.gender }).eq('id', profileClient.id);
+    await supabase.from('klienci').update({ 
+      Imię: profileClient.firstName, 
+      Nazwisko: profileClient.lastName, 
+      telefon: profileClient.phone, 
+      email: profileClient.email, 
+      płeć: profileClient.gender,
+      Urodziny: profileClient.birthDate 
+    }).eq('id', profileClient.id);
     setIsEditProfileInfoOpen(false);
     loadData();
   };
@@ -1430,7 +1437,6 @@ export default function KlienciPage() {
       const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
       const newCena = getPassPrice(uaktualnioneKarnety);
       
-      // Zapisujemy w Supabase wyczyszczoną kolumnę Wygasa (null jeśli brak karnetów)
       await supabase.from('klienci').update({ 
         karnetyKlubowicza: uaktualnioneKarnety,
         Wygasa: latestExpiry,
@@ -2660,6 +2666,16 @@ export default function KlienciPage() {
                   <option value="Kobieta">Kobieta</option>
                   <option value="Inna">Inna</option>
                 </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Urodziny</label>
+                <input 
+                  type="date" 
+                  value={profileClient.birthDate || ''} 
+                  onChange={(e) => setProfileClient({...profileClient, birthDate: e.target.value})} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
+                />
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
