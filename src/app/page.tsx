@@ -136,22 +136,75 @@ export default function DashboardPage() {
     }
   };
 
-  // UNIWERSALNA FUNKCJA WERYFIKACJI UPRAWNIEŃ KARNETU DO KONKRETNYCH ZAJĘĆ
+  // ODPORNY SILNIK NORMALIZACJI I DOPASOWYWANIA NAZW ZAJĘĆ
+  const normalizeText = (text: string): string => {
+    if (!text) return '';
+    return text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Usuwanie ogonków (ą->a, ę->e, ó->o itd.)
+      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ') // Zamiana znaków specjalnych na spacje
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  const getMeaningfulTokens = (text: string): string[] => {
+    const stopWords = new Set(['pod', 'dla', 'na', 'i', 'w', 'z', 'ze', 'oraz', 'trening']);
+    return normalizeText(text)
+      .split(' ')
+      .filter(token => token.length >= 3 && !stopWords.has(token));
+  };
+
+  const areClassNamesMatching = (nameA: string, nameB: string): boolean => {
+    if (!nameA || !nameB) return false;
+    const normA = normalizeText(nameA);
+    const normB = normalizeText(nameB);
+
+    if (normA === normB) return true;
+    if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
+    if (normA.includes(normB) || normB.includes(normA)) return true;
+
+    // Dopasowanie wieloczłonowe dla znaków takich jak / lub i (np. "HIIT/tabata", "Ogólnorozwojowe i rozciąganie")
+    const subPartsA = nameA.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
+    const subPartsB = nameB.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
+
+    for (const partA of subPartsA) {
+      for (const partB of subPartsB) {
+        if (partA === partB || partA.includes(partB) || partB.includes(partA)) {
+          return true;
+        }
+      }
+    }
+
+    const tokensA = getMeaningfulTokens(nameA);
+    const tokensB = getMeaningfulTokens(nameB);
+
+    if (tokensA.length > 0 && tokensB.length > 0) {
+      const hasSharedToken = tokensA.some(tA => tokensB.some(tB => tA === tB || tA.includes(tB) || tB.includes(tA)));
+      if (hasSharedToken) return true;
+    }
+
+    return false;
+  };
+
+  // UNIWERSALNA I ODPORNA NA BŁĘDY FUNKCJA WERYFIKACJI UPRAWNIEŃ KARNETU
   const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
     if (!passItem || !classTitle) return false;
     const passName = passItem.nazwa || passItem.pass || '';
-    const passNameLower = passName.toLowerCase().trim();
-    const classTitleLower = classTitle.toLowerCase().trim();
+    const normPassName = normalizeText(passName);
 
-    // Karnety typu OPEN lub MEDICOVER OPEN mają dostęp do wszystkich zajęć
-    if (passNameLower.includes('open')) return true;
+    // Karnety typu OPEN lub MEDICOVER OPEN mają pełny dostęp
+    if (normPassName.includes('open')) return true;
 
-    // Szukamy definicji karnetu w tabeli 'karnety'
-    const def = allPassDefs.find((d: any) => (d.nazwa || '').toLowerCase().trim() === passNameLower);
+    // Szukamy pasującej definicji w katalogu tabeli karnety
+    const def = allPassDefs.find((d: any) => {
+      const defName = d.nazwa || '';
+      return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName;
+    });
 
     if (def) {
-      const accessType = (def.dostep_do_zajec || '').toLowerCase().trim();
-      if (accessType === 'wszystkich zajęć' || accessType === 'wszystkie' || accessType === 'all') {
+      const accessType = normalizeText(def.dostep_do_zajec || '');
+      if (accessType.includes('wszystk') || accessType === 'all') {
         return true;
       }
 
@@ -162,30 +215,40 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      // Sprawdzamy listę dozwolonych zajęć w strukturze JSON
-      const allowedList = meta.wybraneZajecia || meta.dostepneZajecia || meta.allowedClasses || meta.listaZajec || meta.zajecia || [];
+      // Sprawdzamy wszystkie potencjalne klucze w JSON
+      const allowedList = 
+        meta.wybraneZajecia || 
+        meta.wybrane_zajecia || 
+        meta.dostepneZajecia || 
+        meta.dostepne_zajecia || 
+        meta.allowedClasses || 
+        meta.allowed_classes || 
+        meta.listaZajec || 
+        meta.lista_zajec || 
+        meta.zajecia || 
+        meta.classes || 
+        [];
+
       if (Array.isArray(allowedList) && allowedList.length > 0) {
         const isMatched = allowedList.some((item: any) => {
           const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
-          return itemName.toLowerCase().trim() === classTitleLower;
+          return areClassNamesMatching(itemName, classTitle);
         });
         if (isMatched) return true;
       }
+
+      // Jeżeli zaznaczone checkboxy zapisały się jako mapa obiektów { "Nazwa": true }
+      if (typeof allowedList === 'object' && !Array.isArray(allowedList) && allowedList !== null) {
+        for (const [keyName, isChecked] of Object.entries(allowedList)) {
+          if (isChecked && areClassNamesMatching(keyName, classTitle)) {
+            return true;
+          }
+        }
+      }
     }
 
-    // Dopasowanie kontekstowe po nazwie karnetu i nazwie zajęć
-    if (passNameLower.includes(classTitleLower) || classTitleLower.includes(passNameLower)) {
-      return true;
-    }
-
-    // Dopasowanie słów kluczowych (np. "Ogólnorozwojowe i Rozciąganie" -> "Rozciąganie")
-    const passWords = passNameLower.split(/[\s,+/&|i-]+/).filter((w: string) => w.length >= 4);
-    const classWords = classTitleLower.split(/[\s,+/&|i-]+/).filter((w: string) => w.length >= 4);
-    if (classWords.length > 0 && classWords.some((cw: string) => passWords.includes(cw))) {
-      return true;
-    }
-
-    if (def && (def.dostep_do_zajec || '').toLowerCase().includes('wszystk')) {
+    // Bezpośrednie dopasowanie nazwy karnetu do nazwy zajęć
+    if (areClassNamesMatching(passName, classTitle)) {
       return true;
     }
 
@@ -1955,7 +2018,7 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ
+    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ Z ZASTOSOWANIEM NOWEGO SILNIKA
     const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
       if (k.waznyDo) {
@@ -2312,9 +2375,9 @@ export default function DashboardPage() {
       .in('class_key', keys)
       .eq('klient_id', editWaitlistTarget.id);
 
-    if (error) {
-      showToast(`Nie udało się zmienić czasu gotowości: ${error.message}`, 'error');
-      return;
+    if (error) { 
+      showToast(`Nie udało się zaktualizować czasu wypisu: ${error.message}`, 'error'); 
+      return; 
     }
 
     const cutoffLabel = newCutoff >= 60 ? `${newCutoff / 60}h` : `${newCutoff} min`;
@@ -2646,7 +2709,7 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ KARNETU KLIENTA DO WYBRANYCH ZAJĘĆ
+    // WERYFIKACJA UPRAWNIEŃ KARNETU KLIENTA Z WYKORZYSTANIEM NOWEGO SILNIKA
     const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
