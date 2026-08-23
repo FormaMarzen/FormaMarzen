@@ -102,7 +102,7 @@ const isPassActive = (k: any) => {
   if (k.waznyDo && k.waznyDo < today) {
     return false;
   }
-  if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+  if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0 && (!k.waznyDo || k.waznyDo < today)) {
     return false;
   }
   return true;
@@ -135,7 +135,7 @@ const parsujOkresZDlugosci = (dlugoscStr: string) => {
   return { ilosc: '1', jednostka: 'Miesiąc' };
 };
 
-// DYNAMICZNY I NIEZAWODNY KALKULATOR DATY WYGAŚNIĘCIA KARNETU
+// DYNAMICZNY I NIEZAWODNY KALKULATOR DATY WYGAŚNIĘCIA KARNETU (NP. 6 MIESIĘCY, 1 ROK, 14 DNI)
 const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date => {
   let meta: Record<string, any> = {};
   if (passDef?.inne_ustawienia) {
@@ -173,7 +173,7 @@ const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date 
     }
   }
 
-  // Fallback z tekstu długości
+  // Fallback z tekstu długości (np. '6 miesięcy', '3 miesiące', '14 dni')
   const dlugoscStr = (passDef?.dlugosc || passDef?.limitCzasowy || '').toLowerCase();
   
   const matchMonths = dlugoscStr.match(/(\d+)\s*(mies|m-c|rok|lat)/i);
@@ -451,15 +451,10 @@ export default function KarnetyPage() {
   };
 
   // =========================================================================
-  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - WYJĄTEK < 150 ZŁ
+  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ) - DOKŁADNA BAZA OD ADMINA
   // =========================================================================
-  const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
+  const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
-
-    // WYJĄTEK SYSTEMOWY: Blokada rabatu za ciągłość poniżej 150 zł
-    if (basePriceToCheck !== undefined && basePriceToCheck < 150) {
-      return { hasContinuity: false, percent: 0, label: '0% (Karnet < 150 zł - brak rabatu ciągłości)' };
-    }
     
     if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
       return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
@@ -533,8 +528,8 @@ export default function KarnetyPage() {
     };
   };
 
-  // EFEKTYWNY RABAT Z UWZGLĘDNIENIEM WYJĄTKU < 150 ZŁ I UMOWY 12M
-  const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number) => {
+  // EFEKTYWNY RABAT Z UWZGLĘDNIENIEM JEDNORAZOWEGO UŻYCIA URODZIN I BLOKADY CIĄGŁOŚCI DLA 12M
+  const getEffectiveDiscount = (client: any, isTargetContract: boolean = false) => {
     if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false };
     
     const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia'], client.urodziny_rabat_rok);
@@ -542,7 +537,7 @@ export default function KarnetyPage() {
     const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
-    const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client, basePriceToCheck) : { hasContinuity: false, percent: 0, label: '' };
+    const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
     let totalPercent = 0;
@@ -607,7 +602,8 @@ export default function KarnetyPage() {
       endOfContractStr
     };
   };
-  // 1. POBIERANIE DANYCH Z SUPABASE ORAZ AUTOMATYCZNA KONTROLA WAŻNOŚCI KARNETÓW
+
+  // 1. POBIERANIE DANYCH Z SUPABASE
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -630,10 +626,8 @@ export default function KarnetyPage() {
         const { data: klienciData } = await supabase.from('klienci').select('*');
         
         if (klienciData) {
-          const todayDateOnly = new Date().toISOString().split('T')[0];
-
-          const enriched = await Promise.all(klienciData.map(async (c: any) => {
-            let parsedKarnety: any[] = [];
+          const enriched = klienciData.map((c: any) => {
+            let parsedKarnety = [];
             if (Array.isArray(c.karnetyKlubowicza)) {
               parsedKarnety = c.karnetyKlubowicza;
             } else if (typeof c.karnetyKlubowicza === 'string') {
@@ -645,32 +639,6 @@ export default function KarnetyPage() {
               parsedGlobalHistory = c.historiaZawieszenGlobalna;
             } else if (typeof c.historiaZawieszenGlobalna === 'string') {
               try { parsedGlobalHistory = JSON.parse(c.historiaZawieszenGlobalna); } catch(e) {}
-            }
-
-            // BIEŻĄCA KONTROLA I ZEROWANIE WEJŚĆ PO WYGAŚNIĘCIU DATY KARNETU
-            let karnetyChanged = false;
-            const verifiedKarnety = parsedKarnety.map((k: any) => {
-              if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
-                if (k.waznyDo && k.waznyDo < todayDateOnly && k.pozostaloWejsc > 0) {
-                  karnetyChanged = true;
-                  return {
-                    ...k,
-                    pozostaloWejsc: 0,
-                    statusTekst: `Wygasł (${k.waznyDo}) - wejścia wyzerowane`
-                  };
-                }
-              }
-              return k;
-            });
-
-            if (karnetyChanged) {
-              try {
-                await supabase.from('klienci').update({
-                  karnetyKlubowicza: verifiedKarnety
-                }).eq('id', c.id);
-              } catch (errDb) {
-                console.error("Błąd zapisu wyzerowanych karnetów:", errDb);
-              }
             }
 
             const rawContinuity = extractClientContinuityDiscount(c);
@@ -690,11 +658,11 @@ export default function KarnetyPage() {
               rabat_za_ciaglosc: rawContinuity !== null ? `${rawContinuity}%` : null,
               'Rabat za ciągłość': rawContinuity !== null ? `${rawContinuity}%` : null,
               system_discount_offset: c.system_discount_offset || 0,
-              karnetyKlubowicza: verifiedKarnety,
+              karnetyKlubowicza: parsedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
             };
-          }));
+          });
           
           let myUser = enriched.find((c: any) => c.email.toLowerCase().trim() === normalizedEmail);
           
@@ -856,7 +824,6 @@ export default function KarnetyPage() {
   const [opis, setOpis] = useState('');
   const [obrazekUrl, setObrazekUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   const handleOpenAdd = () => {
     setEditingId(null);
     setNazwa(''); setCena(''); setStawkaVat('8%'); setTypKarnetu('Na czas'); setCzasIlosc('1'); setCzasJednostka('Miesiąc'); setIloscTreningow('10'); setDodajLimitCzasowy(true); setLimitIlosc('1'); setLimitOkres('Miesiąc'); setDostepDo('wszystkich zajęć'); setZaznaczoneZajecia([]); setLimitCzasowyZapisow('Domyślny (14 dni)'); setNiestandardowyDni('14'); setTygodniowyLimit('Bez limitu'); setDziennyLimit('Domyślny (Bez limitu)'); setNiestandardowyDziennyIlosc('1'); setBlokujPortfel(false); setPortfelPrógKwota('0'); setDostepnyOnline(true); setPonownyZakup(true); setZmianaNaInny(true); setKupInnyKarnet(true); setOpis(''); setObrazekUrl(null);
@@ -971,7 +938,7 @@ export default function KarnetyPage() {
     karnetNazwa: susp.karnetNazwa || 'Karnet'
   })).sort((a: any, b: any) => new Date(b.utworzono || 0).getTime() - new Date(a.utworzono || 0).getTime());
 
-  // PRECYZYJNE EGZEKWOWANIE 4 REGUŁ SPRZEDAŻY ONLINE
+  // PRECYZYJNE EGZEKWOWANIE 4 REGUŁ SPRZEDAŻY ONLINE (TYLKO AKTYWNE KARNETY BLOKUJĄ ZAKUP)
   const dostepneKarnetyDoZakupu = dostepneKarnety.filter((defKarnetu) => {
     if (defKarnetu.dostepnyOnline === false) return false;
 
@@ -1054,10 +1021,7 @@ export default function KarnetyPage() {
       }
     } else {
       let baseDate = new Date();
-      // Kontrola daty: jeśli karnet wygasł lub wejścia wyczerpane, liczymy od dzisiaj, w przeciwnym razie od poprzedniego terminu
-      const isExpiredOrFinished = (passToExtend.waznyDo && passToExtend.waznyDo < todayStr) || (passToExtend.pozostaloWejsc !== null && passToExtend.pozostaloWejsc <= 0);
-
-      if (passToExtend.waznyDo && !isExpiredOrFinished) {
+      if (passToExtend.waznyDo) {
         const parts = passToExtend.waznyDo.split('-');
         if (parts.length === 3) {
           const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
@@ -1072,8 +1036,7 @@ export default function KarnetyPage() {
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
     const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
-    // Przekazujemy basePriceNum w celu zablokowania rabatu ciągłościowego poniżej 150 zł
-    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum);
+    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
     const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
     
@@ -1081,24 +1044,17 @@ export default function KarnetyPage() {
 
     updatedKarnetyList = updatedKarnetyList.map(k => {
       if (k.id === passToExtend.id) {
+        let updatedRemaining = k.pozostaloWejsc;
+        let updatedInitial = k.poczatkoweWejsc;
+
         let metaExt: Record<string, any> = {};
         try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
         const extWejsciaVal = (isContract) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
         const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
 
-        // Kontrola wejść: jeśli karnet wygasł lub wejścia zostały zużyte, nowa pula startuje od nowa (z zerowaniem starych)
-        let updatedRemaining = k.pozostaloWejsc;
-        let updatedInitial = k.poczatkoweWejsc;
-
         if (parsedExtWejscia !== null) {
-          const isExpiredOrFinished = (k.waznyDo && k.waznyDo < todayStr) || (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0);
-          if (isExpiredOrFinished) {
-            updatedRemaining = parsedExtWejscia;
-            updatedInitial = parsedExtWejscia;
-          } else {
-            updatedRemaining = (k.pozostaloWejsc || 0) + parsedExtWejscia;
-            updatedInitial = (k.poczatkoweWejsc || 0) + parsedExtWejscia;
-          }
+          updatedRemaining = (k.pozostaloWejsc || 0) + parsedExtWejscia;
+          updatedInitial = (k.poczatkoweWejsc || 0) + parsedExtWejscia;
         }
 
         const nowaHistoria = [...(k.historiaPrzedluzen || []), {
@@ -1119,6 +1075,7 @@ export default function KarnetyPage() {
             statusFinalTekst = `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})`;
           }
         }
+
         return {
           ...k,
           waznyDo: nowaDataWygasnieciaStr,
@@ -1154,7 +1111,7 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    if (!isContract && !appliedDiscountCode && basePriceNum >= 150) {
+    if (!isContract && !appliedDiscountCode) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
       
@@ -1263,7 +1220,7 @@ export default function KarnetyPage() {
       calculatedFirstPayment = contractInfo.proRataFirstMonth;
     }
     
-    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment);
+    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
     const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
 
@@ -1398,7 +1355,7 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    if (!isContract && !appliedDiscountCode && calculatedFirstPayment >= 150) {
+    if (!isContract && !appliedDiscountCode) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
       
@@ -1468,12 +1425,11 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // POPRAWIONA I BEZBŁĘDNA FUNKCJA OBLICZANIA DNI
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
-    date1.setHours(0, 0, 0, 0);
-    date2.setHours(0, 0, 0, 0);
+    date1.setHours(0,0,0,0);
+    date2.setHours(0,0,0,0);
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
 
@@ -1561,7 +1517,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ❄️ 1. LOGIKA ZAWIESZANIA
+  // ❄️ 1. LOGIKA ZAWIESZANIA (GLOBALNA HISTORIA NA KONCIE KLIENTA)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -1719,7 +1675,7 @@ export default function KarnetyPage() {
     setSuspendEndDate('');
   };
 
-  // 🔓 2. LOGIKA ODWIESZANIA
+  // 🔓 2. LOGIKA ODWIESZANIA (GLOBALNA HISTORIA)
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -1823,7 +1779,6 @@ export default function KarnetyPage() {
   });
 
   const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd);
-
   // 2. ZAPISYWANIE DANYCH DO SUPABASE (Admin)
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2023,7 +1978,7 @@ export default function KarnetyPage() {
               <div>
                 <div className="font-black text-xs uppercase tracking-wider">Twój aktywny rabat: {effectiveDiscount.percent}%</div>
                 <div className="text-[11px] text-emerald-700 mt-0.5">
-                  {effectiveDiscount.type === 'manual' ? 'Przypisano indywidualny rabat stały do Twojego konta.' : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów (od 150 zł).`} Ceny zakupu i przedłużeń karnetów uwzględniają tę zniżkę.
+                  {effectiveDiscount.type === 'manual' ? 'Przypisano indywidualny rabat stały do Twojego konta.' : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów.`} Ceny zakupu i przedłużeń karnetów uwzględniają tę zniżkę.
                 </div>
               </div>
             </div>
@@ -2409,6 +2364,7 @@ export default function KarnetyPage() {
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
           const contractInfo = getContractRataInfo(passToExtend);
+          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
           const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
           
           let basePrice = 0;
@@ -2426,7 +2382,6 @@ export default function KarnetyPage() {
             basePrice = 0;
           }
 
-          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePrice);
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
           const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
 
@@ -2541,6 +2496,8 @@ export default function KarnetyPage() {
           const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
           const isContract = selectedPassDef?.isContract12M || selectedPassDef?.typKarnetu === 'Umowa 12 miesięcy';
           
+          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract);
+          
           let basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
           let calculatedFirstPayment = basePrice;
           let contractInfo: any = null;
@@ -2550,7 +2507,6 @@ export default function KarnetyPage() {
             calculatedFirstPayment = contractInfo.proRataFirstMonth;
           }
 
-          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment);
           const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
 
           return (
@@ -2578,6 +2534,7 @@ export default function KarnetyPage() {
                       <option value="" disabled>-- Wybierz karnet --</option>
                       {dostepneKarnetyDoZakupu.map((k: any) => {
                         const kIsContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy' || k.typKarnetu === 'Umowa 12 miesięcy';
+                        const kEffectiveDisc = getEffectiveDiscount(currentUser, kIsContract);
                         const kBasePrice = parseFloat(k.cena) || 0;
                         
                         let kDisplayPrice = kBasePrice;
@@ -2585,8 +2542,6 @@ export default function KarnetyPage() {
                           const kProRata = calculateContractProRata(kBasePrice);
                           kDisplayPrice = kProRata.proRataFirstMonth;
                         }
-
-                        const kEffectiveDisc = getEffectiveDiscount(currentUser, kIsContract, kDisplayPrice);
                         
                         const kFinalPrice = kEffectiveDisc.percent > 0 
                           ? (kDisplayPrice * (1 - kEffectiveDisc.percent / 100)).toFixed(2)
@@ -2882,7 +2837,7 @@ export default function KarnetyPage() {
         </div>
       </div>
 
-      {/* MODAL DODAWANIA / EDYCJI KARNETU (ADMIN) */}
+      {/* MODAL DODAWANIA / EDYCJI KARNETU (ADMIN - PEŁNY FORMULARZ) */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-3xl w-full p-8 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto">
@@ -2996,7 +2951,7 @@ export default function KarnetyPage() {
                         placeholder="np. 10"
                         value={iloscTreningow}
                         onChange={(e) => setIloscTreningow(e.target.value)}
-                        className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
+                        className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 font-bold"
                       />
                     </div>
 
@@ -3340,3 +3295,4 @@ export default function KarnetyPage() {
     </div>
   );
 }
+
