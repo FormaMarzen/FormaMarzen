@@ -136,6 +136,62 @@ export default function DashboardPage() {
     }
   };
 
+  // UNIWERSALNA FUNKCJA WERYFIKACJI UPRAWNIEŃ KARNETU DO KONKRETNYCH ZAJĘĆ
+  const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
+    if (!passItem || !classTitle) return false;
+    const passName = passItem.nazwa || passItem.pass || '';
+    const passNameLower = passName.toLowerCase().trim();
+    const classTitleLower = classTitle.toLowerCase().trim();
+
+    // Karnety typu OPEN lub MEDICOVER OPEN mają dostęp do wszystkich zajęć
+    if (passNameLower.includes('open')) return true;
+
+    // Szukamy definicji karnetu w tabeli 'karnety'
+    const def = allPassDefs.find((d: any) => (d.nazwa || '').toLowerCase().trim() === passNameLower);
+
+    if (def) {
+      const accessType = (def.dostep_do_zajec || '').toLowerCase().trim();
+      if (accessType === 'wszystkich zajęć' || accessType === 'wszystkie' || accessType === 'all') {
+        return true;
+      }
+
+      let meta: any = {};
+      try {
+        meta = typeof def.inne_ustawienia === 'string' ? JSON.parse(def.inne_ustawienia) : (def.inne_ustawienia || {});
+      } catch (e) {
+        meta = {};
+      }
+
+      // Sprawdzamy listę dozwolonych zajęć w strukturze JSON
+      const allowedList = meta.wybraneZajecia || meta.dostepneZajecia || meta.allowedClasses || meta.listaZajec || meta.zajecia || [];
+      if (Array.isArray(allowedList) && allowedList.length > 0) {
+        const isMatched = allowedList.some((item: any) => {
+          const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
+          return itemName.toLowerCase().trim() === classTitleLower;
+        });
+        if (isMatched) return true;
+      }
+    }
+
+    // Dopasowanie kontekstowe po nazwie karnetu i nazwie zajęć
+    if (passNameLower.includes(classTitleLower) || classTitleLower.includes(passNameLower)) {
+      return true;
+    }
+
+    // Dopasowanie słów kluczowych (np. "Ogólnorozwojowe i Rozciąganie" -> "Rozciąganie")
+    const passWords = passNameLower.split(/[\s,+/&|i-]+/).filter((w: string) => w.length >= 4);
+    const classWords = classTitleLower.split(/[\s,+/&|i-]+/).filter((w: string) => w.length >= 4);
+    if (classWords.length > 0 && classWords.some((cw: string) => passWords.includes(cw))) {
+      return true;
+    }
+
+    if (def && (def.dostep_do_zajec || '').toLowerCase().includes('wszystk')) {
+      return true;
+    }
+
+    return false;
+  };
+
   const [salesPeriod, setSalesPeriod] = useState('Dziś');
   const [clientSearch, setClientSearch] = useState('');
   const [klienciList, setKlienciList] = useState<any[]>([]);
@@ -1109,7 +1165,6 @@ export default function DashboardPage() {
         }
       }
     }
-
     if (cancelledCount > 0 && targetClientObj) {
       let updatedKarnety = [...(targetClientObj.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -1891,6 +1946,32 @@ export default function DashboardPage() {
       return;
     }
 
+    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ
+    const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
+      if (!k) return false;
+      if (k.waznyDo) {
+        const expDate = new Date(k.waznyDo);
+        expDate.setHours(23, 59, 59, 999);
+        if (expDate < dzisiajDateObj) return false;
+      }
+      if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+        if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
+      }
+      return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
+    });
+
+    if (!passAllowsThisClass) {
+      await supabase.from('booking_logs').insert([{
+        action_type: 'BOOKING_BLOCKED',
+        status: 'BLOCKED',
+        reason: `${currentUser.firstName || 'Klubowicz'}: Posiadany karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}".`,
+        rule_applied: 'pass_class_restriction',
+        payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title }
+      }]);
+      showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`, 'error');
+      return;
+    }
+
     const classKeyCurrent = `${selectedClass.id}_${selectedClass.displayDate}`;
     const zapisaniCurrent = zapisyNaZajecia[classKeyCurrent] || [];
     const autoCancelStatus = checkClassAutoCancellation(selectedClass, selectedClass.displayDate, zapisaniCurrent);
@@ -2209,7 +2290,6 @@ export default function DashboardPage() {
 
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
-
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const { error } = await supabase
       .from('zapisy_zajec')
@@ -2549,6 +2629,25 @@ export default function DashboardPage() {
     if (isPassSuspended) {
       showToast(`Karnet klienta jest zawieszony w dniu tych zajęć (${calcClassDateStr}).`, 'warning');
       return;
+    }
+
+    // WERYFIKACJA UPRAWNIEŃ KARNETU KLIENTA DO WYBRANYCH ZAJĘĆ
+    const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
+      if (k.waznyDo) {
+        const expDate = new Date(k.waznyDo);
+        expDate.setHours(23, 59, 59, 999);
+        if (expDate < new Date()) return false;
+      }
+      if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) {
+        return false;
+      }
+      return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
+    });
+
+    if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && !passAllowsClass) {
+      if (!confirm(`UWAGA: Karnet klienta "${klient.pass || ''}" nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`)) {
+        return;
+      }
     }
 
     const walletVal = parseFloat(String(klient.wallet || klient.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
@@ -2928,7 +3027,8 @@ export default function DashboardPage() {
                 const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
                 const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
 
-                if (!myUpcomingClasses.some((existing: any) => existing.classKey === classKey)) {
+                // PRECYZYJNY WARUNEK ANTY-DUPLIKACYJNY PO ID ZAJĘĆ ORAZ DACIE
+                if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === displayFormatted)) {
                   myUpcomingClasses.push({
                     ...classInfo,
                     classKey,
@@ -3261,7 +3361,6 @@ export default function DashboardPage() {
                   ))
                 )}
               </div>
-              
               {myUpcomingClasses.length > 3 && (
                 <div className="p-4 flex justify-center bg-white border-t border-slate-100">
                   <button 
@@ -3450,6 +3549,9 @@ export default function DashboardPage() {
                       const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
                       const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
 
+                      // SPRAWDZANIE CZY AKTYWNY KARNET KLUBOWICZA UPRAWNIA DO TYCH ZAJĘĆ
+                      const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
+
                       return (
                         <div
                           key={classIdx}
@@ -3458,6 +3560,9 @@ export default function DashboardPage() {
                             if (isLockedForClient) {
                               showToast("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.", 'info');
                               return;
+                            }
+                            if (isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist) {
+                              showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${item.title}".`, 'warning');
                             }
                             setSelectedClass({
                               ...item,
@@ -3479,6 +3584,8 @@ export default function DashboardPage() {
                               ? 'border-emerald-300 ring-2 ring-emerald-400/40 bg-emerald-50/20 hover:shadow-md cursor-pointer'
                               : isUserInWaitlist
                               ? 'border-blue-300 ring-2 ring-blue-400/40 bg-blue-50/20 hover:shadow-md cursor-pointer'
+                              : isPassRestrictedForClass
+                              ? 'border-amber-200/80 bg-amber-50/15 hover:shadow-md cursor-pointer'
                               : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
                           }`}
                         >
@@ -3498,6 +3605,11 @@ export default function DashboardPage() {
                               {isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
                                 <span className="bg-blue-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
                                   🪑 REZERWA
+                                </span>
+                              )}
+                              {isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[8px] px-1.5 py-0.5 rounded-md uppercase tracking-wider" title="Ten trening nie wchodzi w zakres Twojego karnetu">
+                                  Inny karnet
                                 </span>
                               )}
 
@@ -4297,6 +4409,19 @@ export default function DashboardPage() {
                           </div>
                         );
                       }
+                      
+                      const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
+                      const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
+                      
+                      if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
+                        return (
+                          <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
+                            <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
+                            <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.</div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <button
                           onClick={handleKlubowiczZapiszSie}
@@ -4430,7 +4555,7 @@ export default function DashboardPage() {
                           ? 'bg-sky-100/70 border-sky-500 ring-2 ring-sky-200'
                           : 'bg-slate-50/50 border-slate-200 hover:bg-sky-50/40 hover:border-sky-300'
                       }`}
-                    >
+                      >
                       <div className="flex items-center gap-3">
                         <input
                           type="radio"
@@ -5343,4 +5468,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
