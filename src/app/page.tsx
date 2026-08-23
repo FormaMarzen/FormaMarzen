@@ -1433,6 +1433,7 @@ export default function DashboardPage() {
     };
     reader.readAsDataURL(file);
   };
+
   const handleSavePassEditSubmit = async () => {
     if (!profileClient || !editingPassModal) return;
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
@@ -2975,7 +2976,6 @@ export default function DashboardPage() {
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
@@ -3167,7 +3167,7 @@ export default function DashboardPage() {
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
-          {/* SEKCJA: TWOJE AKTYWNE ZAPISY (RESPONSYWNA, BEZ UCINANIA KRZESEŁKA NA TELEFONIE) */}
+          {/* SEKCJA: TWOJE AKTYWNE ZAPISY */}
           <section className="space-y-4">
             <h2 className="text-[13px] font-medium text-slate-500 uppercase tracking-wider pl-1">Twoje aktywne zapisy</h2>
             <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
@@ -3206,7 +3206,7 @@ export default function DashboardPage() {
                       <div className="flex-1 min-w-0 px-1">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="text-[12px] sm:text-[13px] font-bold text-slate-900">{cls.title}</span>
-                          {cls.isKrzeselko && (
+                          {cls.isKrzeselko ? (
                             <button
                               type="button"
                               onClick={() => {
@@ -3221,6 +3221,10 @@ export default function DashboardPage() {
                               <span>🪑 Krzesełko ({cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes} min`})</span>
                               <span className="text-[8px] opacity-70">✏️</span>
                             </button>
+                          ) : (
+                            <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[9px] font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 shrink-0">
+                              <span>✅ Grupa Główna</span>
+                            </span>
                           )}
                         </div>
 
@@ -3257,7 +3261,7 @@ export default function DashboardPage() {
                   ))
                 )}
               </div>
-             
+              
               {myUpcomingClasses.length > 3 && (
                 <div className="p-4 flex justify-center bg-white border-t border-slate-100">
                   <button 
@@ -3441,6 +3445,11 @@ export default function DashboardPage() {
                       
                       const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
 
+                      // DYNAMICZNE SPRAWDZANIE STATUSU ZAPISU UŻYTKOWNIKA W CZASIE RZECZYWISTYM
+                      const mySignupEntry = currentUser ? zapisani.find((s: any) => String(s.id) === String(currentUser.id)) : null;
+                      const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
+                      const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
+
                       return (
                         <div
                           key={classIdx}
@@ -3466,6 +3475,10 @@ export default function DashboardPage() {
                               ? 'border-rose-200 opacity-80 cursor-default bg-rose-50/20'
                               : isLockedForClient
                               ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
+                              : isUserInMainGroup
+                              ? 'border-emerald-300 ring-2 ring-emerald-400/40 bg-emerald-50/20 hover:shadow-md cursor-pointer'
+                              : isUserInWaitlist
+                              ? 'border-blue-300 ring-2 ring-blue-400/40 bg-blue-50/20 hover:shadow-md cursor-pointer'
                               : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
                           }`}
                         >
@@ -3474,11 +3487,26 @@ export default function DashboardPage() {
                               <span className="text-xs sm:text-sm font-black text-slate-900 shrink-0">{item.start}</span>
                               <h3 className="text-[11px] sm:text-xs font-bold text-slate-800 truncate" title={item.title}>{item.title}</h3>
                             </div>
-                            {isLockedForClient && !isClassCancelled && !item.isUsunięte && (
-                              <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
-                                🔒
-                              </span>
-                            )}
+                            
+                            <div className="flex items-center gap-1 shrink-0">
+                              {/* DYNAMICZNE PLAKIETKI STATUSU DLA KLUBOWICZA */}
+                              {isUserInMainGroup && !isClassCancelled && !item.isUsunięte && (
+                                <span className="bg-emerald-500 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
+                                  ✅ ZAPISANY
+                                </span>
+                              )}
+                              {isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
+                                <span className="bg-blue-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
+                                  🪑 REZERWA
+                                </span>
+                              )}
+
+                              {isLockedForClient && !isClassCancelled && !item.isUsunięte && (
+                                <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
+                                  🔒
+                                </span>
+                              )}
+                            </div>
                           </div>
 
                           {progInfo && !isClassCancelled && !item.isUsunięte && (
@@ -3949,7 +3977,7 @@ export default function DashboardPage() {
                   </span>
                   <button
                     onClick={() => setSelectedClass(null)}
-                    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full flex items-center justify-center font-bold transition-colors cursor-pointer"
+                    className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold transition-colors cursor-pointer"
                   >
                     ✕
                   </button>
@@ -4002,8 +4030,31 @@ export default function DashboardPage() {
 
                     const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
 
+                    // WYKRYWANIE KARNETU MEDICOVER I SKANOWANIA QR DLA TRENERA / ADMINA
+                    const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
+                      (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
+
                     return (
-                      <div key={osoba.id} className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
+                      <div 
+                        key={osoba.id} 
+                        className={`rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-3 transition-all ${
+                          canManageClass && isMedicover
+                            ? 'bg-gradient-to-br from-emerald-50 via-white to-sky-50 border-2 border-emerald-500 ring-2 ring-emerald-300/60 shadow-md'
+                            : 'bg-white border border-sky-200'
+                        }`}
+                      >
+                        {/* ADNOTACJA O SKANOWANIU KODU QR DLA MEDICOVER W WIDOKU TRENERA/ADMINA */}
+                        {canManageClass && isMedicover && (
+                          <div className="bg-emerald-500 text-slate-950 font-black text-[10px] px-3 py-1 rounded-xl uppercase tracking-wider flex items-center justify-between shadow-xs border border-emerald-400">
+                            <span className="flex items-center gap-1.5">
+                              <span className="animate-bounce">📱</span> SKANUJ KOD QR MEDICOVER
+                            </span>
+                            <span className="bg-slate-950 text-emerald-300 px-1.5 py-0.2 rounded font-mono text-[9px]">
+                              MEDICOVER
+                            </span>
+                          </div>
+                        )}
+
                         <div className="flex items-start justify-between">
                           <div>
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -4016,7 +4067,12 @@ export default function DashboardPage() {
                             </div>
                             {canSeeThisPersonDetails && (
                               <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
-                                <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
+                                <div>
+                                  <span className="font-bold text-slate-700">KARNET:</span>{' '}
+                                  <span className={isMedicover ? 'font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded' : ''}>
+                                    {osoba.pass || 'OPEN'}
+                                  </span>
+                                </div>
                                 <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
                                 <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
                                 <div>
@@ -4031,7 +4087,9 @@ export default function DashboardPage() {
                               </div>
                             )}
                           </div>
-                          <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-sky-100 border-2 border-amber-500 overflow-hidden flex items-center justify-center font-bold text-sky-900 text-5xl shrink-0 shadow-sm">
+                          <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden flex items-center justify-center font-bold text-5xl shrink-0 shadow-sm ${
+                            isMedicover ? 'bg-emerald-100 border-4 border-emerald-500 text-emerald-900' : 'bg-sky-100 border-2 border-amber-500 text-sky-900'
+                          }`}>
                             {osoba.avatarUrl ? (
                               <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                             ) : (
@@ -4117,8 +4175,30 @@ export default function DashboardPage() {
                       const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
                       const cutoffMin = osobaZapisana.waitlist_cutoff_minutes || 30;
 
+                      // WYKRYWANIE MEDICOVER NA LIŚCIE REZERWOWEJ
+                      const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
+                        (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
+
                       return (
-                        <div key={osoba.id} className="bg-blue-50/50 border border-blue-200 rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-4">
+                        <div 
+                          key={osoba.id} 
+                          className={`rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-3 transition-all ${
+                            canManageClass && isMedicover
+                              ? 'bg-gradient-to-br from-emerald-50 via-white to-blue-50 border-2 border-emerald-500 ring-2 ring-emerald-300/60 shadow-md'
+                              : 'bg-blue-50/50 border border-blue-200'
+                          }`}
+                        >
+                          {canManageClass && isMedicover && (
+                            <div className="bg-emerald-500 text-slate-950 font-black text-[10px] px-3 py-1 rounded-xl uppercase tracking-wider flex items-center justify-between shadow-xs border border-emerald-400">
+                              <span className="flex items-center gap-1.5">
+                                <span className="animate-bounce">📱</span> SKANUJ KOD QR MEDICOVER
+                              </span>
+                              <span className="bg-slate-950 text-emerald-300 px-1.5 py-0.2 rounded font-mono text-[9px]">
+                                MEDICOVER
+                              </span>
+                            </div>
+                          )}
+
                           <div className="flex items-start justify-between">
                             <div>
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -4134,7 +4214,12 @@ export default function DashboardPage() {
                               </div>
                               {canSeeThisPersonDetails && (
                                 <div className="text-[11px] text-slate-500 mt-1 space-y-0.5">
-                                  <div><span className="font-bold text-slate-700">KARNET:</span> {osoba.pass || 'OPEN'}</div>
+                                  <div>
+                                    <span className="font-bold text-slate-700">KARNET:</span>{' '}
+                                    <span className={isMedicover ? 'font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded' : ''}>
+                                      {osoba.pass || 'OPEN'}
+                                    </span>
+                                  </div>
                                   <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
                                   <div className="flex items-center gap-1.5">
                                     <span className="font-bold text-slate-700">LIMIT WYPISU:</span> 
@@ -4162,7 +4247,9 @@ export default function DashboardPage() {
                                 </div>
                               )}
                             </div>
-                            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center font-bold text-blue-900 text-5xl shrink-0 shadow-sm">
+                            <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden flex items-center justify-center font-bold text-5xl shrink-0 shadow-sm ${
+                              isMedicover ? 'bg-emerald-100 border-4 border-emerald-500 text-emerald-900' : 'bg-blue-100 border-2 border-blue-500 text-blue-900'
+                            }`}>
                               {osoba.avatarUrl ? (
                                 <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                               ) : (
