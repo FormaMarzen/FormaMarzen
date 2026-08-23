@@ -193,13 +193,28 @@ export default function DashboardPage() {
     const passName = passItem.nazwa || passItem.pass || '';
     const normPassName = normalizeText(passName);
 
-    // Karnety typu OPEN lub MEDICOVER OPEN mają pełny dostęp do każdego treningu
-    if (normPassName.includes('open')) return true;
+    // Karnety typu OPEN lub MEDICOVER mają pełny dostęp do każdego treningu
+    if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
 
-    // Szukamy definicji w katalogu tabeli karnety
+    // 1. Sprawdzanie bezpośrednio przypisanych uprawnień na karnecie (wzbogaconych w loadData)
+    const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
+    if (passAccessType.includes('wszystk') || passAccessType === 'all') {
+      return true;
+    }
+
+    const allowedList = passItem.zaznaczoneZajecia || [];
+    if (Array.isArray(allowedList) && allowedList.length > 0) {
+      const isMatched = allowedList.some((item: any) => {
+        const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
+        return areClassNamesMatching(itemName, classTitle);
+      });
+      if (isMatched) return true;
+    }
+
+    // 2. Fallback: szukamy definicji w katalogu tabeli karnety po bezpiecznym dopasowaniu nazw (wielkość liter ignorowana)
     const def = allPassDefs.find((d: any) => {
       const defName = d.nazwa || '';
-      return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName;
+      return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName || defName.trim().toLowerCase() === passName.trim().toLowerCase();
     });
 
     if (def) {
@@ -215,41 +230,22 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      // Odczytujemy listę wybranych zajęć ze wszystkich wariantów kluczy (w tym zaznaczoneZajecia)
-      const allowedList = 
-        meta.zaznaczoneZajecia ||
-        meta.zaznaczone_zajecia ||
-        meta.wybraneZajecia || 
-        meta.wybrane_zajecia || 
-        meta.dostepneZajecia || 
-        meta.dostepne_zajecia || 
-        meta.allowedClasses || 
-        meta.allowed_classes || 
-        meta.listaZajec || 
-        meta.lista_zajec || 
-        meta.zajecia || 
-        meta.classes || 
-        [];
+      // Odczytujemy listę wybranych zajęć ze wszystkich wariantów kluczy
+      const defAllowedList = 
+        meta.zaznaczoneZajecia || meta.zaznaczone_zajecia ||
+        meta.wybraneZajecia || meta.wybrane_zajecia || 
+        def.zaznaczoneZajecia || [];
 
-      if (Array.isArray(allowedList) && allowedList.length > 0) {
-        const isMatched = allowedList.some((item: any) => {
+      if (Array.isArray(defAllowedList) && defAllowedList.length > 0) {
+        const isMatched = defAllowedList.some((item: any) => {
           const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
           return areClassNamesMatching(itemName, classTitle);
         });
         if (isMatched) return true;
       }
-
-      // Jeżeli pozycje zapisały się jako mapa { "Nazwa": true }
-      if (typeof allowedList === 'object' && !Array.isArray(allowedList) && allowedList !== null) {
-        for (const [keyName, isChecked] of Object.entries(allowedList)) {
-          if (isChecked && areClassNamesMatching(keyName, classTitle)) {
-            return true;
-          }
-        }
-      }
     }
 
-    // Bezpośrednie dopasowanie nazwy karnetu do nazwy treningu
+    // 3. Fallback bezpieczeństwa: czy nazwa karnetu tożsama z nazwą zajęć?
     if (areClassNamesMatching(passName, classTitle)) {
       return true;
     }
@@ -904,13 +900,13 @@ export default function DashboardPage() {
         try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
         return {
           ...k,
-          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
+          cena: k.cena_brutto || k.cena || '0.00',
+          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null,
+          zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
+          dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć'
         };
       });
-      setDostepneKarnety(karnetyDefData.map((k: any) => ({
-        ...k,
-        cena: k.cena_brutto || k.cena || '0.00'
-      })));
+      setDostepneKarnety(ustrukturyzowaneKarnetyDef);
     }
 
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
@@ -1050,17 +1046,23 @@ export default function DashboardPage() {
           const lowerName = (k.nazwa || '').toLowerCase();
           const isTimePassItem = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy') || lowerName.includes('umowa');
           
+          const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa?.trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
+
           if (isTimePassItem) {
             k.pozostaloWejsc = null;
             k.poczatkoweWejsc = null;
           } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
-            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa === k.nazwa);
             if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
               const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
               k.pozostaloWejsc = valWejsc;
               k.poczatkoweWejsc = valWejsc;
             }
           }
+
+          // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ BEZPOŚREDNIO NA KARNECIE KLUBOWICZA
+          k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
+          k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || (pasujacyDef ? pasujacyDef.zaznaczoneZajecia : []);
+
           return k;
         });
 
@@ -1337,6 +1339,8 @@ export default function DashboardPage() {
     
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
     let bazowaCenaNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget.cena.replace(/[^0-9.]/g, '')) || 0;
+    const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
+    const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
     const effectiveDiscount = getEffectiveDiscount(profileClient);
     const finalPriceNum = effectiveDiscount.percent > 0 
@@ -1351,6 +1355,8 @@ export default function DashboardPage() {
           nazwa: extendSelectedNewPassName || k.nazwa, 
           waznyDo: extendNewDate, 
           cena: nowaCena, 
+          zaznaczoneZajecia: extendSelectedNewPassName ? allowedClasses : k.zaznaczoneZajecia,
+          dostepDo: extendSelectedNewPassName ? dostepDo : k.dostepDo,
           znizkaProcentowa: effectiveDiscount.label,
           statusTekst: `Ważny do: ${extendNewDate}` 
         };
@@ -1403,13 +1409,13 @@ export default function DashboardPage() {
       : basePriceNum;
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
 
-    let metaBuy: Record<string, any> = {};
-    try { metaBuy = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+    const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
+    const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
     const lowerBuyName = selectedBuyPass.toLowerCase();
     const isTimePassBuy = lowerBuyName.includes('open') || lowerBuyName.includes('miesiąc') || lowerBuyName.includes('miesiac') || lowerBuyName.includes('rok') || lowerBuyName.includes('czasowy') || lowerBuyName.includes('umowa');
     
-    const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || metaBuy.ilosc_wejsc || metaBuy.iloscTreningow || null) : null;
+    const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || null) : null;
     const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
 
     let updatedKarnety = [];
@@ -1434,6 +1440,8 @@ export default function DashboardPage() {
             pozostaloWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? currentEntries + addedEntries : null),
             poczatkoweWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? (k.poczatkoweWejsc || currentEntries) + addedEntries : null),
             cena: cenaStr, 
+            zaznaczoneZajecia: allowedClasses,
+            dostepDo: dostepDo,
             znizkaProcentowa: effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
@@ -1451,6 +1459,8 @@ export default function DashboardPage() {
         pozostaloWejsc: isTimePassBuy ? null : parsedLimitWejsc,
         poczatkoweWejsc: isTimePassBuy ? null : parsedLimitWejsc,
         cena: cenaStr, 
+        zaznaczoneZajecia: allowedClasses,
+        dostepDo: dostepDo,
         znizkaProcentowa: effectiveDiscount.label, 
         rata: '1 / 1', 
         statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
@@ -1560,6 +1570,10 @@ export default function DashboardPage() {
     const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
     const cenaRegularna = bazowyKarnet ? parseFloat(bazowyKarnet.cena) : null;
     const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
+    
+    const allowedClasses = bazowyKarnet?.zaznaczoneZajecia || [];
+    const dostepDo = bazowyKarnet?.dostep_do_zajec || 'wszystkich zajęć';
+
     let znizkaTekst = '';
     if (cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
       const roznica = cenaRegularna - nowaCenaWartosc;
@@ -1578,6 +1592,8 @@ export default function DashboardPage() {
           pozostaloWejsc: isTimePassItem ? null : editingPassModal.pozostaloWejsc,
           poczatkoweWejsc: isTimePassItem ? null : (k.poczatkoweWejsc || editingPassModal.pozostaloWejsc),
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
+          zaznaczoneZajecia: allowedClasses,
+          dostepDo: dostepDo,
           znizkaProcentowa: znizkaTekst, 
           rata: editingPassModal.rata, 
           statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
@@ -2054,7 +2070,6 @@ export default function DashboardPage() {
       showToast(autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : "Nie można zapisać się na odwołane lub usunięte zajęcia!", 'error'); 
       return; 
     }
-    
     const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
     if (walletVal < 0) { 
       showToast("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać.", 'error'); 
@@ -3351,7 +3366,6 @@ export default function DashboardPage() {
           </Link>
         </div>
       )}
-
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
@@ -4206,7 +4220,6 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
-
               <div className="space-y-3">
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -4622,7 +4635,7 @@ export default function DashboardPage() {
               <div className="bg-sky-50 border border-sky-200/80 rounded-2xl p-4 text-slate-700 leading-relaxed">
                 <p className="font-bold text-sky-950 mb-1">Na ile przed rozpoczęciem treningu system ma Cię automatycznie wypisać?</p>
                 <p className="text-[11px] text-slate-500">
-                  Jeśli przed wybranym czasem nie zwolni się miejsce na liście głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
+                  Jeśli przed wybranym czasem nie zwolni się miejsce na listie głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
                 </p>
               </div>
 
@@ -4643,7 +4656,7 @@ export default function DashboardPage() {
                           ? 'bg-sky-100/70 border-sky-500 ring-2 ring-sky-200'
                           : 'bg-slate-50/50 border-slate-200 hover:bg-sky-50/40 hover:border-sky-300'
                       }`}
-                      >
+                    >
                       <div className="flex items-center gap-3">
                         <input
                           type="radio"
