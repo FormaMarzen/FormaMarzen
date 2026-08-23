@@ -390,7 +390,7 @@ export default function OfertaKarnetowPage() {
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
             <span className="p-2 bg-amber-500 rounded-xl shadow-sm text-slate-900">🎟️</span>
-            Karnety i Członkostwa
+            Karnety
           </h1>
           <p className="text-slate-500 text-sm mt-2 font-medium max-w-2xl">
             Poznaj naszą aktualną ofertę. Wybierz dogodny karnet czasowy, pakiet elastycznych wejść lub członkostwo klubowe.
