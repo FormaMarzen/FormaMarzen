@@ -34,7 +34,7 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANTÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
+  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANCIÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
   const getKeysVariants = (classId: string | number, dateStr: string) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
@@ -136,14 +136,14 @@ export default function DashboardPage() {
     }
   };
 
-  // SILNIK NORMALIZACJI I DOPASOWYWANIA NAZW ZAJĘĆ
+  // ODPORNY SILNIK NORMALIZACJI I DOPASOWYWANIA NAZW ZAJĘĆ
   const normalizeText = (text: string): string => {
     if (!text) return '';
     return text
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ')
+      .replace(/[\u0300-\u036f]/g, '') // Usuwanie znaków diakrytycznych (ą->a, ę->e, ó->o itd.)
+      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ') // Zamiana separatorów na spacje
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -164,6 +164,7 @@ export default function DashboardPage() {
     if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
     if (normA.includes(normB) || normB.includes(normA)) return true;
 
+    // Obsługa nazw wieloczłonowych (np. "HIIT/TABATA", "Ogólnorozwojowe i rozciąganie")
     const subPartsA = nameA.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
     const subPartsB = nameB.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
 
@@ -186,31 +187,19 @@ export default function DashboardPage() {
     return false;
   };
 
-  // WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ
+  // UNIWERSALNA I ODPORNA NA BŁĘDY FUNKCJA WERYFIKACJI UPRAWNIEŃ KARNETU
   const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
     if (!passItem || !classTitle) return false;
     const passName = passItem.nazwa || passItem.pass || '';
     const normPassName = normalizeText(passName);
 
-    if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
+    // Karnety typu OPEN lub MEDICOVER OPEN mają pełny dostęp do każdego treningu
+    if (normPassName.includes('open')) return true;
 
-    const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
-    if (passAccessType.includes('wszystk') || passAccessType === 'all') {
-      return true;
-    }
-
-    const allowedList = passItem.zaznaczoneZajecia || [];
-    if (Array.isArray(allowedList) && allowedList.length > 0) {
-      const isMatched = allowedList.some((item: any) => {
-        const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
-        return areClassNamesMatching(itemName, classTitle);
-      });
-      if (isMatched) return true;
-    }
-
+    // Szukamy definicji w katalogu tabeli karnety
     const def = allPassDefs.find((d: any) => {
       const defName = d.nazwa || '';
-      return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName || defName.trim().toLowerCase() === passName.trim().toLowerCase();
+      return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName;
     });
 
     if (def) {
@@ -226,20 +215,41 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      const defAllowedList = 
-        meta.zaznaczoneZajecia || meta.zaznaczone_zajecia ||
-        meta.wybraneZajecia || meta.wybrane_zajecia || 
-        def.zaznaczoneZajecia || [];
+      // Odczytujemy listę wybranych zajęć ze wszystkich wariantów kluczy (w tym zaznaczoneZajecia)
+      const allowedList = 
+        meta.zaznaczoneZajecia ||
+        meta.zaznaczone_zajecia ||
+        meta.wybraneZajecia || 
+        meta.wybrane_zajecia || 
+        meta.dostepneZajecia || 
+        meta.dostepne_zajecia || 
+        meta.allowedClasses || 
+        meta.allowed_classes || 
+        meta.listaZajec || 
+        meta.lista_zajec || 
+        meta.zajecia || 
+        meta.classes || 
+        [];
 
-      if (Array.isArray(defAllowedList) && defAllowedList.length > 0) {
-        const isMatched = defAllowedList.some((item: any) => {
+      if (Array.isArray(allowedList) && allowedList.length > 0) {
+        const isMatched = allowedList.some((item: any) => {
           const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
           return areClassNamesMatching(itemName, classTitle);
         });
         if (isMatched) return true;
       }
+
+      // Jeżeli pozycje zapisały się jako mapa { "Nazwa": true }
+      if (typeof allowedList === 'object' && !Array.isArray(allowedList) && allowedList !== null) {
+        for (const [keyName, isChecked] of Object.entries(allowedList)) {
+          if (isChecked && areClassNamesMatching(keyName, classTitle)) {
+            return true;
+          }
+        }
+      }
     }
 
+    // Bezpośrednie dopasowanie nazwy karnetu do nazwy treningu
     if (areClassNamesMatching(passName, classTitle)) {
       return true;
     }
@@ -373,7 +383,7 @@ export default function DashboardPage() {
       targetDate = new Date();
     }
 
-    const baseDate = new Date(2026, 0, 5);
+    const baseDate = new Date(2026, 0, 5); // Poniedziałek, 5 stycznia 2026 jako baza cyklu
     const diffMs = targetDate.getTime() - baseDate.getTime();
     const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
     const dayOfWeek = targetDate.getDay();
@@ -894,13 +904,13 @@ export default function DashboardPage() {
         try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
         return {
           ...k,
-          cena: k.cena_brutto || k.cena || '0.00',
-          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null,
-          zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
-          dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć'
+          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null
         };
       });
-      setDostepneKarnety(ustrukturyzowaneKarnetyDef);
+      setDostepneKarnety(karnetyDefData.map((k: any) => ({
+        ...k,
+        cena: k.cena_brutto || k.cena || '0.00'
+      })));
     }
 
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
@@ -1040,22 +1050,17 @@ export default function DashboardPage() {
           const lowerName = (k.nazwa || '').toLowerCase();
           const isTimePassItem = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy') || lowerName.includes('umowa');
           
-          const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa?.trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
-
           if (isTimePassItem) {
             k.pozostaloWejsc = null;
             k.poczatkoweWejsc = null;
           } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa === k.nazwa);
             if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
               const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
               k.pozostaloWejsc = valWejsc;
               k.poczatkoweWejsc = valWejsc;
             }
           }
-
-          k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
-          k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || (pasujacyDef ? pasujacyDef.zaznaczoneZajecia : []);
-
           return k;
         });
 
@@ -1175,6 +1180,7 @@ export default function DashboardPage() {
     loadData();
     return true;
   };
+
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -1331,8 +1337,6 @@ export default function DashboardPage() {
     
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
     let bazowaCenaNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget.cena.replace(/[^0-9.]/g, '')) || 0;
-    const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
-    const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
     const effectiveDiscount = getEffectiveDiscount(profileClient);
     const finalPriceNum = effectiveDiscount.percent > 0 
@@ -1347,8 +1351,6 @@ export default function DashboardPage() {
           nazwa: extendSelectedNewPassName || k.nazwa, 
           waznyDo: extendNewDate, 
           cena: nowaCena, 
-          zaznaczoneZajecia: extendSelectedNewPassName ? allowedClasses : k.zaznaczoneZajecia,
-          dostepDo: extendSelectedNewPassName ? dostepDo : k.dostepDo,
           znizkaProcentowa: effectiveDiscount.label,
           statusTekst: `Ważny do: ${extendNewDate}` 
         };
@@ -1401,13 +1403,13 @@ export default function DashboardPage() {
       : basePriceNum;
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
 
-    const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
-    const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
+    let metaBuy: Record<string, any> = {};
+    try { metaBuy = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
     
     const lowerBuyName = selectedBuyPass.toLowerCase();
     const isTimePassBuy = lowerBuyName.includes('open') || lowerBuyName.includes('miesiąc') || lowerBuyName.includes('miesiac') || lowerBuyName.includes('rok') || lowerBuyName.includes('czasowy') || lowerBuyName.includes('umowa');
     
-    const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || null) : null;
+    const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || metaBuy.ilosc_wejsc || metaBuy.iloscTreningow || null) : null;
     const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
 
     let updatedKarnety = [];
@@ -1432,8 +1434,6 @@ export default function DashboardPage() {
             pozostaloWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? currentEntries + addedEntries : null),
             poczatkoweWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? (k.poczatkoweWejsc || currentEntries) + addedEntries : null),
             cena: cenaStr, 
-            zaznaczoneZajecia: allowedClasses,
-            dostepDo: dostepDo,
             znizkaProcentowa: effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
@@ -1451,8 +1451,6 @@ export default function DashboardPage() {
         pozostaloWejsc: isTimePassBuy ? null : parsedLimitWejsc,
         poczatkoweWejsc: isTimePassBuy ? null : parsedLimitWejsc,
         cena: cenaStr, 
-        zaznaczoneZajecia: allowedClasses,
-        dostepDo: dostepDo,
         znizkaProcentowa: effectiveDiscount.label, 
         rata: '1 / 1', 
         statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
@@ -1562,10 +1560,6 @@ export default function DashboardPage() {
     const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
     const cenaRegularna = bazowyKarnet ? parseFloat(bazowyKarnet.cena) : null;
     const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
-    
-    const allowedClasses = bazowyKarnet?.zaznaczoneZajecia || [];
-    const dostepDo = bazowyKarnet?.dostep_do_zajec || 'wszystkich zajęć';
-
     let znizkaTekst = '';
     if (cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
       const roznica = cenaRegularna - nowaCenaWartosc;
@@ -1584,8 +1578,6 @@ export default function DashboardPage() {
           pozostaloWejsc: isTimePassItem ? null : editingPassModal.pozostaloWejsc,
           poczatkoweWejsc: isTimePassItem ? null : (k.poczatkoweWejsc || editingPassModal.pozostaloWejsc),
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
-          zaznaczoneZajecia: allowedClasses,
-          dostepDo: dostepDo,
           znizkaProcentowa: znizkaTekst, 
           rata: editingPassModal.rata, 
           statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
@@ -2028,7 +2020,7 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ
+    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ Z ZASTOSOWANIEM NOWEGO SILNIKA
     const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
       if (k.waznyDo) {
@@ -2062,6 +2054,7 @@ export default function DashboardPage() {
       showToast(autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : "Nie można zapisać się na odwołane lub usunięte zajęcia!", 'error'); 
       return; 
     }
+    
     const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
     if (walletVal < 0) { 
       showToast("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać.", 'error'); 
@@ -2278,45 +2271,15 @@ export default function DashboardPage() {
     
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
-    // NATYCHMIASTOWE OPTYMISTYCZNE DOPISANIE DO STANU GRAFIKU
-    const optimisticEntry = {
-      id: currentUser.id,
-      klient_id: currentUser.id,
-      status: 'zapisany',
-      waitlist_cutoff_minutes: null,
-      obecny: false,
-      nieobecny: false,
-      firstName: currentUser.firstName,
-      lastName: currentUser.lastName,
-      pass: currentUser.pass,
-      avatarUrl: currentUser.avatarUrl,
-      wallet: currentUser.wallet,
-      birthDate: currentUser.birthDate,
-      karnetyKlubowicza: currentUser.karnetyKlubowicza
-    };
-
-    const keysToUpdate = getKeysVariants(selectedClass.id, selectedClass.displayDate);
-    setZapisyNaZajecia(prev => {
-      const updated = { ...prev };
-      keysToUpdate.forEach(k => {
-        const list = updated[k] ? [...updated[k]] : [];
-        if (!list.some(item => String(item.id) === String(currentUser.id))) {
-          list.push(optimisticEntry);
-        }
-        updated[k] = list;
-      });
-      return updated;
-    });
-
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
     ]);
     
     if (error) { 
       showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
-      loadData();
       return; 
     }
+
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
@@ -2359,42 +2322,12 @@ export default function DashboardPage() {
     const limitZajec = selectedClass.limit || 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
 
-    const optimisticWaitlistEntry = {
-      id: currentUser.id,
-      klient_id: currentUser.id,
-      status: 'krzesełko',
-      waitlist_cutoff_minutes: cutoffMinutes,
-      obecny: false,
-      nieobecny: false,
-      firstName: currentUser.firstName,
-      lastName: currentUser.lastName,
-      pass: currentUser.pass,
-      avatarUrl: currentUser.avatarUrl,
-      wallet: currentUser.wallet,
-      birthDate: currentUser.birthDate,
-      karnetyKlubowicza: currentUser.karnetyKlubowicza
-    };
-
-    const keysToUpdate = getKeysVariants(selectedClass.id, selectedClass.displayDate);
-    setZapisyNaZajecia(prev => {
-      const updated = { ...prev };
-      keysToUpdate.forEach(k => {
-        const list = updated[k] ? [...updated[k]] : [];
-        if (!list.some(item => String(item.id) === String(currentUser.id))) {
-          list.push(optimisticWaitlistEntry);
-        }
-        updated[k] = list;
-      });
-      return updated;
-    });
-
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
     ]);
 
     if (error) {
       showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
-      loadData();
       return;
     }
 
@@ -2497,6 +2430,7 @@ export default function DashboardPage() {
       return; 
     }
 
+    // Usunięcie z zapisyNadchodzace w profilu
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -2524,6 +2458,7 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
+    // Zapis transakcji z kluczem w celu blokady ponownego autozapisu
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
@@ -2633,6 +2568,7 @@ export default function DashboardPage() {
       return; 
     }
 
+    // Usunięcie z zapisyNadchodzace
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -2663,6 +2599,7 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
+    // Zapis transakcji z dwoma wariantami kluczy
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
@@ -2774,6 +2711,7 @@ export default function DashboardPage() {
       return;
     }
 
+    // WERYFIKACJA UPRAWNIEŃ KARNETU KLIENTA Z WYKORZYSTANIEM NOWEGO SILNIKA
     const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
@@ -2894,6 +2832,7 @@ export default function DashboardPage() {
       }
     }
 
+    // Aktualizacja zapisyNadchodzace
     let updatedNadchodzace = clientToUnregister.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -3176,6 +3115,7 @@ export default function DashboardPage() {
                 const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
                 const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
 
+                // PRECYZYJNY WARUNEK ANTY-DUPLIKACYJNY PO ID ZAJĘĆ ORAZ DACIE
                 if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === displayFormatted)) {
                   myUpcomingClasses.push({
                     ...classInfo,
@@ -3411,6 +3351,7 @@ export default function DashboardPage() {
           </Link>
         </div>
       )}
+
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
@@ -4289,6 +4230,7 @@ export default function DashboardPage() {
 
                     const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
 
+                    // WYKRYWANIE KARNETU MEDICOVER I SKANOWANIA QR DLA TRENERA / ADMINA
                     const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                       (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
@@ -4301,6 +4243,7 @@ export default function DashboardPage() {
                             : 'bg-white border border-sky-200'
                         }`}
                       >
+                        {/* ADNOTACJA O SKANOWANIU KODU QR DLA MEDICOVER W WIDOKU TRENERA/ADMINA */}
                         {canManageClass && isMedicover && (
                           <div className="bg-emerald-500 text-slate-950 font-black text-[10px] px-3 py-1 rounded-xl uppercase tracking-wider flex items-center justify-between shadow-xs border border-emerald-400">
                             <span className="flex items-center gap-1.5">
@@ -4432,6 +4375,7 @@ export default function DashboardPage() {
                       const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
                       const cutoffMin = osobaZapisana.waitlist_cutoff_minutes || 30;
 
+                      // WYKRYWANIE MEDICOVER NA LIŚCIE REZERWOWEJ
                       const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                         (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
@@ -4553,6 +4497,7 @@ export default function DashboardPage() {
                           </div>
                         );
                       }
+                      
                       const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
                       const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
                       
@@ -4698,7 +4643,7 @@ export default function DashboardPage() {
                           ? 'bg-sky-100/70 border-sky-500 ring-2 ring-sky-200'
                           : 'bg-slate-50/50 border-slate-200 hover:bg-sky-50/40 hover:border-sky-300'
                       }`}
-                    >
+                      >
                       <div className="flex items-center gap-3">
                         <input
                           type="radio"
@@ -5611,3 +5556,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+
