@@ -2234,7 +2234,6 @@ export default function KlienciPage() {
                       const now = new Date();
                       const currentYear = now.getFullYear();
                       const upcomingList: any[] = [];
-                      const processedKeys = new Set<string>();
 
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
@@ -2243,41 +2242,49 @@ export default function KlienciPage() {
                           const classId = parts[0];
                           const dateStr = parts[1];
                           if (dateStr) {
-                            const [d, m] = dateStr.split('/').map(Number);
+                            let classStartDateTime: Date;
+
+                            if (dateStr.includes('/')) {
+                              const [d, m] = dateStr.split('/').map(Number);
+                              const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
+                              const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
+                              const override = nadpisaneZajeciaDni[z.class_key];
+                              const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+
+                              const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+                              classStartDateTime = new Date(currentYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+                            } else if (dateStr.includes('-')) {
+                              const [y, m, d] = dateStr.split('-').map(Number);
+                              const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
+                              const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
+                              const override = nadpisaneZajeciaDni[z.class_key];
+                              const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+
+                              const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+                              classStartDateTime = new Date(y, m - 1, d, parseInt(sh), parseInt(sm), 0);
+                            } else {
+                              classStartDateTime = new Date(now);
+                            }
+
                             const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
                             const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
                             const override = nadpisaneZajeciaDni[z.class_key];
                             const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
-
-                            const title = classInfo?.title || classInfo?.nazwa || 'Trening';
-                            const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-                            const classStartDateTime = new Date(currentYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+                            const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
 
                             if (classStartDateTime >= now) {
-                              processedKeys.add(z.class_key);
                               upcomingList.push({
                                 id: z.id || `${z.class_key}_${profileClient.id}`,
                                 classKey: z.class_key,
                                 data: `${dateStr} ${classInfo?.start || ''}`.trim(),
                                 zajecia: title,
                                 status: z.status === 'krzesełko' ? 'LISTA REZERWOWA (KRZESEŁKO)' : 'ZAPISANY',
-                                zapisujacy: 'System / Grafik',
+                                zapisujacy: z.zapisujacy || 'System / Panel Administratora',
                                 sortTime: classStartDateTime.getTime()
                               });
                             }
                           }
                         });
-
-                      (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
-                        if (item.classKey && processedKeys.has(item.classKey)) return;
-                        const pTime = parseClassDate(item.data);
-                        if (pTime === 0 || pTime >= now.getTime()) {
-                          upcomingList.push({
-                            ...item,
-                            sortTime: pTime || now.getTime()
-                          });
-                        }
-                      });
 
                       upcomingList.sort((a, b) => a.sortTime - b.sortTime);
 
@@ -2310,7 +2317,7 @@ export default function KlienciPage() {
                                 </td>
                                 <td className="py-3 px-4 whitespace-nowrap">
                                   <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
-                                    {item.zapisujacy?.toLowerCase().includes('klubowicz') ? '📱 Klubowicz' : `🛡️ ${item.zapisujacy || 'Trener / System'}`}
+                                    {item.zapisujacy?.toLowerCase().includes('klubowicz') ? '📱 Klubowicz' : `🛡️ ${item.zapisujacy || 'Panel Administratora'}`}
                                   </span>
                                 </td>
                                 <td className="py-3 px-4 text-right whitespace-nowrap">
@@ -2341,15 +2348,35 @@ export default function KlienciPage() {
                           const classId = parts[0];
                           const dateStr = parts[1];
                           if (dateStr) {
-                            const [d, m] = dateStr.split('/').map(Number);
+                            let classStartDateTime: Date;
+
+                            if (dateStr.includes('/')) {
+                              const [d, m] = dateStr.split('/').map(Number);
+                              const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
+                              const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
+                              const override = nadpisaneZajeciaDni[z.class_key];
+                              const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+
+                              const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+                              classStartDateTime = new Date(currentYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+                            } else if (dateStr.includes('-')) {
+                              const [y, m, d] = dateStr.split('-').map(Number);
+                              const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
+                              const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
+                              const override = nadpisaneZajeciaDni[z.class_key];
+                              const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+
+                              const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
+                              classStartDateTime = new Date(y, m - 1, d, parseInt(sh), parseInt(sm), 0);
+                            } else {
+                              classStartDateTime = new Date(nowTime - 1000);
+                            }
+
                             const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
                             const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
                             const override = nadpisaneZajeciaDni[z.class_key];
                             const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
-
-                            const title = classInfo?.title || classInfo?.nazwa || 'Trening';
-                            const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-                            const classStartDateTime = new Date(currentYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+                            const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
 
                             if (classStartDateTime < now) {
                               processedSignups.add(z.class_key);
@@ -2363,7 +2390,7 @@ export default function KlienciPage() {
                                 zajecia: title,
                                 status: 'ZAKOŃCZONE',
                                 kolorStatus: 'bg-slate-100 text-slate-800 border-slate-200',
-                                zapisujacy: 'Trener / System',
+                                zapisujacy: z.zapisujacy || 'Trener / System',
                                 szczegoly: szczegoly,
                                 _sortTime: classStartDateTime.getTime()
                               });
@@ -2441,7 +2468,7 @@ export default function KlienciPage() {
                             {allHistory.map((item: any, idx: number) => {
                               let zrodlo = item.zapisujacy || 'Klubowicz';
                               if (zrodlo.toLowerCase().includes('klubowicz') && !zrodlo.includes('📱')) zrodlo = `📱 ${zrodlo}`;
-                              if ((zrodlo.toLowerCase().includes('trener') || zrodlo.toLowerCase().includes('zarządca') || zrodlo.toLowerCase().includes('system')) && !zrodlo.includes('🛡️')) zrodlo = `🛡️ ${zrodlo}`;
+                              if ((zrodlo.toLowerCase().includes('trener') || zrodlo.toLowerCase().includes('zarządca') || zrodlo.toLowerCase().includes('system') || zrodlo.toLowerCase().includes('panel')) && !zrodlo.includes('🛡️')) zrodlo = `🛡️ ${zrodlo}`;
 
                               return (
                                 <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
