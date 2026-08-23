@@ -10,6 +10,7 @@ export interface KarnetKatalog {
   cena: number | string;
   typ_karnetu: 'czas' | 'wejscia' | 'umowa';
   dlugosc: string;
+  ilosc_wejsc?: string | null;
   dostep_zajecia: string[] | null;
   grafika_url: string | null;
   wyrozniony: boolean;
@@ -38,6 +39,7 @@ export default function OfertaKarnetowPage() {
     cena: "199.00",
     typ_karnetu: "czas" as 'czas' | 'wejscia' | 'umowa',
     dlugosc: "1 miesiąc (30 dni)",
+    ilosc_wejsc: "Bez limitu",
     dostep_zajecia_text: "Wszystkie zajęcia grupowe, Strefa Siłowa, Open Gym, Sauna",
     grafika_url: "" as string | null,
     wyrozniony: false,
@@ -84,6 +86,7 @@ export default function OfertaKarnetowPage() {
       cena: "199.00",
       typ_karnetu: "czas",
       dlugosc: "1 miesiąc (30 dni)",
+      ilosc_wejsc: "Bez limitu",
       dostep_zajecia_text: "Wszystkie zajęcia grupowe, Strefa Siłowa, Open Gym, Sauna",
       grafika_url: null,
       wyrozniony: false,
@@ -108,6 +111,7 @@ export default function OfertaKarnetowPage() {
       cena: String(k.cena || "0.00"),
       typ_karnetu: k.typ_karnetu || "czas",
       dlugosc: k.dlugosc || "",
+      ilosc_wejsc: k.ilosc_wejsc || "",
       dostep_zajecia_text: zajeciaString,
       grafika_url: k.grafika_url,
       wyrozniony: !!k.wyrozniony,
@@ -162,7 +166,6 @@ export default function OfertaKarnetowPage() {
   const handleSaveKarnet = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Parsowanie wprowadzonej listy zajęć do tablicy TEXT[] w PostgreSQL
     const zajeciaArray = form.dostep_zajecia_text
       .split(/,|\n/)
       .map((s) => s.trim())
@@ -176,6 +179,7 @@ export default function OfertaKarnetowPage() {
       cena: parsedCena,
       typ_karnetu: form.typ_karnetu,
       dlugosc: form.dlugosc.trim(),
+      ilosc_wejsc: form.ilosc_wejsc.trim(),
       dostep_zajecia: zajeciaArray,
       grafika_url: form.grafika_url,
       wyrozniony: form.wyrozniony,
@@ -211,7 +215,6 @@ export default function OfertaKarnetowPage() {
     return `${num.toFixed(2)} PLN`;
   };
 
-  // Klubowicze widzą tylko aktywne karnety, administrator widzi wszystkie
   const widoczneKarnety = karnety.filter((k) => isAdmin || k.aktywny);
 
   const filteredKarnety = widoczneKarnety.filter((k) => {
@@ -236,7 +239,7 @@ export default function OfertaKarnetowPage() {
           setSelectedKarnet(k);
           setIsViewModalOpen(true);
         }}
-        className={`relative bg-white rounded-3xl overflow-hidden border flex flex-col group transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1 cursor-pointer ${
+        className={`relative bg-white rounded-3xl overflow-hidden border flex flex-col justify-between group transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1 cursor-pointer ${
           !k.aktywny
             ? 'opacity-60 grayscale hover:grayscale-0 border-slate-200'
             : k.wyrozniony
@@ -244,7 +247,7 @@ export default function OfertaKarnetowPage() {
             : 'border-sky-100 hover:border-sky-300'
         }`}
       >
-        {/* Przyciski admina na kafelku */}
+        {/* Przyciski admina */}
         {isAdmin && (
           <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
             <button
@@ -264,7 +267,7 @@ export default function OfertaKarnetowPage() {
           </div>
         )}
 
-        {/* Etykieta wyróżnienia (Bestseller / Polecany) */}
+        {/* Etykieta wyróżnienia */}
         {k.wyrozniony && (
           <div className="absolute top-3 left-3 bg-amber-500 text-slate-950 font-black text-[10px] uppercase px-3 py-1.5 rounded-xl shadow-md z-10 border border-amber-600/30 flex items-center gap-1.5">
             <span>⭐</span>
@@ -272,70 +275,75 @@ export default function OfertaKarnetowPage() {
           </div>
         )}
 
-        {/* Grafika karnetu */}
-        <div className="h-48 w-full bg-slate-900 relative overflow-hidden flex items-center justify-center">
-          {k.grafika_url ? (
-            <img
-              src={k.grafika_url}
-              alt={k.nazwa}
-              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-            />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-br from-sky-900 via-sky-950 to-slate-950 flex flex-col items-center justify-center text-sky-200">
-              <span className="text-5xl mb-2 opacity-80">🎟️</span>
-              <span className="text-[10px] font-black uppercase tracking-widest text-sky-300/60">
-                Forma Marzeń
-              </span>
-            </div>
-          )}
-          <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
-            <span>{badge.icon}</span>
-            <span>{k.dlugosc || badge.label}</span>
-          </div>
-        </div>
-
-        {/* Treść kafelka */}
-        <div className="p-5 flex flex-col flex-grow">
-          <div className="flex items-center gap-2 mb-2">
-            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${badge.color}`}>
-              {badge.label}
-            </span>
-            {!k.aktywny && (
-              <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-slate-200 text-slate-700 border border-slate-300">
-                Ukryty dla klubowiczów
-              </span>
-            )}
-          </div>
-
-          <h3 className="font-black text-lg text-sky-950 leading-tight mb-2 line-clamp-2">
-            {k.nazwa}
-          </h3>
-
-          <p className="text-sm text-slate-500 line-clamp-2 flex-grow">
-            {k.opis || "Nielimitowany dostęp do stref treningowych w ramach oferty."}
-          </p>
-
-          {/* Dostępne strefy / zajęcia - mini tagi */}
-          {zajeciaList.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-sky-50 flex flex-wrap gap-1">
-              {zajeciaList.slice(0, 3).map((zajecie, i) => (
-                <span
-                  key={i}
-                  className="bg-sky-50 text-sky-900 text-[10px] font-bold px-2 py-0.5 rounded-md border border-sky-100"
-                >
-                  ✓ {zajecie}
+        <div>
+          {/* Grafika karnetu */}
+          <div className="h-48 w-full bg-slate-900 relative overflow-hidden flex items-center justify-center">
+            {k.grafika_url ? (
+              <img
+                src={k.grafika_url}
+                alt={k.nazwa}
+                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+              />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-br from-sky-900 via-sky-950 to-slate-950 flex flex-col items-center justify-center text-sky-200">
+                <span className="text-5xl mb-2 opacity-80">🎟️</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-sky-300/60">
+                  Forma Marzeń
                 </span>
-              ))}
-              {zajeciaList.length > 3 && (
-                <span className="text-[10px] font-bold text-slate-400 px-1 py-0.5">
-                  +{zajeciaList.length - 3} więcej
+              </div>
+            )}
+            <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
+              <span>{badge.icon}</span>
+              <span>{k.dlugosc || badge.label}</span>
+            </div>
+          </div>
+
+          {/* Treść kafelka */}
+          <div className="p-5 space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border ${badge.color}`}>
+                {badge.label}
+              </span>
+              {k.ilosc_wejsc && (
+                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200">
+                  🔢 {k.ilosc_wejsc}
+                </span>
+              )}
+              {!k.aktywny && (
+                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-slate-200 text-slate-700 border border-slate-300">
+                  Ukryty dla klubowiczów
                 </span>
               )}
             </div>
-          )}
 
-          {/* Stopka z ceną */}
-          <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
+            <h3 className="font-black text-lg text-sky-950 leading-tight">
+              {k.nazwa}
+            </h3>
+
+            {/* Opis zachowujący układ linijka po linijce */}
+            <div className="text-xs text-slate-600 leading-relaxed whitespace-pre-line font-medium">
+              {k.opis || "Nielimitowany dostęp do stref treningowych w ramach oferty."}
+            </div>
+
+            {/* Dostępne strefy / zajęcia - mini tagi */}
+            {zajeciaList.length > 0 && (
+              <div className="pt-2 border-t border-sky-50 flex flex-wrap gap-1">
+                {zajeciaList.map((zajecie, i) => (
+                  <span
+                    key={i}
+                    className="bg-sky-50 text-sky-900 text-[10px] font-bold px-2 py-0.5 rounded-md border border-sky-100"
+                  >
+                    ✓ {zajecie}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Stopka z ceną */}
+        <div className="p-5 pt-0">
+          <div className="pt-4 border-t border-sky-50 flex items-center justify-between">
             <div className="flex flex-col">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                 Cena karnetu
@@ -530,38 +538,50 @@ export default function OfertaKarnetowPage() {
               </div>
 
               {/* Kafelki z kluczowymi informacjami */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-sky-100">
-                  <span className="text-3xl">{getTypBadge(selectedKarnet.typ_karnetu).icon}</span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-sky-100">
+                  <span className="text-2xl">{getTypBadge(selectedKarnet.typ_karnetu).icon}</span>
                   <div>
                     <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest">
                       Typ karnetu
                     </div>
-                    <div className="font-black text-sky-950 text-sm mt-0.5">
+                    <div className="font-black text-sky-950 text-xs sm:text-sm mt-0.5">
                       {getTypBadge(selectedKarnet.typ_karnetu).label}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-amber-100">
-                  <span className="text-3xl">⏳</span>
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-amber-100">
+                  <span className="text-2xl">⏳</span>
                   <div>
                     <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">
-                      Ważność / Wejścia
+                      Ważność
                     </div>
-                    <div className="font-black text-amber-950 text-sm mt-0.5">
+                    <div className="font-black text-amber-950 text-xs sm:text-sm mt-0.5">
                       {selectedKarnet.dlugosc || "Standard"}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-emerald-100">
-                  <span className="text-3xl">💳</span>
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-sky-100">
+                  <span className="text-2xl">🔢</span>
+                  <div>
+                    <div className="text-[10px] font-bold text-sky-600 uppercase tracking-widest">
+                      Ilość wejść
+                    </div>
+                    <div className="font-black text-sky-950 text-xs sm:text-sm mt-0.5">
+                      {selectedKarnet.ilosc_wejsc || "Bez limitu"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 rounded-3xl shadow-sm border border-emerald-100">
+                  <span className="text-2xl">💳</span>
                   <div>
                     <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">
                       Cena
                     </div>
-                    <div className="font-black text-emerald-950 text-sm mt-0.5">
+                    <div className="font-black text-emerald-950 text-xs sm:text-sm mt-0.5">
                       {formatCenaDisplay(selectedKarnet.cena)}
                     </div>
                   </div>
@@ -591,12 +611,12 @@ export default function OfertaKarnetowPage() {
                 </div>
               )}
 
-              {/* Sekcja opisu */}
+              {/* Sekcja opisu z pełnym zachowaniem wierszy */}
               <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
                 <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2.5">
                   <span className="text-xl">📝</span> Szczegółowy opis
                 </h3>
-                <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-line font-medium">
                   {selectedKarnet.opis ||
                     "Zapraszamy do zakupu w recepcji klubu lub kontaktu z naszym zespołem."}
                 </div>
@@ -627,7 +647,7 @@ export default function OfertaKarnetowPage() {
             </div>
 
             <form onSubmit={handleSaveKarnet} className="space-y-4">
-              {/* Grafika główna z kompresją */}
+              {/* Grafika główna */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase">
                   Grafika karnetu / baner
@@ -739,8 +759,8 @@ export default function OfertaKarnetowPage() {
                 />
               </div>
 
-              {/* Długość / Ważność i Cena */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Długość, Ilość Wejść i Cena */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 text-xs block uppercase">
                     Długość / Ważność *
@@ -750,7 +770,20 @@ export default function OfertaKarnetowPage() {
                     required
                     value={form.dlugosc}
                     onChange={(e) => setForm({ ...form, dlugosc: e.target.value })}
-                    placeholder="np. 30 dni, 10 wejść (60 dni)"
+                    placeholder="np. 30 dni"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">
+                    Ilość wejść
+                  </label>
+                  <input
+                    type="text"
+                    value={form.ilosc_wejsc}
+                    onChange={(e) => setForm({ ...form, ilosc_wejsc: e.target.value })}
+                    placeholder="np. 10 wejść / Bez limitu"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
@@ -848,8 +881,11 @@ export default function OfertaKarnetowPage() {
                 <textarea
                   value={form.opis}
                   onChange={(e) => setForm({ ...form, opis: e.target.value })}
-                  placeholder="Napisz dla kogo przeznaczony jest ten karnet, jakie daje możliwości..."
-                  rows={3}
+                  placeholder="Wpisz opis, np.:
+Wejście 1x dziennie.
+Zapisy na 21 dni do przodu.
+Ważny wyłącznie z aktywną kartą MEDICOVER SPORT."
+                  rows={4}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none"
                 />
               </div>
