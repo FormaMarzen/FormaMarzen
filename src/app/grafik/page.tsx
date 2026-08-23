@@ -8,6 +8,18 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Pomocnik do konwersji klucza VAPID
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export default function SchedulePage() {
   const [selectedClass, setSelectedClass] = useState<any | null>(null);
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
@@ -24,6 +36,50 @@ export default function SchedulePage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
   
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW (LISTA GŁÓWNA ORAZ KRZESEŁKO)
+  const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
+    try {
+      const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
+      const validIds = rawIds.filter(id => Number(id) !== 5000 && Number(id) !== 999999999);
+      if (validIds.length === 0) return;
+
+      const { data: clients } = await supabase
+        .from('klienci')
+        .select('id, push_subscription')
+        .in('id', validIds);
+
+      if (!clients || clients.length === 0) return;
+
+      const subscriptions = clients
+        .map((c: any) => {
+          if (!c.push_subscription) return null;
+          try {
+            return typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      if (subscriptions.length === 0) return;
+
+      await fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscriptions,
+          payload: {
+            title: payload.title || 'FORMA MARZEŃ',
+            body: payload.body || '',
+            url: payload.url || '/grafik'
+          }
+        })
+      });
+    } catch (err) {
+      console.error('Błąd podczas wysyłania powiadomienia push z grafiku:', err);
+    }
+  };
+
   const [activeMenuClassId, setActiveMenuClassId] = useState<string | null>(null);
   const [historyModalClass, setHistoryModalClass] = useState<any | null>(null);
   const [modalHistoryData, setModalHistoryData] = useState<any[]>([]); 
@@ -159,7 +215,9 @@ export default function SchedulePage() {
               });
 
               // 2. Wypisujemy wszystkich uczestników i zwracamy wejścia
+              const participantIds: number[] = [];
               for (const participant of classSignups) {
+                participantIds.push(participant.id);
                 const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
                 if (clientData) {
                   let parsedKarnety = [];
@@ -188,10 +246,19 @@ export default function SchedulePage() {
                 }
               }
 
-              // 3. Usuwamy wpisy z tabeli zapisy_zajec
+              // 3. Wysyłamy powiadomienie Push do wszystkich zapisanych (główna + krzesełko)
+              if (participantIds.length > 0) {
+                await sendPushNotification(participantIds, {
+                  title: `Odwołano trening: ${cls.title}`,
+                  body: `Trening ${cls.title} w dniu ${col.date} o godz. ${cls.start} został odwołany z powodu zbyt małej liczby uczestników. Zwrócono wejście.`,
+                  url: '/grafik'
+                });
+              }
+
+              // 4. Usuwamy wpisy z tabeli zapisy_zajec
               await supabase.from('zapisy_zajec').delete().eq('class_key', cls.classKey);
 
-              // 4. Logujemy zdarzenie w booking_logs
+              // 5. Logujemy zdarzenie w booking_logs
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
@@ -705,7 +772,7 @@ export default function SchedulePage() {
       return;
     }
 
-    // Zwrot wejść i usunięcie zapisów w trakcie wydarzenia
+    // Zwrot wejść i usunięcie zapisów w trakcie wydarzenia + Push
     for (const col of daysList) {
       if (col.isoDate >= multiDayFrom && col.isoDate <= multiDayTo) {
         const standardoweDnia = zapisaneZajecia
@@ -722,8 +789,10 @@ export default function SchedulePage() {
         for (const item of zajeciaDnia) {
           const classKey = `${item.id}_${col.date}`;
           const zapisani = zapisyNaZajecia[classKey] || [];
+          const participantIds: number[] = [];
           
           for (const u of zapisani) {
+            participantIds.push(u.id);
             const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
             if (clientData) {
               let parsedKarnety = [];
@@ -750,6 +819,14 @@ export default function SchedulePage() {
                 opis: `Wypisano z zajęć "${item.title}" (${col.date}) z powodu wydarzenia "${multiDayTitle}". Zwrócono 1 wejście.`
               }]);
             }
+          }
+
+          if (participantIds.length > 0) {
+            await sendPushNotification(participantIds, {
+              title: `Odwołano zajęcia: ${item.title}`,
+              body: `Zajęcia "${item.title}" w dniu ${col.date} zostały odwołane z powodu wydarzenia "${multiDayTitle}". Zwrócono wejście.`,
+              url: '/grafik'
+            });
           }
 
           await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
@@ -1082,6 +1159,12 @@ export default function SchedulePage() {
         rule_applied: 'waitlist_auto_promote',
         payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
       }]);
+
+      await sendPushNotification(pierwszaRezerwa.id, {
+        title: 'Zwolniło się miejsce!',
+        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
+        url: '/grafik'
+      });
     }
 
     if (blokadaZapisow) {
@@ -1171,7 +1254,6 @@ export default function SchedulePage() {
       class_key: classKey,
       opis: `Zmieniono dane zajęć. Limit: ${newLimitNum}, Trener: ${editTrainer}, Czas: ${newStart}-${newEnd}`
     }]);
-
     setEditClassModalData(null);
     loadDataFromSupabase();
     showToast("Zajęcia w tym dniu zostały zaktualizowane!");
@@ -1226,7 +1308,10 @@ export default function SchedulePage() {
 
     if (nextOdwołaneState) {
       const zapisani = zapisyNaZajecia[classKey] || [];
+      const participantIds: number[] = [];
+
       for (const u of zapisani) {
+        participantIds.push(u.id);
         const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
         if (clientData) {
           let parsedKarnety = [];
@@ -1250,10 +1335,20 @@ export default function SchedulePage() {
             klient_id: u.id,
             typ_operacji: 'zajecia_wypis',
             class_key: classKey,
-            opis: `Odwołano zajęcia "${item.title}" (${displayDate}). Wypisano uczestnika i zwrócono 1 wejście.`
+            opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika i zwrócono 1 wejście.`
           }]);
         }
       }
+
+      // WYSYŁKA POWIADOMIENIA PUSH DO WSZYSTKICH ZAPISANYCH (GRUPA GŁÓWNA + KRZESEŁKO)
+      if (participantIds.length > 0) {
+        await sendPushNotification(participantIds, {
+          title: `Odwołano trening: ${item.title}`,
+          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany. Zwrócono wejście na karnet.`,
+          url: '/grafik'
+        });
+      }
+
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
@@ -1306,7 +1401,10 @@ export default function SchedulePage() {
 
     if (nextUsunięteState) {
       const zapisani = zapisyNaZajecia[classKey] || [];
+      const participantIds: number[] = [];
+
       for (const u of zapisani) {
+        participantIds.push(u.id);
         const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
         if (clientData) {
           let parsedKarnety = [];
@@ -1330,10 +1428,20 @@ export default function SchedulePage() {
             klient_id: u.id,
             typ_operacji: 'zajecia_wypis',
             class_key: classKey,
-            opis: `Usunięto zajęcia "${item.title}" (${displayDate}). Wypisano uczestnika i zwrócono 1 wejście.`
+            opis: `Usunięto zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika i zwrócono 1 wejście.`
           }]);
         }
       }
+
+      // WYSYŁKA POWIADOMIENIA PUSH DO WSZYSTKICH ZAPISANYCH (GRUPA GŁÓWNA + KRZESEŁKO)
+      if (participantIds.length > 0) {
+        await sendPushNotification(participantIds, {
+          title: `Usunięto trening: ${item.title}`,
+          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został usunięty z grafiku. Zwrócono wejście na karnet.`,
+          url: '/grafik'
+        });
+      }
+
       await supabase.from('zapisy_zajec').delete().eq('class_key', classKey);
     }
 
@@ -1373,6 +1481,7 @@ export default function SchedulePage() {
     loadDataFromSupabase();
     showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały przywrócone.");
   };
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-4 pb-24 relative font-sans antialiased text-slate-800">
       
