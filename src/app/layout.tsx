@@ -72,7 +72,6 @@ export default function RootLayout({
   const subscribeToPushNotifications = async (clientId: string | number) => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
-      // 1. Poproś użytkownika o zgodę na powiadomienia
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') {
         console.warn('Użytkownik odmówił zgody na powiadomienia Push.');
@@ -386,6 +385,7 @@ export default function RootLayout({
         { href: '/ustawienia/zasady-zapisow', label: 'Zasady zapisów', icon: '📋' },
         { href: '/ustawienia/rodzaje-zajec', label: 'Rodzaje zajęć', icon: '🏷️' },
         { href: '/ustawienia/karnety', label: 'Karnety', icon: '🎟️' },
+        { href: '/ustawienia/katalog-karnetow', label: 'Katalog karnetów (Oferta)', icon: '🎫' },
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
         { href: '/ustawienia/integracja-www', label: 'Integracja WWW', icon: '🌐' },
         { href: '/ustawienia/platnosci-online', label: 'Płatności online', icon: '💳' },
@@ -403,7 +403,7 @@ export default function RootLayout({
       title: "Główne",
       items: [
         { href: '/', label: 'Strona główna', icon: '🏠' },
-        { href: '/karnet', label: 'Karnet', icon: '🎟️' },
+        { href: '/karnet', label: 'Mój Karnet', icon: '🎟️' },
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
       ]
     },
@@ -419,6 +419,7 @@ export default function RootLayout({
     {
       title: "Klub i Finanse",
       items: [
+        { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
@@ -444,6 +445,7 @@ export default function RootLayout({
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
+        { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
