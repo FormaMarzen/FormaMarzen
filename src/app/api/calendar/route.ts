@@ -17,7 +17,6 @@ export async function GET(request: Request) {
 
     // 1. Jeśli to kalendarz klubowicza
     if (klientId) {
-      // Używamy rzutowania na any, aby TypeScript nie protestował przy niestandardowych kolumnach
       const { data: clientData } = await (supabase
         .from('klienci') as any)
         .select('id, Imię, Nazwisko, ustawienia_kalendarza')
@@ -41,7 +40,6 @@ export async function GET(request: Request) {
         return new NextResponse('Synchronizacja kalendarza jest wyłączona w profilu użytkownika.', { status: 403 });
       }
 
-      // Pobieramy zapisy klienta
       const { data: signups } = await supabase
         .from('zapisy_zajec')
         .select('*')
@@ -59,7 +57,7 @@ export async function GET(request: Request) {
         signups.forEach((s: any) => {
           const parts = (s.class_key || '').split('_');
           const classId = parts[0];
-          const dateStr = parts[1]; // np. 24/08 lub 2026-08-24
+          const dateStr = parts[1];
 
           if (dateStr) {
             let year = new Date().getFullYear();
@@ -82,7 +80,7 @@ export async function GET(request: Request) {
             const override = nadpisaniaMap[s.class_key];
             const cls = override ? { ...std, ...jed, ...override } : (std || jed);
 
-            if (cls && !cls.is_odwolane && !cls.is_usuniete) {
+            if (cls && !cls.is_odwolane && !cls.is_usuniete && !cls['is-usuniete']) {
               events.push({
                 title: cls.title || cls.nazwa || 'Trening w klubie',
                 start: cls.start || cls.start_time || '10:00',
@@ -97,10 +95,14 @@ export async function GET(request: Request) {
         });
       }
     } 
-    // 2. Jeśli to widok administratora z filtrami
+    // 2. Jeśli to widok administratora z filtrami (uwzględnia odwołania i nadpisania)
     else if (isAdmin) {
       const { data: szablony } = await supabase.from('grafik_zajec').select('*');
       const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*');
+      const { data: nadpisania } = await supabase.from('nadpisania_zajec').select('*');
+
+      const nadpisaniaMap: Record<string, any> = {};
+      nadpisania?.forEach((n: any) => { nadpisaniaMap[n.class_key] = n; });
 
       const now = new Date();
       for (let i = 0; i < 30; i++) {
@@ -113,26 +115,36 @@ export async function GET(request: Request) {
         const dayStr = String(d.getDate()).padStart(2, '0');
         const monthStr = String(d.getMonth() + 1).padStart(2, '0');
         const dateDisplay = `${dayStr}/${monthStr}`;
+        const isoDateStr = `${d.getFullYear()}-${monthStr}-${dayStr}`;
 
         szablony?.forEach((item: any) => {
           if (item.days && item.days[kKey]) {
-            if (filterTrainer && filterTrainer !== 'Wszyscy' && item.trainer !== filterTrainer) return;
-            if (filterType && filterType !== 'Wszystkie' && item.title !== filterType) return;
+            const classKey = `${item.id}_${dayStr}/${monthStr}`;
+            const override = nadpisaniaMap[classKey] || nadpisaniaMap[`${item.id}_${isoDateStr}`];
+            const cls = override ? { ...item, ...override } : item;
+
+            // Pomiń, jeśli zajęcia są odwołane lub usunięte
+            if (cls.is_odwolane || cls.is_usuniete || cls['is-usuniete']) return;
+
+            if (filterTrainer && filterTrainer !== 'Wszyscy' && cls.trainer !== filterTrainer) return;
+            if (filterType && filterType !== 'Wszystkie' && cls.title !== filterType) return;
 
             events.push({
-              title: item.title || 'Trening',
-              start: item.start || '10:00',
-              end: item.end || '11:00',
+              title: cls.title || 'Trening',
+              start: cls.start || '10:00',
+              end: cls.end || '11:00',
               year: d.getFullYear(),
               month: d.getMonth() + 1,
               day: d.getDate(),
-              trainer: item.trainer || ''
+              trainer: cls.trainer || ''
             });
           }
         });
 
         jednorazowe?.forEach((item: any) => {
-          if (item.display_date === dateDisplay || item.displayDate === dateDisplay) {
+          if (item.display_date === dateDisplay || item.displayDate === dateDisplay || item.full_date_str === isoDateStr) {
+            if (item.is_odwolane || item.is_usuniete || item['is-usuniete']) return;
+
             if (filterTrainer && filterTrainer !== 'Wszyscy' && item.trainer !== filterTrainer) return;
             if (filterType && filterType !== 'Wszystkie' && item.title !== filterType) return;
 
@@ -150,7 +162,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Generowanie formatu ICS
     let icsLines = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
