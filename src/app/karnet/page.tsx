@@ -7,6 +7,30 @@ import { supabase } from '../raporty/klienci/supabase';
 let globalCreatingLock = false;
 const SYSTEM_CHAT_ID = 5000;
 
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE
+const fetchAllFromSupabase = async (table: string, orderBy: string = 'id', ascending: boolean = false, maxPages: number = 5) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (error) {
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break;
+    } else {
+      break;
+    }
+  }
+  return result;
+};
+
 // POMOCNICZA FUNKCJA DO PEWNEGO ODCZYTU RABATU CIĄGŁOŚCI OD ADMINA
 const extractClientContinuityDiscount = (client: any): number | null => {
   if (!client) return null;
@@ -607,13 +631,14 @@ export default function KarnetyPage() {
       endOfContractStr
     };
   };
+
   // 1. POBIERANIE DANYCH Z SUPABASE ORAZ AUTOMATYCZNA KONTROLA WAŻNOŚCI KARNETÓW
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
-      const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+      const trenerzyData = await fetchAllFromSupabase('trenerzy');
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
       } else {
@@ -627,9 +652,9 @@ export default function KarnetyPage() {
 
       if (userEmail) {
         const normalizedEmail = userEmail.toLowerCase().trim();
-        const { data: klienciData } = await supabase.from('klienci').select('*');
+        const klienciData = await fetchAllFromSupabase('klienci', 'id', true, 10);
         
-        if (klienciData) {
+        if (klienciData && klienciData.length > 0) {
           const todayDateOnly = new Date().toISOString().split('T')[0];
 
           const enriched = await Promise.all(klienciData.map(async (c: any) => {
@@ -756,12 +781,9 @@ export default function KarnetyPage() {
       }
 
       // Pobieranie karnetów
-      const { data: karnetyData, error: karnetyError } = await supabase
-        .from('karnety')
-        .select('*')
-        .order('id', { ascending: false });
+      const karnetyData = await fetchAllFromSupabase('karnety', 'id', false, 5);
 
-      if (!karnetyError && karnetyData) {
+      if (karnetyData && karnetyData.length > 0) {
         const parsedData = karnetyData.map((item: any) => {
           let meta: Record<string, any> = {};
           try {
@@ -800,12 +822,9 @@ export default function KarnetyPage() {
       }
 
       // Pobieranie rodzajów zajęć
-      const { data: rodzajeData, error: rodzajeError } = await supabase
-        .from('rodzaje_zajec')
-        .select('*')
-        .order('nazwa', { ascending: true });
+      const rodzajeData = await fetchAllFromSupabase('rodzaje_zajec', 'nazwa', true, 5);
 
-      if (!rodzajeError && rodzajeData && rodzajeData.length > 0) {
+      if (rodzajeData && rodzajeData.length > 0) {
         setDostepneRodzajeZajec(rodzajeData);
       } else {
         setDostepneRodzajeZajec([
@@ -1137,7 +1156,6 @@ export default function KarnetyPage() {
       }
       return k;
     });
-
     const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;

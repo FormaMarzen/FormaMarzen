@@ -21,6 +21,30 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE
+const fetchAllFromSupabase = async (table: string, orderBy: string = 'id', ascending: boolean = false, maxPages: number = 5) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (error) {
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break;
+    } else {
+      break;
+    }
+  }
+  return result;
+};
+
 export default function DashboardPage() {
   const nowLocal = new Date();
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
@@ -142,8 +166,8 @@ export default function DashboardPage() {
     return text
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '') // Usuwanie znaków diakrytycznych (ą->a, ę->e, ó->o itd.)
-      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ') // Zamiana separatorów na spacje
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\/\-\_\,\.\+\&\(\)]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -164,7 +188,6 @@ export default function DashboardPage() {
     if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
     if (normA.includes(normB) || normB.includes(normA)) return true;
 
-    // Obsługa nazw wieloczłonowych (np. "HIIT/TABATA", "Ogólnorozwojowe i rozciąganie")
     const subPartsA = nameA.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
     const subPartsB = nameB.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
 
@@ -193,10 +216,8 @@ export default function DashboardPage() {
     const passName = passItem.nazwa || passItem.pass || '';
     const normPassName = normalizeText(passName);
 
-    // Karnety typu OPEN lub MEDICOVER mają pełny dostęp do każdego treningu
     if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
 
-    // 1. Sprawdzanie bezpośrednio przypisanych uprawnień na karnecie (wzbogaconych w loadData)
     const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
     if (passAccessType.includes('wszystk') || passAccessType === 'all') {
       return true;
@@ -211,7 +232,6 @@ export default function DashboardPage() {
       if (isMatched) return true;
     }
 
-    // 2. Fallback: szukamy definicji w katalogu tabeli karnety po bezpiecznym dopasowaniu nazw (wielkość liter ignorowana)
     const def = allPassDefs.find((d: any) => {
       const defName = d.nazwa || '';
       return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName || defName.trim().toLowerCase() === passName.trim().toLowerCase();
@@ -230,7 +250,6 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      // Odczytujemy listę wybranych zajęć ze wszystkich wariantów kluczy
       const defAllowedList = 
         meta.zaznaczoneZajecia || meta.zaznaczone_zajecia ||
         meta.wybraneZajecia || meta.wybrane_zajecia || 
@@ -245,7 +264,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 3. Fallback bezpieczeństwa: czy nazwa karnetu tożsama z nazwą zajęć?
     if (areClassNamesMatching(passName, classTitle)) {
       return true;
     }
@@ -311,7 +329,6 @@ export default function DashboardPage() {
   const [dlugoscBlokady, setDlugoscBlokady] = useState('3');
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
 
-  // STAN WYBORU CZASU WYPISU Z KRZESEŁKA
   const [isWaitlistModalOpen, setIsWaitlistModalOpen] = useState(false);
   const [selectedWaitlistCutoff, setSelectedWaitlistCutoff] = useState<number>(30);
   const [isEditWaitlistModalOpen, setIsEditWaitlistModalOpen] = useState(false);
@@ -321,7 +338,6 @@ export default function DashboardPage() {
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
 
-  // STAN NADRZĘDNYCH ZASAD ZAPISÓW
   const [bookingRules, setBookingRules] = useState<any>({
     cancel_deadline_minutes: 90,
     booking_cutoff_minutes: null,
@@ -339,7 +355,6 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // SILNIK PROGRAMOWANIA TRENINGÓW I CYKLICZNEJ ROTACJI JEDNOSTEK TRENINGOWYCH
   const getProgrammedWorkout = (classItem: any, isoDate?: string, displayDate?: string) => {
     if (!classItem || !classItem.title) return null;
     const matchedRodzaj = rodzajeZajec.find((r: any) => (r.nazwa || '').trim().toLowerCase() === (classItem.title || '').trim().toLowerCase());
@@ -379,7 +394,7 @@ export default function DashboardPage() {
       targetDate = new Date();
     }
 
-    const baseDate = new Date(2026, 0, 5); // Poniedziałek, 5 stycznia 2026 jako baza cyklu
+    const baseDate = new Date(2026, 0, 5); 
     const diffMs = targetDate.getTime() - baseDate.getTime();
     const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000));
     const dayOfWeek = targetDate.getDay();
@@ -399,7 +414,6 @@ export default function DashboardPage() {
     };
   };
 
-  // SILNIK AUTOMATYCZNEGO WYPISYWANIA Z LISTY REZERWOWEJ PO UPŁYWIE CZASU DOSTĘPNOŚCI KLUBOWICZA
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -506,7 +520,6 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
-  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -631,7 +644,6 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
-  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ W WIDOKU
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     
@@ -665,7 +677,6 @@ export default function DashboardPage() {
     return { isAutoCancelled: false, reason: '' };
   };
 
-  // WERYFIKACJA URODZIN KLUBOWICZA W DNIU TRENINGU
   const isBirthdayOnDate = (birthDateStr?: string, classDisplayDate?: string, classIsoDate?: string) => {
     if (!birthDateStr) return false;
     let bDay: number | null = null;
@@ -711,7 +722,6 @@ export default function DashboardPage() {
     return bDay === cDay && bMonth === cMonth;
   };
 
-  // POMOCNIKI KLASYFIKACJI KARNETÓW
   const isContractPass = (k: any) => k?.isContract12M || (k?.nazwa || '').toLowerCase().includes('umowa') || (k?.typKarnetu || '').toLowerCase().includes('umowa');
   const isTimePass = (k: any) => {
     if (!k) return false;
@@ -721,7 +731,6 @@ export default function DashboardPage() {
   };
   const isQuantityPass = (k: any) => !isTimePass(k) && k?.pozostaloWejsc !== null && k?.pozostaloWejsc !== undefined;
 
-  // PRECYZYJNA KALKULACJA RABATU SYSTEMOWEGO
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
     const karnety = client.karnetyKlubowicza || [];
@@ -809,333 +818,341 @@ export default function DashboardPage() {
     return new Date(dCopy.setDate(diff));
   };
 
+  // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA
+  const isFetchingRef = useRef(false);
+
   const loadData = async () => {
-    let parsedRules = { ...bookingRules };
-    const { data: rulesData } = await supabase
-      .from('club_booking_rules')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
 
-    if (rulesData) {
-      parsedRules = {
-        cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
-        booking_cutoff_minutes: rulesData.booking_cutoff_minutes ?? null,
-        booking_window_days: rulesData.booking_window_days ?? 14,
-        expired_pass_grace_days: rulesData.expired_pass_grace_days ?? 15,
-        max_daily_bookings: rulesData.max_daily_bookings ?? null,
-        max_daily_same_type_bookings: 1,
-        min_participants: rulesData.min_participants ?? null,
-        auto_cancel_deadline_minutes: rulesData.auto_cancel_deadline_minutes ?? null,
-        cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
-        booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
-        booking_window_per_pass: rulesData.booking_window_per_pass || {},
-        expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
-        min_participants_per_class: rulesData.min_participants_per_class || {},
-        auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
-      };
-      setBookingRules(parsedRules);
-      setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
-    }
+    try {
+      let parsedRules = { ...bookingRules };
+      const { data: rulesData } = await supabase
+        .from('club_booking_rules')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const userEmail = session?.user?.email;
-    
-    const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
-    if (trenerzyData) setZespolTrenerzy(trenerzyData);
-    
-    if (userEmail === 'maciejklaput@gmail.com') {
-      setAppRole('admin');
-    } else {
-      const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
-      if (trenerObj) {
-        setAppRole('trener');
-        setCurrentTrenerProfile(trenerObj);
-      } else {
-        setAppRole('klubowicz');
+      if (rulesData) {
+        parsedRules = {
+          cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
+          booking_cutoff_minutes: rulesData.booking_cutoff_minutes ?? null,
+          booking_window_days: rulesData.booking_window_days ?? 14,
+          expired_pass_grace_days: rulesData.expired_pass_grace_days ?? 15,
+          max_daily_bookings: rulesData.max_daily_bookings ?? null,
+          max_daily_same_type_bookings: 1,
+          min_participants: rulesData.min_participants ?? null,
+          auto_cancel_deadline_minutes: rulesData.auto_cancel_deadline_minutes ?? null,
+          cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
+          booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
+          booking_window_per_pass: rulesData.booking_window_per_pass || {},
+          expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
+          min_participants_per_class: rulesData.min_participants_per_class || {},
+          auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
+        };
+        setBookingRules(parsedRules);
+        setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
       }
-    }
-    
-    const { data: tData } = await supabase.from('transakcje').select('*').order('created_at', { ascending: false });
-    if (tData) {
-      setWszystkieTransakcje(tData);
-    }
 
-    const { data: ogloszeniaData } = await supabase
-      .from('ogloszenia')
-      .select('*')
-      .order('id', { ascending: false });
-
-    if (ogloszeniaData) {
-      const parsedOgloszenia = ogloszeniaData.map((o: any) => {
-        let tArray = ['Wszystkich'];
-        if (Array.isArray(o.target_array)) {
-          tArray = o.target_array;
-        } else if (typeof o.target_array === 'string') {
-          try { tArray = JSON.parse(o.target_array); } catch (e) { tArray = [o.target_array]; }
-        } else if (o.targetArray) {
-          tArray = Array.isArray(o.targetArray) ? o.targetArray : [o.targetArray];
+      const { data: { session } } = await supabase.auth.getSession();
+      const userEmail = session?.user?.email;
+      
+      const trenerzyData = await fetchAllFromSupabase('trenerzy');
+      if (trenerzyData) setZespolTrenerzy(trenerzyData);
+      
+      if (userEmail === 'maciejklaput@gmail.com') {
+        setAppRole('admin');
+      } else {
+        const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
+        if (trenerObj) {
+          setAppRole('trener');
+          setCurrentTrenerProfile(trenerObj);
+        } else {
+          setAppRole('klubowicz');
         }
+      }
+      
+      const tData = await fetchAllFromSupabase('transakcje', 'created_at', false, 5); // Obejście 1000 rek limitu, max 5000 (5 stron)
+      if (tData) {
+        setWszystkieTransakcje(tData);
+      }
 
-        return {
-          id: o.id,
-          dateFrom: o.date_from || o.dateFrom || '',
-          dateTo: o.date_to || o.dateTo || '',
-          target: o.target || 'Wszystkich',
-          targetArray: tArray,
-          content: o.content || o.tresc || '',
-          isVisible: o.is_visible !== undefined ? o.is_visible : (o.isVisible !== undefined ? o.isVisible : true),
-          createdAt: o.created_at || o.createdAt || ''
-        };
-      });
-      setOgloszeniaList(parsedOgloszenia);
-    }
-
-    const { data: karnetyDefData } = await supabase.from('karnety').select('*');
-    let ustrukturyzowaneKarnetyDef: any[] = [];
-    if (karnetyDefData) {
-      ustrukturyzowaneKarnetyDef = karnetyDefData.map((k: any) => {
-        let meta: Record<string, any> = {};
-        try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
-        return {
-          ...k,
-          cena: k.cena_brutto || k.cena || '0.00',
-          ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null,
-          zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
-          dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć'
-        };
-      });
-      setDostepneKarnety(ustrukturyzowaneKarnetyDef);
-    }
-
-    const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
-    let mappedSzablony: any[] = [];
-    if (szablonyData) {
-      mappedSzablony = szablonyData.map((s: any) => ({
-        ...s,
-        title: s.title || s.nazwa,
-        start: s.start || s.start_time,
-        end: s.end || s.end_time,
-        limit: s.limit || s.limit_miejsc,
-        trainer: s.trainer || s.prowadzacy,
-        days: s.days || {}
-      }));
-      setZapisaneZajecia(mappedSzablony);
-    }
-
-    const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
-    let mappedJednorazowe: any[] = [];
-    if (jednorazoweData) {
-      mappedJednorazowe = jednorazoweData.map((j: any) => ({
-        ...j,
-        title: j.title || j.nazwa,
-        start: j.start_time || j.start,
-        end: j.end_time || j.end,
-        limit: j.limit_miejsc || j.limit,
-        trainer: j.trainer || j.prowadzacy,
-        displayDate: j.display_date,
-        fullDateStr: j.full_date_str
-      }));
-      setJednorazoweZajecia(mappedJednorazowe);
-    }
-
-    const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
-    const nadpisaniaMap: { [key: string]: any } = {};
-    if (nadpisaniaData) {
-      nadpisaniaData.forEach((n: any) => {
-        nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
-      });
-      setNadpisaneZajeciaDni(nadpisaniaMap);
-    }
-
-    // POBIERANIE I PODWÓJNE MAPOWANIE ZAPISÓW NA ZAJĘCIA (KOMPATYBILNOŚĆ DD/MM ORAZ YYYY-MM-DD)
-    const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
-    const groupedZapisy: { [key: string]: any[] } = {};
-    if (zapisyData) {
-      const sortedZapisy = [...zapisyData].sort((a: any, b: any) => {
-        if (a.created_at && b.created_at) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-        if (a.id && b.id) return Number(a.id) - Number(b.id);
-        return 0;
-      });
-
-      sortedZapisy.forEach((z: any) => {
-        const entry = {
-          ...z,
-          id: z.klient_id,
-          status: z.status || 'zapisany',
-          waitlist_cutoff_minutes: z.waitlist_cutoff_minutes !== undefined && z.waitlist_cutoff_minutes !== null ? Number(z.waitlist_cutoff_minutes) : 30,
-          obecny: z.obecny,
-          nieobecny: z.nieobecny
-        };
-
-        if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
-        groupedZapisy[z.class_key].push(entry);
-
-        if (z.class_key && z.class_key.includes('_')) {
-          const [classId, datePart] = z.class_key.split('_');
-          if (datePart && datePart.includes('-')) {
-            const parts = datePart.split('-');
-            if (parts.length === 3) {
-              const altKey = `${classId}_${parts[2]}/${parts[1]}`;
-              if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
-              if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
-                groupedZapisy[altKey].push(entry);
-              }
-            }
-          } else if (datePart && datePart.includes('/')) {
-            const parts = datePart.split('/');
-            if (parts.length === 2) {
-              const year = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-              const altKey = `${classId}_${year}-${parts[1]}-${parts[0]}`;
-              if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
-              if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
-                groupedZapisy[altKey].push(entry);
-              }
-            }
-          }
-        }
-      });
-      setZapisyNaZajecia(groupedZapisy);
-    }
-
-    const currentMon = getMonday(selectedWeekDate);
-    const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
-      const dayDate = new Date(currentMon);
-      dayDate.setDate(currentMon.getDate() + index);
-      const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
-      const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
-      const dayStr = String(dayDate.getDate()).padStart(2, '0');
-      const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-      return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
-    });
-
-    const waitlistCutoffChanges = await processWaitlistCutoffs(
-      mappedSzablony,
-      mappedJednorazowe,
-      groupedZapisy,
-      nadpisaniaMap,
-      activeDashboardDays
-    );
-
-    const changesOccurred = await processAutoCancellations(
-      mappedSzablony,
-      mappedJednorazowe,
-      groupedZapisy,
-      nadpisaniaMap,
-      parsedRules,
-      activeDashboardDays
-    );
-
-    if (waitlistCutoffChanges || changesOccurred) {
-      loadData();
-      return;
-    }
-
-    const { data: klienciData } = await supabase.from('klienci').select('*');
-    if (klienciData) {
-      const enriched = klienciData.map((c: any) => {
-        let parsedKarnety = [];
-        if (Array.isArray(c.karnetyKlubowicza)) {
-          parsedKarnety = c.karnetyKlubowicza;
-        } else if (typeof c.karnetyKlubowicza === 'string') {
-          try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
-        }
-
-        parsedKarnety = parsedKarnety.map((k: any) => {
-          const lowerName = (k.nazwa || '').toLowerCase();
-          const isTimePassItem = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy') || lowerName.includes('umowa');
-          
-          const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa?.trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
-
-          if (isTimePassItem) {
-            k.pozostaloWejsc = null;
-            k.poczatkoweWejsc = null;
-          } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
-            if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
-              const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
-              k.pozostaloWejsc = valWejsc;
-              k.poczatkoweWejsc = valWejsc;
-            }
+      const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
+      if (ogloszeniaData) {
+        const parsedOgloszenia = ogloszeniaData.map((o: any) => {
+          let tArray = ['Wszystkich'];
+          if (Array.isArray(o.target_array)) {
+            tArray = o.target_array;
+          } else if (typeof o.target_array === 'string') {
+            try { tArray = JSON.parse(o.target_array); } catch (e) { tArray = [o.target_array]; }
+          } else if (o.targetArray) {
+            tArray = Array.isArray(o.targetArray) ? o.targetArray : [o.targetArray];
           }
 
-          // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ BEZPOŚREDNIO NA KARNECIE KLUBOWICZA
-          k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
-          k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || (pasujacyDef ? pasujacyDef.zaznaczoneZajecia : []);
+          return {
+            id: o.id,
+            dateFrom: o.date_from || o.dateFrom || '',
+            dateTo: o.date_to || o.dateTo || '',
+            target: o.target || 'Wszystkich',
+            targetArray: tArray,
+            content: o.content || o.tresc || '',
+            isVisible: o.is_visible !== undefined ? o.is_visible : (o.isVisible !== undefined ? o.isVisible : true),
+            createdAt: o.created_at || o.createdAt || ''
+          };
+        });
+        setOgloszeniaList(parsedOgloszenia);
+      }
 
-          return k;
+      const karnetyDefData = await fetchAllFromSupabase('karnety', 'id', true, 2);
+      let ustrukturyzowaneKarnetyDef: any[] = [];
+      if (karnetyDefData) {
+        ustrukturyzowaneKarnetyDef = karnetyDefData.map((k: any) => {
+          let meta: Record<string, any> = {};
+          try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
+          return {
+            ...k,
+            cena: k.cena_brutto || k.cena || '0.00',
+            ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null,
+            zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
+            dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć'
+          };
+        });
+        setDostepneKarnety(ustrukturyzowaneKarnetyDef);
+      }
+
+      const szablonyData = await fetchAllFromSupabase('grafik_zajec', 'id', true, 2);
+      let mappedSzablony: any[] = [];
+      if (szablonyData) {
+        mappedSzablony = szablonyData.map((s: any) => ({
+          ...s,
+          title: s.title || s.nazwa,
+          start: s.start || s.start_time,
+          end: s.end || s.end_time,
+          limit: s.limit || s.limit_miejsc,
+          trainer: s.trainer || s.prowadzacy,
+          days: s.days || {}
+        }));
+        setZapisaneZajecia(mappedSzablony);
+      }
+
+      const jednorazoweData = await fetchAllFromSupabase('zajecia_jednorazowe', 'id', false, 5);
+      let mappedJednorazowe: any[] = [];
+      if (jednorazoweData) {
+        mappedJednorazowe = jednorazoweData.map((j: any) => ({
+          ...j,
+          title: j.title || j.nazwa,
+          start: j.start_time || j.start,
+          end: j.end_time || j.end,
+          limit: j.limit_miejsc || j.limit,
+          trainer: j.trainer || j.prowadzacy,
+          displayDate: j.display_date,
+          fullDateStr: j.full_date_str
+        }));
+        setJednorazoweZajecia(mappedJednorazowe);
+      }
+
+      const nadpisaniaData = await fetchAllFromSupabase('nadpisania_zajec', 'id', false, 5);
+      const nadpisaniaMap: { [key: string]: any } = {};
+      if (nadpisaniaData) {
+        nadpisaniaData.forEach((n: any) => {
+          nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
+        });
+        setNadpisaneZajeciaDni(nadpisaniaMap);
+      }
+
+      // ROZWIĄZANIE PROBLEMU BRAKUJĄCYCH LUDZI - Omijamy limit 1000 rekordów pobierając paginację do 10 stron (10000 wpisów)
+      const zapisyData = await fetchAllFromSupabase('zapisy_zajec', 'id', false, 10);
+      const groupedZapisy: { [key: string]: any[] } = {};
+      if (zapisyData) {
+        const sortedZapisy = [...zapisyData].sort((a: any, b: any) => {
+          if (a.created_at && b.created_at) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+          if (a.id && b.id) return Number(a.id) - Number(b.id);
+          return 0;
         });
 
-        const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
-        const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
+        sortedZapisy.forEach((z: any) => {
+          const entry = {
+            ...z,
+            id: z.klient_id,
+            status: z.status || 'zapisany',
+            waitlist_cutoff_minutes: z.waitlist_cutoff_minutes !== undefined && z.waitlist_cutoff_minutes !== null ? Number(z.waitlist_cutoff_minutes) : 30,
+            obecny: z.obecny,
+            nieobecny: z.nieobecny
+          };
 
-        return {
-          ...c,
-          _rawKarnety: c.karnetyKlubowicza,
-          id: c.id,
-          firstName: c.Imię || c.firstName || '',
-          lastName: c.Nazwisko || c.lastName || '',
-          registered: c.Zarejestrowany || c.registered || '2026-08-07',
-          status: c.status || 'Aktywny',
-          expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
-          pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
-          price: c.Cena || c.cena || c.price || '0.00 PLN',
-          discount: c.discount || '',
-          wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
-          avatarUrl: c.avatarUrl || c.avatar || null,
-          gender: c.płeć || c.gender || '',
-          phone: c['Numer tel.'] || c.telefon || c.phone || '',
-          email: c['E-mail'] || c.email || '',
-          birthDate: c.Urodziny || c.birthDate || '',
-          blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
-          powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
-          karnetyKlubowicza: parsedKarnety,
-          walletHistory: c.walletHistory || [],
-          transakcje: clientTransakcje,
-          isTrainer: !!powiazanyTrener,
-          zapisyNadchodzace: c.zapisyNadchodzace || [],
-          zapisyPrzeszle: c.zapisyPrzeszle || [],
-          zapisyWypisy: c.zapisyWypisy || []
-        };
+          if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
+          groupedZapisy[z.class_key].push(entry);
+
+          if (z.class_key && z.class_key.includes('_')) {
+            const [classId, datePart] = z.class_key.split('_');
+            if (datePart && datePart.includes('-')) {
+              const parts = datePart.split('-');
+              if (parts.length === 3) {
+                const altKey = `${classId}_${parts[2]}/${parts[1]}`;
+                if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
+                if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
+                  groupedZapisy[altKey].push(entry);
+                }
+              }
+            } else if (datePart && datePart.includes('/')) {
+              const parts = datePart.split('/');
+              if (parts.length === 2) {
+                const year = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+                const altKey = `${classId}_${year}-${parts[1]}-${parts[0]}`;
+                if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
+                if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
+                  groupedZapisy[altKey].push(entry);
+                }
+              }
+            }
+          }
+        });
+        setZapisyNaZajecia(groupedZapisy);
+      }
+
+      const currentMon = getMonday(selectedWeekDate);
+      const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
+        const dayDate = new Date(currentMon);
+        dayDate.setDate(currentMon.getDate() + index);
+        const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
+        const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+        const dayStr = String(dayDate.getDate()).padStart(2, '0');
+        const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
+        return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
       });
-      setKlienciList(enriched);
-      if (userEmail) {
-        const myUser = enriched.find((c: any) => c.email === userEmail);
-        if (myUser) {
-          setCurrentUser(myUser);
-          subscribeToPushNotifications(myUser.id);
+
+      // Zablokowano rekursywne wywoływanie `loadData()` by zapobiec nieskończonej pętli zacięć. 
+      // Realtime poradzi sobie sam po delete.
+      await processWaitlistCutoffs(
+        mappedSzablony,
+        mappedJednorazowe,
+        groupedZapisy,
+        nadpisaniaMap,
+        activeDashboardDays
+      );
+
+      await processAutoCancellations(
+        mappedSzablony,
+        mappedJednorazowe,
+        groupedZapisy,
+        nadpisaniaMap,
+        parsedRules,
+        activeDashboardDays
+      );
+
+      const klienciData = await fetchAllFromSupabase('klienci', 'id', true, 10);
+      if (klienciData) {
+        const enriched = klienciData.map((c: any) => {
+          let parsedKarnety = [];
+          if (Array.isArray(c.karnetyKlubowicza)) {
+            parsedKarnety = c.karnetyKlubowicza;
+          } else if (typeof c.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+          }
+
+          parsedKarnety = parsedKarnety.map((k: any) => {
+            const lowerName = (k.nazwa || '').toLowerCase();
+            const isTimePassItem = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy') || lowerName.includes('umowa');
+            
+            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa?.trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
+
+            if (isTimePassItem) {
+              k.pozostaloWejsc = null;
+              k.poczatkoweWejsc = null;
+            } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+              if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
+                const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
+                k.pozostaloWejsc = valWejsc;
+                k.poczatkoweWejsc = valWejsc;
+              }
+            }
+
+            // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ BEZPOŚREDNIO NA KARNECIE KLUBOWICZA
+            k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
+            k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || (pasujacyDef ? pasujacyDef.zaznaczoneZajecia : []);
+
+            return k;
+          });
+
+          const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
+          const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
+
+          return {
+            ...c,
+            _rawKarnety: c.karnetyKlubowicza,
+            id: c.id,
+            firstName: c.Imię || c.firstName || '',
+            lastName: c.Nazwisko || c.lastName || '',
+            registered: c.Zarejestrowany || c.registered || '2026-08-07',
+            status: c.status || 'Aktywny',
+            expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
+            pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
+            price: c.Cena || c.cena || c.price || '0.00 PLN',
+            discount: c.discount || '',
+            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+            avatarUrl: c.avatarUrl || c.avatar || null,
+            gender: c.płeć || c.gender || '',
+            phone: c['Numer tel.'] || c.telefon || c.phone || '',
+            email: c['E-mail'] || c.email || '',
+            birthDate: c.Urodziny || c.birthDate || '',
+            blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
+            powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
+            karnetyKlubowicza: parsedKarnety,
+            walletHistory: c.walletHistory || [],
+            transakcje: clientTransakcje,
+            isTrainer: !!powiazanyTrener,
+            zapisyNadchodzace: c.zapisyNadchodzace || [],
+            zapisyPrzeszle: c.zapisyPrzeszle || [],
+            zapisyWypisy: c.zapisyWypisy || []
+          };
+        });
+        setKlienciList(enriched);
+        
+        if (userEmail) {
+          const myUser = enriched.find((c: any) => c.email === userEmail);
+          if (myUser) {
+            setCurrentUser(myUser);
+            subscribeToPushNotifications(myUser.id);
+          }
+        }
+
+        if (profileClient) {
+          const currentActive = enriched.find((c: any) => c.id === profileClient.id);
+          if (currentActive) {
+            setProfileClient(currentActive);
+          }
         }
       }
-      if (profileClient) {
-        const currentActive = enriched.find((c: any) => c.id === profileClient.id);
-        if (currentActive) {
-          setProfileClient(currentActive);
-        }
-      }
-    }
 
-    const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
-    if (rodzajeData) {
-      const parsedRodzaje = rodzajeData.map((item: any) => {
-        let parsedUstawienia: any = {};
-        try {
-          parsedUstawienia = typeof item.ustawienia === 'string' ? JSON.parse(item.ustawienia) : (item.ustawienia || {});
-        } catch(e) {
-          parsedUstawienia = {};
-        }
-        return {
-          id: item.id,
-          nazwa: item.nazwa || '',
-          kolor: item.kolor || '#7bc043',
-          ...parsedUstawienia
-        };
-      });
-      setRodzajeZajec(parsedRodzaje);
-    }
-    
-    const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
-    if (wydarzeniaData) {
-      setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
+      const rodzajeData = await fetchAllFromSupabase('rodzaje_zajec');
+      if (rodzajeData) {
+        const parsedRodzaje = rodzajeData.map((item: any) => {
+          let parsedUstawienia: any = {};
+          try {
+            parsedUstawienia = typeof item.ustawienia === 'string' ? JSON.parse(item.ustawienia) : (item.ustawienia || {});
+          } catch(e) {
+            parsedUstawienia = {};
+          }
+          return {
+            id: item.id,
+            nazwa: item.nazwa || '',
+            kolor: item.kolor || '#7bc043',
+            ...parsedUstawienia
+          };
+        });
+        setRodzajeZajec(parsedRodzaje);
+      }
+      
+      const wydarzeniaData = await fetchAllFromSupabase('wydarzenia_kilkudniowe');
+      if (wydarzeniaData) {
+        setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
+      }
+
+    } catch (err) {
+      console.error("Wystąpił błąd podczas ładowania danych Dashboardu:", err);
+    } finally {
+      isFetchingRef.current = false;
     }
   };
 
@@ -2036,7 +2053,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ POSIADANEGO KARNETU DO TEGO RODZAJU ZAJĘĆ Z ZASTOSOWANIEM NOWEGO SILNIKA
     const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
       if (k.waznyDo) {
@@ -2404,7 +2420,6 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // SKUTECZNE WYPISYWANIE SAMODZIELNE Z OKNA MODAL
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -2445,7 +2460,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // Usunięcie z zapisyNadchodzace w profilu
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -2473,7 +2487,6 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
-    // Zapis transakcji z kluczem w celu blokady ponownego autozapisu
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
@@ -2545,7 +2558,6 @@ export default function DashboardPage() {
     setSelectedClass(null);
   };
 
-  // SKUTECZNE WYPISYWANIE Z LISTY "TWOJE AKTYWNE ZAPISY"
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const now = new Date();
     const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
@@ -2583,7 +2595,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // Usunięcie z zapisyNadchodzace
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -2614,7 +2625,6 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
-    // Zapis transakcji z dwoma wariantami kluczy
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
@@ -2726,7 +2736,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // WERYFIKACJA UPRAWNIEŃ KARNETU KLIENTA Z WYKORZYSTANIEM NOWEGO SILNIKA
     const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
@@ -2812,7 +2821,6 @@ export default function DashboardPage() {
     showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}!`);
   };
 
-  // SKUTECZNE WYPISYWANIE KLIENTA PRZEZ ADMINA/TRENERA
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -2847,7 +2855,6 @@ export default function DashboardPage() {
       }
     }
 
-    // Aktualizacja zapisyNadchodzace
     let updatedNadchodzace = clientToUnregister.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -3130,7 +3137,6 @@ export default function DashboardPage() {
                 const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
                 const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
 
-                // PRECYZYJNY WARUNEK ANTY-DUPLIKACYJNY PO ID ZAJĘĆ ORAZ DACIE
                 if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === displayFormatted)) {
                   myUpcomingClasses.push({
                     ...classInfo,
@@ -3179,6 +3185,7 @@ export default function DashboardPage() {
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+  
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
@@ -3646,12 +3653,10 @@ export default function DashboardPage() {
                       
                       const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
 
-                      // DYNAMICZNE SPRAWDZANIE STATUSU ZAPISU UŻYTKOWNIKA W CZASIE RZECZYWISTYM
                       const mySignupEntry = currentUser ? zapisani.find((s: any) => String(s.id) === String(currentUser.id)) : null;
                       const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
                       const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
 
-                      // SPRAWDZANIE CZY AKTYWNY KARNET KLUBOWICZA UPRAWNIA DO TYCH ZAJĘĆ
                       const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
 
                       return (
@@ -3698,7 +3703,6 @@ export default function DashboardPage() {
                             </div>
                             
                             <div className="flex items-center gap-1 shrink-0">
-                              {/* DYNAMICZNE PLAKIETKI STATUSU DLA KLUBOWICZA */}
                               {isUserInMainGroup && !isClassCancelled && !item.isUsunięte && (
                                 <span className="bg-emerald-500 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
                                   ✅ ZAPISANY
@@ -3804,19 +3808,19 @@ export default function DashboardPage() {
                         : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
                     </button>
                     {isExpanded && (
-                      <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {renderEventsAndClasses()}
+                          <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                            {renderEventsAndClasses()}
+                          </div>
+                        )}
                       </div>
+                    ) : (
+                      renderEventsAndClasses()
                     )}
                   </div>
-                ) : (
-                  renderEventsAndClasses()
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </section>
+                );
+              })}
+            </div>
+          </section>
 
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
@@ -4243,7 +4247,6 @@ export default function DashboardPage() {
 
                     const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
 
-                    // WYKRYWANIE KARNETU MEDICOVER I SKANOWANIA QR DLA TRENERA / ADMINA
                     const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                       (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
@@ -4256,7 +4259,6 @@ export default function DashboardPage() {
                             : 'bg-white border border-sky-200'
                         }`}
                       >
-                        {/* ADNOTACJA O SKANOWANIU KODU QR DLA MEDICOVER W WIDOKU TRENERA/ADMINA */}
                         {canManageClass && isMedicover && (
                           <div className="bg-emerald-500 text-slate-950 font-black text-[10px] px-3 py-1 rounded-xl uppercase tracking-wider flex items-center justify-between shadow-xs border border-emerald-400">
                             <span className="flex items-center gap-1.5">
@@ -4388,7 +4390,6 @@ export default function DashboardPage() {
                       const hasBirthdayToday = isBirthdayOnDate(osoba.birthDate || osoba.Urodziny, selectedClass.displayDate, selectedClass.isoDate);
                       const cutoffMin = osobaZapisana.waitlist_cutoff_minutes || 30;
 
-                      // WYKRYWANIE MEDICOVER NA LIŚCIE REZERWOWEJ
                       const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                         (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
@@ -4497,7 +4498,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-
               {['klubowicz', 'trener'].includes(appRole) ? (
                 <div className="pt-2">
                   {!isUserSignedUp ? (
@@ -5569,5 +5569,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-
