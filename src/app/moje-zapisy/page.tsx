@@ -24,10 +24,13 @@ export default function MojeZapisyPage() {
   // Ranking globalny, wyszukiwarki i zwijanie powyżej 10 osób
   const [allUsersAttendance, setAllUsersAttendance] = useState<any[]>([]);
   const [rankingFilterMonth, setRankingFilterMonth] = useState(new Date().getMonth());
+  const [rankingFilterQuarter, setRankingFilterQuarter] = useState<number>(Math.floor(new Date().getMonth() / 3) + 1);
   const [rankingFilterYear, setRankingFilterYear] = useState(new Date().getFullYear());
   const [rankingSearchMonth, setRankingSearchMonth] = useState('');
+  const [rankingSearchQuarter, setRankingSearchQuarter] = useState('');
   const [rankingSearchYear, setRankingSearchYear] = useState('');
   const [showAllRankingMonth, setShowAllRankingMonth] = useState(false);
+  const [showAllRankingQuarter, setShowAllRankingQuarter] = useState(false);
   const [showAllRankingYear, setShowAllRankingYear] = useState(false);
 
   // Statystyki użytkownika
@@ -432,7 +435,26 @@ export default function MojeZapisyPage() {
     return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
   };
 
+  const getGlobalRankingQuarter = (year: number, quarter: number) => {
+    const startMonth = (quarter - 1) * 3;
+    const endMonth = startMonth + 2;
+    const results: Record<string, number> = {};
+    allUsersAttendance.forEach(u => {
+      const validRecords = u.records.filter((r: any) => {
+        if (r.date.getFullYear() !== year) return false;
+        const m = r.date.getMonth();
+        if (m < startMonth || m > endMonth) return false;
+        return true;
+      });
+      if (validRecords.length > 0) {
+        results[u.name] = validRecords.length;
+      }
+    });
+    return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
+  };
+
   const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [allUsersAttendance, rankingFilterYear, rankingFilterMonth]);
+  const rankingQuarterData = useMemo(() => getGlobalRankingQuarter(rankingFilterYear, rankingFilterQuarter), [allUsersAttendance, rankingFilterYear, rankingFilterQuarter]);
   const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [allUsersAttendance, rankingFilterYear]);
 
   const filteredRankingMonth = useMemo(() => {
@@ -442,6 +464,14 @@ export default function MojeZapisyPage() {
       position: idx + 1
     })).filter(item => item.name.toLowerCase().includes(rankingSearchMonth.toLowerCase()));
   }, [rankingMonthData, rankingSearchMonth]);
+
+  const filteredRankingQuarter = useMemo(() => {
+    return rankingQuarterData.map(([name, count], idx) => ({
+      name,
+      count,
+      position: idx + 1
+    })).filter(item => item.name.toLowerCase().includes(rankingSearchQuarter.toLowerCase()));
+  }, [rankingQuarterData, rankingSearchQuarter]);
 
   const filteredRankingYear = useMemo(() => {
     return rankingYearData.map(([name, count], idx) => ({
@@ -709,13 +739,13 @@ export default function MojeZapisyPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
             
             {/* Tabela 1: Ranking Miesięczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
                 <div className="flex items-center gap-2">
-                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Ranking Miesięczny</h3>
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🏆 Miesięczny</h3>
                   {filteredRankingMonth.length > 10 && (
                     <span className="bg-sky-100 text-sky-900 font-bold text-[10px] px-2 py-0.5 rounded-full">
                       Razem: {filteredRankingMonth.length}
@@ -738,7 +768,7 @@ export default function MojeZapisyPage() {
               <div>
                 <input 
                   type="text"
-                  placeholder="🔍 Wyszukaj siebie lub klubowicza..."
+                  placeholder="🔍 Wyszukaj klubowicza..."
                   value={rankingSearchMonth}
                   onChange={(e) => setRankingSearchMonth(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3.5 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -751,13 +781,13 @@ export default function MojeZapisyPage() {
                     <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-3 w-16">Pozycja</th>
                       <th className="py-3 px-3">Klubowicz</th>
-                      <th className="py-3 px-3 text-right">Liczba obecności</th>
+                      <th className="py-3 px-3 text-right">Obecności</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
                     {filteredRankingMonth.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników wyszukiwania lub obecności w wybranym miesiącu.</td>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników w wybranym miesiącu.</td>
                       </tr>
                     ) : (
                       (showAllRankingMonth ? filteredRankingMonth : filteredRankingMonth.slice(0, 10)).map((item: any, idx: number) => (
@@ -766,7 +796,7 @@ export default function MojeZapisyPage() {
                             {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
                           </td>
                           <td className="py-3.5 px-3 font-bold text-slate-900">{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count} treningów</td>
+                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
                         </tr>
                       ))
                     )}
@@ -786,11 +816,85 @@ export default function MojeZapisyPage() {
               )}
             </div>
 
-            {/* Tabela 2: Ranking Roczny */}
+            {/* Tabela 2: Ranking Kwartalny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
                 <div className="flex items-center gap-2">
-                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Ranking Roczny</h3>
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📈 Kwartalny</h3>
+                  {filteredRankingQuarter.length > 10 && (
+                    <span className="bg-sky-100 text-sky-900 font-bold text-[10px] px-2 py-0.5 rounded-full">
+                      Razem: {filteredRankingQuarter.length}
+                    </span>
+                  )}
+                </div>
+                <select 
+                  value={rankingFilterQuarter}
+                  onChange={(e) => setRankingFilterQuarter(parseInt(e.target.value, 10))}
+                  className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                >
+                  <option value={1}>I KWARTAŁ {rankingFilterYear}</option>
+                  <option value={2}>II KWARTAŁ {rankingFilterYear}</option>
+                  <option value={3}>III KWARTAŁ {rankingFilterYear}</option>
+                  <option value={4}>IV KWARTAŁ {rankingFilterYear}</option>
+                </select>
+              </div>
+
+              <div>
+                <input 
+                  type="text"
+                  placeholder="🔍 Wyszukaj klubowicza..."
+                  value={rankingSearchQuarter}
+                  onChange={(e) => setRankingSearchQuarter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3.5 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              <div className="overflow-x-auto text-xs">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-3 w-16">Pozycja</th>
+                      <th className="py-3 px-3">Klubowicz</th>
+                      <th className="py-3 px-3 text-right">Obecności</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {filteredRankingQuarter.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników w wybranym kwartale.</td>
+                      </tr>
+                    ) : (
+                      (showAllRankingQuarter ? filteredRankingQuarter : filteredRankingQuarter.slice(0, 10)).map((item: any, idx: number) => (
+                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
+                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                            {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
+                          </td>
+                          <td className="py-3.5 px-3 font-bold text-slate-900">{item.name}</td>
+                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {filteredRankingQuarter.length > 10 && (
+                <div className="pt-2 border-t border-slate-100 text-center">
+                  <button
+                    onClick={() => setShowAllRankingQuarter(!showAllRankingQuarter)}
+                    className="text-xs font-bold text-sky-600 hover:text-sky-800 transition-colors cursor-pointer uppercase tracking-wider"
+                  >
+                    {showAllRankingQuarter ? 'Zwiń listę ↑' : `Pokaż wszystkich (${filteredRankingQuarter.length}) ↓`}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Tabela 3: Ranking Roczny */}
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🌟 Roczny</h3>
                   {filteredRankingYear.length > 10 && (
                     <span className="bg-sky-100 text-sky-900 font-bold text-[10px] px-2 py-0.5 rounded-full">
                       Razem: {filteredRankingYear.length}
@@ -811,7 +915,7 @@ export default function MojeZapisyPage() {
               <div>
                 <input 
                   type="text"
-                  placeholder="🔍 Wyszukaj siebie lub klubowicza..."
+                  placeholder="🔍 Wyszukaj klubowicza..."
                   value={rankingSearchYear}
                   onChange={(e) => setRankingSearchYear(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3.5 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -824,13 +928,13 @@ export default function MojeZapisyPage() {
                     <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                       <th className="py-3 px-3 w-16">Pozycja</th>
                       <th className="py-3 px-3">Klubowicz</th>
-                      <th className="py-3 px-3 text-right">Liczba obecności</th>
+                      <th className="py-3 px-3 text-right">Obecności</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
                     {filteredRankingYear.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników wyszukiwania lub obecności w wybranym roku.</td>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników w wybranym roku.</td>
                       </tr>
                     ) : (
                       (showAllRankingYear ? filteredRankingYear : filteredRankingYear.slice(0, 10)).map((item: any, idx: number) => (
@@ -839,7 +943,7 @@ export default function MojeZapisyPage() {
                             {item.position === 1 ? '🥇 1' : item.position === 2 ? '🥈 2' : item.position === 3 ? '🥉 3' : `${item.position}.`}
                           </td>
                           <td className="py-3.5 px-3 font-bold text-slate-900">{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count} treningów</td>
+                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
                         </tr>
                       ))
                     )}
