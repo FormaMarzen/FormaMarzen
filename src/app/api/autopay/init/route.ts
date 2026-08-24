@@ -18,15 +18,14 @@ export async function POST(request: Request) {
     const currency = 'PLN';
     const desc = description || 'Doładowanie portfela Forma Marzeń';
 
-    // Oficjalny algorytm sumy kontrolnej SHA256 dla Autopay (BlueMedia) z walutą
-    // Standardowy ciąg: pos_id | order_id | amount | currency | description | crc
+    // Oficjalny algorytm sumy kontrolnej SHA256 zgodny z dokumentacją Autopay Online:
+    // pos_id | session_id | amount | currency | description | crc
     const hashString = `${posId}|${orderId}|${amountStr}|${currency}|${desc}|${crcKey}`;
     const hash = crypto.createHash('sha256').update(hashString).digest('hex');
 
     const paymentPayload = {
       pos_id: posId,
       session_id: orderId,
-      order_id: orderId,
       amount: amountStr,
       currency: currency,
       description: desc,
