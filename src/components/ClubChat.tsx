@@ -34,6 +34,32 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages]);
 
+  // Funkcja aktualizująca znacznik last_seen dla zalogowanego użytkownika
+  const updateLastSeen = async (userId: number | string) => {
+    if (!userId || Number(userId) === SYSTEM_ID || Number(userId) === 999999999) return;
+    try {
+      await supabase
+        .from("klienci")
+        .update({ last_seen: new Date().toISOString() })
+        .eq("id", userId);
+    } catch (err) {
+      console.error("Błąd aktualizacji last_seen:", err);
+    }
+  };
+
+  // Cykliczne odświeżanie last_seen co 60 sekund, gdy czat jest otwarty lub użytkownik jest zalogowany
+  useEffect(() => {
+    if (!currentUserId) return;
+    const actualId = secondaryUserId || currentUserId;
+    updateLastSeen(actualId);
+
+    const interval = setInterval(() => {
+      updateLastSeen(actualId);
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [currentUserId, secondaryUserId]);
+
   // Funkcja wysyłająca powiadomienie Push do odbiorcy wiadomości
   const sendChatPushNotification = async (recipientId: number | string, senderName: string, messageText: string) => {
     try {
@@ -113,6 +139,7 @@ export default function ClubChat() {
           name: `${c.Imię || c.firstName || ""} ${c.Nazwisko || c.lastName || ""}`.trim() || c["E-mail"] || "Klubowicz",
           email: (c["E-mail"] || c.email || "").toLowerCase().trim(),
           avatar: c.avatarUrl || c.avatar || null,
+          last_seen: c.last_seen || null,
           isSystem: Number(c.id) === SYSTEM_ID,
         }));
 
@@ -127,6 +154,7 @@ export default function ClubChat() {
                 name: "Forma Marzeń (System)",
                 email: "system@formamarzen.pl",
                 avatar: null,
+                last_seen: null,
                 isSystem: true,
               },
               ...enriched,
@@ -148,11 +176,13 @@ export default function ClubChat() {
           );
           if (maciejClient) {
             setSecondaryUserId(maciejClient.id);
+            updateLastSeen(maciejClient.id);
           }
         } else if (myProfile) {
           setCurrentUserId(myProfile.id);
           setCurrentUserName(myProfile.name);
           setCurrentUserAvatar(myProfile.avatar);
+          updateLastSeen(myProfile.id);
         }
       }
     };
@@ -255,6 +285,7 @@ export default function ClubChat() {
     if (!error) {
       setNewMessage("");
       fetchMessages();
+      updateLastSeen(senderId);
       sendChatPushNotification(selectedUser.id, currentUserName, messageText);
     }
   };
@@ -332,6 +363,26 @@ export default function ClubChat() {
       const timeB = latestMessageMap.get(b.id) || 0;
       return timeB - timeA;
     });
+
+  // Pomocnicza funkcja formatująca czas ostatniej aktywności
+  const formatLastSeen = (lastSeenString: string | null) => {
+    if (!lastSeenString) return "Brak danych o aktywności";
+    const now = new Date().getTime();
+    const seen = new Date(lastSeenString).getTime();
+    const diffMinutes = Math.floor((now - seen) / 60000);
+
+    if (diffMinutes < 1) return "Aktywny przed chwilą";
+    if (diffMinutes === 1) return "Aktywny 1 min temu";
+    if (diffMinutes < 60) return `Aktywny ${diffMinutes} min temu`;
+    
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours === 1) return "Aktywny 1 godz. temu";
+    if (diffHours < 24) return `Aktywny ${diffHours} godz. temu`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return "Aktywny wczoraj";
+    return `Aktywny ${diffDays} dni temu`;
+  };
 
   const renderMessageContent = (msg: any, isMe: boolean) => {
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
@@ -441,7 +492,7 @@ export default function ClubChat() {
                         <span className="text-amber-400 font-bold">Konto Systemowe</span>
                       ) : (
                         <span className="text-emerald-400 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Klubowicz
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {formatLastSeen(selectedUser.last_seen)}
                         </span>
                       )}
                     </div>
@@ -526,7 +577,7 @@ export default function ClubChat() {
                             {lastMessageText ? (
                               <span className="italic">{lastMessageText}</span>
                             ) : (
-                              <span>{isSys ? "Oficjalne powiadomienia" : "Klubowicz"}</span>
+                              <span>{isSys ? "Oficjalne powiadomienia" : formatLastSeen(user.last_seen)}</span>
                             )}
                           </div>
                         </div>
