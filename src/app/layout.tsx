@@ -1148,27 +1148,33 @@ export default function RootLayout({
                   </label>
                 </div>
 
-                {calendarAutoSync && currentClientId && (
+                {calendarAutoSync && (
                   <div className="space-y-2 pt-2 animate-in fade-in slide-in-from-top-2">
                     <label className="font-bold text-slate-900">Twój prywatny link subskrypcji (URL ICS):</label>
-                    <div className="flex items-center gap-2">
-                      <input 
-                        type="text" 
-                        readOnly 
-                        value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
-                        className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
-                      />
-                      <button 
-                        onClick={() => {
-                          const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
-                          navigator.clipboard.writeText(url);
-                          alert("Link skopiowany do schowka! Wklej go w aplikacji kalendarza jako 'Subskrybowany kalendarz'.");
-                        }}
-                        className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer"
-                      >
-                        Kopiuj
-                      </button>
-                    </div>
+                    {currentClientId ? (
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="text" 
+                          readOnly 
+                          value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
+                          className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                        />
+                        <button 
+                          onClick={() => {
+                            const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
+                            navigator.clipboard.writeText(url);
+                            alert("Link skopiowany do schowka! Wklej go w aplikacji kalendarza jako 'Subskrybowany kalendarz'.");
+                          }}
+                          className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer"
+                        >
+                          Kopiuj
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-amber-600 font-bold py-2 text-center animate-pulse">
+                        Ładowanie Twojego identyfikatora klienta...
+                      </div>
+                    )}
                     <p className="text-[10px] text-amber-700 font-medium bg-amber-50 p-2 rounded-lg border border-amber-200 mt-2">
                       Nigdy nie udostępniaj tego linku osobom trzecim. Zawiera on listę Twoich zapisów w klubie.
                     </p>
