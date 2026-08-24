@@ -11,28 +11,30 @@ export async function POST(request: Request) {
     }
 
     const posId = process.env.NEXT_PUBLIC_AUTOPAY_POS_ID || '220522';
-    const crcKey = process.env.AUTOPAY_CRC_KEY || ''; // Twój tajny klucz z panelu Autopay
+    const crcKey = process.env.AUTOPAY_CRC_KEY || ''; 
     const gatewayUrl = 'https://pay.autopay.eu/payment';
 
     const amountStr = Number(amount).toFixed(2);
+    const currency = 'PLN';
 
-    // Generowanie podpisu SHA256 (hash) wymaganego przez Autopay
+    // Algorytm haszowania Autopay
     const hashData = `${posId}${orderId}${amountStr}${crcKey}`;
     const hash = crypto.createHash('sha256').update(hashData).digest('hex');
 
     const paymentPayload = {
       pos_id: posId,
       session_id: orderId,
-      amount: amountStr,
       order_id: orderId,
-      crc: crcKey,
-      hash: hash,
+      amount: amountStr,
+      currency: currency,
       description: description || 'Doładowanie portfela Forma Marzeń',
-      client_email: email || '',
-      client_first_name: firstName || '',
-      client_last_name: lastName || '',
+      client_email: email || 'klient@formamarzen.pl',
+      client_first_name: firstName || 'Klubowicz',
+      client_last_name: lastName || 'FormaMarzen',
       url_return: `${process.env.NEXT_PUBLIC_SITE_URL || 'https://forma-marzen.vercel.app'}/portfel?status=success`,
       url_status: `${process.env.NEXT_PUBLIC_SITE_URL || 'https://forma-marzen.vercel.app'}/api/autopay/webhook`,
+      crc: crcKey,
+      hash: hash,
     };
 
     return NextResponse.json({
