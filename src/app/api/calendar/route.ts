@@ -14,93 +14,125 @@ export async function GET(request: Request) {
     const filterType = searchParams.get('type');
 
     let events: any[] = [];
+    let calendarName = 'Forma Marzeń - Treningi';
 
-    // 1. Jeśli to kalendarz klubowicza
     if (rawKlientId) {
-      // Bezpieczna konwersja ID z tekstu na liczbę (dopasowanie do typu int8 w Supabase)
       const klientId = !isNaN(Number(rawKlientId)) ? Number(rawKlientId) : rawKlientId;
 
+      // Pobieramy całe wiersze przez gwiazdkę (*), aby brak opcjonalnej kolumny w Supabase nie powodował błędu
       const { data: clientData, error: clientErr } = await (supabase
         .from('klienci') as any)
-        .select('id, Imię, Nazwisko, ustawienia_kalendarza')
+        .select('*')
         .eq('id', klientId)
         .maybeSingle();
 
       if (clientErr || !clientData) {
         console.error("Kalendarz ICS - klient nie znaleziony:", rawKlientId, clientErr);
-        return new NextResponse('Klient nie znaleziony w bazie danych', { status: 404 });
-      }
-
-      let settings: any = {};
-      try {
-        settings = typeof clientData.ustawienia_kalendarza === 'string' 
-          ? JSON.parse(clientData.ustawienia_kalendarza) 
-          : (clientData.ustawienia_kalendarza || {});
-      } catch (e) {
-        settings = {};
-      }
-
-      if (settings.autoSync === false) {
-        return new NextResponse('Synchronizacja kalendarza jest wyłączona w profilu użytkownika.', { status: 403 });
-      }
-
-      const { data: signups } = await supabase
-        .from('zapisy_zajec')
-        .select('*')
-        .eq('klient_id', klientId)
-        .eq('status', 'zapisany');
-
-      if (signups && signups.length > 0) {
-        const { data: szablony } = await supabase.from('grafik_zajec').select('*');
-        const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*');
-        const { data: nadpisania } = await supabase.from('nadpisania_zajec').select('*');
-
-        const nadpisaniaMap: Record<string, any> = {};
-        nadpisania?.forEach((n: any) => { nadpisaniaMap[n.class_key] = n; });
-
-        signups.forEach((s: any) => {
-          const parts = (s.class_key || '').split('_');
-          const classId = parts[0];
-          const dateStr = parts[1];
-
-          if (dateStr) {
-            let year = new Date().getFullYear();
-            let month = 1;
-            let day = 1;
-
-            if (dateStr.includes('/')) {
-              const [d, m] = dateStr.split('/').map(Number);
-              day = d;
-              month = m;
-            } else if (dateStr.includes('-')) {
-              const [y, m, d] = dateStr.split('-').map(Number);
-              year = y;
-              month = m;
-              day = d;
-            }
-
-            const std = szablony?.find((sz: any) => String(sz.id) === classId);
-            const jed = jednorazowe?.find((j: any) => String(j.id) === classId);
-            const override = nadpisaniaMap[s.class_key];
-            const cls = override ? { ...std, ...jed, ...override } : (std || jed);
-
-            if (cls && !cls.is_odwolane && !cls.is_usuniete && !cls['is-usuniete']) {
-              events.push({
-                title: cls.title || cls.nazwa || 'Trening w klubie',
-                start: cls.start || cls.start_time || '10:00',
-                end: cls.end || cls.end_time || '11:00',
-                year,
-                month,
-                day,
-                trainer: cls.trainer || cls.prowadzacy || ''
-              });
-            }
-          }
+        events.push({
+          title: 'Forma Marzeń - Klient nie znaleziony',
+          start: '10:00',
+          end: '11:00',
+          year: new Date().getFullYear(),
+          month: new Date().getMonth() + 1,
+          day: new Date().getDate(),
+          trainer: 'Klub'
         });
+      } else {
+        const imie = clientData.Imię || clientData.imie || '';
+        const nazwisko = clientData.Nazwisko || clientData.nazwisko || '';
+        calendarName = `Forma Marzeń - ${imie} ${nazwisko}`.trim();
+
+        let settings: any = {};
+        try {
+          settings = typeof clientData.ustawienia_kalendarza === 'string' 
+            ? JSON.parse(clientData.ustawienia_kalendarza) 
+            : (clientData.ustawienia_kalendarza || {});
+        } catch (e) {
+          settings = {};
+        }
+
+        if (settings.autoSync === false) {
+          events.push({
+            title: 'Forma Marzeń - Synchronizacja wyłączona',
+            start: '10:00',
+            end: '11:00',
+            year: new Date().getFullYear(),
+            month: new Date().getMonth() + 1,
+            day: new Date().getDate(),
+            trainer: 'Klub'
+          });
+        } else {
+          const { data: signups } = await supabase
+            .from('zapisy_zajec')
+            .select('*')
+            .eq('klient_id', klientId)
+            .eq('status', 'zapisany');
+
+          if (signups && signups.length > 0) {
+            const { data: szablony } = await supabase.from('grafik_zajec').select('*');
+            const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*');
+            const { data: nadpisania } = await supabase.from('nadpisania_zajec').select('*');
+
+            const nadpisaniaMap: Record<string, any> = {};
+            nadpisania?.forEach((n: any) => { nadpisaniaMap[n.class_key] = n; });
+
+            signups.forEach((s: any) => {
+              const parts = (s.class_key || '').split('_');
+              const classId = parts[0];
+              const dateStr = parts[1];
+
+              if (dateStr) {
+                let year = new Date().getFullYear();
+                let month = 1;
+                let day = 1;
+
+                if (dateStr.includes('/')) {
+                  const [d, m] = dateStr.split('/').map(Number);
+                  day = d;
+                  month = m;
+                } else if (dateStr.includes('-')) {
+                  const [y, m, d] = dateStr.split('-').map(Number);
+                  year = y;
+                  month = m;
+                  day = d;
+                }
+
+                const std = szablony?.find((sz: any) => String(sz.id) === classId);
+                const jed = jednorazowe?.find((j: any) => String(j.id) === classId);
+                const override = nadpisaniaMap[s.class_key];
+                const cls = override ? { ...std, ...jed, ...override } : (std || jed);
+
+                if (cls && !cls.is_odwolane && !cls.is_usuniete && !cls['is-usuniete']) {
+                  events.push({
+                    title: cls.title || cls.nazwa || 'Trening w klubie',
+                    start: cls.start || cls.start_time || '10:00',
+                    end: cls.end || cls.end_time || '11:00',
+                    year,
+                    month,
+                    day,
+                    trainer: cls.trainer || cls.prowadzacy || ''
+                  });
+                }
+              }
+            });
+          }
+
+          if (events.length === 0) {
+            const now = new Date();
+            events.push({
+              title: 'Forma Marzeń - Brak nadchodzących zapisów',
+              start: '10:00',
+              end: '11:00',
+              year: now.getFullYear(),
+              month: now.getMonth() + 1,
+              day: now.getDate(),
+              trainer: 'Klub'
+            });
+          }
+        }
       }
-    } 
-    // 2. Jeśli to widok administratora z filtrami
-    else if (isAdmin) {
+    } else if (isAdmin) {
+      calendarName = 'Forma Marzeń - Grafik Administratora';
       const { data: szablony } = await supabase.from('grafik_zajec').select('*');
       const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*');
       const { data: nadpisania } = await supabase.from('nadpisania_zajec').select('*');
@@ -164,7 +196,17 @@ export async function GET(request: Request) {
         });
       }
     } else {
-      return new NextResponse('Brak wymaganych parametrów (klient_id lub admin=true)', { status: 400 });
+      calendarName = 'Forma Marzeń - Kalendarz';
+      const now = new Date();
+      events.push({
+        title: 'Forma Marzeń - Kalendarz gotowy',
+        start: '10:00',
+        end: '11:00',
+        year: now.getFullYear(),
+        month: now.getMonth() + 1,
+        day: now.getDate(),
+        trainer: 'Klub'
+      });
     }
 
     let icsLines = [
@@ -173,7 +215,7 @@ export async function GET(request: Request) {
       'PRODID:-//Forma Marzen//Klub Sportowy//PL',
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',
-      'X-WR-CALNAME:Forma Marzeń - Treningi'
+      `X-WR-CALNAME:${calendarName}`
     ];
 
     events.forEach((ev, idx) => {
@@ -210,6 +252,33 @@ export async function GET(request: Request) {
 
   } catch (err) {
     console.error('Błąd generowania ICS:', err);
-    return new NextResponse('Błąd serwera', { status: 500 });
+    const now = new Date();
+    const fallbackIcs = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Forma Marzen//Klub Sportowy//PL',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:Forma Marzeń - Kalendarz',
+      'BEGIN:VEVENT',
+      `UID:error-event@formamarzen.pl`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+      `DTSTART:${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}T100000`,
+      `DTEND:${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}T110000`,
+      `SUMMARY:Forma Marzeń - Aktualizacja kalendarza`,
+      `DESCRIPTION:Spróbuj ponownie za chwilę.`,
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n');
+
+    return new NextResponse(fallbackIcs, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'Content-Disposition': 'inline; filename="kalendarz-treningow.ics"',
+        'Cache-Control': 'no-store, max-age=0',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
   }
 }
