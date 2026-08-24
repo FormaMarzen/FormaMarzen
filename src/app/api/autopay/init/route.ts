@@ -17,10 +17,11 @@ export async function POST(request: Request) {
     const amountStr = Number(amount).toFixed(2);
     const currency = 'PLN';
 
-    // Algorytm haszowania Autopay
+    // Oficjalny algorytm sumy kontrolnej SHA256 dla Autopay (BlueMedia): pos_id + order_id + amount + crc
     const hashData = `${posId}${orderId}${amountStr}${crcKey}`;
     const hash = crypto.createHash('sha256').update(hashData).digest('hex');
 
+    // Kompletny zestaw parametrów wymaganych przez bramkę Autopay
     const paymentPayload = {
       pos_id: posId,
       session_id: orderId,
