@@ -1132,7 +1132,7 @@ export default function RootLayout({
               
               <div className="space-y-4 text-xs text-slate-700">
                 <p>
-                  Dzięki integracji możesz automatycznie dodawać swoje treningi do kalendarza w telefonie (Apple Calendar, Google Calendar, itp.). Zawsze, gdy zapiszesz się na trening lub go odwołasz, kalendarz zaktualizuje się sam.
+                  Dzięki integracji możesz automatycznie dodawać swoje treningi do kalendarza w telefonie. Wybierz odpowiedni link w zależności od używanej aplikacji.
                 </p>
 
                 <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center justify-between">
@@ -1154,26 +1154,54 @@ export default function RootLayout({
                 </div>
 
                 {calendarAutoSync && (
-                  <div className="space-y-2 pt-2 animate-in fade-in slide-in-from-top-2">
-                    <label className="font-bold text-slate-900">Twój prywatny link subskrypcji (URL ICS):</label>
+                  <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-top-2">
                     {currentClientId ? (
-                      <div className="flex items-center gap-2">
-                        <input 
-                          type="text" 
-                          readOnly 
-                          value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
-                          className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
-                        />
-                        <button 
-                          onClick={() => {
-                            const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
-                            navigator.clipboard.writeText(url);
-                            alert("Link skopiowany do schowka! Wklej go w aplikacji kalendarza jako 'Subskrybowany kalendarz'.");
-                          }}
-                          className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer"
-                        >
-                          Kopiuj
-                        </button>
+                      <div className="space-y-3">
+                        {/* Apple Calendar / iOS */}
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-900 text-[11px]"> Apple Calendar / iPhone / iPad (webcal):</label>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="text" 
+                              readOnly 
+                              value={`webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
+                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                            />
+                            <button 
+                              onClick={() => {
+                                const url = `webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
+                                navigator.clipboard.writeText(url);
+                                alert("Link dla Apple (webcal://) skopiowany do schowka!");
+                              }}
+                              className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer text-xs"
+                            >
+                              Kopiuj
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Google Calendar / Inne */}
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-900 text-[11px]">🌐 Google Calendar / Outlook / Inne (https):</label>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="text" 
+                              readOnly 
+                              value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
+                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                            />
+                            <button 
+                              onClick={() => {
+                                const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
+                                navigator.clipboard.writeText(url);
+                                alert("Link standardowy (https://) skopiowany do schowka!");
+                              }}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer text-xs"
+                            >
+                              Kopiuj
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <div className="text-amber-600 font-bold py-2 text-center animate-pulse">
@@ -1181,7 +1209,7 @@ export default function RootLayout({
                       </div>
                     )}
                     <p className="text-[10px] text-amber-700 font-medium bg-amber-50 p-2 rounded-lg border border-amber-200 mt-2">
-                      Nigdy nie udostępniaj tego linku osobom trzecim. Zawiera on listę Twoich zapisów w klubie.
+                      Nigdy nie udostępniaj tych linków osobom trzecim. Zawierają one listę Twoich zapisów w klubie.
                     </p>
                   </div>
                 )}
