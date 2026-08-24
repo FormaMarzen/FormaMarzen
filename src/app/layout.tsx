@@ -33,6 +33,10 @@ export default function RootLayout({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
+  // Stany dla obsługi kalendarza w profilu klubowicza
+  const [showCalendarSettings, setShowCalendarSettings] = useState(false);
+  const [calendarAutoSync, setCalendarAutoSync] = useState(false);
+
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [isMounted, setIsMounted] = useState(false);
 
@@ -103,6 +107,17 @@ export default function RootLayout({
     } catch (err) {
       console.error("Błąd podczas aktywacji powiadomień Push:", err);
     }
+  };
+
+  // Obsługa włączania/wyłączania synchronizacji kalendarza w bazie
+  const handleToggleCalendarSync = async (enabled: boolean) => {
+    setCalendarAutoSync(enabled);
+    if (!currentClientId) return;
+    const newSettings = { autoSync: enabled };
+    await supabase
+      .from('klienci')
+      .update({ ustawienia_kalendarza: newSettings })
+      .eq('id', currentClientId);
   };
 
   // Obsługa gestu Pull-to-Refresh
@@ -218,7 +233,7 @@ export default function RootLayout({
         
         const { data: klientData } = await supabase
           .from('klienci')
-          .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl')
+          .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl, ustawienia_kalendarza')
           .ilike('E-mail', userEmail.trim())
           .maybeSingle();
 
@@ -229,6 +244,14 @@ export default function RootLayout({
           if (k.gender) setProfileGender(k.gender);
           if (k['Numer tel.'] && k['Numer tel.'] !== '-') setProfilePhone(k['Numer tel.']);
           if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
+
+          let settings: any = {};
+          try {
+            settings = typeof k.ustawienia_kalendarza === 'string'
+              ? JSON.parse(k.ustawienia_kalendarza)
+              : (k.ustawienia_kalendarza || {});
+          } catch(e) { settings = {}; }
+          setCalendarAutoSync(settings.autoSync ?? false);
 
           subscribeToPushNotifications(k.id);
         }
@@ -368,6 +391,7 @@ export default function RootLayout({
         { href: '/raporty/zajecia-i-zapisy', label: 'Zajęcia i zapisy', icon: '🏋️' },
         { href: '/raporty/automatyczne-zapisy', label: 'Automatyczne zapisy', icon: '⚡' },
         { href: '/raporty/trenerzy', label: 'Trenerzy', icon: '🧢' },
+        { href: '/raporty/kalendarz', label: 'Kalendarz ICS', icon: '📅' },
       ]
     },
     {
@@ -937,13 +961,25 @@ export default function RootLayout({
                     <span className="uppercase">{profileName.substring(0, 2)}</span>
                   )}
                 </div>
-                <button 
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="bg-rose-950 hover:bg-rose-900 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
-                >
-                  <span>🖼️</span> Zmień zdjęcie
-                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="bg-rose-950 hover:bg-rose-900 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>🖼️</span> Zmień zdjęcie
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsProfileModalOpen(false);
+                      setShowCalendarSettings(true);
+                    }}
+                    className="bg-sky-100 hover:bg-sky-200 text-sky-900 text-xs font-bold px-4 py-2 rounded-xl border border-sky-300 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>📅</span> Kalendarz ICS
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-4 text-xs">
@@ -1076,6 +1112,75 @@ export default function RootLayout({
                 </button>
               </div>
 
+            </div>
+          </div>
+        )}
+
+        {/* MODAL USTAWIENIA KALENDARZA (ICS) */}
+        {showCalendarSettings && (
+          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📅 Synchronizacja kalendarza</h3>
+                <button onClick={() => setShowCalendarSettings(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+              </div>
+              
+              <div className="space-y-4 text-xs text-slate-700">
+                <p>
+                  Dzięki integracji możesz automatycznie dodawać swoje treningi do kalendarza w telefonie (Apple Calendar, Google Calendar, itp.). Zawsze, gdy zapiszesz się na trening lub go odwołasz, kalendarz zaktualizuje się sam.
+                </p>
+
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-slate-900 text-sm">Auto-synchronizacja</div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Zapisy będą widoczne w zewnętrznych aplikacjach.
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer" 
+                      checked={calendarAutoSync}
+                      onChange={(e) => handleToggleCalendarSync(e.target.checked)}
+                    />
+                    <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                  </label>
+                </div>
+
+                {calendarAutoSync && currentClientId && (
+                  <div className="space-y-2 pt-2 animate-in fade-in slide-in-from-top-2">
+                    <label className="font-bold text-slate-900">Twój prywatny link subskrypcji (URL ICS):</label>
+                    <div className="flex items-center gap-2">
+                      <input 
+                        type="text" 
+                        readOnly 
+                        value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
+                        className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                      />
+                      <button 
+                        onClick={() => {
+                          const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
+                          navigator.clipboard.writeText(url);
+                          alert("Link skopiowany do schowka! Wklej go w aplikacji kalendarza jako 'Subskrybowany kalendarz'.");
+                        }}
+                        className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer"
+                      >
+                        Kopiuj
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-amber-700 font-medium bg-amber-50 p-2 rounded-lg border border-amber-200 mt-2">
+                      Nigdy nie udostępniaj tego linku osobom trzecim. Zawiera on listę Twoich zapisów w klubie.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 flex justify-end border-t border-sky-100">
+                <button onClick={() => setShowCalendarSettings(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-2.5 rounded-xl transition-colors cursor-pointer">
+                  Zamknij
+                </button>
+              </div>
             </div>
           </div>
         )}
