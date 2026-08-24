@@ -72,35 +72,38 @@ export default function RootLayout({
     );
   })();
 
-  // Natychmiastowe pobieranie ID klienta po otwarciu ustawień kalendarza
+  // Natychmiastowe i niezawodne pobieranie ID klienta (wyszukiwanie w JS odporne na wielkość liter)
   useEffect(() => {
     if (showCalendarSettings && !currentClientId) {
       const fetchClientIdInstantly = async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        const email = session?.user?.email || profileEmail;
-        if (email) {
-          let { data: klientData } = await supabase
-            .from('klienci')
-            .select('id, ustawienia_kalendarza')
-            .ilike('E-mail', email.trim())
-            .maybeSingle();
+        const { data: { user } } = await supabase.auth.getUser();
+        const email = (user?.email || profileEmail || '').toLowerCase().trim();
+        
+        const { data: clients } = await supabase
+          .from('klienci')
+          .select('*');
 
-          if (!klientData) {
-            const { data: anyClient } = await supabase
-              .from('klienci')
-              .select('id, ustawienia_kalendarza')
-              .limit(1)
-              .maybeSingle();
-            klientData = anyClient;
+        if (clients && clients.length > 0) {
+          let matched = null;
+          if (email) {
+            matched = clients.find((c: any) => {
+              const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
+              return cEmail === email;
+            });
           }
 
-          if (klientData) {
-            setCurrentClientId(klientData.id);
+          if (!matched) {
+            // Fallback dla admina lub braku dopasowania
+            matched = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput')) || clients[0];
+          }
+
+          if (matched) {
+            setCurrentClientId(matched.id);
             let settings: any = {};
             try {
-              settings = typeof klientData.ustawienia_kalendarza === 'string'
-                ? JSON.parse(klientData.ustawienia_kalendarza)
-                : (klientData.ustawienia_kalendarza || {});
+              settings = typeof matched.ustawienia_kalendarza === 'string'
+                ? JSON.parse(matched.ustawienia_kalendarza)
+                : (matched.ustawienia_kalendarza || {});
             } catch(e) { settings = {}; }
             setCalendarAutoSync(settings.autoSync ?? false);
           }
@@ -233,30 +236,36 @@ export default function RootLayout({
     }
 
     const checkAuthAndRole = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
       
-      if (!session?.user) {
+      if (!user) {
         if (!isPublicPage) router.push('/login');
         return;
       }
 
-      if (session?.user) {
-        const userEmail = session.user.email || '';
+      if (user) {
+        const userEmail = user.email || '';
         setProfileEmail(userEmail);
         
-        let { data: klientData } = await supabase
+        const { data: clients } = await supabase
           .from('klienci')
-          .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl, ustawienia_kalendarza')
-          .ilike('E-mail', userEmail.trim())
-          .maybeSingle();
+          .select('*');
 
-        if (!klientData) {
-          const { data: anyClient } = await supabase
-            .from('klienci')
-            .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl, ustawienia_kalendarza')
-            .limit(1)
-            .maybeSingle();
-          if (anyClient) klientData = anyClient;
+        let klientData = null;
+        if (clients && clients.length > 0) {
+          const cleanEmail = userEmail.toLowerCase().trim();
+          klientData = clients.find((c: any) => {
+            const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
+            return cEmail === cleanEmail;
+          });
+
+          if (!klientData) {
+            if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
+              klientData = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput')) || clients[0];
+            } else {
+              klientData = clients[0];
+            }
+          }
         }
 
         if (klientData) {
