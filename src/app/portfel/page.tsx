@@ -74,20 +74,14 @@ export default function PortfelPage() {
         if (klientData) {
           const rawClient = klientData as any;
 
-          // Pobranie transakcji powiązanych z kontem klienta (informacyjnie do widoku)
-          const { data: tData } = await supabase
-            .from('transakcje')
+          // POBIERANIE TYLKO I WYŁĄCZNIE TRANSAKCJI AUTOPAY DLA DANEGO KLUBOWICZA Z NOWEJ TABELI autopay_transakcje
+          const { data: autopayData } = await supabase
+            .from('autopay_transakcje')
             .select('*')
-            .eq('klient_id', rawClient.id)
+            .eq('user_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          const finansowe = tData ? tData.filter((t: any) => {
-            const kwota = Number(t.kwota) || 0;
-            const typ = (t.typ_operacji || '').toLowerCase();
-            return kwota !== 0 || typ.includes('zakup') || typ.includes('uzupelnienie') || typ.includes('splata') || typ.includes('portfel');
-          }) : [];
-
-          setTransakcjeFinansowe(finansowe);
+          setTransakcjeFinansowe(autopayData || []);
 
           // POBIERANIE SALDA BEZPOŚREDNIO Z TABELI KLIENCI Z AGRESYWNYM PARSOWANIEM MINUSA
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
@@ -116,6 +110,68 @@ export default function PortfelPage() {
     }
   };
 
+  // Funkcja inicjująca przekierowanie do bramki Autopay przez nasz endpoint API
+  const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string) => {
+    try {
+      // 1. Zapisujemy transakcję wstępną w bazie ze statusem pending
+      const { error: insertError } = await supabase.from('autopay_transakcje').insert([{
+        user_id: currentUser.id,
+        amount: amount,
+        status: 'pending',
+        order_id: orderId,
+        type: type,
+        gateway_response: { opis: description }
+      }]);
+
+      if (insertError) {
+        alert(`Błąd zapisu transakcji w bazie: ${insertError.message}`);
+        return;
+      }
+
+      // 2. Wywołujemy nasz endpoint API generujący podpis (hash) Autopay
+      const response = await fetch('/api/autopay/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amount,
+          orderId: orderId,
+          userId: currentUser.id,
+          description: description,
+          email: currentUser["E-mail"] || currentUser.email || '',
+          firstName: currentUser.firstName,
+          lastName: currentUser.lastName
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nie udało się zainicjalizować płatności w API');
+      }
+
+      // 3. Tworzymy formularz i automatycznie wysyłamy żądanie POST do bramki Autopay
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = data.gatewayUrl;
+
+      // Dodajemy wszystkie pola wymagane przez Autopay (pos_id, amount, hash, crc itp.)
+      Object.keys(data.payload).forEach((key) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = data.payload[key];
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      form.submit();
+
+    } catch (err: any) {
+      console.error("Błąd przekierowania do Autopay:", err);
+      alert(`Wystąpił błąd podczas uruchamiania płatności: ${err.message}`);
+    }
+  };
+
   const handleTopUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !topUpAmount) return;
@@ -126,42 +182,11 @@ export default function PortfelPage() {
       return;
     }
 
-    const currentWalletNum = currentUser.rawWalletNum || 0;
-    const nowyStan = currentWalletNum + kwotaZmiany;
-    const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
+    const orderId = `AP-TOP-${currentUser.id}-${Date.now()}`;
+    const opisOperacji = topUpReason.trim() || `Doładowanie portfela przez Autopay: +${kwotaZmiany.toFixed(2)} PLN`;
 
-    const { error } = await supabase
-      .from('klienci')
-      .update({ Portfel: nowyStanStr })
-      .eq('id', currentUser.id);
-
-    if (error) {
-      alert(`Błąd doładowania: ${error.message}`);
-      return;
-    }
-
-    const opisOperacji = topUpReason.trim() || `Doładowanie portfela: +${kwotaZmiany.toFixed(2)} PLN`;
-
-    await supabase.from('transakcje').insert([{
-      klient_id: currentUser.id,
-      typ_operacji: 'uzupelnienie_portfela',
-      kwota: kwotaZmiany,
-      opis: opisOperacji
-    }]);
-
-    await supabase.from('booking_logs').insert([{
-      action_type: 'WALLET_TOPUP',
-      status: 'SUCCESS',
-      reason: `Doładowano portfel użytkownika ${currentUser.firstName} ${currentUser.lastName}: +${kwotaZmiany.toFixed(2)} PLN`,
-      rule_applied: 'wallet_credit',
-      payload: { klient_id: currentUser.id, kwota: kwotaZmiany, nowy_stan: nowyStanStr }
-    }]);
-
-    alert("Portfel został pomyślnie doładowany!");
-    setTopUpAmount('');
-    setTopUpReason('');
     setIsTopUpOpen(false);
-    loadData();
+    await redirectToAutopay(kwotaZmiany, orderId, opisOperacji, 'wallet_topup');
   };
 
   const handleSplatPortfela = async () => {
@@ -170,35 +195,10 @@ export default function PortfelPage() {
     if (currentWalletNum >= 0) return;
 
     const kwotaSplaty = Math.abs(currentWalletNum);
-    const nowyStanStr = "0.00 PLN";
+    const orderId = `AP-DEBT-${currentUser.id}-${Date.now()}`;
+    const opisOperacji = `Spłata ujemnego salda portfela przez Autopay (${kwotaSplaty.toFixed(2)} PLN)`;
 
-    const { error } = await supabase
-      .from('klienci')
-      .update({ Portfel: nowyStanStr })
-      .eq('id', currentUser.id);
-
-    if (error) {
-      alert(`Błąd spłaty: ${error.message}`);
-      return;
-    }
-
-    await supabase.from('transakcje').insert([{
-      klient_id: currentUser.id,
-      typ_operacji: 'splata_portfela',
-      kwota: kwotaSplaty,
-      opis: `Spłata ujemnego salda portfela (${kwotaSplaty.toFixed(2)} PLN)`
-    }]);
-
-    await supabase.from('booking_logs').insert([{
-      action_type: 'WALLET_SETTLED',
-      status: 'SUCCESS',
-      reason: `Uregulowano ujemne saldo portfela użytkownika ${currentUser.firstName} ${currentUser.lastName}`,
-      rule_applied: 'wallet_debt_settled',
-      payload: { klient_id: currentUser.id, kwota: kwotaSplaty, nowy_stan: nowyStanStr }
-    }]);
-
-    alert("Zadłużenie zostało pomyślnie uregulowane! Blokada zapisów z tytułu ujemnego salda została zdjęta.");
-    loadData();
+    await redirectToAutopay(kwotaSplaty, orderId, opisOperacji, 'wallet_settlement');
   };
 
   if (isLoading) {
@@ -234,14 +234,14 @@ export default function PortfelPage() {
                 onClick={handleSplatPortfela}
                 className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 text-white font-black text-xs px-5 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
               >
-                Spłać zadłużenie
+                Spłać zadłużenie (Autopay)
               </button>
             )}
             <button 
               onClick={() => setIsTopUpOpen(true)}
               className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
             >
-              <span className="text-base leading-none">+</span> Doładuj portfel
+              <span className="text-base leading-none">+</span> Doładuj portfel (Autopay)
             </button>
           </div>
         </div>
@@ -256,9 +256,9 @@ export default function PortfelPage() {
         />
       </div>
 
-      {/* SEKCJA 2: HISTORIA TRANSAKCJI FINANSOWYCH */}
+      {/* SEKCJA 2: HISTORIA TRANSAKCJI AUTOPAY KLUBOWICZA */}
       <div className="space-y-4">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA TRANSAKCJI FINANSOWYCH</h2>
+        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA PŁATNOŚCI AUTOPAY</h2>
         
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
           <div className="overflow-x-auto">
@@ -266,28 +266,42 @@ export default function PortfelPage() {
               <thead>
                 <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                   <th className="py-4 px-5">DATA</th>
+                  <th className="py-4 px-5">ID ZAMÓWIENIA</th>
                   <th className="py-4 px-5">KWOTA</th>
-                  <th className="py-4 px-5">OPIS OPERACJI</th>
+                  <th className="py-4 px-5">STATUS</th>
+                  <th className="py-4 px-5">TYP / OPIS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {transakcjeFinansowe.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="py-8 text-center text-slate-400">Brak historii transakcji finansowych.</td>
+                    <td colSpan={5} className="py-8 text-center text-slate-400">Brak transakcji Autopay dla tego konta.</td>
                   </tr>
                 ) : (
                   transakcjeFinansowe.map((t: any) => {
-                    const kwotaNum = Number(t.kwota) || 0;
-                    const isPositive = kwotaNum >= 0;
+                    const kwotaNum = Number(t.amount) || 0;
                     const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
+                    const statusVal = t.status || 'pending';
 
                     return (
                       <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-4 px-5 font-mono text-slate-600">{formattedDate}</td>
-                        <td className={`py-4 px-5 font-bold flex items-center gap-1.5 ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          <span>{isPositive ? '▲' : '▼'}</span> {isPositive ? `+${kwotaNum.toFixed(2)}` : kwotaNum.toFixed(2)} PLN
+                        <td className="py-4 px-5 font-mono text-slate-500">{t.order_id}</td>
+                        <td className="py-4 px-5 font-bold text-slate-900">
+                          +{kwotaNum.toFixed(2)} PLN
                         </td>
-                        <td className="py-4 px-5 font-medium text-slate-800">{t.opis || t.typ_operacji}</td>
+                        <td className="py-4 px-5 font-bold">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] uppercase ${
+                            statusVal === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                            statusVal === 'failed' ? 'bg-rose-50 text-rose-700 border border-rose-200' :
+                            'bg-amber-50 text-amber-700 border border-amber-200'
+                          }`}>
+                            {statusVal}
+                          </span>
+                        </td>
+                        <td className="py-4 px-5 font-medium text-slate-800">
+                          {t.gateway_response?.opis || t.type}
+                        </td>
                       </tr>
                     );
                   })
@@ -303,13 +317,13 @@ export default function PortfelPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">💳 Doładuj portfel</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">💳 Doładuj portfel (Autopay)</h3>
               <button onClick={() => setIsTopUpOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
             </div>
             
             <form onSubmit={handleTopUpSubmit} className="space-y-4 text-xs">
               <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sky-900 font-medium">
-                Wprowadź kwotę, o jaką chcesz zwiększyć środki w swoim portfelu klubowym.
+                Wprowadź kwotę doładowania portfela realizowanego przez bramkę płatności Autopay.
               </div>
 
               <div className="space-y-1">
@@ -342,7 +356,7 @@ export default function PortfelPage() {
                   Anuluj
                 </button>
                 <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                  Doładuj
+                  Przejdź do płatności
                 </button>
               </div>
             </form>
