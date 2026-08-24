@@ -16,19 +16,21 @@ export async function POST(request: Request) {
 
     const amountStr = Number(amount).toFixed(2);
     const currency = 'PLN';
+    const desc = description || 'Doładowanie portfela Forma Marzeń';
 
-    // Oficjalny algorytm sumy kontrolnej SHA256 dla Autopay (BlueMedia): pos_id + order_id + amount + crc
-    const hashData = `${posId}${orderId}${amountStr}${crcKey}`;
-    const hash = crypto.createHash('sha256').update(hashData).digest('hex');
+    // Standardowy algorytm sumy kontrolnej SHA256 dla Autopay (BlueMedia) z użyciem separatora "|"
+    // Format: pos_id | order_id | amount | description | crc (lub pos_id + order_id + amount + crc)
+    // Zgodnie z oficjalną specyfikacją BlueMedia/Autopay dla przekierowań:
+    const hashString = `${posId}|${orderId}|${amountStr}|${currency}|${desc}|${crcKey}`;
+    const hash = crypto.createHash('sha256').update(hashString).digest('hex');
 
-    // Kompletny zestaw parametrów wymaganych przez bramkę Autopay
     const paymentPayload = {
       pos_id: posId,
       session_id: orderId,
       order_id: orderId,
       amount: amountStr,
       currency: currency,
-      description: description || 'Doładowanie portfela Forma Marzeń',
+      description: desc,
       client_email: email || 'klient@formamarzen.pl',
       client_first_name: firstName || 'Klubowicz',
       client_last_name: lastName || 'FormaMarzen',
