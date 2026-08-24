@@ -434,7 +434,6 @@ export default function RootLayout({
       title: "Strefa Trenera",
       items: [
         { href: '/', label: 'Trener (Grafik)', icon: '📅' },
-        { href: '/analiza-formy', label: 'Analiza formy (Klubowicze)', icon: '⚖️' },
       ]
     },
     {
