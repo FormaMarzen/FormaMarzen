@@ -3713,11 +3713,11 @@ export default function DashboardPage() {
                                   🪑 REZERWA
                                 </span>
                               )}
-                              {isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
-                                <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[8px] px-1.5 py-0.5 rounded-md uppercase tracking-wider" title="Ten trening nie wchodzi w zakres Twojego karnetu">
-                                  Inny karnet
-                                </span>
-                              )}
+{isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
+  <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[9px] sm:text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider inline-flex items-center gap-1.5 shadow-xs">
+    <span>⚠️</span> Obowiązuje inny karnet
+  </span>
+)}
 
                               {isLockedForClient && !isClassCancelled && !item.isUsunięte && (
                                 <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
