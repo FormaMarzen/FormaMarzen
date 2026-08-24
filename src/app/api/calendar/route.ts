@@ -197,7 +197,9 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         'Content-Type': 'text/calendar; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="kalendarz-treningow.ics"'
+        'Content-Disposition': 'inline; filename="kalendarz-treningow.ics"',
+        'Cache-Control': 'no-store, max-age=0',
+        'Access-Control-Allow-Origin': '*'
       }
     });
 
