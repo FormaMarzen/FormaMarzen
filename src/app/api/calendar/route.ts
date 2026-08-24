@@ -8,7 +8,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const klientId = searchParams.get('klient_id');
+    const rawKlientId = searchParams.get('klient_id');
     const isAdmin = searchParams.get('admin') === 'true';
     const filterTrainer = searchParams.get('trainer');
     const filterType = searchParams.get('type');
@@ -16,15 +16,19 @@ export async function GET(request: Request) {
     let events: any[] = [];
 
     // 1. Jeśli to kalendarz klubowicza
-    if (klientId) {
-      const { data: clientData } = await (supabase
+    if (rawKlientId) {
+      // Bezpieczna konwersja ID z tekstu na liczbę (dopasowanie do typu int8 w Supabase)
+      const klientId = !isNaN(Number(rawKlientId)) ? Number(rawKlientId) : rawKlientId;
+
+      const { data: clientData, error: clientErr } = await (supabase
         .from('klienci') as any)
         .select('id, Imię, Nazwisko, ustawienia_kalendarza')
         .eq('id', klientId)
         .maybeSingle();
 
-      if (!clientData) {
-        return new NextResponse('Klient nie znaleziony', { status: 404 });
+      if (clientErr || !clientData) {
+        console.error("Kalendarz ICS - klient nie znaleziony:", rawKlientId, clientErr);
+        return new NextResponse('Klient nie znaleziony w bazie danych', { status: 404 });
       }
 
       let settings: any = {};
@@ -95,7 +99,7 @@ export async function GET(request: Request) {
         });
       }
     } 
-    // 2. Jeśli to widok administratora z filtrami (uwzględnia odwołania i nadpisania)
+    // 2. Jeśli to widok administratora z filtrami
     else if (isAdmin) {
       const { data: szablony } = await supabase.from('grafik_zajec').select('*');
       const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*');
@@ -123,7 +127,6 @@ export async function GET(request: Request) {
             const override = nadpisaniaMap[classKey] || nadpisaniaMap[`${item.id}_${isoDateStr}`];
             const cls = override ? { ...item, ...override } : item;
 
-            // Pomiń, jeśli zajęcia są odwołane lub usunięte
             if (cls.is_odwolane || cls.is_usuniete || cls['is-usuniete']) return;
 
             if (filterTrainer && filterTrainer !== 'Wszyscy' && cls.trainer !== filterTrainer) return;
@@ -160,6 +163,8 @@ export async function GET(request: Request) {
           }
         });
       }
+    } else {
+      return new NextResponse('Brak wymaganych parametrów (klient_id lub admin=true)', { status: 400 });
     }
 
     let icsLines = [
