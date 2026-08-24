@@ -277,12 +277,16 @@ export default function ClubChat() {
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
+  // Mapowanie ostatniej wiadomości oraz jej treści dla każdego użytkownika
   const latestMessageMap = new Map();
+  const latestMessageTextMap = new Map();
+
   messages.forEach((m: any) => {
     const otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
     const msgTime = new Date(m.created_at).getTime();
     if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
       latestMessageMap.set(otherId, msgTime);
+      latestMessageTextMap.set(otherId, m.tresc || "");
     }
   });
 
@@ -486,6 +490,8 @@ export default function ClubChat() {
                       !m.przeczytana
                   ).length;
 
+                  const lastMessageText = latestMessageTextMap.get(user.id);
+
                   return (
                     <button
                       key={user.id}
@@ -496,7 +502,7 @@ export default function ClubChat() {
                           : "bg-white hover:bg-sky-50 border-slate-200/80"
                       }`}
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 overflow-hidden">
                         <div
                           className={`w-10 h-10 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${
                             isSys
@@ -512,18 +518,22 @@ export default function ClubChat() {
                             <span>👤</span>
                           )}
                         </div>
-                        <div>
-                          <div className={`font-bold text-xs ${isSys ? "text-amber-950 font-black" : "text-slate-900 group-hover:text-sky-950"}`}>
+                        <div className="overflow-hidden">
+                          <div className={`font-bold text-xs truncate ${isSys ? "text-amber-950 font-black" : "text-slate-900 group-hover:text-sky-950"}`}>
                             {user.name}
                           </div>
-                          <div className="text-[10px] text-slate-400">
-                            {isSys ? "Oficjalne powiadomienia" : "Klubowicz"}
+                          <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                            {lastMessageText ? (
+                              <span className="italic">{lastMessageText}</span>
+                            ) : (
+                              <span>{isSys ? "Oficjalne powiadomienia" : "Klubowicz"}</span>
+                            )}
                           </div>
                         </div>
                       </div>
 
                       {userUnread > 0 && (
-                        <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm">
+                        <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0 ml-2">
                           {userUnread}
                         </span>
                       )}
