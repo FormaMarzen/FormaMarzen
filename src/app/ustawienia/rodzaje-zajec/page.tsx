@@ -8,19 +8,48 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE
+const fetchAllFromSupabase = async (
+  table: string, 
+  selectQuery: string = '*', 
+  orderBy: string = 'id', 
+  ascending: boolean = false, 
+  maxPages: number = 5
+) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(selectQuery)
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (error) {
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break;
+    } else {
+      break;
+    }
+  }
+  return result;
+};
+
 export default function RodzajeZajecPage() {
   const [rodzaje, setRodzaje] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
+  const isFetchingRef = useRef(false);
 
-  // 1. POBIERANIE DANYCH Z SUPABASE
+  // 1. POBIERANIE DANYCH Z SUPABASE Z OMINIĘCIEM LIMITU
   const loadRodzaje = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('rodzaje_zajec')
-        .select('*')
-        .order('id', { ascending: true });
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
 
-      if (error) throw error;
+    try {
+      const data = await fetchAllFromSupabase('rodzaje_zajec', '*', 'id', true, 2);
 
       if (data) {
         const parsedData = data.map((item: any) => {
@@ -44,6 +73,8 @@ export default function RodzajeZajecPage() {
       }
     } catch (err: any) {
       console.error("Błąd pobierania rodzajów zajęć z Supabase:", err);
+    } finally {
+      isFetchingRef.current = false;
     }
   };
 

@@ -1,10 +1,40 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
 const SYSTEM_ID = 5000;
+
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
+const fetchAllFromSupabase = async (
+  table: string, 
+  selectQuery: string = '*', 
+  orderBy: string = 'id', 
+  ascending: boolean = false, 
+  maxPages: number = 5
+) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(selectQuery)
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (error) {
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break;
+    } else {
+      break;
+    }
+  }
+  return result;
+};
 
 export default function WyzwaniaPage() {
   // Stan użytkownika
@@ -114,9 +144,9 @@ export default function WyzwaniaPage() {
     const initData = async () => {
       setIsLoading(true);
       try {
-        const [sessionRes, klienciRes] = await Promise.all([
+        const [sessionRes, klienciData] = await Promise.all([
           supabase.auth.getSession(),
-          supabase.from("klienci").select("id, Imię, Nazwisko, E-mail, avatarUrl, push_subscription")
+          fetchAllFromSupabase('klienci', 'id, Imię, Nazwisko, E-mail, avatarUrl, push_subscription', 'id', true, 10)
         ]);
 
         const userEmail = (sessionRes.data.session?.user?.email || "").toLowerCase().trim();
@@ -125,8 +155,7 @@ export default function WyzwaniaPage() {
           return;
         }
 
-        const klienciData = klienciRes.data || [];
-        const enriched = klienciData.map((c: any) => ({
+        const enriched = (klienciData || []).map((c: any) => ({
           id: c.id,
           firstName: c.Imię || c.firstName || "",
           lastName: c.Nazwisko || c.lastName || "",
@@ -180,14 +209,14 @@ export default function WyzwaniaPage() {
     initData();
   }, []);
 
-  // 2. Pobieranie danych z bazy
+  // 2. Pobieranie danych z bazy (Omijanie limitu 1000 rekordów Supabase)
   const fetchWyzwania = async () => {
-    const { data } = await supabase.from("klub_wyzwania").select("*").order("created_at", { ascending: false });
+    const data = await fetchAllFromSupabase("klub_wyzwania", "*", "created_at", false, 5);
     if (data) setWyzwania(data);
   };
 
   const fetchDyscypliny = async () => {
-    const { data } = await supabase.from("klub_dyscypliny").select("*").order("nazwa");
+    const data = await fetchAllFromSupabase("klub_dyscypliny", "*", "nazwa", true, 2);
     if (data) {
       setDyscyplinyList(data);
       if (data.length > 0 && !dyscyplina) setDyscyplina(data[0].nazwa);
@@ -195,6 +224,7 @@ export default function WyzwaniaPage() {
   };
 
   const fetchOdznaki = async (userId: any) => {
+    // Tu możemy zostawić zwykłe query, ponieważ to są odznaki pojedynczego użytkownika (wątpliwe, by było ich ponad 1000)
     const { data } = await supabase
       .from("klub_odznaki_klubowicze")
       .select(`id, przyznano_at, klient_id, klub_odznaki_definicje (id, nazwa, opis, ikona, punkty, kategoria, warunek)`)
@@ -203,14 +233,18 @@ export default function WyzwaniaPage() {
   };
 
   const fetchAllOdznakiDef = async () => {
-    const { data } = await supabase.from("klub_odznaki_definicje").select("*").order("punkty", { ascending: true });
+    const data = await fetchAllFromSupabase("klub_odznaki_definicje", "*", "punkty", true, 2);
     if (data) setWszystkieOdznaki(data);
   };
 
   const fetchWszystkiePrzydzieloneOdznakiDirect = async () => {
-    const { data } = await supabase
-      .from("klub_odznaki_klubowicze")
-      .select(`id, przyznano_at, klient_id, odznaka_id, klub_odznaki_definicje (id, nazwa, opis, ikona, punkty, kategoria, warunek)`);
+    const data = await fetchAllFromSupabase(
+      "klub_odznaki_klubowicze", 
+      `id, przyznano_at, klient_id, odznaka_id, klub_odznaki_definicje (id, nazwa, opis, ikona, punkty, kategoria, warunek)`, 
+      "id", 
+      false, 
+      10
+    );
     if (data) {
       setWszystkiePrzydzieloneOdznaki(data);
       return data;
@@ -219,13 +253,19 @@ export default function WyzwaniaPage() {
   };
 
   const fetchHistoriaOdznak = async () => {
-    const { data } = await supabase.from("klub_odznaki_klubowicze").select(`*, klub_odznaki_definicje (nazwa), klienci (Imię, Nazwisko)`);
+    const data = await fetchAllFromSupabase(
+      "klub_odznaki_klubowicze", 
+      `*, klub_odznaki_definicje (nazwa), klienci (Imię, Nazwisko)`, 
+      "id", 
+      false, 
+      5
+    );
     if (data) setOdznakiHistoria(data);
   };
 
   // Obliczanie obu rankingów: pojedynków oraz punktacji odznak
   const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
-    const { data: challengesData } = await supabase.from("klub_wyzwania_historia").select("zwyciezca_id");
+    const challengesData = await fetchAllFromSupabase("klub_wyzwania_historia", "zwyciezca_id", "id", false, 5);
     
     // 1. Ranking pojedynków
     if (challengesData && clientsData.length > 0) {

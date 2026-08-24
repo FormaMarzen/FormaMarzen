@@ -7,6 +7,36 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
+const fetchAllFromSupabase = async (
+  table: string, 
+  selectQuery: string = '*', 
+  orderBy: string = 'id', 
+  ascending: boolean = false, 
+  maxPages: number = 5
+) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(selectQuery)
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (error) {
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break; // Jeśli pobrano mniej niż 1000, to znaczy, że to już ostatnia strona
+    } else {
+      break;
+    }
+  }
+  return result;
+};
+
 export default function AutomatyczneZapisyPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [klienciList, setKlienciList] = useState<any[]>([]);
@@ -27,6 +57,9 @@ export default function AutomatyczneZapisyPage() {
   const [rulesSearchQuery, setRulesSearchQuery] = useState<string>('');
 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA I NAKŁADANIEM SIĘ (Race Condition)
+  const isFetchingRef = useRef(false);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -110,18 +143,23 @@ export default function AutomatyczneZapisyPage() {
   };
 
   const loadData = async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
     try {
       setLoading(true);
 
-      // 1. Pobierz klientów z bazy
-      const { data: klienciData, error: klienciErr } = await supabase
-        .from('klienci')
-        .select('id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza');
-      
-      if (klienciErr) console.error('Błąd pobierania klientów:', klienciErr);
+      // 1. Pobierz klientów z bazy z ominięciem limitu 1000
+      const klienciData = await fetchAllFromSupabase(
+        'klienci', 
+        'id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza', 
+        'id', 
+        true, 
+        10
+      );
       
       let enrichedClients: any[] = [];
-      if (klienciData) {
+      if (klienciData && klienciData.length > 0) {
         enrichedClients = klienciData.map((c: any) => {
           const passExp = getClientPassExpiry(c);
           return {
@@ -134,8 +172,7 @@ export default function AutomatyczneZapisyPage() {
       }
 
       // 2. Pobierz grafik cykliczny
-      const { data: cykliczne, error: cykliczneErr } = await supabase.from('grafik_zajec').select('*');
-      if (cykliczneErr) console.error('Błąd pobierania grafiku:', cykliczneErr);
+      const cykliczne = await fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 2);
 
       const combinedGrafik = (cykliczne || []).map(c => ({
         ...c,
@@ -145,18 +182,18 @@ export default function AutomatyczneZapisyPage() {
       }));
       setGrafikItems(combinedGrafik);
 
-      // 3. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika
-      const { data: zapisyData, error: zapisyErr } = await supabase.from('zapisy_zajec').select('*');
-      if (zapisyErr) console.error('Błąd pobierania zapisów:', zapisyErr);
+      // 3. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika (ominięcie limitu)
+      const zapisyData = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
       if (zapisyData) setZapisyList(zapisyData);
 
       // 4. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
-      const { data: autoData, error: autoErr } = await supabase.from('automatyczne_zapisy').select('*');
-      if (!autoErr && autoData) {
+      const autoData = await fetchAllFromSupabase('automatyczne_zapisy', '*', 'id', false, 5);
+      if (autoData) {
         setAutoBookingsList(autoData);
         await syncAutoBookings(autoData, enrichedClients, combinedGrafik);
         
-        const { data: refreshedZapisy } = await supabase.from('zapisy_zajec').select('*');
+        // Odświeżenie zapisów po synchronizacji (by licznik zaktualizował się od razu)
+        const refreshedZapisy = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
         if (refreshedZapisy) setZapisyList(refreshedZapisy);
       }
 
@@ -164,6 +201,7 @@ export default function AutomatyczneZapisyPage() {
       console.error('Błąd ładowania danych:', err);
     } finally {
       setLoading(false);
+      isFetchingRef.current = false;
     }
   };
 

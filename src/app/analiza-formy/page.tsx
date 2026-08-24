@@ -50,6 +50,36 @@ interface AnalizaFormyWpis {
   notatki_klubowicza?: string | null;
 }
 
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
+const fetchAllFromSupabase = async (
+  table: string, 
+  selectQuery: string = '*', 
+  orderBy: string = 'id', 
+  ascending: boolean = false, 
+  maxPages: number = 5
+) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(selectQuery)
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (error) {
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break;
+    } else {
+      break;
+    }
+  }
+  return result;
+};
+
 export default function AnalizaFormyPage() {
   const [activeTab, setActiveTab] = useState<'pomiary' | 'makro' | 'redukcja'>('pomiary');
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
@@ -161,12 +191,9 @@ export default function AnalizaFormyPage() {
 
   // 2. Pobieranie bazy klientów dla autouzupełniania wyszukiwarki (Admin/Trener)
   const fetchClientsList = async () => {
-    const { data, error } = await supabase
-      .from('klienci')
-      .select('*')
-      .order('Nazwisko', { ascending: true });
+    const data = await fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 10);
 
-    if (data && !error) {
+    if (data) {
       setKlienci(data as unknown as Klient[]);
     }
   };
@@ -184,6 +211,7 @@ export default function AnalizaFormyPage() {
       query = query.ilike('email_klienta', email.trim());
     }
 
+    // Ponieważ to pojedynczy uzytkownik, nie zlapie on sie na ukryty limit Supabase (no chyba, że ma więcej niż 1000 pomiarów formy).
     const { data, error } = await query;
     if (data && !error) {
       setMeasurements(data as AnalizaFormyWpis[]);
@@ -612,7 +640,7 @@ export default function AnalizaFormyPage() {
                   setSelectedKlient(null);
                   setMeasurements([]);
                 }}
-                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
               >
                 ✕ Wyczyść
               </button>
