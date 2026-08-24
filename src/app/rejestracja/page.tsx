@@ -259,6 +259,17 @@ export default function FreeRegistrationPage() {
       ]);
     }
 
+    // 6. Powiadomienie na czacie dla administratora (ID 5000)
+    await supabase.from('czat_wiadomosci').insert([
+      {
+        nadawca_id: 5000,
+        nadawca_nazwa: 'System / Administrator',
+        odbiorca_id: 5000,
+        tresc: `Nowy użytkownik zarejestrowany (darmowe zajęcia): ${firstName} ${lastName} (${email}, tel: ${phone})`,
+        przeczytana: false
+      }
+    ]);
+
     setIsLoading(false);
     setIsSuccessModalOpen(true);
   };

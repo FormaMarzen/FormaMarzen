@@ -71,7 +71,7 @@ export default function RegistrationPassPage() {
     if (!pass) return false;
     const name = (pass.nazwa || '').toLowerCase();
     const dlugosc = (pass.dlugosc || '').toLowerCase();
-    return name.includes('umow') || name.includes('12m') || dlugosc.includes('12 miesi') || dlugosc.includes('1 rok');
+    return name.includes('umow') || name.includes('12m') || dlugosc.includes('1 miesi') || dlugosc.includes('1 rok');
   };
 
   const getPassCalculation = (pass: any) => {
@@ -286,6 +286,17 @@ export default function RegistrationPassPage() {
           opis: `Rejestracja z darmowym karnetem: ${selectedPass.nazwa}`
         }]);
       }
+
+      // 6. Powiadomienie na czacie dla administratora (ID 5000)
+      await supabase.from('czat_wiadomosci').insert([
+        {
+          nadawca_id: 5000,
+          nadawca_nazwa: 'System / Administrator',
+          odbiorca_id: 5000,
+          tresc: `Nowy użytkownik zarejestrowany z zakupem karnetu (${selectedPass.nazwa}): ${firstName} ${lastName} (${email}, tel: ${phone})`,
+          przeczytana: false
+        }
+      ]);
 
       setIsLoading(false);
       setIsSuccessModalOpen(true);
