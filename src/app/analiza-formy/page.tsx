@@ -163,6 +163,23 @@ export default function AnalizaFormyPage() {
           if (trenerData) {
             setAppRole('trener');
             await fetchClientsList();
+
+            // Pobieramy dane osobowe trenera z tabeli 'klienci', aby traktować go jak klubowicza w jego własnej zakładce
+            const { data: trenerKlientData } = await supabase
+              .from('klienci')
+              .select('*')
+              .ilike('E-mail', cleanEmail)
+              .maybeSingle();
+
+            if (trenerKlientData) {
+              const k = trenerKlientData as unknown as Klient;
+              setSelectedKlient(k);
+              const g = (k.gender || k.Płeć || k.plec || '').toLowerCase();
+              if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
+              else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+            }
+
+            await fetchMeasurements(trenerKlientData ? (trenerKlientData as any).id : 0, cleanEmail);
           } else {
             setAppRole('klubowicz');
             const { data: klientData } = await supabase
@@ -211,7 +228,6 @@ export default function AnalizaFormyPage() {
       query = query.ilike('email_klienta', email.trim());
     }
 
-    // Ponieważ to pojedynczy uzytkownik, nie zlapie on sie na ukryty limit Supabase (no chyba, że ma więcej niż 1000 pomiarów formy).
     const { data, error } = await query;
     if (data && !error) {
       setMeasurements(data as AnalizaFormyWpis[]);
@@ -296,11 +312,6 @@ export default function AnalizaFormyPage() {
   // Obsługa zapisu (dodanie lub aktualizacja)
   const handleSubmitMeasurement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedKlient && appRole !== 'klubowicz') {
-      alert("Proszę najpierw wyszukać i wybrać podopiecznego.");
-      return;
-    }
-
     const targetKlientId = selectedKlient ? selectedKlient.id : null;
     const targetEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
 
@@ -563,19 +574,21 @@ export default function AnalizaFormyPage() {
             </h1>
           </div>
           <p className="text-xs text-slate-500 font-medium mt-1">
-            {appRole === 'admin' || appRole === 'trener' 
-              ? "Panel trenerski: Wyszukaj podopiecznego, zarządzaj pomiarami, edytuj karty i plany makro" 
-              : "Twój dziennik postępów: Pomiary, skład ciała oraz wytyczne dietetyczne"}
+            {appRole === 'admin' 
+              ? "Panel administratora: Wyszukaj podopiecznego, zarządzaj pomiarami, edytuj karty i plany makro" 
+              : appRole === 'trener'
+                ? "Twoje konto trenera: Zobacz swoje wyniki, pomiary oraz dietę lub wyszukaj podopiecznego"
+                : "Twój dziennik postępów: Pomiary, skład ciała oraz wytyczne dietetyczne"}
           </p>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {((appRole === 'admin' || appRole === 'trener' && selectedKlient) || appRole === 'klubowicz') && (
+          {((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
             <button
               onClick={handleOpenAddModal}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
             >
-              <span>+</span> {appRole === 'klubowicz' ? 'Dodaj swój pomiar' : 'Dodaj pomiar'}
+              <span>+</span> {appRole === 'klubowicz' || appRole === 'trener' ? 'Dodaj swój pomiar' : 'Dodaj pomiar'}
             </button>
           )}
         </div>
@@ -618,13 +631,18 @@ export default function AnalizaFormyPage() {
       {/* WYSZUKIWARKA KLUBOWICZA TYLKO DLA ADMINA / TRENERA */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3 relative">
-          <label className="text-xs font-black text-sky-950 uppercase tracking-wider flex items-center gap-2">
-            <span>🔍</span> Wyszukaj podopiecznego:
+          <label className="text-xs font-black text-sky-950 uppercase tracking-wider flex items-center justify-between">
+            <span className="flex items-center gap-2"><span>🔍</span> Wyszukaj podopiecznego (opcjonalnie):</span>
+            {appRole === 'trener' && selectedKlient && selectedKlient['E-mail']?.toLowerCase() === currentUserEmail && (
+              <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                Obecnie wyświetlasz swoje własne dane
+              </span>
+            )}
           </label>
           <div className="relative">
             <input
               type="text"
-              placeholder="Wpisz imię, nazwisko lub e-mail (min. 2 znaki)..."
+              placeholder="Wpisz imię, nazwisko lub e-mail (min. 2 znaki), aby przejrzeć podopiecznego..."
               value={searchQuery}
               onFocus={() => setIsSearchFocused(true)}
               onChange={(e) => {
@@ -635,14 +653,25 @@ export default function AnalizaFormyPage() {
             />
             {searchQuery && (
               <button
-                onClick={() => {
+                onClick={async () => {
                   setSearchQuery('');
-                  setSelectedKlient(null);
-                  setMeasurements([]);
+                  // Przywracamy dane trenera po wyczyszczeniu wyszukiwania
+                  const { data: trenerKlientData } = await supabase
+                    .from('klienci')
+                    .select('*')
+                    .ilike('E-mail', currentUserEmail)
+                    .maybeSingle();
+                  if (trenerKlientData) {
+                    setSelectedKlient(trenerKlientData as unknown as Klient);
+                    fetchMeasurements((trenerKlientData as any).id, currentUserEmail);
+                  } else {
+                    setSelectedKlient(null);
+                    setMeasurements([]);
+                  }
                 }}
                 className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
               >
-                ✕ Wyczyść
+                ✕ Wróć do moich danych
               </button>
             )}
 
@@ -727,7 +756,7 @@ export default function AnalizaFormyPage() {
           )}
         </div>
       ) : (
-        (appRole === 'admin' || appRole === 'trener') && (
+        appRole === 'admin' && (
           <div className="bg-sky-50 border border-sky-200 rounded-2xl p-8 text-center text-slate-500 text-xs font-bold space-y-1">
             <span className="text-2xl block mb-2">👤</span>
             Użyj powyższego pola wyszukiwania, aby wybrać klubowicza i załadować jego historię pomiarów.
@@ -738,7 +767,7 @@ export default function AnalizaFormyPage() {
       {/* ========================================================================= */}
       {/* ZAKŁADKA 1: POMIARY CENTYMETREM, SKŁAD CIAŁA I WYKRESY 24 MSC */}
       {/* ========================================================================= */}
-      {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz') && (
+      {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
           
           {/* KAFLE OSTATNIEGO POMIARU */}
@@ -879,26 +908,22 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.tluszcz_wisceralny || '-'}</td>
                         <td className="p-3 text-center">
-                          {((appRole === 'admin' || appRole === 'trener') || appRole === 'klubowicz') ? (
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                onClick={() => handleOpenEditModal(m)}
-                                className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                                title="Edytuj ten wpis"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                onClick={() => handleDeleteMeasurement(m.id)}
-                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                                title="Usuń wpis"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 font-bold">-</span>
-                          )}
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleOpenEditModal(m)}
+                              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                              title="Edytuj ten wpis"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              onClick={() => handleDeleteMeasurement(m.id)}
+                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                              title="Usuń wpis"
+                            >
+                              🗑️
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -942,7 +967,7 @@ export default function AnalizaFormyPage() {
       {/* ========================================================================= */}
       {/* ZAKŁADKA 2: DIETA, MAKROSKŁADNIKI I KALKULATOR KATCH-MCARDLE Z PŁCIĄ */}
       {/* ========================================================================= */}
-      {activeTab === 'makro' && (selectedKlient || appRole === 'klubowicz') && (
+      {activeTab === 'makro' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
           
           {/* GŁÓWNE KARTY KALORII I MAKRO */}
@@ -1079,7 +1104,6 @@ export default function AnalizaFormyPage() {
               </span>
             </div>
 
-            {/* INFORMACJA O WYMAGANEJ PŁCI */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 font-bold flex items-center gap-2">
               <span>⚠️</span>
               <span>W celu prawidłowego obliczenia zapotrzebowania niezbędna jest informacja o płci podopiecznego (różnice w metabolizmie tkanek).</span>
@@ -1193,29 +1217,26 @@ export default function AnalizaFormyPage() {
                   </div>
                 </div>
 
-                {((appRole === 'admin' || appRole === 'trener') || appRole === 'klubowicz') && (
-                  <div className="flex justify-end pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFormData(prev => ({
-                          ...prev,
-                          kcal: String(calcResult.targetKcal),
-                          bialko: String(calcResult.protein),
-                          tluszcz: String(calcResult.fat),
-                          weglowodany: String(calcResult.carbs)
-                        }));
-                        setIsAddModalOpen(true);
-                      }}
-                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-4 py-2 rounded-xl transition-all shadow cursor-pointer uppercase tracking-wider"
-                    >
-                      Przepisz wyliczone makro do karty pomiaru ➔
-                    </button>
-                  </div>
-                )}
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        kcal: String(calcResult.targetKcal),
+                        bialko: String(calcResult.protein),
+                        tluszcz: String(calcResult.fat),
+                        weglowodany: String(calcResult.carbs)
+                      }));
+                      setIsAddModalOpen(true);
+                    }}
+                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-4 py-2 rounded-xl transition-all shadow cursor-pointer uppercase tracking-wider"
+                  >
+                    Przepisz wyliczone makro do karty pomiaru ➔
+                  </button>
+                </div>
               </div>
             )}
-
           </div>
 
         </div>
@@ -1224,7 +1245,7 @@ export default function AnalizaFormyPage() {
       {/* ========================================================================= */}
       {/* ZAKŁADKA 3: WYZWANIE REDUKCJI */}
       {/* ========================================================================= */}
-      {activeTab === 'redukcja' && (selectedKlient || appRole === 'klubowicz') && (
+      {activeTab === 'redukcja' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
           <div className="bg-gradient-to-br from-slate-900 to-sky-950 text-white p-6 rounded-2xl shadow-md space-y-4">
             <div className="flex items-center gap-3">
@@ -1273,15 +1294,6 @@ export default function AnalizaFormyPage() {
               <div className="text-2xl font-black text-amber-500">W grze!</div>
               <p className="text-[11px] text-slate-500">Kolejny pomiar kontrolny w wyznaczonym terminie.</p>
             </div>
-          </div>
-
-          <div className="bg-sky-50 border border-sky-200 rounded-2xl p-6 text-center space-y-2">
-            <h4 className="font-black text-xs text-sky-950 uppercase tracking-wider">
-              Podkład pod moduł wyzwania redukcji
-            </h4>
-            <p className="text-xs text-slate-600 max-w-xl mx-auto">
-              W tym miejscu możemy dodać ranking klubowiczów, punkty za regularność treningów, zadania specjalne lub cotygodniowy progres procentowy. Sprecyzuj szczegóły, a rozbudujemy tę zakładkę.
-            </p>
           </div>
         </div>
       )}
