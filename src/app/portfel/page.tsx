@@ -149,15 +149,12 @@ export default function PortfelPage() {
         throw new Error(data.error || 'Nie udało się zainicjalizować płatności w API');
       }
 
-      // DEBUGOWANIE: Wypisujemy w konsoli przeglądarki dokładnie to, co wysyłamy do Autopay
-      console.log("DEBUG AUTOPAY PAYLOAD:", data.payload);
-
       // 3. Tworzymy formularz i automatycznie wysyłamy żądanie POST do bramki Autopay
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = data.gatewayUrl;
 
-      // Dodajemy wszystkie pola wymagane przez Autopay (pos_id, amount, hash, crc itp.)
+      // Dodajemy wszystkie pola wymagane przez Autopay
       Object.keys(data.payload).forEach((key) => {
         const input = document.createElement('input');
         input.type = 'hidden';
