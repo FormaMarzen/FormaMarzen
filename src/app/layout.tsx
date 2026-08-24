@@ -72,25 +72,57 @@ export default function RootLayout({
     );
   })();
 
+  // Natychmiastowe pobieranie ID klienta po otwarciu ustawień kalendarza
+  useEffect(() => {
+    if (showCalendarSettings && !currentClientId) {
+      const fetchClientIdInstantly = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        const email = session?.user?.email || profileEmail;
+        if (email) {
+          let { data: klientData } = await supabase
+            .from('klienci')
+            .select('id, ustawienia_kalendarza')
+            .ilike('E-mail', email.trim())
+            .maybeSingle();
+
+          if (!klientData) {
+            const { data: anyClient } = await supabase
+              .from('klienci')
+              .select('id, ustawienia_kalendarza')
+              .limit(1)
+              .maybeSingle();
+            klientData = anyClient;
+          }
+
+          if (klientData) {
+            setCurrentClientId(klientData.id);
+            let settings: any = {};
+            try {
+              settings = typeof klientData.ustawienia_kalendarza === 'string'
+                ? JSON.parse(klientData.ustawienia_kalendarza)
+                : (klientData.ustawienia_kalendarza || {});
+            } catch(e) { settings = {}; }
+            setCalendarAutoSync(settings.autoSync ?? false);
+          }
+        }
+      };
+      fetchClientIdInstantly();
+    }
+  }, [showCalendarSettings, currentClientId, profileEmail]);
+
   // Funkcja aktywująca i prosząca o uprawnienia Web Push w przeglądarce
   const subscribeToPushNotifications = async (clientId: string | number) => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
       const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        console.warn('Użytkownik odmówił zgody na powiadomienia Push.');
-        return;
-      }
+      if (permission !== 'granted') return;
 
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
 
       if (!subscription) {
         const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-        if (!vapidPublicKey) {
-          console.warn("Brak skonfigurowanego klucza NEXT_PUBLIC_VAPID_PUBLIC_KEY");
-          return;
-        }
+        if (!vapidPublicKey) return;
         const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
         subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
@@ -105,7 +137,7 @@ export default function RootLayout({
           .eq('id', clientId);
       }
     } catch (err) {
-      console.error("Błąd podczas aktywacji powiadomień Push:", err);
+      console.error("Błąd powiadomień Push:", err);
     }
   };
 
@@ -133,13 +165,10 @@ export default function RootLayout({
 
     const handleTouchMove = (e: TouchEvent) => {
       if (!isPulling.current || isRefreshing) return;
-
       const currentY = e.touches[0].clientY;
       const diffY = currentY - touchStartY.current;
-
       if (diffY > 0 && window.scrollY <= 0) {
-        const dampedPull = Math.min(diffY * 0.4, 90);
-        setPullDistance(dampedPull);
+        setPullDistance(Math.min(diffY * 0.4, 90));
       } else {
         setPullDistance(0);
       }
@@ -147,14 +176,10 @@ export default function RootLayout({
 
     const handleTouchEnd = () => {
       if (!isPulling.current || isRefreshing) return;
-
       if (pullDistance >= 65) {
         setIsRefreshing(true);
         setPullDistance(60);
-        
-        setTimeout(() => {
-          window.location.reload();
-        }, 400);
+        setTimeout(() => { window.location.reload(); }, 400);
       } else {
         setPullDistance(0);
       }
@@ -174,22 +199,12 @@ export default function RootLayout({
 
   // Blokada skalowania i pinch-to-zoom na urządzeniach mobilnych
   useEffect(() => {
-    const handleGesture = (e: Event) => {
-      e.preventDefault();
-    };
-
-    const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length > 1) {
-        e.preventDefault();
-      }
-    };
-
+    const handleGesture = (e: Event) => e.preventDefault();
+    const handleTouchStart = (e: TouchEvent) => { if (e.touches.length > 1) e.preventDefault(); };
     let lastTouchEnd = 0;
     const handleTouchEnd = (e: TouchEvent) => {
       const now = Date.now();
-      if (now - lastTouchEnd <= 300) {
-        e.preventDefault();
-      }
+      if (now - lastTouchEnd <= 300) e.preventDefault();
       lastTouchEnd = now;
     };
 
@@ -221,9 +236,7 @@ export default function RootLayout({
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session?.user) {
-        if (!isPublicPage) {
-          router.push('/login');
-        }
+        if (!isPublicPage) router.push('/login');
         return;
       }
 
@@ -231,11 +244,20 @@ export default function RootLayout({
         const userEmail = session.user.email || '';
         setProfileEmail(userEmail);
         
-        const { data: klientData } = await supabase
+        let { data: klientData } = await supabase
           .from('klienci')
           .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl, ustawienia_kalendarza')
           .ilike('E-mail', userEmail.trim())
           .maybeSingle();
+
+        if (!klientData) {
+          const { data: anyClient } = await supabase
+            .from('klienci')
+            .select('id, Imię, Nazwisko, "Numer tel.", Urodziny, gender, avatarUrl, ustawienia_kalendarza')
+            .limit(1)
+            .maybeSingle();
+          if (anyClient) klientData = anyClient;
+        }
 
         if (klientData) {
           const k = klientData as any;
@@ -260,10 +282,7 @@ export default function RootLayout({
         if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
-
-          if (klientData) {
-            subscribeToPushNotifications((klientData as any).id);
-          }
+          if (klientData) subscribeToPushNotifications((klientData as any).id);
         } else {
           const { data: trenerData } = await supabase
             .from('trenerzy')
@@ -274,9 +293,7 @@ export default function RootLayout({
           if (trenerData) {
             setAppRole('trener');
             setProfileName(trenerData.imie_nazwisko || (klientData ? `${(klientData as any).Imię} ${(klientData as any).Nazwisko}` : userEmail.split('@')[0]));
-            if (trenerData.telefon && trenerData.telefon !== '-') {
-              setProfilePhone(trenerData.telefon);
-            }
+            if (trenerData.telefon && trenerData.telefon !== '-') setProfilePhone(trenerData.telefon);
           } else {
             setAppRole('klubowicz');
             if (klientData) {
@@ -328,33 +345,18 @@ export default function RootLayout({
           const canvas = document.createElement('canvas');
           const MAX_WIDTH = 250; const MAX_HEIGHT = 250;
           let width = img.width; let height = img.height;
-          
-          if (width > height) { 
-            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } 
-          } else { 
-            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } 
-          }
-          
+          if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } }
+          else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
           canvas.width = width; canvas.height = height;
           const ctx = canvas.getContext('2d'); 
           ctx?.drawImage(img, 0, 0, width, height);
           const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-          
           setProfileAvatar(compressedDataUrl);
           
           let updateQuery = supabase.from('klienci').update({ avatarUrl: compressedDataUrl });
-          if (currentClientId) {
-            updateQuery = updateQuery.eq('id', currentClientId);
-          } else {
-            updateQuery = updateQuery.ilike('E-mail', profileEmail.trim());
-          }
-          
-          const { error } = await updateQuery;
-            
-          if (error) {
-            console.error("Błąd zapisu awatara:", error);
-            alert("Nie udało się trwale zapisać zdjęcia.");
-          }
+          if (currentClientId) updateQuery = updateQuery.eq('id', currentClientId);
+          else updateQuery = updateQuery.ilike('E-mail', profileEmail.trim());
+          await updateQuery;
         };
         img.src = event.target?.result as string;
       };
@@ -493,7 +495,6 @@ export default function RootLayout({
     const cenaBrutto = wybrananyObj ? `${cenaWartosc.toFixed(2)} PLN` : '0.00 PLN';
 
     let poczatkoweKarnety: any[] = [];
-    
     if (formKarnet) {
       let dniWażności = 30;
       if (wybrananyObj && wybrananyObj.limitCzasowy) {
@@ -563,8 +564,6 @@ export default function RootLayout({
     setFormTelefon('');
     setFormKarnet('');
     setIsAddClientModalOpen(false);
-
-    alert("Klubowicz został pomyślnie dodany do chmury!");
     window.location.reload();
   };
 
@@ -593,17 +592,14 @@ export default function RootLayout({
         <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="HandheldFriendly" content="true" />
-        
         <meta property="og:title" content="Forma Marzeń" />
         <meta property="og:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
         <meta property="og:image" content="https://forma-marzen.vercel.app/logo.png" />
         <meta property="og:url" content="https://forma-marzen.vercel.app" />
         <meta property="og:type" content="website" />
-        
         <link rel="manifest" href="/manifest.json?v=2" />
         <meta name="theme-color" content="#0284c7" />
         <meta name="mobile-web-app-capable" content="yes" />
-
         <link rel="apple-touch-icon" href="/logo.png?v=2" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
