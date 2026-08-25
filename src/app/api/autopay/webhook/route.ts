@@ -6,7 +6,6 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Pomocnicza funkcja wyciągająca wartości z XML za pomocą RegExp
 function extractXmlTag(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
   return match ? match[1].trim() : '';
@@ -14,9 +13,9 @@ function extractXmlTag(xml: string, tag: string): string {
 
 export async function POST(req: Request) {
   try {
-    const serviceIDEnv = (process.env.AUTOPAY_SERVICE_ID || '').trim();
+    const serviceIDEnv = (process.env.AUTOPAY_SERVICE_ID || '220522').trim();
     const hashKey = (process.env.AUTOPAY_HASH_KEY || '').trim();
-    const separator = process.env.AUTOPAY_HASH_SEPARATOR || ';';
+    const separator = (process.env.AUTOPAY_HASH_SEPARATOR || '|').trim();
 
     const rawBody = await req.text();
     let orderID = '';
@@ -24,7 +23,7 @@ export async function POST(req: Request) {
     let amount = '';
     let receivedHash = '';
 
-    // 1. Obsługa powiadomienia ITN Autopay (Base64 XML / standard XML / JSON / URL-encoded)
+    // 1. Parsowanie powiadomienia Autopay ITN (XML Base64 / XML / JSON / URL-encoded)
     if (rawBody.includes('transactions=') || rawBody.includes('<transactions>') || rawBody.startsWith('<?xml')) {
       let xmlContent = rawBody;
 
@@ -58,7 +57,7 @@ export async function POST(req: Request) {
       return new NextResponse('Brak OrderID w powiadomieniu', { status: 400 });
     }
 
-    // 2. Weryfikacja sumy kontrolnej HASH powiadomienia
+    // 2. Weryfikacja sumy kontrolnej powiadomienia
     if (receivedHash && hashKey) {
       const calculatedHash = crypto
         .createHash('sha256')
@@ -70,7 +69,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3. Pobranie rekordu transakcji z tabeli autopay_transakcje
+    // 3. Pobranie transakcji z bazy danych
     const { data: transakcja, error: fetchErr } = await supabase
       .from('autopay_transakcje')
       .select('*')
@@ -83,7 +82,7 @@ export async function POST(req: Request) {
       return new NextResponse(xmlNotFound, { status: 200, headers: { 'Content-Type': 'application/xml' } });
     }
 
-    // 4. Zabezpieczenie przed ponownym zaksięgowaniem
+    // 4. Zabezpieczenie przed podwójnym naliczeniem wpłaty
     if (transakcja.status === 'success') {
       const xmlAlreadySuccess = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
       return new NextResponse(xmlAlreadySuccess, { status: 200, headers: { 'Content-Type': 'application/xml' } });
@@ -95,7 +94,7 @@ export async function POST(req: Request) {
     if (isSuccess) {
       const transactionAmount = Number(transakcja.amount) || Number(amount) || 0;
 
-      // Aktualizacja rekordu transakcji na status success
+      // Zmiana statusu na success w autopay_transakcje
       await supabase
         .from('autopay_transakcje')
         .update({
@@ -108,7 +107,7 @@ export async function POST(req: Request) {
         })
         .eq('order_id', orderID);
 
-      // Pobranie danych klienta i aktualizacja salda portfela
+      // Aktualizacja salda portfela klienta
       const { data: klient, error: klientErr } = await supabase
         .from('klienci')
         .select('*')
@@ -157,7 +156,6 @@ export async function POST(req: Request) {
         .eq('order_id', orderID);
     }
 
-    // 5. Zwrócenie wymaganej przez Autopay odpowiedzi XML z potwierdzeniem
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
     return new NextResponse(xmlResponse, { status: 200, headers: { 'Content-Type': 'application/xml' } });
 

@@ -18,15 +18,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const serviceId = (process.env.AUTOPAY_SERVICE_ID || '').trim();
+    const serviceId = (process.env.AUTOPAY_SERVICE_ID || '220522').trim();
     const hashKey = (process.env.AUTOPAY_HASH_KEY || '').trim();
-    const separator = process.env.AUTOPAY_HASH_SEPARATOR || ';';
+    const separator = (process.env.AUTOPAY_HASH_SEPARATOR || '|').trim();
     const gatewayUrl = (process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment').trim();
-    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://forma-marzen.vercel.app').replace(/\/$/, '');
 
     if (!serviceId || !hashKey) {
       return NextResponse.json(
-        { success: false, error: 'Brak skonfigurowanych kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY' },
+        { success: false, error: 'Brak klucza AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w konfiguracji Vercel' },
         { status: 500 }
       );
     }
@@ -36,9 +35,7 @@ export async function POST(req: Request) {
     const gatewayId = '0';
     const customerEmail = (email || '').trim();
     const customerName = `${firstName || ''} ${lastName || ''}`.trim() || 'Klubowicz';
-    // Usunięcie ewentualnych średników z opisu, aby nie zaburzały separatora w Hashu
-    const cleanDescription = (description || `Doladowanie portfela ${formattedAmount} PLN`).replace(/;/g, ' ').trim();
-    const returnUrl = `${appUrl}/portfel`;
+    const cleanDescription = (description || `Doladowanie portfela ${formattedAmount} PLN`).replace(/[|;]/g, ' ').trim();
 
     // 1. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
     const { error: dbError } = await supabase
@@ -64,8 +61,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2. Wyliczenie sumy kontrolnej SHA-256 zgodnie ze standardem Autopay
-    // Standardowa kolejność pól: ServiceID;OrderID;Amount;Description;GatewayID;Currency;CustomerEmail;CustomerName;HashKey
+    // 2. Wyliczenie sumy kontrolnej Hash SHA-256 z separatorem pipe (|)
     const hashDataArray = [
       serviceId,
       orderId,
@@ -81,7 +77,7 @@ export async function POST(req: Request) {
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 3. Zwrócenie danych formularza do bramki Autopay
+    // 3. Przygotowanie parametrów formularza POST dla bramki Autopay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: orderId,
@@ -91,7 +87,6 @@ export async function POST(req: Request) {
       Currency: currency,
       CustomerEmail: customerEmail,
       CustomerName: customerName,
-      ReturnURL: returnUrl,
       Hash: hash
     };
 
