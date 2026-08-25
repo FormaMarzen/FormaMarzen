@@ -316,7 +316,10 @@ export default function AutomatyczneZapisyPage() {
               }
             ]);
 
-            // Unikamy duplikatów w tablici zapisyNadchodzace
+            // Zabezpieczenie przed duplikatem w tej samej sesji synchronizacji
+            bookedKeys.add(classKeyDisplay);
+            bookedKeys.add(classKeyIso);
+
             const dateStr = `${year}-${month}-${day}`;
             const zajeciaTitle = classObj.title || classObj.nazwa;
             const alreadyInArray = newZapisyNadchodzace.some(
@@ -389,7 +392,6 @@ export default function AutomatyczneZapisyPage() {
       const clientName = `${clientObj.Imię} ${clientObj.Nazwisko}`;
       const classTitle = classObj.title || classObj.nazwa;
 
-      // Zapisujemy regułę – synchronizacja automatycznie wygeneruje wpisy bez ryzyka dublowania
       const { error: insertErr } = await supabase.from('automatyczne_zapisy').insert([
         {
           klient_id: Number(selectedClientId),
