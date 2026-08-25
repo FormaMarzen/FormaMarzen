@@ -18,15 +18,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const serviceId = process.env.AUTOPAY_SERVICE_ID || '';
-    const hashKey = process.env.AUTOPAY_HASH_KEY || '';
+    const serviceId = (process.env.AUTOPAY_SERVICE_ID || '').trim();
+    const hashKey = (process.env.AUTOPAY_HASH_KEY || '').trim();
     const separator = process.env.AUTOPAY_HASH_SEPARATOR || ';';
-    const gatewayUrl = process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment';
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const gatewayUrl = (process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment').trim();
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://forma-marzen.vercel.app').replace(/\/$/, '');
 
     if (!serviceId || !hashKey) {
       return NextResponse.json(
-        { success: false, error: 'Brak skonfigurowanych kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w .env.local' },
+        { success: false, error: 'Brak skonfigurowanych kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY' },
         { status: 500 }
       );
     }
@@ -36,8 +36,9 @@ export async function POST(req: Request) {
     const gatewayId = '0';
     const customerEmail = (email || '').trim();
     const customerName = `${firstName || ''} ${lastName || ''}`.trim() || 'Klubowicz';
-    const cleanDescription = (description || `Zasilenie portfela ${formattedAmount} PLN`).trim();
-    const returnUrl = `${appUrl}/portfel?status=success&orderId=${orderId}`;
+    // Usunięcie ewentualnych średników z opisu, aby nie zaburzały separatora w Hashu
+    const cleanDescription = (description || `Doladowanie portfela ${formattedAmount} PLN`).replace(/;/g, ' ').trim();
+    const returnUrl = `${appUrl}/portfel`;
 
     // 1. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
     const { error: dbError } = await supabase
@@ -56,14 +57,15 @@ export async function POST(req: Request) {
       }]);
 
     if (dbError) {
-      console.error('Błąd zapisu autopay_transakcje w Supabase:', dbError);
+      console.error('Błąd zapisu w Supabase:', dbError);
       return NextResponse.json(
         { success: false, error: `Błąd bazy danych: ${dbError.message}` },
         { status: 500 }
       );
     }
 
-    // 2. Wyliczenie sumy kontrolnej SHA-256
+    // 2. Wyliczenie sumy kontrolnej SHA-256 zgodnie ze standardem Autopay
+    // Standardowa kolejność pól: ServiceID;OrderID;Amount;Description;GatewayID;Currency;CustomerEmail;CustomerName;HashKey
     const hashDataArray = [
       serviceId,
       orderId,
@@ -73,14 +75,13 @@ export async function POST(req: Request) {
       currency,
       customerEmail,
       customerName,
-      returnUrl,
       hashKey
     ];
 
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 3. Przygotowanie pól dla bramki Autopay
+    // 3. Zwrócenie danych formularza do bramki Autopay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: orderId,

@@ -6,26 +6,48 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Pomocnicza funkcja wyciągająca wartości z XML za pomocą RegExp
+function extractXmlTag(xml: string, tag: string): string {
+  const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return match ? match[1].trim() : '';
+}
+
 export async function POST(req: Request) {
   try {
-    const serviceId = process.env.AUTOPAY_SERVICE_ID || '';
-    const hashKey = process.env.AUTOPAY_HASH_KEY || '';
+    const serviceIDEnv = (process.env.AUTOPAY_SERVICE_ID || '').trim();
+    const hashKey = (process.env.AUTOPAY_HASH_KEY || '').trim();
     const separator = process.env.AUTOPAY_HASH_SEPARATOR || ';';
 
-    const rawText = await req.text();
+    const rawBody = await req.text();
     let orderID = '';
     let paymentStatus = '';
     let amount = '';
     let receivedHash = '';
 
-    if (rawText.startsWith('{')) {
-      const jsonData = JSON.parse(rawText);
+    // 1. Obsługa powiadomienia ITN Autopay (Base64 XML / standard XML / JSON / URL-encoded)
+    if (rawBody.includes('transactions=') || rawBody.includes('<transactions>') || rawBody.startsWith('<?xml')) {
+      let xmlContent = rawBody;
+
+      if (rawBody.includes('transactions=')) {
+        const params = new URLSearchParams(rawBody);
+        const base64Transactions = params.get('transactions') || '';
+        if (base64Transactions) {
+          xmlContent = Buffer.from(base64Transactions, 'base64').toString('utf8');
+        }
+      }
+
+      orderID = extractXmlTag(xmlContent, 'orderID');
+      paymentStatus = extractXmlTag(xmlContent, 'paymentStatus');
+      amount = extractXmlTag(xmlContent, 'amount');
+      receivedHash = extractXmlTag(xmlContent, 'hash');
+    } else if (rawBody.startsWith('{')) {
+      const jsonData = JSON.parse(rawBody);
       orderID = jsonData.OrderID || jsonData.orderID || jsonData.order_id || '';
       paymentStatus = jsonData.PaymentStatus || jsonData.paymentStatus || jsonData.status || '';
       amount = jsonData.Amount || jsonData.amount || '';
       receivedHash = jsonData.Hash || jsonData.hash || '';
     } else {
-      const params = new URLSearchParams(rawText);
+      const params = new URLSearchParams(rawBody);
       orderID = params.get('OrderID') || params.get('orderID') || '';
       paymentStatus = params.get('PaymentStatus') || params.get('paymentStatus') || '';
       amount = params.get('Amount') || params.get('amount') || '';
@@ -33,22 +55,22 @@ export async function POST(req: Request) {
     }
 
     if (!orderID) {
-      return new NextResponse('Brak OrderID', { status: 400 });
+      return new NextResponse('Brak OrderID w powiadomieniu', { status: 400 });
     }
 
-    // Weryfikacja sumy kontrolnej HASH
+    // 2. Weryfikacja sumy kontrolnej HASH powiadomienia
     if (receivedHash && hashKey) {
       const calculatedHash = crypto
         .createHash('sha256')
-        .update(`${serviceId}${separator}${orderID}${separator}${paymentStatus}${separator}${hashKey}`, 'utf8')
+        .update(`${serviceIDEnv}${separator}${orderID}${separator}${paymentStatus}${separator}${hashKey}`, 'utf8')
         .digest('hex');
 
       if (receivedHash.toLowerCase() !== calculatedHash.toLowerCase()) {
-        console.warn(`[Autopay Webhook] Ostrzeżenie: Niezgodny hash dla OrderID: ${orderID}`);
+        console.warn(`[Autopay Webhook] Niepoprawny hash powiadomienia dla OrderID: ${orderID}`);
       }
     }
 
-    // 1. Pobranie rekordu transakcji
+    // 3. Pobranie rekordu transakcji z tabeli autopay_transakcje
     const { data: transakcja, error: fetchErr } = await supabase
       .from('autopay_transakcje')
       .select('*')
@@ -56,13 +78,15 @@ export async function POST(req: Request) {
       .single();
 
     if (fetchErr || !transakcja) {
-      console.error(`[Autopay Webhook] Nie znaleziono transakcji ${orderID}:`, fetchErr);
-      return new NextResponse('Transakcja nie istnieje', { status: 404 });
+      console.error(`[Autopay Webhook] Transakcja nie znaleziona: ${orderID}`);
+      const xmlNotFound = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>NOTCONFIRMED</status></confirmation>`;
+      return new NextResponse(xmlNotFound, { status: 200, headers: { 'Content-Type': 'application/xml' } });
     }
 
-    // Zabezpieczenie przed wielokrotnym księgowaniem tej samej transakcji
+    // 4. Zabezpieczenie przed ponownym zaksięgowaniem
     if (transakcja.status === 'success') {
-      return new NextResponse('OK - Transakcja została już przetworzona', { status: 200 });
+      const xmlAlreadySuccess = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
+      return new NextResponse(xmlAlreadySuccess, { status: 200, headers: { 'Content-Type': 'application/xml' } });
     }
 
     const isSuccess = paymentStatus.toUpperCase() === 'SUCCESS' || paymentStatus.toUpperCase() === 'SUCCESSFUL';
@@ -71,7 +95,7 @@ export async function POST(req: Request) {
     if (isSuccess) {
       const transactionAmount = Number(transakcja.amount) || Number(amount) || 0;
 
-      // Aktualizacja statusu transakcji w autopay_transakcje
+      // Aktualizacja rekordu transakcji na status success
       await supabase
         .from('autopay_transakcje')
         .update({
@@ -84,7 +108,7 @@ export async function POST(req: Request) {
         })
         .eq('order_id', orderID);
 
-      // Pobranie danych klienta i aktualizacja salda
+      // Pobranie danych klienta i aktualizacja salda portfela
       const { data: klient, error: klientErr } = await supabase
         .from('klienci')
         .select('*')
@@ -133,10 +157,13 @@ export async function POST(req: Request) {
         .eq('order_id', orderID);
     }
 
-    return new NextResponse('OK', { status: 200 });
+    // 5. Zwrócenie wymaganej przez Autopay odpowiedzi XML z potwierdzeniem
+    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
+    return new NextResponse(xmlResponse, { status: 200, headers: { 'Content-Type': 'application/xml' } });
 
   } catch (error: any) {
     console.error('[Autopay Webhook Error]:', error);
-    return new NextResponse(`Błąd serwera: ${error.message}`, { status: 500 });
+    const xmlErr = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>NOTCONFIRMED</status></confirmation>`;
+    return new NextResponse(xmlErr, { status: 500, headers: { 'Content-Type': 'application/xml' } });
   }
 }
