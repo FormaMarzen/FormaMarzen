@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+// Bezpośrednia inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -32,7 +32,7 @@ export default function KlienciPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
   
-  // Dane grafiku i zapisów do pełnej synchronizacji
+  // Dane grafiku i zapisów
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
   const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
   const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
@@ -695,10 +695,11 @@ export default function KlienciPage() {
         const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
         const effectiveBanReason = c.powodBlokady || c.powod_blokady || (finalKarnety[0]?.powodBlokady) || null;
 
-        // Łączenie historii zawieszeń z kolumn 'historiaZawieszen' oraz 'historiazawieszen'
-        const rawHistZaw1 = safeJsonParse(c.historiaZawieszen, []);
-        const rawHistZaw2 = safeJsonParse(c.historiazawieszen, []);
-        const mergedHistoriaZawieszen = [...rawHistZaw1, ...rawHistZaw2];
+        // Łączenie historii zawieszeń ze WSZYSTKICH możliwych źródeł
+        const rawHistZaw1 = safeJsonParse(c.historiaZawieszenGlobalna || c.historiazawieszenglobalna, []);
+        const rawHistZaw2 = safeJsonParse(c.historiaZawieszen, []);
+        const rawHistZaw3 = safeJsonParse(c.historiazawieszen, []);
+        const mergedHistoriaZawieszen = [...rawHistZaw1, ...rawHistZaw2, ...rawHistZaw3];
 
         return {
           ...c,
@@ -2698,19 +2699,19 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // B. Zawieszenia z kolumn 'historiaZawieszen' i 'historiazawieszen' w tabeli klienci
+                      // B. Zawieszenia z kolumn 'historiaZawieszenGlobalna', 'historiaZawieszen' i 'historiazawieszen'
                       (profileClient.historiaZawieszen || []).forEach((hz: any) => {
                         const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik') || hz.by?.toLowerCase().includes('user') || !hz.kto;
                         suspensionsList.push({
                           id: `hist_client_${hz.id || Math.random()}`,
-                          karnetNazwa: hz.karnet || hz.nazwa || 'Karnet klubowicza',
+                          karnetNazwa: hz.karnet || hz.karnetNazwa || hz.nazwa || 'Karnet klubowicza',
                           od: hz.od || hz.start_date || hz.od_dnia,
-                          do: hz.do || hz.end_date || hz.do_dnia,
-                          dni: hz.dni ? `${hz.dni} dni` : '-',
+                          do: hz.status === 'aktywne' ? (hz.planowane_do || hz.do || '-') : (hz.do || hz.end_date || hz.do_dnia || '-'),
+                          dni: hz.status === 'aktywne' ? `Plan. ${hz.planowane_dni || 0}` : (hz.dni ? `${hz.dni} dni` : '-'),
                           kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : `🛡️ ${hz.kto || 'Administrator'}`,
-                          status: '✅ ZAKOŃCZONE',
-                          statusKlasa: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-                          dataOdwieszenia: hz.do || '-'
+                          status: hz.status === 'aktywne' ? '⏳ Trwa' : '✅ ZAKOŃCZONE',
+                          statusKlasa: hz.status === 'aktywne' ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                          dataOdwieszenia: hz.status === 'aktywne' ? '-' : (hz.do || '-')
                         });
                       });
 
