@@ -134,7 +134,7 @@ export default function RegistrationPassPage() {
     };
   };
 
-  const handleNextToStep2 = (e: React.FormEvent) => {
+  const handleNextToStep2 = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!firstName || !lastName || !email || !phone || !password) {
       setErrorMsg("Uzupełnij wszystkie wymagane pola.");
@@ -144,7 +144,24 @@ export default function RegistrationPassPage() {
       setErrorMsg("Hasło musi mieć minimum 6 znaków.");
       return;
     }
+
+    setIsLoading(true);
     setErrorMsg('');
+
+    // Globalna weryfikacja czy adres e-mail już istnieje w tabeli klienci
+    const { data: existingClientCheck } = await supabase
+      .from('klienci')
+      .select('id')
+      .eq('E-mail', email)
+      .maybeSingle();
+
+    if (existingClientCheck) {
+      setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(false);
     setStep(2);
   };
 
@@ -196,6 +213,17 @@ export default function RegistrationPassPage() {
     setErrorMsg('');
 
     try {
+      // Dodatkowe sprawdzenie na wypadek współbieżności
+      const { data: existingClientCheck } = await supabase
+        .from('klienci')
+        .select('id')
+        .eq('E-mail', email)
+        .maybeSingle();
+
+      if (existingClientCheck) {
+        throw new Error('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+      }
+
       // 1. Utworzenie konta Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: email,
@@ -375,8 +403,8 @@ export default function RegistrationPassPage() {
                 <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors" minLength={6} />
               </div>
               <div className="pt-4 flex justify-end border-t border-slate-100">
-                <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-8 py-3.5 rounded-xl uppercase transition-colors shadow-md text-xs cursor-pointer">
-                  Dalej →
+                <button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white font-black px-8 py-3.5 rounded-xl uppercase transition-colors shadow-md text-xs cursor-pointer disabled:opacity-70">
+                  {isLoading ? 'Sprawdzanie...' : 'Dalej →'}
                 </button>
               </div>
             </form>

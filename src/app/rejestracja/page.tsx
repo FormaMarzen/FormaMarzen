@@ -175,6 +175,19 @@ export default function FreeRegistrationPage() {
     setIsLoading(true);
     setErrorMsg('');
 
+    // Weryfikacja czy adres e-mail już istnieje w tabeli klienci
+    const { data: existingClientCheck, error: queryError } = await supabase
+      .from('klienci')
+      .select('id')
+      .eq('E-mail', email)
+      .maybeSingle();
+
+    if (existingClientCheck) {
+      setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+      setIsLoading(false);
+      return;
+    }
+
     // 1. Rejestracja w Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: email,
