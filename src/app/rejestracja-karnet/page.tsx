@@ -202,28 +202,51 @@ export default function RegistrationPassPage() {
     });
   };
 
-  // Pomocnicza funkcja wysyłająca powiadomienie Push do administratorów
-  const sendPushToAdmins = async (title: string, body: string, url: string = '/klienci') => {
+  // Pomocnicza funkcja wysyłająca powiadomienie Push do administratorów i zapisująca wpis w historii
+  const sendPushToAdmins = async (title: string, body: string, url: string = '/raporty/klienci') => {
     try {
       const { data: subs, error } = await supabase
         .from('push_subscriptions')
         .select('subscription')
         .eq('role', 'admin');
 
-      if (error || !subs || subs.length === 0) return;
+      if (error || !subs) return;
 
-      const subscriptions = subs.map(s => s.subscription);
-
-      await fetch('/api/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subscriptions,
-          payload: { title, body, url }
+      const subscriptions = subs
+        .map(s => {
+          if (!s.subscription) return null;
+          try {
+            return typeof s.subscription === 'string' ? JSON.parse(s.subscription) : s.subscription;
+          } catch (e) {
+            return null;
+          }
         })
-      });
+        .filter(Boolean);
+
+      if (subscriptions.length > 0) {
+        await fetch('/api/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriptions,
+            payload: { title, body, url }
+          })
+        });
+      }
+
+      // Automatyczny zapis zdarzenia w tabeli historia_powiadomien
+      await supabase.from('historia_powiadomien').insert([
+        {
+          odbiorca: `Administratorzy (${subscriptions.length} urządz.)`,
+          odbiorca_id: null,
+          tytul: title,
+          tresc: body,
+          typ: 'PUSH',
+          status: subscriptions.length > 0 ? 'Wysłano' : 'Brak aktywnych urządzeń'
+        }
+      ]);
     } catch (err) {
-      console.error('Błąd wysyłania powiadomienia push:', err);
+      console.error('Błąd wysyłania/zapisywania powiadomienia push:', err);
     }
   };
 
@@ -364,11 +387,11 @@ export default function RegistrationPassPage() {
         }
       ]);
 
-      // 7. Wysłanie powiadomienia PUSH do administratora
+      // 7. Wysłanie powiadomienia PUSH do administratora oraz zapis w historia_powiadomien
       await sendPushToAdmins(
         'Nowy klubowicz i zakup karnetu! 💳',
-        `${firstName} ${lastName} zarejestrował(a) się i kupił(a) karnet: ${selectedPass.nazwa} (${passCalc.finalPriceStr})`,
-        '/klienci'
+        `${firstName} ${lastName} (${email}) zarejestrował(a) się i kupił(a) karnet: ${selectedPass.nazwa} (${passCalc.finalPriceStr}).`,
+        '/raporty/klienci'
       );
 
       setIsLoading(false);
