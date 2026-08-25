@@ -81,27 +81,49 @@ export default function PortfelPage() {
             .eq('user_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          // 2. Pobranie transakcji ogólnych i portfelowych (zakupy karnetów, spłaty, raty)
+          // 2. Pobranie transakcji ogólnych z bazy
           const { data: localTransData } = await supabase
             .from('transakcje')
             .select('*')
             .eq('klient_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          // 3. Połączenie i ujednolicenie historii operacji bez duplikatów
+          // 3. Połączenie i selekcja WYŁĄCZNIE transakcji o charakterze finansowym
           const combinedHistory: any[] = [];
           const processedOrderIds = new Set<string>();
 
-          // A. Dodanie operacji z tabeli transakcje (wydatki z portfela, karnety)
+          // A. Filtrowanie tabeli ogólnej `transakcje` (wydatki z portfela, zakup karnetów, spłaty)
           if (localTransData && localTransData.length > 0) {
             localTransData.forEach((t: any) => {
-              const kwotaVal = Number(t.kwota) || 0;
-              const isAutopayType = (t.typ_operacji || '').toLowerCase().includes('autopay');
+              const kwotaVal = Number(t.kwota);
+              const typ = (t.typ_operacji || '').toLowerCase();
+              const opis = (t.opis || '').toLowerCase();
+
+              // FILTR: Wykluczamy wpisy logów systemowych, rezerwacji i wypisów z zajęć
+              const isNonFinancialLog = 
+                typ.includes('zajecia') ||
+                typ.includes('zapis') ||
+                typ.includes('wypis') ||
+                typ.includes('usuniecie') ||
+                typ.includes('blokada') ||
+                opis.includes('zapisano na zajęcia') ||
+                opis.includes('wypisanie z zajęć') ||
+                opis.includes('wypisano z') ||
+                opis.includes('usunięcie karnetu') ||
+                opis.includes('auto-blokada') ||
+                opis.includes('obłożenie:');
+
+              if (isNonFinancialLog) return;
+
+              // Do historii dopuszczamy tylko operacje ze zdefiniowaną kwotą
+              if (isNaN(kwotaVal) || kwotaVal === 0) return;
+
+              const isAutopayType = typ.includes('autopay');
               
               combinedHistory.push({
                 id: `loc-${t.id}`,
                 data: t.created_at || t.data || new Date().toISOString(),
-                opis: t.opis || t.typ_operacji || 'Operacja portfela',
+                opis: t.opis || (kwotaVal < 0 ? 'Wypłata / Zakup z portfela' : 'Uznanie portfela'),
                 zrodlo: isAutopayType ? 'Bramka Autopay' : 'Saldo Portfela',
                 kategoria: isAutopayType ? 'autopay' : 'wallet',
                 kwota: kwotaVal,
@@ -112,26 +134,31 @@ export default function PortfelPage() {
             });
           }
 
-          // B. Dodanie operacji z bramki Autopay (doładowania, spłaty online)
+          // B. Dołączanie transakcji online z tabeli `autopay_transakcje`
           if (autopayData && autopayData.length > 0) {
             autopayData.forEach((a: any) => {
               const kwotaVal = Number(a.amount) || 0;
               const statusVal = a.status || 'pending';
               const gatewayInfo = a.gateway_response;
 
-              // Jeśli transakcja dotyczyła zakupu karnetu przez Autopay, zabezpieczamy przed zdublowanym wpisem
+              // Zabezpieczenie przed dublowaniem zakupów karnetów zarejestrowanych już w obu tabelach
               if (a.type === 'pass_purchase' || a.type === 'pass_extend') {
                 if (processedOrderIds.has(a.order_id)) return;
                 processedOrderIds.add(a.order_id);
               }
 
+              let defaultOpis = 'Doładowanie portfela Autopay';
+              if (a.type === 'wallet_settlement') defaultOpis = 'Spłata zadłużenia portfela (Autopay)';
+              else if (a.type === 'pass_purchase') defaultOpis = 'Zakup karnetu (Płatność Autopay)';
+              else if (a.type === 'pass_extend') defaultOpis = 'Przedłużenie karnetu (Płatność Autopay)';
+
               combinedHistory.push({
                 id: `ap-${a.id}`,
                 data: a.created_at || new Date().toISOString(),
-                opis: gatewayInfo?.opis || (a.type === 'wallet_topup' ? `Doładowanie portfela Autopay` : a.type === 'wallet_settlement' ? 'Spłata ujemnego salda Autopay' : 'Płatność online Autopay'),
+                opis: gatewayInfo?.opis || defaultOpis,
                 zrodlo: 'Bramka Autopay',
                 kategoria: 'autopay',
-                kwota: a.type === 'wallet_topup' ? Math.abs(kwotaVal) : (statusVal === 'success' ? Math.abs(kwotaVal) : kwotaVal),
+                kwota: a.type === 'wallet_topup' || a.type === 'wallet_settlement' ? Math.abs(kwotaVal) : (statusVal === 'success' ? Math.abs(kwotaVal) : kwotaVal),
                 status: statusVal,
                 statusTekst: statusVal === 'success' ? 'Opłacona' : statusVal === 'failed' ? 'Nieudana' : 'Oczekuje',
                 orderId: a.order_id
@@ -139,11 +166,11 @@ export default function PortfelPage() {
             });
           }
 
-          // Sortowanie całej historii od najnowszej do najstarszej
+          // Sortowanie od najnowszych
           combinedHistory.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
           setHistoriaWszystkichOperacji(combinedHistory);
 
-          // 4. Odczyt i formatowanie bieżącego salda portfela
+          // 4. Formatowanie stanu salda portfela
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
           const isNegative = String(rawWalletStr).includes('-');
           let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
@@ -294,7 +321,7 @@ export default function PortfelPage() {
         </div>
       </div>
 
-      {/* BANER PŁATNOŚCI */}
+      {/* BANER METOD PŁATNOŚCI */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-center overflow-hidden">
         <img 
           src="/autopay-banner.png" 
@@ -304,11 +331,11 @@ export default function PortfelPage() {
         />
       </div>
 
-      {/* SEKCJA 2: PEŁNA HISTORIA OPERACJI I TRANSAKCJI */}
+      {/* SEKCJA 2: HISTORIA FINANSOWA */}
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
           <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">
-            HISTORIA OPERACJI I PŁATNOŚCI
+            HISTORIA TRANSAKCJI FINANSOWYCH
           </h2>
 
           <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
@@ -334,7 +361,7 @@ export default function PortfelPage() {
                 activeFilter === 'wallet' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              Wydatki z Portfela
+              Operacje Portfela
             </button>
           </div>
         </div>
@@ -345,8 +372,8 @@ export default function PortfelPage() {
               <thead>
                 <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                   <th className="py-4 px-5">DATA</th>
-                  <th className="py-4 px-5">TYP / OPIS OPERACJI</th>
-                  <th className="py-4 px-5">ŹRÓDŁO PŁATNOŚCI</th>
+                  <th className="py-4 px-5">OPIS TRANSAKCJI</th>
+                  <th className="py-4 px-5">METODA / ŹRÓDŁO</th>
                   <th className="py-4 px-5">KWOTA</th>
                   <th className="py-4 px-5 text-right">STATUS</th>
                 </tr>
@@ -354,16 +381,16 @@ export default function PortfelPage() {
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {filteredHistory.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-10 text-center text-slate-400">
-                      Brak zarejestrowanych operacji w wybranej kategorii.
+                    <td colSpan={5} className="py-10 text-center text-slate-400 font-medium">
+                      Brak transakcji finansowych w wybranej kategorii.
                     </td>
                   </tr>
                 ) : (
                   filteredHistory.map((item: any) => {
                     const kwotaNum = Number(item.kwota) || 0;
                     const formattedDate = item.data ? item.data.replace('T', ' ').substring(0, 16) : '-';
-                    const isPositive = kwotaNum > 0 && item.kategoria === 'autopay';
-                    const isNegativeAmount = kwotaNum < 0;
+                    const isPositive = (kwotaNum > 0 && item.kategoria === 'autopay') || item.opis.includes('Doładowanie') || item.opis.includes('Spłata');
+                    const isNegativeAmount = kwotaNum < 0 || (!isPositive && item.kategoria === 'wallet');
 
                     return (
                       <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
@@ -372,11 +399,11 @@ export default function PortfelPage() {
                         </td>
                         <td className="py-4 px-5 font-medium text-slate-900">
                           <div className="font-bold">{item.opis}</div>
-                          {item.orderId && item.orderId !== '-' && (
+                          {item.orderId && (
                             <div className="text-[10px] font-mono text-slate-400 mt-0.5">ID: {item.orderId}</div>
                           )}
                           {item.kodRabatowy && (
-                            <div className="text-[10px] text-emerald-600 font-bold mt-0.5">Kod: {item.kodRabatowy}</div>
+                            <div className="text-[10px] text-emerald-600 font-bold mt-0.5">Zastosowany kod: {item.kodRabatowy}</div>
                           )}
                         </td>
                         <td className="py-4 px-5 font-semibold text-slate-600">
@@ -385,12 +412,12 @@ export default function PortfelPage() {
                               ? 'bg-blue-50 text-blue-800 border border-blue-200' 
                               : 'bg-slate-100 text-slate-700 border border-slate-200'
                           }`}>
-                            {item.zrodlo === 'Bramka Autopay' ? '💳 Autopay' : '👛 Portfel'}
+                            {item.zrodlo === 'Bramka Autopay' ? '💳 Autopay Online' : '👛 Saldo Portfela'}
                           </span>
                         </td>
                         <td className="py-4 px-5 font-black text-sm">
                           <span className={isPositive ? 'text-emerald-600' : isNegativeAmount ? 'text-rose-600' : 'text-slate-900'}>
-                            {isPositive ? `+${kwotaNum.toFixed(2)}` : kwotaNum.toFixed(2)} PLN
+                            {isPositive ? `+${Math.abs(kwotaNum).toFixed(2)}` : `-${Math.abs(kwotaNum).toFixed(2)}`} PLN
                           </span>
                         </td>
                         <td className="py-4 px-5 text-right font-bold">
