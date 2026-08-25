@@ -9,7 +9,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { amount, orderId, userId, description, email, firstName, lastName, type } = body;
+    const { amount, orderId, userId, description, email, type } = body;
 
     if (!amount || !orderId || !userId) {
       return NextResponse.json(
@@ -24,27 +24,37 @@ export async function POST(req: Request) {
     const gatewayUrl = (process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment').trim();
 
     if (!serviceId || !hashKey) {
+      console.error('[Autopay Init Error]: Brak kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w środowisku Vercel.');
       return NextResponse.json(
         { success: false, error: 'Brak klucza AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w konfiguracji Vercel' },
         { status: 500 }
       );
     }
 
+    // 1. Zapewnienie bezpiecznego formatu OrderID (maksymalnie 32 znaki zgodnie ze specyfikacją Autopay)
+    const rawOrderId = String(orderId).replace(/[^a-zA-Z0-9-_]/g, '');
+    const safeOrderId = rawOrderId.length > 32 ? rawOrderId.substring(0, 32) : rawOrderId;
+
+    // 2. Formatowanie kwoty z dokładnie dwoma miejscami po przecinku
     const formattedAmount = Number(amount).toFixed(2);
     const currency = 'PLN';
-    const gatewayId = '0';
-    const customerEmail = (email || '').trim();
-    const customerName = `${firstName || ''} ${lastName || ''}`.trim() || 'Klubowicz';
-    const cleanDescription = (description || `Doladowanie portfela ${formattedAmount} PLN`).replace(/[|;]/g, ' ').trim();
+    const gatewayId = '0'; // 0 = wybór wszystkich kanałów płatności na stronie bramki
+    const customerEmail = (email || '').trim().toLowerCase();
 
-    // 1. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
+    // 3. Oczyszczenie opisu z separatorów i znaków specjalnych
+    const cleanDescription = (description || `Zasilenie portfela ${formattedAmount} PLN`)
+      .replace(/[|;]/g, ' ')
+      .trim()
+      .substring(0, 100);
+
+    // 4. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
     const { error: dbError } = await supabase
       .from('autopay_transakcje')
       .insert([{
         user_id: userId,
         amount: parseFloat(formattedAmount),
         status: 'pending',
-        order_id: orderId,
+        order_id: safeOrderId,
         type: type || 'wallet_topup',
         gateway_response: {
           opis: cleanDescription,
@@ -54,41 +64,57 @@ export async function POST(req: Request) {
       }]);
 
     if (dbError) {
-      console.error('Błąd zapisu w Supabase:', dbError);
+      console.error('[Autopay Init DB Error]: Błąd zapisu do tabeli autopay_transakcje:', dbError);
       return NextResponse.json(
         { success: false, error: `Błąd bazy danych: ${dbError.message}` },
         { status: 500 }
       );
     }
 
-    // 2. Wyliczenie sumy kontrolnej Hash SHA-256 z separatorem pipe (|)
-    const hashDataArray = [
+    // 5. Kanoniczny łańcuch Hash SHA-256 dla Autopay (ściśle określona kolejność pól bramki)
+    // Format: ServiceID|OrderID|Amount|Description|GatewayID|Currency|CustomerEmail|HashKey
+    const hashDataArray: string[] = [
       serviceId,
-      orderId,
+      safeOrderId,
       formattedAmount,
       cleanDescription,
       gatewayId,
-      currency,
-      customerEmail,
-      customerName,
-      hashKey
+      currency
     ];
+
+    // Jeśli e-mail jest podany, wchodzi do obliczenia hasha
+    if (customerEmail) {
+      hashDataArray.push(customerEmail);
+    }
+
+    // Klucz hashujący zawsze na końcu
+    hashDataArray.push(hashKey);
 
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 3. Przygotowanie parametrów formularza POST dla bramki Autopay
+    // 6. Parametry przekazywane do formularza POST
     const payload: Record<string, string> = {
       ServiceID: serviceId,
-      OrderID: orderId,
+      OrderID: safeOrderId,
       Amount: formattedAmount,
       Description: cleanDescription,
       GatewayID: gatewayId,
       Currency: currency,
-      CustomerEmail: customerEmail,
-      CustomerName: customerName,
       Hash: hash
     };
+
+    if (customerEmail) {
+      payload.CustomerEmail = customerEmail;
+    }
+
+    // Diagnostyka w logach Vercel
+    console.log('[Autopay Init Success] Przygotowano transakcję:', {
+      safeOrderId,
+      formattedAmount,
+      hashString,
+      hash
+    });
 
     return NextResponse.json({
       success: true,
@@ -97,7 +123,7 @@ export async function POST(req: Request) {
     });
 
   } catch (error: any) {
-    console.error('Błąd inicjalizacji Autopay:', error);
+    console.error('[Autopay Init Fatal Error]:', error);
     return NextResponse.json(
       { success: false, error: error.message || 'Wewnętrzny błąd serwera' },
       { status: 500 }
