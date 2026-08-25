@@ -40,10 +40,24 @@ export default function RegistrationPassPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
 
-  // Pobranie karnetów i regulaminów przy załadowaniu
+  // --- PRECYZYJNA LOGIKA WYKRYWANIA UMÓW ---
+  const isContractPass = (pass: any) => {
+    if (!pass) return false;
+    const name = (pass.nazwa || '').toLowerCase();
+    const typ = (pass.typ_karnetu || '').toLowerCase();
+    
+    return (
+      typ.includes('umowa') ||
+      name.includes('umowa') ||
+      name.includes('umow') ||
+      name.includes('12m')
+    );
+  };
+
+  // Pobranie wszystkich karnetów i regulaminów przy załadowaniu
   useEffect(() => {
     const fetchInitialData = async () => {
-      // Pobieranie karnetów
+      // Pobieranie wszystkich karnetów z bazy
       const { data: karnetyData } = await supabase.from('karnety').select('*');
       if (karnetyData) {
         setDostepneKarnety(karnetyData.map((k: any) => ({
@@ -66,16 +80,9 @@ export default function RegistrationPassPage() {
     fetchInitialData();
   }, []);
 
-  // --- LOGIKA WYKRYWANIA I PRZELICZANIA PRO-RATY DLA UMÓW 12M ---
-  const isContractPass = (pass: any) => {
-    if (!pass) return false;
-    const name = (pass.nazwa || '').toLowerCase();
-    const dlugosc = (pass.dlugosc || '').toLowerCase();
-    return name.includes('umow') || name.includes('12m') || dlugosc.includes('1 miesi') || dlugosc.includes('1 rok');
-  };
-
+  // --- LOGIKA PRZELICZANIA I DAT DLA RÓŻNYCH TYPÓW KARNETÓW ---
   const getPassCalculation = (pass: any) => {
-    if (!pass) return { isContract: false, finalPrice: 0, finalPriceStr: '0.00 PLN', basePrice: 0, daysRemaining: 0, daysInMonth: 30, lastDayOfMonthStr: '', expiryDateStr: '' };
+    if (!pass) return { isContract: false, finalPrice: 0, finalPriceStr: '0.00 PLN', basePrice: 0, daysRemaining: 0, daysInMonth: 30, expiryDateStr: '' };
 
     const basePrice = parseFloat(pass.cena) || 0;
     const isContract = isContractPass(pass);
@@ -85,14 +92,12 @@ export default function RegistrationPassPage() {
     const month = now.getMonth();
     const currentDay = now.getDate();
 
-    // Ostatni dzień bieżącego miesiąca
     const lastDayObj = new Date(year, month + 1, 0);
     const daysInMonth = lastDayObj.getDate();
     const daysRemaining = daysInMonth - currentDay + 1;
     const lastDayOfMonthStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
     if (isContract) {
-      // Wyliczenie pro-rata za pozostałe dni bieżącego miesiąca
       const proRataPrice = Number(((basePrice / daysInMonth) * daysRemaining).toFixed(2));
       return {
         isContract: true,
@@ -101,22 +106,20 @@ export default function RegistrationPassPage() {
         basePrice,
         daysRemaining,
         daysInMonth,
-        lastDayOfMonthStr,
         expiryDateStr: lastDayOfMonthStr
       };
     }
 
-    // Standardowe karnety (miesięczne, okresowe, wejściowe)
+    // Standardowe karnety czasowe / wejściowe
     let dniWażności = 30;
-    if (pass.dlugosc) {
-      const dlugoscStr = pass.dlugosc.toLowerCase();
-      if (dlugoscStr.includes('1 miesiąc') || dlugoscStr.includes('miesiąc')) dniWażności = 30;
-      else if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
-      else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
-      else if (dlugoscStr.includes('1 rok')) dniWażności = 365;
-      else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
-      else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
-    }
+    const dlugoscStr = (pass.dlugosc || '').toLowerCase();
+    
+    if (dlugoscStr.includes('3 miesiące')) dniWażności = 90;
+    else if (dlugoscStr.includes('6 miesięcy')) dniWażności = 180;
+    else if (dlugoscStr.includes('1 rok') || dlugoscStr.includes('12 miesięcy')) dniWażności = 365;
+    else if (dlugoscStr.includes('14 dni')) dniWażności = 14;
+    else if (dlugoscStr.includes('7 dni')) dniWażności = 7;
+    else if (dlugoscStr.includes('42 dzie')) dniWażności = 42;
 
     const dataWygasniecia = new Date();
     dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
@@ -129,7 +132,6 @@ export default function RegistrationPassPage() {
       basePrice,
       daysRemaining,
       daysInMonth,
-      lastDayOfMonthStr,
       expiryDateStr: standardExpiryDateStr
     };
   };
@@ -148,7 +150,6 @@ export default function RegistrationPassPage() {
     setIsLoading(true);
     setErrorMsg('');
 
-    // Globalna weryfikacja czy adres e-mail już istnieje w tabeli klienci
     const { data: existingClientCheck } = await supabase
       .from('klienci')
       .select('id')
@@ -202,7 +203,6 @@ export default function RegistrationPassPage() {
   };
 
   const handleFinalSubmit = async () => {
-    // Sprawdzenie regulaminów
     const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
     if (!allAccepted) {
       setErrorMsg("Musisz zaakceptować wszystkie wymagane zgody i regulaminy.");
@@ -213,7 +213,6 @@ export default function RegistrationPassPage() {
     setErrorMsg('');
 
     try {
-      // Dodatkowe sprawdzenie na wypadek współbieżności
       const { data: existingClientCheck } = await supabase
         .from('klienci')
         .select('id')
@@ -237,7 +236,7 @@ export default function RegistrationPassPage() {
         throw new Error(`Błąd tworzenia konta: ${authError.message}`);
       }
 
-      // 2. Zapis akceptacji regulaminów (powiązanie z User ID)
+      // 2. Zapis akceptacji regulaminów
       if (authData.user) {
         const acceptanceInserts = regulations.map(reg => ({
           user_id: authData.user!.id,
@@ -248,22 +247,36 @@ export default function RegistrationPassPage() {
         await supabase.from('regulation_acceptances').insert(acceptanceInserts);
       }
 
-      // 3. Przygotowanie danych karnetu z uwzględnieniem pro-raty dla umów
+      // 3. Przygotowanie danych karnetu
       const passCalc = getPassCalculation(selectedPass);
       const limitWejscBaza = selectedPass.ilosc_wejsc || selectedPass.limitWejsc || selectedPass.wejscia || null;
-      const lowerBuyName = selectedPass.nazwa.toLowerCase();
-      const isTimePass = lowerBuyName.includes('open') || lowerBuyName.includes('miesiąc') || lowerBuyName.includes('miesiac') || lowerBuyName.includes('rok') || lowerBuyName.includes('czasowy') || passCalc.isContract;
+      const lowerBuyName = (selectedPass.nazwa || '').toLowerCase();
+      
+      const isTimePass = 
+        passCalc.isContract || 
+        lowerBuyName.includes('open') || 
+        lowerBuyName.includes('miesiąc') || 
+        lowerBuyName.includes('miesiac') || 
+        lowerBuyName.includes('rok') || 
+        lowerBuyName.includes('6 miesi') || 
+        lowerBuyName.includes('rozciąganie');
+
+      const wejsciaVal = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : (
+        lowerBuyName.includes('10 wejś') ? 10 :
+        lowerBuyName.includes('5 wejś') ? 5 :
+        lowerBuyName.includes('1 wejś') ? 1 : null
+      );
 
       const nowyKarnetObj = {
         id: Date.now(),
         nazwa: selectedPass.nazwa,
         waznyDo: passCalc.expiryDateStr,
-        pozostaloWejsc: isTimePass ? null : (limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null),
-        poczatkoweWejsc: isTimePass ? null : (limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null),
+        pozostaloWejsc: isTimePass ? null : wejsciaVal,
+        poczatkoweWejsc: isTimePass ? null : wejsciaVal,
         cena: passCalc.finalPriceStr,
         znizkaProcentowa: '',
         rata: passCalc.isContract ? '0 / 12' : '1 / 1',
-        statusTekst: `Ważny do: ${passCalc.expiryDateStr}`,
+        statusTekst: isTimePass ? `Ważny do: ${passCalc.expiryDateStr}` : `Pozostało wejść: ${wejsciaVal}`,
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
@@ -274,7 +287,7 @@ export default function RegistrationPassPage() {
       const ujemnyPortfelStr = `-${passCalc.finalPrice.toFixed(2)} PLN`;
       const newClientId = Date.now();
 
-      // 4. Zapis do bazy danych 'klienci' z unikalnym ID numerycznym
+      // 4. Zapis do bazy danych 'klienci'
       const payload: any = {
         id: newClientId,
         'Imię': firstName,
@@ -294,7 +307,7 @@ export default function RegistrationPassPage() {
         throw new Error(`Błąd zapisu do bazy klientów: ${dbError.message}`);
       }
 
-      // 5. Dodanie wpisu do tabeli 'transakcje'
+      // 5. Zapis transakcji
       if (passCalc.finalPrice > 0) {
         const opisTransakcji = passCalc.isContract
           ? `Rejestracja z zakupem karnetu (Umowa 12M - wyrównanie pro-rata za ${passCalc.daysRemaining} dni): ${selectedPass.nazwa}`
@@ -315,7 +328,7 @@ export default function RegistrationPassPage() {
         }]);
       }
 
-      // 6. Powiadomienie na czacie dla administratora (ID 5000)
+      // 6. Powiadomienie na czacie dla administratora
       await supabase.from('czat_wiadomosci').insert([
         {
           nadawca_id: 5000,
@@ -415,53 +428,59 @@ export default function RegistrationPassPage() {
             <div className="space-y-5 animate-in slide-in-from-right-4 fade-in">
               <h2 className="text-lg font-black text-slate-950 uppercase tracking-wider mb-2">2. Wybierz swój karnet</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {dostepneKarnety.map(k => {
-                  const isSelected = selectedPass?.id === k.id;
-                  const calc = getPassCalculation(k);
+                {dostepneKarnety.length > 0 ? (
+                  dostepneKarnety.map(k => {
+                    const isSelected = selectedPass?.id === k.id;
+                    const calc = getPassCalculation(k);
 
-                  return (
-                    <div 
-                      key={k.id} 
-                      onClick={() => setSelectedPass(k)} 
-                      className={`relative border-2 rounded-2xl p-5 cursor-pointer transition-all shadow-sm flex flex-col justify-between ${isSelected ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 bg-white hover:border-blue-300'}`}
-                    >
-                      {isSelected && (
-                        <div className="absolute top-3 right-3 w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm">
-                          ✓
-                        </div>
-                      )}
-                      <div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-black text-slate-900 text-sm">{k.nazwa}</h4>
-                          {calc.isContract && (
-                            <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-300">
-                              Umowa 12M
-                            </span>
+                    return (
+                      <div 
+                        key={k.id} 
+                        onClick={() => setSelectedPass(k)} 
+                        className={`relative border-2 rounded-2xl p-5 cursor-pointer transition-all shadow-sm flex flex-col justify-between ${isSelected ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 bg-white hover:border-blue-300'}`}
+                      >
+                        {isSelected && (
+                          <div className="absolute top-3 right-3 w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm">
+                            ✓
+                          </div>
+                        )}
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h4 className="font-black text-slate-900 text-sm">{k.nazwa}</h4>
+                            {calc.isContract && (
+                              <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-300">
+                                Umowa 12M
+                              </span>
+                            )}
+                          </div>
+
+                          {calc.isContract ? (
+                            <div className="mt-2 space-y-1">
+                              <div className="text-[11px] text-slate-500 font-medium">
+                                Cena abonamentu: <span className="font-bold text-slate-700">{calc.basePrice.toFixed(2)} PLN / mies.</span>
+                              </div>
+                              <div className="text-xs font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2 mt-1">
+                                Wyrównanie za bieżący m-c ({calc.daysRemaining} dni): <span className="text-sm font-black">{calc.finalPriceStr}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="font-black text-blue-700 text-lg mt-2">{calc.finalPriceStr}</p>
                           )}
                         </div>
 
-                        {calc.isContract ? (
-                          <div className="mt-2 space-y-1">
-                            <div className="text-[11px] text-slate-500 font-medium">
-                              Cena abonamentu: <span className="font-bold text-slate-700">{calc.basePrice.toFixed(2)} PLN / mies.</span>
-                            </div>
-                            <div className="text-xs font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2 mt-1">
-                              Wyrównanie za bieżący m-c ({calc.daysRemaining} dni): <span className="text-sm font-black">{calc.finalPriceStr}</span>
-                            </div>
+                        {k.dlugosc && (
+                          <div className="text-[10px] text-slate-400 font-semibold mt-3 pt-2 border-t border-slate-100">
+                            ⏱ Czas trwania: {k.dlugosc}
                           </div>
-                        ) : (
-                          <p className="font-black text-blue-700 text-lg mt-2">{calc.finalPriceStr}</p>
                         )}
                       </div>
-
-                      {k.dlugosc && (
-                        <div className="text-[10px] text-slate-400 font-semibold mt-3 pt-2 border-t border-slate-100">
-                          ⏱ Czas trwania: {k.dlugosc}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                ) : (
+                  <div className="col-span-2 text-center py-8 text-xs text-slate-500 italic">
+                    Brak dostępnych karnetów w systemie.
+                  </div>
+                )}
               </div>
               <div className="pt-4 flex justify-between border-t border-slate-100">
                 <button onClick={() => setStep(1)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-3.5 rounded-xl text-xs cursor-pointer">← Wróć</button>
@@ -511,7 +530,7 @@ export default function RegistrationPassPage() {
                     )}
                   </div>
                   
-                  {/* Dynamiczne regulaminy */}
+                  {/* Regulaminy */}
                   <div className="space-y-2.5 pt-2 text-[11px] text-slate-600 border-t border-slate-200 mt-2 pt-4">
                     {regulations.length > 0 ? (
                       regulations.map((reg) => (
