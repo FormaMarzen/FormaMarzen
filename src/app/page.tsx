@@ -58,7 +58,7 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANCIÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
+  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANTÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
   const getKeysVariants = (classId: string | number, dateStr: string) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
@@ -160,7 +160,7 @@ export default function DashboardPage() {
     }
   };
 
-  // ODPORNY SILNIK NORMALIZACJI I DOPASOWYWANIA NAZW ZAJĘĆ
+  // PRECYZYJNA NORMALIZACJA I DOPASOWYWANIE NAZW ZAJĘĆ (BEZ FAŁSZYWYCH DOPASOWAŃ CZĘŚCIOWYCH)
   const normalizeText = (text: string): string => {
     if (!text) return '';
     return text
@@ -172,13 +172,6 @@ export default function DashboardPage() {
       .trim();
   };
 
-  const getMeaningfulTokens = (text: string): string[] => {
-    const stopWords = new Set(['pod', 'dla', 'na', 'i', 'w', 'z', 'ze', 'oraz', 'trening']);
-    return normalizeText(text)
-      .split(' ')
-      .filter(token => token.length >= 3 && !stopWords.has(token));
-  };
-
   const areClassNamesMatching = (nameA: string, nameB: string): boolean => {
     if (!nameA || !nameB) return false;
     const normA = normalizeText(nameA);
@@ -186,35 +179,16 @@ export default function DashboardPage() {
 
     if (normA === normB) return true;
     if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
-    if (normA.includes(normB) || normB.includes(normA)) return true;
-
-    const subPartsA = nameA.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
-    const subPartsB = nameB.split(/[\/\+\&\,]|\s+i\s+/i).map(s => normalizeText(s)).filter(Boolean);
-
-    for (const partA of subPartsA) {
-      for (const partB of subPartsB) {
-        if (partA === partB || partA.includes(partB) || partB.includes(partA)) {
-          return true;
-        }
-      }
-    }
-
-    const tokensA = getMeaningfulTokens(nameA);
-    const tokensB = getMeaningfulTokens(nameB);
-
-    if (tokensA.length > 0 && tokensB.length > 0) {
-      const hasSharedToken = tokensA.some(tA => tokensB.some(tB => tA === tB || tA.includes(tB) || tB.includes(tA)));
-      if (hasSharedToken) return true;
-    }
 
     return false;
   };
 
-  // UNIWERSALNA I ODPORNA NA BŁĘDY FUNKCJA WERYFIKACJI UPRAWNIEŃ KARNETU
+  // UNIWERSALNA I DOKŁADNA WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ
   const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
     if (!passItem || !classTitle) return false;
-    const passName = passItem.nazwa || passItem.pass || '';
+    const passName = (passItem.nazwa || passItem.pass || '').trim();
     const normPassName = normalizeText(passName);
+    const normClassTitle = normalizeText(classTitle);
 
     if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
 
@@ -223,22 +197,23 @@ export default function DashboardPage() {
       return true;
     }
 
-    const allowedList = passItem.zaznaczoneZajecia || [];
+    const allowedList = passItem.zaznaczoneZajecia || passItem.wybraneZajecia || [];
     if (Array.isArray(allowedList) && allowedList.length > 0) {
       const isMatched = allowedList.some((item: any) => {
         const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
-        return areClassNamesMatching(itemName, classTitle);
+        const normItem = normalizeText(itemName);
+        return normItem === normClassTitle || normItem.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '');
       });
       if (isMatched) return true;
     }
 
     const def = allPassDefs.find((d: any) => {
-      const defName = d.nazwa || '';
-      return areClassNamesMatching(defName, passName) || normalizeText(defName) === normPassName || defName.trim().toLowerCase() === passName.trim().toLowerCase();
+      const defName = (d.nazwa || '').trim();
+      return defName.toLowerCase() === passName.toLowerCase() || normalizeText(defName) === normPassName;
     });
 
     if (def) {
-      const accessType = normalizeText(def.dostep_do_zajec || '');
+      const accessType = normalizeText(def.dostep_do_zajec || def.dostepDo || '');
       if (accessType.includes('wszystk') || accessType === 'all') {
         return true;
       }
@@ -258,13 +233,14 @@ export default function DashboardPage() {
       if (Array.isArray(defAllowedList) && defAllowedList.length > 0) {
         const isMatched = defAllowedList.some((item: any) => {
           const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
-          return areClassNamesMatching(itemName, classTitle);
+          const normItem = normalizeText(itemName);
+          return normItem === normClassTitle || normItem.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '');
         });
         if (isMatched) return true;
       }
     }
 
-    if (areClassNamesMatching(passName, classTitle)) {
+    if (normPassName === normClassTitle || normPassName.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '')) {
       return true;
     }
 
@@ -354,6 +330,71 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
+
+  // PRECYZYJNA KALKULACJA ODLICZANIA DO KOŃCA MOŻLIWOŚCI WYPISANIA
+  const getCancelDeadlineInfo = (classItem: any, displayDate: string) => {
+    if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return null;
+    const trainingName = classItem.title || '';
+    const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[trainingName] !== undefined
+      ? Number(bookingRules.cancel_deadline_per_class[trainingName])
+      : Number(bookingRules.cancel_deadline_minutes ?? 90);
+
+    if (!displayDate || !classItem.start) return null;
+
+    let d = 1, m = 1;
+    if (displayDate.includes('/')) {
+      [d, m] = displayDate.split('/').map(Number);
+    } else if (displayDate.includes('-')) {
+      const p = displayDate.split('-').map(Number);
+      m = p[1];
+      d = p[2];
+    }
+
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const [sh = '00', sm = '00'] = (classItem.start || '00:00').split(':');
+    const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+    const now = new Date();
+    const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+    if (diffMinutes <= 0) {
+      return {
+        canCancel: false,
+        status: 'past',
+        label: 'Zajęcia zakończone',
+        minutesLeftToCancel: 0
+      };
+    }
+
+    if (diffMinutes <= cancelDeadlineMinutes) {
+      return {
+        canCancel: false,
+        status: 'locked',
+        label: 'Minął czas na bezpłatny wypis',
+        minutesLeftToCancel: 0
+      };
+    }
+
+    const minutesLeft = Math.floor(diffMinutes - cancelDeadlineMinutes);
+
+    if (minutesLeft <= 120) {
+      const hours = Math.floor(minutesLeft / 60);
+      const mins = minutesLeft % 60;
+      const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+      return {
+        canCancel: true,
+        status: 'countdown',
+        label: `⏱️ Wypis możliwy jeszcze przez: ${timeStr}`,
+        minutesLeftToCancel: minutesLeft
+      };
+    }
+
+    return {
+      canCancel: true,
+      status: 'open',
+      label: `Wypis do ${cancelDeadlineMinutes} min przed startem`,
+      minutesLeftToCancel: minutesLeft
+    };
+  };
 
   const getProgrammedWorkout = (classItem: any, isoDate?: string, displayDate?: string) => {
     if (!classItem || !classItem.title) return null;
@@ -480,7 +521,7 @@ export default function DashboardPage() {
                 try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
               }
 
-              const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+              const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
               if (passIndex !== -1) {
                 const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
                 const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
@@ -576,15 +617,18 @@ export default function DashboardPage() {
             if (activeSignups.length < minRequired) {
               hasChanges = true;
               
-              await supabase.from('nadpisania_zajec').upsert({
-                class_key: cls.classKey,
-                start: cls.start,
-                end: cls.end,
-                trainer: cls.trainer,
-                limit: cls.limit,
-                is_odwolane: true,
-                is_usuniete: false
-              });
+              const allVariantKeys = getKeysVariants(cls.id, col.date);
+              for (const vKey of allVariantKeys) {
+                await supabase.from('nadpisania_zajec').upsert({
+                  class_key: vKey,
+                  start: cls.start,
+                  end: cls.end,
+                  trainer: cls.trainer,
+                  limit: cls.limit,
+                  is_odwolane: true,
+                  is_usuniete: false
+                });
+              }
 
               const participantIds: number[] = [];
               for (const participant of classSignups) {
@@ -597,7 +641,7 @@ export default function DashboardPage() {
                     try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
                   }
 
-                  const passIndex = parsedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+                  const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
                   if (passIndex !== -1) {
                     const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
                     const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
@@ -645,7 +689,8 @@ export default function DashboardPage() {
   };
 
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
-    if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
+    if (!classItem || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
+    if (classItem.isOdwołane) return { isAutoCancelled: true, reason: 'ODWOŁANE' };
     
     const trainingName = classItem.title || '';
     const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
@@ -722,14 +767,33 @@ export default function DashboardPage() {
     return bDay === cDay && bMonth === cMonth;
   };
 
-  const isContractPass = (k: any) => k?.isContract12M || (k?.nazwa || '').toLowerCase().includes('umowa') || (k?.typKarnetu || '').toLowerCase().includes('umowa');
+  const isContractPass = (k: any) => {
+    if (!k) return false;
+    const lower = (k.nazwa || k.pass || '').toLowerCase();
+    const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
+    return k.isContract12M === true || typ.includes('umowa') || lower.includes('umowa');
+  };
+
   const isTimePass = (k: any) => {
     if (!k) return false;
-    const lower = (k.nazwa || '').toLowerCase();
-    const typ = (k.typKarnetu || '').toLowerCase();
-    return isContractPass(k) || typ === 'na czas' || lower.includes('open') || lower.includes('miesiąc') || lower.includes('miesiac') || lower.includes('rok') || lower.includes('czasowy');
+    if (isContractPass(k)) return true;
+    const lower = (k.nazwa || k.pass || '').toLowerCase();
+    const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
+    if (typ === 'na czas' || typ.includes('czas')) return true;
+    if (lower.includes('open') || lower.includes('miesiąc') || lower.includes('miesiac') || lower.includes('rok') || lower.includes('czasowy')) {
+      if (typ === 'na ilość treningów' || typ.includes('ilość') || typ.includes('trening')) return false;
+      return true;
+    }
+    return false;
   };
-  const isQuantityPass = (k: any) => !isTimePass(k) && k?.pozostaloWejsc !== null && k?.pozostaloWejsc !== undefined;
+
+  const isQuantityPass = (k: any) => {
+    if (!k) return false;
+    if (isTimePass(k)) return false;
+    const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
+    if (typ === 'na ilość treningów' || typ.includes('ilość') || typ.includes('trening')) return true;
+    return k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined;
+  };
 
   const calculateContinuityDiscount = (client: any) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
@@ -747,7 +811,7 @@ export default function DashboardPage() {
         const diffDays = Math.floor((today.getTime() - expDate.getTime()) / (1000 * 60 * 60 * 24));
         
         if (diffDays <= 1) {
-          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+          if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
             if (diffDays <= 1) isContinuous = true;
           } else {
             isContinuous = true;
@@ -873,7 +937,7 @@ export default function DashboardPage() {
         }
       }
       
-      const tData = await fetchAllFromSupabase('transakcje', 'created_at', false, 5); // Obejście 1000 rek limitu, max 5000 (5 stron)
+      const tData = await fetchAllFromSupabase('transakcje', 'created_at', false, 5);
       if (tData) {
         setWszystkieTransakcje(tData);
       }
@@ -956,12 +1020,17 @@ export default function DashboardPage() {
       const nadpisaniaMap: { [key: string]: any } = {};
       if (nadpisaniaData) {
         nadpisaniaData.forEach((n: any) => {
-          nadpisaniaMap[n.class_key] = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
+          const itemVal = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
+          nadpisaniaMap[n.class_key] = itemVal;
+          if (n.class_key && n.class_key.includes('_')) {
+            const [cId, dPart] = n.class_key.split('_');
+            const variants = getKeysVariants(cId, dPart);
+            variants.forEach(vk => { nadpisaniaMap[vk] = itemVal; });
+          }
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
-      // ROZWIĄZANIE PROBLEMU BRAKUJĄCYCH LUDZI - Omijamy limit 1000 rekordów pobierając paginację do 10 stron (10000 wpisów)
       const zapisyData = await fetchAllFromSupabase('zapisy_zajec', 'id', false, 10);
       const groupedZapisy: { [key: string]: any[] } = {};
       if (zapisyData) {
@@ -1022,8 +1091,6 @@ export default function DashboardPage() {
         return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
       });
 
-      // Zablokowano rekursywne wywoływanie `loadData()` by zapobiec nieskończonej pętli zacięć. 
-      // Realtime poradzi sobie sam po delete.
       await processWaitlistCutoffs(
         mappedSzablony,
         mappedJednorazowe,
@@ -1052,25 +1119,23 @@ export default function DashboardPage() {
           }
 
           parsedKarnety = parsedKarnety.map((k: any) => {
-            const lowerName = (k.nazwa || '').toLowerCase();
-            const isTimePassItem = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy') || lowerName.includes('umowa');
-            
-            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => dk.nazwa?.trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
+            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
+            const isTime = isTimePass(k) || (pasujacyDef && isTimePass(pasujacyDef));
 
-            if (isTimePassItem) {
+            if (isTime) {
               k.pozostaloWejsc = null;
               k.poczatkoweWejsc = null;
             } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
               if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
                 const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
-                k.pozostaloWejsc = valWejsc;
-                k.poczatkoweWejsc = valWejsc;
+                k.pozostaloWejsc = isNaN(valWejsc) ? null : valWejsc;
+                k.poczatkoweWejsc = isNaN(valWejsc) ? null : valWejsc;
               }
             }
 
-            // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ BEZPOŚREDNIO NA KARNECIE KLUBOWICZA
+            // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ DLA ZAJĘĆ
             k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
-            k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || (pasujacyDef ? pasujacyDef.zaznaczoneZajecia : []);
+            k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || pasujacyDef?.zaznaczoneZajecia || [];
 
             return k;
           });
@@ -1251,7 +1316,7 @@ export default function DashboardPage() {
     }
     if (cancelledCount > 0 && targetClientObj) {
       let updatedKarnety = [...(targetClientObj.karnetyKlubowicza || [])];
-      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
@@ -1328,7 +1393,7 @@ export default function DashboardPage() {
         }
         if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
 
-        const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
         
         if (passIndex !== -1) {
           const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
@@ -1429,9 +1494,7 @@ export default function DashboardPage() {
     const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
     const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
-    const lowerBuyName = selectedBuyPass.toLowerCase();
-    const isTimePassBuy = lowerBuyName.includes('open') || lowerBuyName.includes('miesiąc') || lowerBuyName.includes('miesiac') || lowerBuyName.includes('rok') || lowerBuyName.includes('czasowy') || lowerBuyName.includes('umowa');
-    
+    const isTimePassBuy = isTimePass(defKarnetu) || isTimePass({ nazwa: selectedBuyPass });
     const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || null) : null;
     const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
 
@@ -1599,8 +1662,7 @@ export default function DashboardPage() {
     }
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === editingPassModal.id) {
-        const lowerName = (editingPassModal.nazwa || '').toLowerCase();
-        const isTimePassItem = lowerName.includes('open') || lowerName.includes('miesiąc') || lowerName.includes('miesiac') || lowerName.includes('rok') || lowerName.includes('czasowy') || lowerName.includes('umowa');
+        const isTimePassItem = isTimePass(editingPassModal);
         
         return {
           ...k, 
@@ -1878,7 +1940,7 @@ export default function DashboardPage() {
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === suspendPassTarget.id) {
         let newPozostalo = k.pozostaloWejsc;
-        if (newPozostalo !== null && newPozostalo !== undefined && cancelledCount > 0) {
+        if (isQuantityPass(k) && newPozostalo !== null && newPozostalo !== undefined && cancelledCount > 0) {
           const currentRemaining = parseInt(newPozostalo, 10) || 0;
           const poczatkowe = parseInt(k.poczatkoweWejsc || currentRemaining + cancelledCount, 10);
           newPozostalo = Math.min(poczatkowe, currentRemaining + cancelledCount);
@@ -2035,7 +2097,7 @@ export default function DashboardPage() {
         expDate.setHours(23, 59, 59, 999);
         if (expDate < dzisiajDateObj) return false;
       }
-      if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+      if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
         if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
       }
       return true;
@@ -2060,7 +2122,7 @@ export default function DashboardPage() {
         expDate.setHours(23, 59, 59, 999);
         if (expDate < dzisiajDateObj) return false;
       }
-      if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+      if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
         if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
       }
       return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
@@ -2312,7 +2374,7 @@ export default function DashboardPage() {
     }
 
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
       if (!isNaN(currentRemaining) && currentRemaining > 0) {
@@ -2363,7 +2425,7 @@ export default function DashboardPage() {
     }
 
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
       if (!isNaN(currentRemaining) && currentRemaining > 0) {
@@ -2423,22 +2485,9 @@ export default function DashboardPage() {
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
-    const trainingName = selectedClass.title || '';
-    const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[trainingName] ?? bookingRules.cancel_deadline_minutes ?? 90;
-    const [dStr, mStr] = selectedClass.displayDate.split('/');
-    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-    const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
-    const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
-    const now = new Date();
-    const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
-
-    if (diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
-      showToast(`Nie możesz się wypisać! Minimalny czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
-      return;
-    }
-
-    if (diffMinutes <= 0) {
-      showToast("Zajęcia już się rozpoczęły lub minęły. Wypisanie jest niemożliwe.", 'error');
+    const deadlineInfo = getCancelDeadlineInfo(selectedClass, selectedClass.displayDate);
+    if (deadlineInfo && !deadlineInfo.canCancel) {
+      showToast(deadlineInfo.label, 'error');
       return;
     }
 
@@ -2464,13 +2513,15 @@ export default function DashboardPage() {
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
     }
+    const [dStr, mStr] = selectedClass.displayDate.split('/');
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
     const filteredNadchodzace = updatedNadchodzace.filter((z: any) => {
       const zData = z.data || '';
       return !(zData.includes(selectedClass.displayDate) || zData.includes(`${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`));
     });
 
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
       const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
@@ -2509,6 +2560,10 @@ export default function DashboardPage() {
       rule_applied: 'USER_CANCEL',
       payload: { klient_id: currentUser.id, class_key: classKey }
     }]);
+
+    const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
+    const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+    const diffMinutes = (classStartDateTime.getTime() - new Date().getTime()) / (1000 * 60);
 
     const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
@@ -2569,11 +2624,13 @@ export default function DashboardPage() {
     }
     if (!currentUser) return;
     
-    const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] ?? bookingRules.cancel_deadline_minutes ?? 90;
+    const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] !== undefined
+      ? Number(bookingRules.cancel_deadline_per_class[title])
+      : Number(bookingRules.cancel_deadline_minutes ?? 90);
     const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
     if (diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
-      showToast(`Nie możesz się wypisać! Czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
+      showToast(`Nie możesz się wypisać! Minimalny czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
       return;
     }
 
@@ -2608,7 +2665,7 @@ export default function DashboardPage() {
     });
 
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
       const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
@@ -2742,7 +2799,7 @@ export default function DashboardPage() {
         expDate.setHours(23, 59, 59, 999);
         if (expDate < new Date()) return false;
       }
-      if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) {
+      if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) {
         return false;
       }
       return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
@@ -2802,7 +2859,7 @@ export default function DashboardPage() {
     if (error) { showToast(`Nie udało się zapisać: ${error.message}`, 'error'); return; }
 
     let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
       if (!isNaN(currentRemaining) && currentRemaining > 0) {
@@ -2842,7 +2899,7 @@ export default function DashboardPage() {
     const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
     let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
     if (zwrocicWejscie) {
-      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
@@ -3093,7 +3150,7 @@ export default function DashboardPage() {
           const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
           if (diffDays < 0) { isValid = false; } else if (diffDays <= 5) { isExpiring = true; msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`; }
         }
-        if (k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
+        if (isQuantityPass(k) && k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
           if (k.pozostaloWejsc <= 0) { isValid = false; } else if (k.pozostaloWejsc <= 2) { isExpiring = true; msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`; }
         }
         if (isValid) { hasAnyValid = true; if (isExpiring) { isPassExpiringSoon = true; expiringMessage = msg; } }
@@ -3136,6 +3193,7 @@ export default function DashboardPage() {
                 const targetIso = `${now.getFullYear()}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                 const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
                 const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
+                const cancelInfo = getCancelDeadlineInfo(classInfo, displayFormatted);
 
                 if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === displayFormatted)) {
                   myUpcomingClasses.push({
@@ -3146,7 +3204,8 @@ export default function DashboardPage() {
                     signupStatus: mojZapis.status || 'zapisany',
                     isKrzeselko: mojZapis.status === 'krzesełko',
                     waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30,
-                    programmedWorkout: progWorkout
+                    programmedWorkout: progWorkout,
+                    cancelInfo
                   });
                 }
               }
@@ -3185,8 +3244,7 @@ export default function DashboardPage() {
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
-  
-  return (
+return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
       {/* NOWOCZESNE POWIADOMIENIE TOAST */}
@@ -3373,6 +3431,7 @@ export default function DashboardPage() {
           </Link>
         </div>
       )}
+
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
@@ -3383,9 +3442,9 @@ export default function DashboardPage() {
               
               {myUpcomingClasses.length > 0 && (
                 <div className="hidden sm:flex justify-between px-5 py-3 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-white">
-                  <div className="w-[35%]">Data</div>
-                  <div className="w-[50%]">Zajęcia i plan</div>
-                  <div className="w-[15%] text-right pr-2">Wypisz</div>
+                  <div className="w-[30%]">Data</div>
+                  <div className="w-[45%]">Zajęcia i plan</div>
+                  <div className="w-[25%] text-right pr-2">Status wypisu</div>
                 </div>
               )}
               
@@ -3395,79 +3454,102 @@ export default function DashboardPage() {
                     Nie masz aktualnie żadnych aktywnych zapisów na zajęcia.
                   </div>
                 ) : (
-                  (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-4 sm:px-5 sm:py-4 hover:bg-slate-50 transition-colors bg-white gap-2 sm:gap-4">
-                      
-                      {/* LEWA KOLUMNA: DATA */}
-                      <div className="shrink-0 min-w-[95px] sm:min-w-[130px] pr-1">
-                        <div className="text-[10px] font-black text-sky-700 uppercase tracking-wider mb-0.5">
-                          {['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'][cls.fullDateObj.getDay()]}
-                        </div>
-                        <div className="text-[12px] sm:text-[13px] font-bold text-slate-800 font-mono">
-                          {`${String(cls.fullDateObj.getDate()).padStart(2, '0')}.${String(cls.fullDateObj.getMonth() + 1).padStart(2, '0')}.${String(cls.fullDateObj.getFullYear()).slice(-2)}`}
-                        </div>
-                        <div className="text-[10px] sm:text-[12px] text-slate-500 mt-0.5">
-                          {cls.start} - {cls.end} ({calculateDuration(cls.start, cls.end)})
-                        </div>
-                      </div>
+                  (showAllMyClasses ? myUpcomingClasses : myUpcomingClasses.slice(0, 3)).map((cls, idx) => {
+                    const cancelInfo = cls.cancelInfo || getCancelDeadlineInfo(cls, cls.displayDate);
 
-                      {/* ŚRODKOWA KOLUMNA: TYTUŁ, KRZESEŁKO I TRENING */}
-                      <div className="flex-1 min-w-0 px-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[12px] sm:text-[13px] font-bold text-slate-900">{cls.title}</span>
-                          {cls.isKrzeselko ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditWaitlistTarget(currentUser);
-                                setEditWaitlistCutoff(cls.waitlistCutoffMinutes || 30);
-                                setSelectedClass(cls);
-                                setIsEditWaitlistModalOpen(true);
-                              }}
-                              className="bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-200 text-[9px] font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap shadow-xs shrink-0"
-                              title="Kliknij, aby zmienić czas gotowości bez utraty miejsca w kolejce"
-                            >
-                              <span>🪑 Krzesełko ({cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes} min`})</span>
-                              <span className="text-[8px] opacity-70">✏️</span>
-                            </button>
-                          ) : (
-                            <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[9px] font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 shrink-0">
-                              <span>✅ Grupa Główna</span>
-                            </span>
-                          )}
+                    return (
+                      <div key={idx} className="flex items-center justify-between p-4 sm:px-5 sm:py-4 hover:bg-slate-50 transition-colors bg-white gap-2 sm:gap-4">
+                        
+                        {/* LEWA KOLUMNA: DATA */}
+                        <div className="shrink-0 min-w-[95px] sm:min-w-[130px] pr-1">
+                          <div className="text-[10px] font-black text-sky-700 uppercase tracking-wider mb-0.5">
+                            {['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'][cls.fullDateObj.getDay()]}
+                          </div>
+                          <div className="text-[12px] sm:text-[13px] font-bold text-slate-800 font-mono">
+                            {`${String(cls.fullDateObj.getDate()).padStart(2, '0')}.${String(cls.fullDateObj.getMonth() + 1).padStart(2, '0')}.${String(cls.fullDateObj.getFullYear()).slice(-2)}`}
+                          </div>
+                          <div className="text-[10px] sm:text-[12px] text-slate-500 mt-0.5">
+                            {cls.start} - {cls.end} ({calculateDuration(cls.start, cls.end)})
+                          </div>
                         </div>
 
-                        {cls.programmedWorkout && (
-                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                            <span className="bg-amber-100 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded border border-amber-300">
-                              Trening {cls.programmedWorkout.index}/{cls.programmedWorkout.total}: {cls.programmedWorkout.workout.tytul}
-                            </span>
-                            {cls.programmedWorkout.workout.opis && (
-                              <span className="text-[10px] text-slate-500 truncate max-w-[160px] sm:max-w-[250px]" title={cls.programmedWorkout.workout.opis}>
-                                ({cls.programmedWorkout.workout.opis})
+                        {/* ŚRODKOWA KOLUMNA: TYTUŁ, KRZESEŁKO I TRENING */}
+                        <div className="flex-1 min-w-0 px-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[12px] sm:text-[13px] font-bold text-slate-900">{cls.title}</span>
+                            {cls.isKrzeselko ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditWaitlistTarget(currentUser);
+                                  setEditWaitlistCutoff(cls.waitlistCutoffMinutes || 30);
+                                  setSelectedClass(cls);
+                                  setIsEditWaitlistModalOpen(true);
+                                }}
+                                className="bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-200 text-[9px] font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap shadow-xs shrink-0"
+                                title="Kliknij, aby zmienić czas gotowości bez utraty miejsca w kolejce"
+                              >
+                                <span>🪑 Krzesełko ({cls.waitlistCutoffMinutes >= 60 ? `${cls.waitlistCutoffMinutes / 60}h` : `${cls.waitlistCutoffMinutes} min`})</span>
+                                <span className="text-[8px] opacity-70">✏️</span>
+                              </button>
+                            ) : (
+                              <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[9px] font-black px-2 py-0.5 rounded-md inline-flex items-center gap-1 shrink-0">
+                                <span>✅ Grupa Główna</span>
                               </span>
                             )}
                           </div>
-                        )}
-                        <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
-                      </div>
 
-                      {/* PRAWA KOLUMNA: PRZYCISK WYPISU */}
-                      <div className="shrink-0 flex items-center justify-end pl-1">
-                        <button 
-                          onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
-                          className="w-9 h-9 sm:w-10 sm:h-10 bg-[#ff2a43] hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0"
-                          title="Wypisz się z zajęć"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l4 4m0-4l-4 4" />
-                          </svg>
-                        </button>
-                      </div>
+                          {cls.programmedWorkout && (
+                            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                              <span className="bg-amber-100 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded border border-amber-300">
+                                Trening {cls.programmedWorkout.index}/{cls.programmedWorkout.total}: {cls.programmedWorkout.workout.tytul}
+                              </span>
+                              {cls.programmedWorkout.workout.opis && (
+                                <span className="text-[10px] text-slate-500 truncate max-w-[160px] sm:max-w-[250px]" title={cls.programmedWorkout.workout.opis}>
+                                  ({cls.programmedWorkout.workout.opis})
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
+                        </div>
 
-                    </div>
-                  ))
+                        {/* PRAWA KOLUMNA: LICZNIK CZASU + PRZYCISK WYPISU */}
+                        <div className="shrink-0 flex items-center justify-end gap-2.5 pl-1">
+                          {cancelInfo && (
+                            <div className="text-right hidden sm:block">
+                              {cancelInfo.status === 'countdown' ? (
+                                <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-950 font-bold px-2 py-1 rounded-lg text-[10px] border border-amber-300 animate-pulse">
+                                  {cancelInfo.label}
+                                </span>
+                              ) : cancelInfo.status === 'locked' ? (
+                                <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 font-bold px-2 py-1 rounded-lg text-[10px] border border-rose-200">
+                                  🔒 Zablokowany wypis
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
+
+                          <button 
+                            onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
+                            disabled={cancelInfo && !cancelInfo.canCancel}
+                            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center shadow-md transition-transform shrink-0 ${
+                              cancelInfo && !cancelInfo.canCancel
+                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                                : 'bg-[#ff2a43] hover:bg-rose-600 text-white hover:scale-105 cursor-pointer'
+                            }`}
+                            title={cancelInfo && !cancelInfo.canCancel ? cancelInfo.label : "Wypisz się z zajęć"}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l4 4m0-4l-4 4" />
+                            </svg>
+                          </button>
+                        </div>
+
+                      </div>
+                    );
+                  })
                 )}
               </div>
               {myUpcomingClasses.length > 3 && (
@@ -3659,6 +3741,8 @@ export default function DashboardPage() {
 
                       const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
 
+                      const cancelDeadlineInfo = getCancelDeadlineInfo(item, col.date);
+
                       return (
                         <div
                           key={classIdx}
@@ -3713,11 +3797,11 @@ export default function DashboardPage() {
                                   🪑 REZERWA
                                 </span>
                               )}
-{isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
-  <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[9px] sm:text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider inline-flex items-center gap-1.5 shadow-xs">
-    <span>⚠️</span> Obowiązuje inny karnet
-  </span>
-)}
+                              {isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[9px] sm:text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider inline-flex items-center gap-1 shadow-xs">
+                                  <span>⚠️</span> Inny karnet
+                                </span>
+                              )}
 
                               {isLockedForClient && !isClassCancelled && !item.isUsunięte && (
                                 <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
@@ -3726,6 +3810,21 @@ export default function DashboardPage() {
                               )}
                             </div>
                           </div>
+
+                          {/* WSKAŹNIK ODLICZANIA CZASU NA BEZPŁATNY WYPIS DLA ZAPISANYCH */}
+                          {(isUserInMainGroup || isUserInWaitlist) && !isClassCancelled && !item.isUsunięte && cancelDeadlineInfo && (
+                            <div className="pt-0.5">
+                              {cancelDeadlineInfo.status === 'countdown' ? (
+                                <div className="bg-amber-100/90 border border-amber-300 text-amber-950 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 animate-pulse">
+                                  {cancelDeadlineInfo.label}
+                                </div>
+                              ) : cancelDeadlineInfo.status === 'locked' ? (
+                                <div className="bg-rose-100 text-rose-800 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 border border-rose-200">
+                                  🔒 Brak możliwości wypisu
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
 
                           {progInfo && !isClassCancelled && !item.isUsunięte && (
                             <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-1.5 text-[10px] space-y-0.5 shadow-2xs">
@@ -3747,7 +3846,7 @@ export default function DashboardPage() {
                             </div>
                           ) : isClassCancelled ? (
                             <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200 leading-tight">
-                              {autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : 'ODWOŁANE'}
+                              {autoCancelStatus.reason || 'ODWOŁANE'}
                             </div>
                           ) : (
                             <div className="flex items-center justify-between gap-1 text-[10px]">
@@ -3808,19 +3907,19 @@ export default function DashboardPage() {
                         : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
                     </button>
                     {isExpanded && (
-                          <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
-                            {renderEventsAndClasses()}
-                          </div>
-                        )}
+                      <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                        {renderEventsAndClasses()}
                       </div>
-                    ) : (
-                      renderEventsAndClasses()
                     )}
                   </div>
-                );
-              })}
-            </div>
-          </section>
+                ) : (
+                  renderEventsAndClasses()
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
@@ -4434,191 +4533,191 @@ export default function DashboardPage() {
                                       {osoba.pass || 'OPEN'}
                                     </span>
                                   </div>
-                                  <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="font-bold text-slate-700">LIMIT WYPISU:</span> 
-                                    <strong className="text-blue-900">{cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin} min`} przed startem</strong>
-                                    {isThisUserMe && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setEditWaitlistTarget(osoba);
-                                          setEditWaitlistCutoff(cutoffMin);
-                                          setIsEditWaitlistModalOpen(true);
-                                        }}
-                                        className="text-[10px] bg-blue-200 hover:bg-blue-300 text-blue-950 font-bold px-1.5 py-0.2 rounded cursor-pointer transition-colors"
-                                        title="Zmień czas gotowości bez utraty kolejki"
-                                      >
-                                        Zmień ✏️
-                                      </button>
-                                    )}
-                                  </div>
-                                  <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
-                                  <div>
-                                    <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
-                                    <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                            <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden flex items-center justify-center font-bold text-5xl shrink-0 shadow-sm ${
-                              isMedicover ? 'bg-emerald-100 border-4 border-emerald-500 text-emerald-900' : 'bg-blue-100 border-2 border-blue-500 text-blue-900'
-                            }`}>
-                              {osoba.avatarUrl ? (
-                                <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                              ) : (
-                                '🪑'
-                              )}
-                            </div>
-                          </div>
-                          {canManageClass && (
-                            <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditWaitlistTarget(osoba);
-                                  setEditWaitlistCutoff(cutoffMin);
-                                  setIsEditWaitlistModalOpen(true);
-                                }}
-                                className="font-bold text-blue-800 hover:text-blue-950 text-[11px] underline cursor-pointer"
-                              >
-                                Wypis: {cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin}m`} przed (Edytuj ✏️)
-                              </button>
-                              <button
-                                onClick={() => setClientToUnregister(osoba)}
-                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
-                              >
-                                WYPISZ
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {['klubowicz', 'trener'].includes(appRole) ? (
-                <div className="pt-2">
-                  {!isUserSignedUp ? (
-                    (() => {
-                      const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-                      if (wVal < 0) {
-                        return (
-                          <div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
-                            💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
-                          </div>
-                        );
-                      }
-                      
-                      const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
-                      const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
-                      
-                      if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
-                        return (
-                          <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
-                            <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
-                            <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.</div>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <button
-                          onClick={handleKlubowiczZapiszSie}
-                          className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
-                            isFull
-                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                          }`}
-                        >
-                          {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
-                        </button>
-                      );
-                    })()
-                  ) : (
-                    <button
-                      onClick={handleKlubowiczWypiszSie}
-                      className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
-                    >
-                      ❌ Wypisz się z zajęć
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
-                  {!isSearchingClient ? (
-                    <button
-                      onClick={() => setIsSearchingClient(true)}
-                      className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
-                        isFull
-                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
-                      }`}
-                    >
-                      <span>{isFull ? '🪑' : '👤+'}</span>
-                      {isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
-                    </button>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-xs text-sky-950 uppercase">
-                          {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
-                        </span>
-                        <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
-                      </div>
-                      <input
-                        type="text"
-                        autoFocus
-                        placeholder="Wpisz imię, nazwisko lub email..."
-                        value={searchClientQuery}
-                        onChange={(e) => setSearchClientQuery(e.target.value)}
-                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
-                      />
-                      {searchClientQuery.trim().length > 0 && (
-                        <div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
-                          {filteredSuggestions.length > 0 ? (
-                            filteredSuggestions.map((klient) => (
-                              <div
-                                key={klient.id}
-                                onClick={() => handleZapiszKlientaDoZajec(klient)}
-                                className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
-                              >
-                                <div>
-                                  <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
-                                  <span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
-                                  {klient.blokadaDo && klient.blokadaDo >= todayStr && (
-                                    <span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
+                                <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold text-slate-700">LIMIT WYPISU:</span> 
+                                  <strong className="text-blue-900">{cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin} min`} przed startem</strong>
+                                  {isThisUserMe && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditWaitlistTarget(osoba);
+                                        setEditWaitlistCutoff(cutoffMin);
+                                        setIsEditWaitlistModalOpen(true);
+                                      }}
+                                      className="text-[10px] bg-blue-200 hover:bg-blue-300 text-blue-950 font-bold px-1.5 py-0.2 rounded cursor-pointer transition-colors"
+                                      title="Zmień czas gotowości bez utraty kolejki"
+                                    >
+                                      Zmień ✏️
+                                    </button>
                                   )}
                                 </div>
-                                <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                                  {isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
-                                </span>
+                                <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
+                                <div>
+                                  <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
+                                  <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
+                                </div>
                               </div>
-                            ))
-                          ) : (
-                            <div className="p-4 text-center text-xs text-slate-400">
-                              Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
-                            </div>
-                          )}
+                            )}
+                          </div>
+                          <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden flex items-center justify-center font-bold text-5xl shrink-0 shadow-sm ${
+                            isMedicover ? 'bg-emerald-100 border-4 border-emerald-500 text-emerald-900' : 'bg-blue-100 border-2 border-blue-500 text-blue-900'
+                          }`}>
+                            {osoba.avatarUrl ? (
+                              <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                            ) : (
+                              '🪑'
+                            )}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  )}
+                        {canManageClass && (
+                          <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditWaitlistTarget(osoba);
+                                setEditWaitlistCutoff(cutoffMin);
+                                setIsEditWaitlistModalOpen(true);
+                              }}
+                              className="font-bold text-blue-800 hover:text-blue-950 text-[11px] underline cursor-pointer"
+                            >
+                              Wypis: {cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin}m`} przed (Edytuj ✏️)
+                            </button>
+                            <button
+                              onClick={() => setClientToUnregister(osoba)}
+                              className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
+                            >
+                              WYPISZ
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-              <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
-                <button
-                  onClick={() => setSelectedClass(null)}
-                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
-                >
-                  Zamknij
-                </button>
               </div>
+            )}
+            {['klubowicz', 'trener'].includes(appRole) ? (
+              <div className="pt-2">
+                {!isUserSignedUp ? (
+                  (() => {
+                    const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+                    if (wVal < 0) {
+                      return (
+                        <div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
+                          💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
+                        </div>
+                      );
+                    }
+                    
+                    const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
+                    const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
+                    
+                    if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
+                      return (
+                        <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
+                          <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
+                          <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.</div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <button
+                        onClick={handleKlubowiczZapiszSie}
+                        className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                          isFull
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                        }`}
+                      >
+                        {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
+                      </button>
+                    );
+                  })()
+                ) : (
+                  <button
+                    onClick={handleKlubowiczWypiszSie}
+                    className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                  >
+                    ❌ Wypisz się z zajęć
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
+                {!isSearchingClient ? (
+                  <button
+                    onClick={() => setIsSearchingClient(true)}
+                    className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
+                      isFull
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                    }`}
+                  >
+                    <span>{isFull ? '🪑' : '👤+'}</span>
+                    {isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-sky-950 uppercase">
+                        {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
+                      </span>
+                      <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
+                    </div>
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="Wpisz imię, nazwisko lub email..."
+                      value={searchClientQuery}
+                      onChange={(e) => setSearchClientQuery(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
+                    />
+                    {searchClientQuery.trim().length > 0 && (
+                      <div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
+                        {filteredSuggestions.length > 0 ? (
+                          filteredSuggestions.map((klient) => (
+                            <div
+                              key={klient.id}
+                              onClick={() => handleZapiszKlientaDoZajec(klient)}
+                              className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+                            >
+                              <div>
+                                <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
+                                <span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
+                                {klient.blokadaDo && klient.blokadaDo >= todayStr && (
+                                  <span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
+                                )}
+                              </div>
+                              <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                {isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="p-4 text-center text-xs text-slate-400">
+                            Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
+              <button
+                onClick={() => setSelectedClass(null)}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+              >
+                Zamknij
+              </button>
             </div>
           </div>
-        );
-      })()}
+        </div>
+      );
+    })()}
 
       {/* MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ */}
       {isWaitlistModalOpen && selectedClass && (
@@ -5569,4 +5668,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
