@@ -51,7 +51,7 @@ export default function RootLayout({
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
-  // Stany dla mechanizmu Pull-to-Refresh
+  // Stany dla mechanizmu Pull-to-Refresh (zwiększona czułość/próg)
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const touchStartY = useRef(0);
@@ -155,7 +155,7 @@ export default function RootLayout({
       .eq('id', currentClientId);
   };
 
-  // Obsługa gestu Pull-to-Refresh
+  // Obsługa gestu Pull-to-Refresh z podniesionym progiem aktywacji
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1 && window.scrollY <= 0) {
@@ -171,7 +171,8 @@ export default function RootLayout({
       const currentY = e.touches[0].clientY;
       const diffY = currentY - touchStartY.current;
       if (diffY > 0 && window.scrollY <= 0) {
-        setPullDistance(Math.min(diffY * 0.4, 90));
+        // Zmniejszony współczynnik (0.25 zamiast 0.4) i ograniczenie do 120px
+        setPullDistance(Math.min(diffY * 0.25, 120));
       } else {
         setPullDistance(0);
       }
@@ -179,9 +180,10 @@ export default function RootLayout({
 
     const handleTouchEnd = () => {
       if (!isPulling.current || isRefreshing) return;
-      if (pullDistance >= 65) {
+      // Wymagane mocniejsze pociągnięcie (min. 90px)
+      if (pullDistance >= 90) {
         setIsRefreshing(true);
-        setPullDistance(60);
+        setPullDistance(85);
         setTimeout(() => { window.location.reload(); }, 400);
       } else {
         setPullDistance(0);
@@ -621,14 +623,14 @@ export default function RootLayout({
           className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out"
           style={{
             transform: `translateY(${pullDistance > 0 ? pullDistance : 0}px)`,
-            opacity: pullDistance > 10 ? 1 : 0
+            opacity: pullDistance > 15 ? 1 : 0
           }}
         >
           <div className="bg-sky-950 text-amber-400 px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 border border-sky-800 text-xs font-black">
             <span className={`text-base inline-block ${isRefreshing ? 'animate-spin' : ''}`} style={{ transform: isRefreshing ? 'none' : `rotate(${pullDistance * 4}deg)` }}>
               {isRefreshing ? '🔄' : '⬇️'}
             </span>
-            <span>{isRefreshing ? 'Odświeżanie danych...' : pullDistance >= 65 ? 'Puść, aby odświeżyć' : 'Pociągnij w dół...'}</span>
+            <span>{isRefreshing ? 'Odświeżanie danych...' : pullDistance >= 90 ? 'Puść, aby odświeżyć' : 'Pociągnij mocniej w dół...'}</span>
           </div>
         </div>
 
