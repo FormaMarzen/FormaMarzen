@@ -259,7 +259,7 @@ export default function PortfelPage() {
                     const kwotaNum = Number(t.amount) || 0;
                     const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
                     const statusVal = t.status || 'pending';
-                    const gatewayInfo = t.gateway_respons || t.gateway_response;
+                    const gatewayInfo = t.gateway_response || t.gateway_respons;
 
                     return (
                       <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">

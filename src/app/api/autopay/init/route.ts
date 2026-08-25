@@ -48,7 +48,7 @@ export async function POST(req: Request) {
         status: 'pending',
         order_id: orderId,
         type: type || 'wallet_topup',
-        gateway_respons: {
+        gateway_response: {
           opis: cleanDescription,
           email: customerEmail,
           created_at: new Date().toISOString()
@@ -80,7 +80,7 @@ export async function POST(req: Request) {
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 3. Zwrócenie danych formularza dla bramki Autopay
+    // 3. Przygotowanie pól dla bramki Autopay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: orderId,

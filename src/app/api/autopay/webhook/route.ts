@@ -76,8 +76,8 @@ export async function POST(req: Request) {
         .from('autopay_transakcje')
         .update({
           status: 'success',
-          gateway_respons: {
-            ...transakcja.gateway_respons,
+          gateway_response: {
+            ...transakcja.gateway_response,
             webhook_received_at: new Date().toISOString(),
             raw_status: paymentStatus
           }
@@ -124,8 +124,8 @@ export async function POST(req: Request) {
         .from('autopay_transakcje')
         .update({
           status: 'failed',
-          gateway_respons: {
-            ...transakcja.gateway_respons,
+          gateway_response: {
+            ...transakcja.gateway_response,
             webhook_received_at: new Date().toISOString(),
             raw_status: paymentStatus
           }
