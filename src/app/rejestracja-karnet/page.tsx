@@ -202,6 +202,31 @@ export default function RegistrationPassPage() {
     });
   };
 
+  // Pomocnicza funkcja wysyłająca powiadomienie Push do administratorów
+  const sendPushToAdmins = async (title: string, body: string, url: string = '/klienci') => {
+    try {
+      const { data: subs, error } = await supabase
+        .from('push_subscriptions')
+        .select('subscription')
+        .eq('role', 'admin');
+
+      if (error || !subs || subs.length === 0) return;
+
+      const subscriptions = subs.map(s => s.subscription);
+
+      await fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscriptions,
+          payload: { title, body, url }
+        })
+      });
+    } catch (err) {
+      console.error('Błąd wysyłania powiadomienia push:', err);
+    }
+  };
+
   const handleFinalSubmit = async () => {
     const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
     if (!allAccepted) {
@@ -338,6 +363,13 @@ export default function RegistrationPassPage() {
           przeczytana: false
         }
       ]);
+
+      // 7. Wysłanie powiadomienia PUSH do administratora
+      await sendPushToAdmins(
+        'Nowy klubowicz i zakup karnetu! 💳',
+        `${firstName} ${lastName} zarejestrował(a) się i kupił(a) karnet: ${selectedPass.nazwa} (${passCalc.finalPriceStr})`,
+        '/klienci'
+      );
 
       setIsLoading(false);
       setIsSuccessModalOpen(true);
