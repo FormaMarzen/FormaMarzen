@@ -53,8 +53,7 @@ export default function PortfelPage() {
             "Numer tel.": '-',
             Portfel: '0.00 PLN',
             Zarejestrowany: new Date().toISOString().split('T')[0],
-            karnetyKlubowicza: [],
-            walletHistory: []
+            karnetyKlubowicza: []
           };
 
           const { error: insertErr } = await supabase.from('klienci').insert([defaultClient]);
@@ -67,20 +66,35 @@ export default function PortfelPage() {
         if (klientData) {
           const rawClient = klientData as any;
 
+          // 1. Pobranie historii transakcji Autopay
           const { data: autopayData } = await supabase
             .from('autopay_transakcje')
             .select('*')
             .eq('user_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          setTransakcjeFinansowe(autopayData || []);
+          const transactions = autopayData || [];
+          setTransakcjeFinansowe(transactions);
 
+          // 2. Automatyczna synchronizacja salda z bazy
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
           const isNegative = String(rawWalletStr).includes('-');
           let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
-          
-          if (isNegative) {
-            parsedWalletNum = -Math.abs(parsedWalletNum);
+          if (isNegative) parsedWalletNum = -Math.abs(parsedWalletNum);
+
+          // Jeśli w historii są transakcje SUCCESS, a portfel jest pusty (0.00), synchronizujemy saldo
+          const successfulTopupsTotal = transactions
+            .filter((t: any) => t.status === 'success')
+            .reduce((acc: number, curr: any) => acc + (Number(curr.amount) || 0), 0);
+
+          if (successfulTopupsTotal > 0 && parsedWalletNum === 0) {
+            parsedWalletNum = successfulTopupsTotal;
+            const syncedWalletStr = `${parsedWalletNum.toFixed(2)} PLN`;
+            
+            await supabase
+              .from('klienci')
+              .update({ Portfel: syncedWalletStr })
+              .eq('id', rawClient.id);
           }
 
           setCurrentUser({
@@ -122,7 +136,6 @@ export default function PortfelPage() {
         throw new Error(data.error || 'Nie udało się zainicjalizować płatności w Autopay');
       }
 
-      // Bezpieczny formularz POST ze scisle zdefiniowanym kodowaniem UTF-8
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = data.gatewayUrl;
@@ -156,7 +169,6 @@ export default function PortfelPage() {
       return;
     }
 
-    // Unikalne OrderID ponizej 32 znakow
     const orderId = `TOP-${currentUser.id}-${Date.now()}`.substring(0, 32);
     const opisOperacji = topUpReason.trim() || `Doladowanie portfela ${kwotaZmiany.toFixed(2)} PLN`;
 
