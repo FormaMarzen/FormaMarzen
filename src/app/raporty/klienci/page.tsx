@@ -8,6 +8,22 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Bezpieczny parser danych JSON / JSONB z Supabase
+const safeJsonParse = (val: any, fallback: any = []) => {
+  if (!val) return fallback;
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'object') return val;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      return parsed !== null ? parsed : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+  return fallback;
+};
+
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -16,11 +32,13 @@ export default function KlienciPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
   
-  // Dane grafiku do pełnej synchronizacji obecności i nadchodzących zajęć
+  // Dane grafiku i zapisów do pełnej synchronizacji
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
   const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
   const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
   const [wszystkieZapisy, setWszystkieZapisy] = useState<any[]>([]);
+  const [automatyczneZapisy, setAutomatyczneZapisy] = useState<any[]>([]);
+  const [wszystkieTransakcje, setWszystkieTransakcje] = useState<any[]>([]);
 
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -103,7 +121,7 @@ export default function KlienciPage() {
     if (!dateStr) return 0;
     let d = String(dateStr).trim();
     
-    // Obsługa formatów DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
+    // Obsługa DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
     const regexFull = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchFull = d.match(regexFull);
     if (matchFull) {
@@ -112,13 +130,11 @@ export default function KlienciPage() {
       const day = matchFull[1].padStart(2, '0');
       const hour = matchFull[4] ? matchFull[4].padStart(2, '0') : '23';
       const min = matchFull[5] ? matchFull[5].padStart(2, '0') : '59';
-      
-      const isoStr = `${year}-${month}-${day}T${hour}:${min}:00`;
-      const parsed = new Date(isoStr).getTime();
+      const parsed = new Date(`${year}-${month}-${day}T${hour}:${min}:00`).getTime();
       if (!isNaN(parsed)) return parsed;
     }
 
-    // Obsługa formatu YYYY-MM-DD
+    // Obsługa YYYY-MM-DD
     const regexIso = /(\d{4})[\.\-\/](\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchIso = d.match(regexIso);
     if (matchIso) {
@@ -127,13 +143,11 @@ export default function KlienciPage() {
       const day = matchIso[3].padStart(2, '0');
       const hour = matchIso[4] ? matchIso[4].padStart(2, '0') : '23';
       const min = matchIso[5] ? matchIso[5].padStart(2, '0') : '59';
-      
-      const isoStr = `${year}-${month}-${day}T${hour}:${min}:00`;
-      const parsed = new Date(isoStr).getTime();
+      const parsed = new Date(`${year}-${month}-${day}T${hour}:${min}:00`).getTime();
       if (!isNaN(parsed)) return parsed;
     }
 
-    // Obsługa krótkiego formatu DD/MM lub DD.MM
+    // Obsługa skróconego formatu DD/MM lub DD.MM
     const regexShort = /(\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchShort = d.match(regexShort);
     if (matchShort) {
@@ -142,9 +156,7 @@ export default function KlienciPage() {
       const day = matchShort[1].padStart(2, '0');
       const hour = matchShort[3] ? matchShort[3].padStart(2, '0') : '23';
       const min = matchShort[4] ? matchShort[4].padStart(2, '0') : '59';
-      
-      const isoStr = `${currentYear}-${month}-${day}T${hour}:${min}:00`;
-      const parsed = new Date(isoStr).getTime();
+      const parsed = new Date(`${currentYear}-${month}-${day}T${hour}:${min}:00`).getTime();
       if (!isNaN(parsed)) return parsed;
     }
 
@@ -175,7 +187,6 @@ export default function KlienciPage() {
 
   const calculateStandardSystemDiscount = (client: any) => {
     if (!client) return 0;
-    
     const utraty = (client.transakcje || []).filter((t: any) => t.typ_operacji === 'utrata_ciaglosci');
     let lastResetDate = '1970-01-01T00:00:00.000Z';
     if (utraty.length > 0) {
@@ -241,7 +252,7 @@ export default function KlienciPage() {
 
     if (nadpisanie?.limit) limit = nadpisanie.limit;
     else if (szablon?.limit || szablon?.limit_miejsc) limit = szablon.limit || szablon.limit_miejsc;
-    else if (jednorazowe?.limit || jednorazowe?.limit_miejsc) limit = jednorazowe.limit || jednorazowe.limit_miejsc;
+    else if (jednorazowe?.limit_miejsc || jednorazowe?.limit) limit = jednorazowe.limit_miejsc || jednorazowe.limit;
 
     const mainList = participants.filter((p: any) => p.status === 'zapisany');
     const firstWaitlist = participants.find((p: any) => p.status === 'krzesełko');
@@ -311,7 +322,7 @@ export default function KlienciPage() {
     }
 
     if (cancelledCount > 0 && targetClientObj) {
-      let updatedKarnety = [...(targetClientObj.karnetyKlubowicza || [])];
+      let updatedKarnety = safeJsonParse(targetClientObj.karnetyKlubowicza, []);
       const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       
       if (passIndex !== -1) {
@@ -328,14 +339,6 @@ export default function KlienciPage() {
         klient_id: klientId,
         typ_operacji: 'zajecia_wypis',
         opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu blokady konta/karnetu (${powodBlokadyText}). Zwrócono ${cancelledCount} wejść.`
-      }]);
-
-      await supabase.from('booking_logs').insert([{
-        action_type: 'BLOCK_CANCEL_ALL',
-        status: 'SUCCESS',
-        reason: `Automatycznie wypisano z ${cancelledCount} zajęć po nałożeniu blokady`,
-        rule_applied: 'absence_ban',
-        payload: { klient_id: klientId, count: cancelledCount }
       }]);
     }
   };
@@ -380,12 +383,7 @@ export default function KlienciPage() {
     if (cancelledCount > 0) {
       const { data: klientData } = await supabase.from('klienci').select('karnetyKlubowicza').eq('id', klientId).single();
       if (klientData) {
-        let updatedKarnety = klientData.karnetyKlubowicza;
-        if (typeof updatedKarnety === 'string') {
-          try { updatedKarnety = JSON.parse(updatedKarnety); } catch(e) { updatedKarnety = []; }
-        }
-        if (!Array.isArray(updatedKarnety)) updatedKarnety = [];
-
+        let updatedKarnety = safeJsonParse(klientData.karnetyKlubowicza, []);
         const passIndex = updatedKarnety.findIndex((k: any) => k.nazwa === nazwaKarnetu && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
         
         if (passIndex !== -1) {
@@ -404,14 +402,6 @@ export default function KlienciPage() {
         typ_operacji: 'zajecia_wypis',
         opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu zawieszenia karnetu. Zwrócono ${cancelledCount} wejść.`
       }]);
-
-      await supabase.from('booking_logs').insert([{
-        action_type: 'SUSPEND_CANCEL_ALL',
-        status: 'SUCCESS',
-        reason: `Automatycznie wypisano z ${cancelledCount} zajęć po zawieszeniu karnetu`,
-        rule_applied: 'pass_suspension',
-        payload: { klient_id: klientId, count: cancelledCount }
-      }]);
     }
   };
 
@@ -421,7 +411,7 @@ export default function KlienciPage() {
 
     const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
 
-    let karnetyZaktualizowane = [...(profileClient.karnetyKlubowicza || [])];
+    let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
     if (zwrocicWejscie) {
       const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -444,14 +434,16 @@ export default function KlienciPage() {
       await promoteWaitlistForClass(zajecieItem.classKey);
     }
 
-    const uaktualnioneNadchodzace = (profileClient.zapisyNadchodzace || []).filter((z: any) => z.id !== zajecieItem.id && z.classKey !== zajecieItem.classKey);
+    const stareNadchodzace = safeJsonParse(profileClient.zapisyNadchodzace, []);
+    const uaktualnioneNadchodzace = stareNadchodzace.filter((z: any) => z.id !== zajecieItem.id && z.classKey !== zajecieItem.classKey);
     const nowyWypis = { 
       ...zajecieItem, 
       id: Date.now(),
       wypisujacy: 'Zarządca (Panel Klienci)',
       data_operacji: new Date().toISOString()
     };
-    const uaktualnioneWypisy = [nowyWypis, ...(profileClient.zapisyWypisy || [])];
+    const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
+    const uaktualnioneWypisy = [nowyWypis, ...stareWypisy];
 
     await supabase.from('klienci').update({ 
       karnetyKlubowicza: karnetyZaktualizowane,
@@ -467,14 +459,6 @@ export default function KlienciPage() {
       opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})${zwrocicWejscie ? ' - zwrócono 1 wejście' : ''}`
     }]);
 
-    await supabase.from('booking_logs').insert([{
-      action_type: 'CANCEL_SUCCESS',
-      status: 'SUCCESS',
-      reason: `Wypisano klubowicza ${profileClient.firstName} ${profileClient.lastName} z poziomu profilu (${zajecieItem.zajecia})`,
-      rule_applied: 'ADMIN_CANCEL',
-      payload: { klient_id: profileClient.id, zajecie: zajecieItem.zajecia, class_key: zajecieItem.classKey }
-    }]);
-
     loadData();
   };
 
@@ -488,7 +472,7 @@ export default function KlienciPage() {
 
     const zwrocicWejscia = confirm(`Czy zwrócić klubowiczowi wejścia na karnet za anulowane rezerwacje (${upcomingItems.length} wejść)?`);
 
-    let karnetyZaktualizowane = [...(profileClient.karnetyKlubowicza || [])];
+    let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
     if (zwrocicWejscia) {
       const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -522,7 +506,8 @@ export default function KlienciPage() {
       });
     }
 
-    const uaktualnioneWypisy = [...noweWypisy, ...(profileClient.zapisyWypisy || [])];
+    const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
+    const uaktualnioneWypisy = [...noweWypisy, ...stareWypisy];
 
     await supabase.from('klienci').update({
       karnetyKlubowicza: karnetyZaktualizowane,
@@ -535,14 +520,6 @@ export default function KlienciPage() {
       typ_operacji: 'zajecia_wypis',
       kwota: null,
       opis: `Masowo wypisano ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów)${zwrocicWejscia ? ` - zwrócono ${upcomingItems.length} wejść` : ''}`
-    }]);
-
-    await supabase.from('booking_logs').insert([{
-      action_type: 'MASS_CANCEL_SUCCESS',
-      status: 'SUCCESS',
-      reason: `Wypisano masowo klubowicza ${profileClient.firstName} ${profileClient.lastName} ze wszystkich nadchodzących zajęć`,
-      rule_applied: 'ADMIN_MASS_CANCEL',
-      payload: { klient_id: profileClient.id, count: upcomingItems.length }
     }]);
 
     alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
@@ -558,7 +535,8 @@ export default function KlienciPage() {
       { data: grafikData },
       { data: jednorazoweData },
       { data: nadpisaniaData },
-      { data: zapisyData }
+      { data: zapisyData },
+      { data: autoZapisyData }
     ] = await Promise.all([
       supabase.from('klienci').select('*'),
       supabase.from('karnety').select('*'),
@@ -567,13 +545,16 @@ export default function KlienciPage() {
       supabase.from('grafik_zajec').select('*'),
       supabase.from('zajecia_jednorazowe').select('*'),
       supabase.from('nadpisania_zajec').select('*'),
-      supabase.from('zapisy_zajec').select('*')
+      supabase.from('zapisy_zajec').select('*'),
+      supabase.from('automatyczne_zapisy').select('*')
     ]);
 
     if (trenerzyData) setZespolTrenerzy(trenerzyData);
     if (grafikData) setZapisaneZajecia(grafikData);
     if (jednorazoweData) setJednorazoweZajecia(jednorazoweData);
     if (zapisyData) setWszystkieZapisy(zapisyData);
+    if (autoZapisyData) setAutomatyczneZapisy(autoZapisyData);
+    if (transakcjeData) setWszystkieTransakcje(transakcjeData);
 
     if (nadpisaniaData) {
       const nadpisaniaMap: { [key: string]: any } = {};
@@ -615,14 +596,7 @@ export default function KlienciPage() {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => String(t.klient_id) === String(c.id)) : [];
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
         
-        let parsedKarnety = [];
-        if (Array.isArray(c.karnetyKlubowicza)) {
-          parsedKarnety = c.karnetyKlubowicza;
-        } else if (typeof c.karnetyKlubowicza === 'string') {
-          try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
-        } else if (c.karnetyklubowicza) {
-          parsedKarnety = c.karnetyklubowicza;
-        }
+        let parsedKarnety = safeJsonParse(c.karnetyKlubowicza || c.karnetyklubowicza, []);
 
         let karnetyZmienione = false;
         parsedKarnety = parsedKarnety.map((k: any) => {
@@ -686,7 +660,6 @@ export default function KlienciPage() {
                
                const staryStd = calculateStandardSystemDiscount({ transakcje: clientTransakcje });
                currentOffset = -staryStd; 
-               
                hasChanges = true;
 
                supabase.from('transakcje').insert([{
@@ -722,6 +695,11 @@ export default function KlienciPage() {
         const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
         const effectiveBanReason = c.powodBlokady || c.powod_blokady || (finalKarnety[0]?.powodBlokady) || null;
 
+        // Łączenie historii zawieszeń z kolumn 'historiaZawieszen' oraz 'historiazawieszen'
+        const rawHistZaw1 = safeJsonParse(c.historiaZawieszen, []);
+        const rawHistZaw2 = safeJsonParse(c.historiazawieszen, []);
+        const mergedHistoriaZawieszen = [...rawHistZaw1, ...rawHistZaw2];
+
         return {
           ...c,
           id: c.id,
@@ -748,10 +726,10 @@ export default function KlienciPage() {
           trenerInfo: powiazanyTrener || null,
           karnetyKlubowicza: finalKarnety, 
           transakcje: clientTransakcje,
-          zapisyNadchodzace: c.zapisyNadchodzace || c.zapisy_nadchodzace || [],
-          zapisyPrzeszle: c.zapisyPrzeszle || c.zapisy_przeszle || [],
-          zapisyWypisy: c.zapisyWypisy || c.zapisy_wypisy || [],
-          historiaZawieszen: c.historiaZawieszen || c.historia_zawieszen || c.zawieszenia || []
+          zapisyNadchodzace: safeJsonParse(c.zapisyNadchodzace || c.zapisy_nadchodzace, []),
+          zapisyPrzeszle: safeJsonParse(c.zapisyPrzeszle || c.zapisy_przeszle, []),
+          zapisyWypisy: safeJsonParse(c.zapisyWypisy || c.zapisy_wypisy, []),
+          historiaZawieszen: mergedHistoriaZawieszen
         };
       });
       
@@ -770,28 +748,14 @@ export default function KlienciPage() {
     loadData();
 
     const realtimeChannel = supabase
-      .channel('realtime_klienci_zapisy_channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'grafik_zajec' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'zajecia_jednorazowe' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transakcje' }, () => {
-        loadData();
-      })
+      .channel('realtime_klienci_zapisy_all_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'grafik_zajec' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zajecia_jednorazowe' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transakcje' }, () => loadData())
       .subscribe();
 
     return () => {
@@ -1114,7 +1078,8 @@ export default function KlienciPage() {
     const extWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
     const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
 
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === extendPassTarget.id) {
         return {
           ...k,
@@ -1227,7 +1192,8 @@ export default function KlienciPage() {
       historiaZawieszen: []
     };
 
-    const uaktualnioneKarnety = [...(profileClient.karnetyKlubowicza || []), nowyKarnetObj];
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = [...stareKarnety, nowyKarnetObj];
     const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
 
     const { error } = await supabase.from('klienci').update({
@@ -1279,7 +1245,8 @@ export default function KlienciPage() {
 
     if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? System automatycznie wypisze klubowicza z zajęć w tym okresie i zwróci wejścia.`)) return;
 
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === suspendPassTarget.id) {
         return {
           ...k,
@@ -1296,7 +1263,7 @@ export default function KlienciPage() {
       await supabase.from('transakcje').insert([{
         klient_id: profileClient.id,
         typ_operacji: 'zawieszenie_karnetu',
-        opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (Zarządca)`
+        opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (Zarządca / Panel)`
       }]);
       await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
       alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony.`);
@@ -1337,8 +1304,10 @@ export default function KlienciPage() {
       kto: 'Zarządca (Panel Klienci)'
     };
 
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === karnetTarget.id) {
+        const passHist = safeJsonParse(k.historiaZawieszen, []);
         return {
           ...k,
           waznyDo: newExpDateStr,
@@ -1346,7 +1315,7 @@ export default function KlienciPage() {
           zawieszonyOd: null,
           zawieszonyDo: null,
           contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
-          historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])]
+          historiaZawieszen: [historiaEntry, ...passHist]
         };
       }
       return k;
@@ -1398,7 +1367,8 @@ export default function KlienciPage() {
 
     const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
 
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === suspendPassTarget.id) {
         return { 
           ...k, 
@@ -1432,7 +1402,8 @@ export default function KlienciPage() {
     if (!profileClient) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu i konta?")) return;
 
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === karnetTarget.id || k.blokadaDo) {
         return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null };
       }
@@ -1475,7 +1446,8 @@ export default function KlienciPage() {
       znizkaTekst = `(-${procent}%)`;
     }
 
-    const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
+    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === editingPassModal.id) {
         return {
           ...k,
@@ -1529,7 +1501,6 @@ export default function KlienciPage() {
       if (userSignups && userSignups.length > 0) {
         for (const signup of userSignups) {
           const parts = (signup.class_key || '').split('_');
-          const classId = parts[0];
           const dateStr = parts[1];
           if (dateStr) {
             const classTimeMs = parseClassDate(dateStr);
@@ -1547,7 +1518,8 @@ export default function KlienciPage() {
         }
       }
 
-      const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).filter((k: any) => k.id !== passId);
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.filter((k: any) => k.id !== passId);
       const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
       const newCena = getPassPrice(uaktualnioneKarnety);
       
@@ -1636,8 +1608,8 @@ export default function KlienciPage() {
       valB = b.karnetyKlubowicza?.[0]?.waznyDo || ''; 
     }
     else if (sortField === 'wallet') { 
-      valA = parseFloat(String(a.wallet).replace(/[^0-9.-]+/g, '')) || 0; 
-      valB = parseFloat(String(b.wallet).replace(/[^0-9.-]+/g, '')) || 0; 
+      valA = parseFloat(String(a.wallet).replace(/[^0-9.-]+/g, "")) || 0; 
+      valB = parseFloat(String(b.wallet).replace(/[^0-9.-]+/g, "")) || 0; 
       return sortDirection === 'asc' ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
     }
     else if (sortField === 'birthDate') { valA = a.birthDate || ''; valB = b.birthDate || ''; }
@@ -2335,10 +2307,9 @@ export default function KlienciPage() {
                     {activeZapisyTab === 'nadchodzace' && (() => {
                       const now = new Date();
                       const nowTime = now.getTime();
-                      const currentYear = now.getFullYear();
                       const upcomingMap = new Map<string, any>();
 
-                      // 1. Zapisy z globalnej tabeli 'zapisy_zajec'
+                      // A. Zapisy z globalnej tabeli 'zapisy_zajec'
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
                         .forEach((z: any) => {
@@ -2351,25 +2322,49 @@ export default function KlienciPage() {
                           const override = nadpisaneZajeciaDni[z.class_key];
                           const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
                           const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
+                          const timeStr = classInfo?.start_time || classInfo?.start || '';
 
-                          const classStartMs = parseClassDate(`${dateStr} ${classInfo?.start || ''}`);
+                          const classStartMs = parseClassDate(`${dateStr} ${timeStr}`);
                           
                           if (classStartMs >= nowTime) {
                             const uniqueKey = z.class_key || `${z.id}`;
+                            const isKlubowicz = z.zapisujacy?.toLowerCase().includes('klubowicz') || z.zapisujacy?.toLowerCase().includes('użytkownik');
                             upcomingMap.set(uniqueKey, {
                               id: z.id || uniqueKey,
                               classKey: z.class_key,
-                              data: `${dateStr} ${classInfo?.start || ''}`.trim(),
+                              data: `${dateStr} ${timeStr}`.trim(),
                               zajecia: title,
                               status: z.status === 'krzesełko' ? 'LISTA REZERWOWA (KRZESEŁKO)' : 'ZAPISANY',
-                              zapisujacy: z.zapisujacy || 'Administrator / Trener (Panel)',
+                              zapisujacy: z.zapisujacy ? (isKlubowicz ? 'Klubowicz' : z.zapisujacy) : 'Klub (Administrator/Trener)',
                               created_at: z.created_at || z.data_zapisu || null,
                               sortTime: classStartMs
                             });
                           }
                         });
 
-                      // 2. Dodatkowe nadchodzące zapisy z profilu klienta (jeśli istnieją w JSON bazy)
+                      // B. Zapisy z tabeli 'automatyczne_zapisy' (zapisy stałe dokonane przez klub)
+                      (automatyczneZapisy || [])
+                        .filter((az: any) => String(az.klient_id) === String(profileClient.id))
+                        .forEach((az: any) => {
+                          const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
+                          if (stdClass) {
+                            const uniqueKey = `auto_${az.id}_${az.grafik_id}`;
+                            if (!upcomingMap.has(uniqueKey)) {
+                              upcomingMap.set(uniqueKey, {
+                                id: uniqueKey,
+                                classKey: `auto_${az.grafik_id}`,
+                                data: `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${stdClass.start || stdClass.start_time || ''}`.trim(),
+                                zajecia: az.class_title || stdClass.title || stdClass.nazwa || 'Zajęcia stałe',
+                                status: 'ZAPIS STAŁY (KLUB)',
+                                zapisujacy: 'Klub (Administrator)',
+                                created_at: az.created_at || null,
+                                sortTime: nowTime + 1000
+                              });
+                            }
+                          }
+                        });
+
+                      // C. Dodatkowe nadchodzące zapisy z profilu klienta (JSONB w klienci)
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         const classStartMs = parseClassDate(item.data);
                         if (classStartMs >= nowTime) {
@@ -2419,7 +2414,7 @@ export default function KlienciPage() {
                             </thead>
                             <tbody className="divide-y divide-slate-100 text-slate-700">
                               {upcomingList.length > 0 ? upcomingList.map((item: any, idx: number) => {
-                                const isKlubowicz = item.zapisujacy?.toLowerCase().includes('klubowicz') || item.zapisujacy?.toLowerCase().includes('użytkownik');
+                                const isKlubowicz = item.zapisujacy?.toLowerCase().includes('klubowicz') || item.zapisujacy?.toLowerCase().includes('użytkownik') || item.zapisujacy?.toLowerCase().includes('sam');
                                 return (
                                   <tr key={item.id || idx} className="hover:bg-slate-50 transition-colors">
                                     <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
@@ -2476,8 +2471,9 @@ export default function KlienciPage() {
                           const override = nadpisaneZajeciaDni[z.class_key];
                           const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
                           const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
+                          const timeStr = classInfo?.start_time || classInfo?.start || '';
 
-                          const classStartMs = parseClassDate(`${dateStr} ${classInfo?.start || ''}`);
+                          const classStartMs = parseClassDate(`${dateStr} ${timeStr}`);
 
                           if (classStartMs > 0 && classStartMs < nowTime) {
                             let statusObecnosci = '⏳ Oczekuje na oznaczenie';
@@ -2492,7 +2488,7 @@ export default function KlienciPage() {
 
                             pastClassesList.push({
                               id: z.id || `${z.class_key}_${profileClient.id}`,
-                              data: `${dateStr} ${classInfo?.start || ''}`.trim(),
+                              data: `${dateStr} ${timeStr}`.trim(),
                               zajecia: title,
                               obecnoscTekst: statusObecnosci,
                               obecnoscKlasa: obecnoscKlasa,
@@ -2537,7 +2533,7 @@ export default function KlienciPage() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
                             {pastClassesList.length > 0 ? pastClassesList.map((item: any, idx: number) => {
-                              const isKlubowicz = item.zapisujacy?.toLowerCase().includes('klubowicz') || item.zapisujacy?.toLowerCase().includes('użytkownik');
+                              const isKlubowicz = item.zapisujacy?.toLowerCase().includes('klubowicz') || item.zapisujacy?.toLowerCase().includes('użytkownik') || item.zapisujacy?.toLowerCase().includes('sam');
                               return (
                                 <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
                                   <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
@@ -2639,7 +2635,7 @@ export default function KlienciPage() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
                             {allMovements.length > 0 ? allMovements.map((mov: any, idx: number) => {
-                              const isKlubowicz = mov.kto?.toLowerCase().includes('klubowicz');
+                              const isKlubowicz = mov.kto?.toLowerCase().includes('klubowicz') || mov.kto?.toLowerCase().includes('użytkownik');
                               return (
                                 <tr key={`${mov.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
                                   <td className="py-3 px-4 font-mono font-bold text-slate-700 whitespace-nowrap">{mov.dataZdarzenia}</td>
@@ -2670,7 +2666,7 @@ export default function KlienciPage() {
                     {activeZapisyTab === 'zawieszenia' && (() => {
                       const suspensionsList: any[] = [];
 
-                      // Zawieszenia zdefiniowane w karnetach
+                      // A. Zawieszenia z obiektów wewnątrz karnetyKlubowicza
                       (profileClient.karnetyKlubowicza || []).forEach((karnet: any) => {
                         if (karnet.zawieszonyOd) {
                           suspensionsList.push({
@@ -2685,8 +2681,9 @@ export default function KlienciPage() {
                             dataOdwieszenia: '-'
                           });
                         }
-                        (karnet.historiaZawieszen || []).forEach((hz: any) => {
-                          const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik');
+                        const passHist = safeJsonParse(karnet.historiaZawieszen, []);
+                        passHist.forEach((hz: any) => {
+                          const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik') || hz.by?.toLowerCase().includes('user');
                           suspensionsList.push({
                             id: `hist_${hz.id || Math.random()}`,
                             karnetNazwa: karnet.nazwa,
@@ -2701,14 +2698,14 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // Zawieszenia przypisane do głównego obiektu klienta
+                      // B. Zawieszenia z kolumn 'historiaZawieszen' i 'historiazawieszen' w tabeli klienci
                       (profileClient.historiaZawieszen || []).forEach((hz: any) => {
-                        const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik');
+                        const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik') || hz.by?.toLowerCase().includes('user') || !hz.kto;
                         suspensionsList.push({
                           id: `hist_client_${hz.id || Math.random()}`,
-                          karnetNazwa: hz.karnet || 'Karnet klubowicza',
-                          od: hz.od,
-                          do: hz.do,
+                          karnetNazwa: hz.karnet || hz.nazwa || 'Karnet klubowicza',
+                          od: hz.od || hz.start_date || hz.od_dnia,
+                          do: hz.do || hz.end_date || hz.do_dnia,
                           dni: hz.dni ? `${hz.dni} dni` : '-',
                           kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : `🛡️ ${hz.kto || 'Administrator'}`,
                           status: '✅ ZAKOŃCZONE',
@@ -2717,23 +2714,25 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // Rejestr transakcji związanych z zawieszeniem
-                      (profileClient.transakcje || []).forEach((t: any) => {
-                        if (t.typ_operacji === 'zawieszenie_karnetu' || (t.opis && t.opis.toLowerCase().includes('zawieszenie'))) {
-                          const isKlubowicz = t.opis?.toLowerCase().includes('klubowicz') || t.opis?.toLowerCase().includes('użytkownik');
-                          suspensionsList.push({
-                            id: `trans_${t.id}`,
-                            karnetNazwa: 'Rejestr operacji',
-                            od: new Date(t.created_at).toISOString().split('T')[0],
-                            do: '-',
-                            dni: '-',
-                            kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : '🛡️ Panel Zarządcy',
-                            status: '📜 WPIS W BAZIE',
-                            statusKlasa: 'bg-slate-100 text-slate-700 border-slate-200',
-                            dataOdwieszenia: '-'
-                          });
-                        }
-                      });
+                      // C. Rejestr transakcji związanych z zawieszeniem
+                      (wszystkieTransakcje || [])
+                        .filter((t: any) => String(t.klient_id) === String(profileClient.id))
+                        .forEach((t: any) => {
+                          if (t.typ_operacji === 'zawieszenie_karnetu' || (t.opis && t.opis.toLowerCase().includes('zawieszenie'))) {
+                            const isKlubowicz = t.opis?.toLowerCase().includes('klubowicz') || t.opis?.toLowerCase().includes('użytkownik') || t.opis?.toLowerCase().includes('aplikacj');
+                            suspensionsList.push({
+                              id: `trans_${t.id}`,
+                              karnetNazwa: t.opis || 'Karnet klubowicza',
+                              od: new Date(t.created_at).toISOString().split('T')[0],
+                              do: '-',
+                              dni: '-',
+                              kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : '🛡️ Panel Zarządcy',
+                              status: '📜 WPIS W BAZIE',
+                              statusKlasa: 'bg-slate-100 text-slate-700 border-slate-200',
+                              dataOdwieszenia: '-'
+                            });
+                          }
+                        });
 
                       return (
                         <table className="w-full text-left text-xs min-w-[700px]">
@@ -3568,7 +3567,7 @@ export default function KlienciPage() {
                     <input 
                       type="number"
                       step="0.01"
-                      placeholder="np. 119.00"
+                      placeholder={targetDef ? targetDef.cena : "np. 119.00"}
                       value={newClient.customContractPrice}
                       onChange={(e) => setNewClient({...newClient, customContractPrice: e.target.value})}
                       className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
