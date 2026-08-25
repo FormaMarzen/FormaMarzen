@@ -24,6 +24,14 @@ export default function ClubChat() {
   const [newMessage, setNewMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
 
+  // Stany i referencje dla przeciągania dymka
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const elementStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const hasMovedRef = useRef<boolean>(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = () => {
@@ -33,6 +41,91 @@ export default function ClubChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Inicjalizacja pozycji dymka z localStorage lub domyślnie prawy dolny róg
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedPos = localStorage.getItem("chat_bubble_pos");
+      if (savedPos) {
+        try {
+          const parsed = JSON.parse(savedPos);
+          const maxX = window.innerWidth - 70;
+          const maxY = window.innerHeight - 70;
+          setPosition({
+            x: Math.min(Math.max(10, parsed.x), Math.max(10, maxX)),
+            y: Math.min(Math.max(10, parsed.y), Math.max(10, maxY)),
+          });
+          return;
+        } catch {
+          // fallback
+        }
+      }
+      setPosition({
+        x: Math.max(10, window.innerWidth - 80),
+        y: Math.max(10, window.innerHeight - 80),
+      });
+    }
+  }, []);
+
+  // Obsługa przeciągania (mysz i dotyk)
+  const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest(".no-drag")) return;
+
+    setIsDragging(true);
+    hasMovedRef.current = false;
+    dragStartPos.current = { x: e.clientX, y: e.clientY };
+
+    if (position) {
+      elementStartPos.current = { ...position };
+    } else {
+      const rect = e.currentTarget.getBoundingClientRect();
+      elementStartPos.current = { x: rect.left, y: rect.top };
+    }
+
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isDragging) return;
+
+    const deltaX = e.clientX - dragStartPos.current.x;
+    const deltaY = e.clientY - dragStartPos.current.y;
+
+    if (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4) {
+      hasMovedRef.current = true;
+    }
+
+    let newX = elementStartPos.current.x + deltaX;
+    let newY = elementStartPos.current.y + deltaY;
+
+    const maxX = window.innerWidth - 65;
+    const maxY = window.innerHeight - 65;
+
+    newX = Math.min(Math.max(10, newX), maxX);
+    newY = Math.min(Math.max(10, newY), maxY);
+
+    setPosition({ x: newX, y: newY });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isDragging) return;
+    setIsDragging(false);
+
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // Ignoruj jeśli wskaźnik został już zwolniony
+    }
+
+    if (position) {
+      localStorage.setItem("chat_bubble_pos", JSON.stringify(position));
+    }
+
+    if (!hasMovedRef.current) {
+      setIsOpen((prev) => !prev);
+    }
+  };
 
   // Funkcja aktualizująca znacznik last_seen dla zalogowanego użytkownika
   const updateLastSeen = async (userId: number | string) => {
@@ -47,7 +140,7 @@ export default function ClubChat() {
     }
   };
 
-  // Cykliczne odświeżanie last_seen co 60 sekund, gdy czat jest otwarty lub użytkownik jest zalogowany
+  // Cykliczne odświeżanie last_seen co 60 sekund
   useEffect(() => {
     if (!currentUserId) return;
     const actualId = secondaryUserId || currentUserId;
@@ -308,7 +401,6 @@ export default function ClubChat() {
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
-  // Mapowanie ostatniej wiadomości oraz jej treści dla każdego użytkownika
   const latestMessageMap = new Map();
   const latestMessageTextMap = new Map();
 
@@ -364,7 +456,6 @@ export default function ClubChat() {
       return timeB - timeA;
     });
 
-  // Pomocnicza funkcja formatująca czas ostatniej aktywności
   const formatLastSeen = (lastSeenString: string | null) => {
     if (!lastSeenString) return "Brak danych o aktywności";
     const now = new Date().getTime();
@@ -460,12 +551,35 @@ export default function ClubChat() {
     );
   };
 
+  const isPositioned = position !== null;
+  const isLeftSide = isPositioned ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 200) : false;
+  const isTopSide = isPositioned ? position.y < 540 : false;
+
   return (
-    <div className="fixed bottom-6 right-6 z-[120] font-sans antialiased">
+    <div
+      ref={containerRef}
+      style={
+        isPositioned
+          ? {
+              left: `${position.x}px`,
+              top: `${position.y}px`,
+              touchAction: "none",
+            }
+          : {
+              right: "24px",
+              bottom: "24px",
+            }
+      }
+      className={`fixed z-[120] font-sans antialiased ${!isPositioned ? "hidden" : ""}`}
+    >
       {isOpen && (
-        <div className="bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[390px] h-[520px] mb-4 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-5">
+        <div
+          className={`absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[390px] h-[520px] flex flex-col overflow-hidden animate-in fade-in ${
+            isLeftSide ? "left-0" : "right-0"
+          } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
+        >
           {/* NAGŁÓWEK CZATU */}
-          <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shadow-sm">
+          <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shadow-sm select-none">
             <div className="flex items-center gap-3">
               {selectedUser ? (
                 <>
@@ -684,16 +798,20 @@ export default function ClubChat() {
         </div>
       )}
 
-      {/* PRZYCISK OTWARCIA CZATU */}
+      {/* PRZYCISK OTWARCIA CZATU (Z PRZECIĄGANIEM) */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-14 h-14 rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-2xl flex items-center justify-center text-2xl transition-transform hover:scale-105 cursor-pointer relative border-2 border-amber-400"
-        title="Otwórz czat"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        className={`w-14 h-14 rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-2xl flex items-center justify-center text-2xl cursor-grab active:cursor-grabbing relative border-2 border-amber-400 select-none touch-none ${
+          isDragging ? "scale-95 opacity-90" : "transition-transform hover:scale-105"
+        }`}
+        title="Przeciągnij lub kliknij, aby otworzyć"
       >
-        <span>💬</span>
+        <span className="pointer-events-none">💬</span>
 
         {unreadCount > 0 && !isOpen && (
-          <span className="absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-md border-2 border-white animate-pulse">
+          <span className="pointer-events-none absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-md border-2 border-white animate-pulse">
             {unreadCount}
           </span>
         )}
