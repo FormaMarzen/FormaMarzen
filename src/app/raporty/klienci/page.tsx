@@ -3557,46 +3557,49 @@ export default function KlienciPage() {
                 </select>
               </div>
 
-              {newClient.isContractMigration && (
-                <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
-                  <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
-                    Parametry umowy 12M (indywidualna oferta):
-                  </div>
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block text-[10px]">Indywidualna kwota raty (PLN / m-c)</label>
-                    <input 
-                      type="number"
-                      step="0.01"
-                      placeholder={targetDef ? targetDef.cena : "np. 119.00"}
-                      value={newClient.customContractPrice}
-                      onChange={(e) => setNewClient({...newClient, customContractPrice: e.target.value})}
-                      className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
+              {newClient.isContractMigration && (() => {
+                const addModalTargetDef = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
+                return (
+                  <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                    <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
+                      Parametry umowy 12M (indywidualna oferta):
+                    </div>
                     <div className="space-y-1">
-                      <label className="font-bold text-slate-700 block text-[10px]">Numer raty (np. 4 / 12)</label>
+                      <label className="font-bold text-slate-700 block text-[10px]">Indywidualna kwota raty (PLN / m-c)</label>
                       <input 
-                        type="text" 
-                        value={newClient.customRata}
-                        onChange={(e) => setNewClient({...newClient, customRata: e.target.value})}
+                        type="number"
+                        step="0.01"
+                        placeholder={addModalTargetDef ? addModalTargetDef.cena : "np. 119.00"}
+                        value={newClient.customContractPrice}
+                        onChange={(e) => setNewClient({...newClient, customContractPrice: e.target.value})}
                         className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
                       />
                     </div>
-                    <div className="space-y-1">
-                      <label className="font-bold text-slate-700 block text-[10px]">Pozostałe dni zawieszenia</label>
-                      <input 
-                        type="number" 
-                        min="0"
-                        max="30"
-                        value={newClient.customSuspensionDays}
-                        onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})}
-                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
-                      />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block text-[10px]">Numer raty (np. 4 / 12)</label>
+                        <input 
+                          type="text" 
+                          value={newClient.customRata}
+                          onChange={(e) => setNewClient({...newClient, customRata: e.target.value})}
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block text-[10px]">Pozostałe dni zawieszenia</label>
+                        <input 
+                          type="number" 
+                          min="0"
+                          max="30"
+                          value={newClient.customSuspensionDays}
+                          onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})}
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsAddModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap">Anuluj</button>
