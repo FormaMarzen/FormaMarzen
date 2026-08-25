@@ -3,18 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// GLOBALNA BLOKADA (Zabezpieczenie przed podwójnym renderowaniem React Strict Mode)
 let globalCreatingLock = false;
 
 export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [transakcjeFinansowe, setTransakcjeFinansowe] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('');
@@ -32,8 +31,7 @@ export default function PortfelPage() {
       if (userEmail) {
         const normalizedEmail = userEmail.toLowerCase().trim();
         
-        // Pobieramy wszystkich klientów i filtrujemy ignorując wielkość liter
-        const { data: klienciList, error: kError } = await supabase
+        const { data: klienciList } = await supabase
           .from('klienci')
           .select('*');
           
@@ -42,12 +40,8 @@ export default function PortfelPage() {
           (c.email || '').toLowerCase().trim() === normalizedEmail
         ) : null;
 
-        // Jeśli nie ma rekordu dla zalogowanego użytkownika, tworzymy go awaryjnie z użyciem BLOKADY
         if (!klientData) {
-          if (globalCreatingLock) {
-            console.log("Blokada wyścigu: inne zapytanie właśnie tworzy to konto.");
-            return;
-          }
+          if (globalCreatingLock) return;
           globalCreatingLock = true;
 
           const newClientId = Date.now();
@@ -59,22 +53,20 @@ export default function PortfelPage() {
             "Numer tel.": '-',
             Portfel: '0.00 PLN',
             Zarejestrowany: new Date().toISOString().split('T')[0],
-            karnetyKlubowicza: []
+            karnetyKlubowicza: [],
+            walletHistory: []
           };
 
           const { error: insertErr } = await supabase.from('klienci').insert([defaultClient]);
           if (!insertErr) {
             klientData = defaultClient;
           }
-          
-          // Zwalniamy blokadę po zakończeniu
           globalCreatingLock = false;
         }
           
         if (klientData) {
           const rawClient = klientData as any;
 
-          // POBIERANIE TYLKO I WYŁĄCZNIE TRANSAKCJI AUTOPAY DLA DANEGO KLUBOWICZA Z NOWEJ TABELI autopay_transakcje
           const { data: autopayData } = await supabase
             .from('autopay_transakcje')
             .select('*')
@@ -83,14 +75,12 @@ export default function PortfelPage() {
 
           setTransakcjeFinansowe(autopayData || []);
 
-          // POBIERANIE SALDA BEZPOŚREDNIO Z TABELI KLIENCI Z AGRESYWNYM PARSOWANIEM MINUSA
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
-          
-          const isNegative = String(rawWalletStr).includes('-'); // Sprawdzamy czy gdziekolwiek jest znak ujemny
-          let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0; // Wyciągamy same liczby
+          const isNegative = String(rawWalletStr).includes('-');
+          let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
           
           if (isNegative) {
-            parsedWalletNum = -Math.abs(parsedWalletNum); // Jeśli był minus, wymuszamy wartość ujemną
+            parsedWalletNum = -Math.abs(parsedWalletNum);
           }
 
           setCurrentUser({
@@ -104,31 +94,15 @@ export default function PortfelPage() {
       }
     } catch (err) {
       console.error("Błąd ładowania danych portfela:", err);
-      globalCreatingLock = false; // Zwalniamy blokadę w razie błędu try-catch
+      globalCreatingLock = false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Funkcja inicjująca przekierowanie do bramki Autopay przez nasz endpoint API
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string) => {
+    setIsProcessingPayment(true);
     try {
-      // 1. Zapisujemy transakcję wstępną w bazie ze statusem pending
-      const { error: insertError } = await supabase.from('autopay_transakcje').insert([{
-        user_id: currentUser.id,
-        amount: amount,
-        status: 'pending',
-        order_id: orderId,
-        type: type,
-        gateway_response: { opis: description }
-      }]);
-
-      if (insertError) {
-        alert(`Błąd zapisu transakcji w bazie: ${insertError.message}`);
-        return;
-      }
-
-      // 2. Wywołujemy nasz endpoint API generujący podpis (hash) Autopay
       const response = await fetch('/api/autopay/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,22 +113,21 @@ export default function PortfelPage() {
           description: description,
           email: currentUser["E-mail"] || currentUser.email || '',
           firstName: currentUser.firstName,
-          lastName: currentUser.lastName
+          lastName: currentUser.lastName,
+          type: type
         })
       });
 
       const data = await response.json();
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Nie udało się zainicjalizować płatności w API');
+        throw new Error(data.error || 'Nie udało się zainicjalizować płatności w Autopay');
       }
 
-      // 3. Tworzymy formularz i automatycznie wysyłamy żądanie POST do bramki Autopay
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = data.gatewayUrl;
 
-      // Dodajemy wszystkie pola wymagane przez Autopay
       Object.keys(data.payload).forEach((key) => {
         const input = document.createElement('input');
         input.type = 'hidden';
@@ -168,7 +141,8 @@ export default function PortfelPage() {
 
     } catch (err: any) {
       console.error("Błąd przekierowania do Autopay:", err);
-      alert(`Wystąpił błąd podczas uruchamiania płatności: ${err.message}`);
+      alert(`Wystąpił błąd: ${err.message}`);
+      setIsProcessingPayment(false);
     }
   };
 
@@ -182,8 +156,8 @@ export default function PortfelPage() {
       return;
     }
 
-    const orderId = `AP-TOP-${currentUser.id}-${Date.now()}`;
-    const opisOperacji = topUpReason.trim() || `Doładowanie portfela przez Autopay: +${kwotaZmiany.toFixed(2)} PLN`;
+    const orderId = `TOP-${currentUser.id}-${Date.now()}`;
+    const opisOperacji = topUpReason.trim() || `Doładowanie portfela Forma Marzeń: +${kwotaZmiany.toFixed(2)} PLN`;
 
     setIsTopUpOpen(false);
     await redirectToAutopay(kwotaZmiany, orderId, opisOperacji, 'wallet_topup');
@@ -195,8 +169,8 @@ export default function PortfelPage() {
     if (currentWalletNum >= 0) return;
 
     const kwotaSplaty = Math.abs(currentWalletNum);
-    const orderId = `AP-DEBT-${currentUser.id}-${Date.now()}`;
-    const opisOperacji = `Spłata ujemnego salda portfela przez Autopay (${kwotaSplaty.toFixed(2)} PLN)`;
+    const orderId = `DEBT-${currentUser.id}-${Date.now()}`;
+    const opisOperacji = `Spłata debetu w portfelu Forma Marzeń: ${kwotaSplaty.toFixed(2)} PLN`;
 
     await redirectToAutopay(kwotaSplaty, orderId, opisOperacji, 'wallet_settlement');
   };
@@ -232,14 +206,16 @@ export default function PortfelPage() {
             {isNegative && (
               <button 
                 onClick={handleSplatPortfela}
-                className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 text-white font-black text-xs px-5 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                disabled={isProcessingPayment}
+                className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black text-xs px-5 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
               >
-                Spłać zadłużenie (Autopay)
+                {isProcessingPayment ? 'Łączenie...' : 'Spłać zadłużenie (Autopay)'}
               </button>
             )}
             <button 
               onClick={() => setIsTopUpOpen(true)}
-              className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+              disabled={isProcessingPayment}
+              className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
             >
               <span className="text-base leading-none">+</span> Doładuj portfel (Autopay)
             </button>
@@ -253,10 +229,11 @@ export default function PortfelPage() {
           src="/autopay-banner.png" 
           alt="Dostępne metody płatności Autopay" 
           className="w-full max-h-14 sm:max-h-16 object-contain"
+          onError={(e: any) => { e.currentTarget.style.display = 'none'; }}
         />
       </div>
 
-      {/* SEKCJA 2: HISTORIA TRANSAKCJI AUTOPAY KLUBOWICZA */}
+      {/* SEKCJA 2: HISTORIA TRANSAKCJI AUTOPAY */}
       <div className="space-y-4">
         <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA PŁATNOŚCI AUTOPAY</h2>
         
@@ -282,6 +259,7 @@ export default function PortfelPage() {
                     const kwotaNum = Number(t.amount) || 0;
                     const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
                     const statusVal = t.status || 'pending';
+                    const gatewayInfo = t.gateway_respons || t.gateway_response;
 
                     return (
                       <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
@@ -300,7 +278,7 @@ export default function PortfelPage() {
                           </span>
                         </td>
                         <td className="py-4 px-5 font-medium text-slate-800">
-                          {t.gateway_response?.opis || t.type}
+                          {gatewayInfo?.opis || t.type}
                         </td>
                       </tr>
                     );

@@ -1,51 +1,110 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
+import { createClient } from '@supabase/supabase-js';
 
-export async function POST(request: Request) {
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    const { amount, orderId, userId, description, email, firstName, lastName } = body;
+    const body = await req.json();
+    const { amount, orderId, userId, description, email, firstName, lastName, type } = body;
 
     if (!amount || !orderId || !userId) {
-      return NextResponse.json({ error: 'Brak wymaganych danych transakcji' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: 'Brak wymaganych danych transakcji (amount, orderId, userId)' },
+        { status: 400 }
+      );
     }
 
-    const posId = process.env.NEXT_PUBLIC_AUTOPAY_POS_ID || '220522';
-    const crcKey = process.env.AUTOPAY_CRC_KEY || ''; 
-    const gatewayUrl = 'https://pay.autopay.eu/payment';
+    const serviceId = process.env.AUTOPAY_SERVICE_ID || '';
+    const hashKey = process.env.AUTOPAY_HASH_KEY || '';
+    const separator = process.env.AUTOPAY_HASH_SEPARATOR || ';';
+    const gatewayUrl = process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment';
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-    const amountStr = Number(amount).toFixed(2);
+    if (!serviceId || !hashKey) {
+      return NextResponse.json(
+        { success: false, error: 'Brak skonfigurowanych kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w .env.local' },
+        { status: 500 }
+      );
+    }
+
+    const formattedAmount = Number(amount).toFixed(2);
     const currency = 'PLN';
-    const desc = description || 'Doładowanie portfela Forma Marzeń';
+    const gatewayId = '0';
+    const customerEmail = (email || '').trim();
+    const customerName = `${firstName || ''} ${lastName || ''}`.trim() || 'Klubowicz';
+    const cleanDescription = (description || `Zasilenie portfela ${formattedAmount} PLN`).trim();
+    const returnUrl = `${appUrl}/portfel?status=success&orderId=${orderId}`;
 
-    // Oficjalny algorytm sumy kontrolnej SHA256 zgodny z dokumentacją Autopay Online:
-    // pos_id | session_id | amount | currency | description | crc
-    const hashString = `${posId}|${orderId}|${amountStr}|${currency}|${desc}|${crcKey}`;
-    const hash = crypto.createHash('sha256').update(hashString).digest('hex');
+    // 1. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
+    const { error: dbError } = await supabase
+      .from('autopay_transakcje')
+      .insert([{
+        user_id: userId,
+        amount: parseFloat(formattedAmount),
+        status: 'pending',
+        order_id: orderId,
+        type: type || 'wallet_topup',
+        gateway_respons: {
+          opis: cleanDescription,
+          email: customerEmail,
+          created_at: new Date().toISOString()
+        }
+      }]);
 
-    const paymentPayload = {
-      pos_id: posId,
-      session_id: orderId,
-      amount: amountStr,
-      currency: currency,
-      description: desc,
-      client_email: email || 'klient@formamarzen.pl',
-      client_first_name: firstName || 'Klubowicz',
-      client_last_name: lastName || 'FormaMarzen',
-      url_return: `${process.env.NEXT_PUBLIC_SITE_URL || 'https://forma-marzen.vercel.app'}/portfel?status=success`,
-      url_status: `${process.env.NEXT_PUBLIC_SITE_URL || 'https://forma-marzen.vercel.app'}/api/autopay/webhook`,
-      crc: crcKey,
-      hash: hash,
+    if (dbError) {
+      console.error('Błąd zapisu autopay_transakcje w Supabase:', dbError);
+      return NextResponse.json(
+        { success: false, error: `Błąd bazy danych: ${dbError.message}` },
+        { status: 500 }
+      );
+    }
+
+    // 2. Wyliczenie sumy kontrolnej SHA-256
+    const hashDataArray = [
+      serviceId,
+      orderId,
+      formattedAmount,
+      cleanDescription,
+      gatewayId,
+      currency,
+      customerEmail,
+      customerName,
+      returnUrl,
+      hashKey
+    ];
+
+    const hashString = hashDataArray.join(separator);
+    const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
+
+    // 3. Zwrócenie danych formularza dla bramki Autopay
+    const payload: Record<string, string> = {
+      ServiceID: serviceId,
+      OrderID: orderId,
+      Amount: formattedAmount,
+      Description: cleanDescription,
+      GatewayID: gatewayId,
+      Currency: currency,
+      CustomerEmail: customerEmail,
+      CustomerName: customerName,
+      ReturnURL: returnUrl,
+      Hash: hash
     };
 
     return NextResponse.json({
       success: true,
-      gatewayUrl: gatewayUrl,
-      payload: paymentPayload
+      gatewayUrl,
+      payload
     });
 
-  } catch (err: any) {
-    console.error('Błąd w endpoint /api/autopay/init:', err);
-    return NextResponse.json({ error: err.message || 'Błąd serwera' }, { status: 500 });
+  } catch (error: any) {
+    console.error('Błąd inicjalizacji Autopay:', error);
+    return NextResponse.json(
+      { success: false, error: error.message || 'Wewnętrzny błąd serwera' },
+      { status: 500 }
+    );
   }
 }
