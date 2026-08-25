@@ -171,7 +171,6 @@ export default function RootLayout({
       const currentY = e.touches[0].clientY;
       const diffY = currentY - touchStartY.current;
       if (diffY > 0 && window.scrollY <= 0) {
-        // Zmniejszony współczynnik (0.25 zamiast 0.4) i ograniczenie do 120px
         setPullDistance(Math.min(diffY * 0.25, 120));
       } else {
         setPullDistance(0);
@@ -180,7 +179,6 @@ export default function RootLayout({
 
     const handleTouchEnd = () => {
       if (!isPulling.current || isRefreshing) return;
-      // Wymagane mocniejsze pociągnięcie (min. 90px)
       if (pullDistance >= 90) {
         setIsRefreshing(true);
         setPullDistance(85);
@@ -410,9 +408,8 @@ export default function RootLayout({
     {
       title: "Komunikacja",
       items: [
-        { href: '/komunikacja/automatyzacja', label: 'Automatyzacja', icon: '🤖' },
         { href: '/komunikacja/ogloszenia', label: 'Ogłoszenia', icon: '📢' },
-        { href: '/komunikacja/historia-wiadomosci', label: 'Historia wiadomości', icon: '💬' },
+        { href: '/komunikacja/historia-wiadomosci', label: 'Historia powiadomień', icon: '💬' },
       ]
     },
     {
@@ -425,11 +422,9 @@ export default function RootLayout({
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
         { href: '/ustawienia/integracja-www', label: 'Integracja WWW', icon: '🌐' },
-        { href: '/ustawienia/platnosci-online', label: 'Płatności online', icon: '💳' },
         { href: '/ustawienia/kody-rabatowe', label: 'Kody rabatowe', icon: '🏷️' },
         { href: '/ustawienia/program-ambasador', label: 'Program ambasador', icon: '⭐' },
         { href: '/ustawienia/zespol', label: 'Zespół', icon: '👨‍👧‍👦' },
-        { href: '/ustawienia/moduly', label: 'Moduły', icon: '🧩' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
     }
