@@ -1,7 +1,11 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../../raporty/klienci/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface PowiadomienieItem {
   id: number;
@@ -41,6 +45,7 @@ export default function HistoriaPowiadomienPage() {
   }, []);
 
   const checkPushPermission = async () => {
+    if (typeof window === 'undefined') return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       setPushStatus('unsupported');
       return;
@@ -68,6 +73,7 @@ export default function HistoriaPowiadomienPage() {
   };
 
   const enablePushNotifications = async () => {
+    if (typeof window === 'undefined') return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       alert('Powiadomienia Web Push nie są wspierane na tej przeglądarce/urządzeniu.');
       return;
@@ -107,19 +113,30 @@ export default function HistoriaPowiadomienPage() {
 
       const rawSub = JSON.parse(JSON.stringify(sub));
 
-      // Zapis subskrypcji admina do tabeli push_subscriptions w Supabase
-      const { error: insertErr } = await supabase
+      // Sprawdzenie czy subskrypcja z tym endpointem już istnieje, aby uniknąć duplikatów
+      const { data: existingSubs } = await supabase
         .from('push_subscriptions')
-        .insert([
-          {
-            user_id: 'admin_device',
-            role: 'admin',
-            subscription: rawSub
-          }
-        ]);
+        .select('id, subscription')
+        .eq('role', 'admin');
 
-      if (insertErr) {
-        throw insertErr;
+      const isAlreadySaved = existingSubs?.some(
+        (s: any) => s.subscription?.endpoint === rawSub.endpoint
+      );
+
+      if (!isAlreadySaved) {
+        const { error: insertErr } = await supabase
+          .from('push_subscriptions')
+          .insert([
+            {
+              user_id: 'admin_device',
+              role: 'admin',
+              subscription: rawSub
+            }
+          ]);
+
+        if (insertErr) {
+          throw insertErr;
+        }
       }
 
       setStatusMessage('✅ Urządzenie zostało pomyślnie zarejestrowane! Będziesz otrzymywać powiadomienia push.');
@@ -132,8 +149,8 @@ export default function HistoriaPowiadomienPage() {
   };
 
   const filteredHistoria = historia.filter(item => 
-    item.tytul.toLowerCase().includes(filterQuery.toLowerCase()) ||
-    item.tresc.toLowerCase().includes(filterQuery.toLowerCase()) ||
+    (item.tytul && item.tytul.toLowerCase().includes(filterQuery.toLowerCase())) ||
+    (item.tresc && item.tresc.toLowerCase().includes(filterQuery.toLowerCase())) ||
     (item.odbiorca && item.odbiorca.toLowerCase().includes(filterQuery.toLowerCase()))
   );
 
