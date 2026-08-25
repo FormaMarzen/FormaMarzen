@@ -88,18 +88,17 @@ export default function PortfelPage() {
             .eq('klient_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          // 3. Połączenie i selekcja WYŁĄCZNIE transakcji o charakterze finansowym
+          // 3. Połączenie i selekcja wyłącznie transakcji finansowych
           const combinedHistory: any[] = [];
           const processedOrderIds = new Set<string>();
 
-          // A. Filtrowanie tabeli ogólnej `transakcje` (wydatki z portfela, zakup karnetów, spłaty)
+          // A. Filtrowanie tabeli ogólnej transakcje (wydatki z portfela, zakup karnetów, spłaty)
           if (localTransData && localTransData.length > 0) {
             localTransData.forEach((t: any) => {
               const kwotaVal = Number(t.kwota);
               const typ = (t.typ_operacji || '').toLowerCase();
               const opis = (t.opis || '').toLowerCase();
 
-              // FILTR: Wykluczamy wpisy logów systemowych, rezerwacji i wypisów z zajęć
               const isNonFinancialLog = 
                 typ.includes('zajecia') ||
                 typ.includes('zapis') ||
@@ -114,8 +113,6 @@ export default function PortfelPage() {
                 opis.includes('obłożenie:');
 
               if (isNonFinancialLog) return;
-
-              // Do historii dopuszczamy tylko operacje ze zdefiniowaną kwotą
               if (isNaN(kwotaVal) || kwotaVal === 0) return;
 
               const isAutopayType = typ.includes('autopay');
@@ -134,14 +131,13 @@ export default function PortfelPage() {
             });
           }
 
-          // B. Dołączanie transakcji online z tabeli `autopay_transakcje`
+          // B. Dołączanie transakcji online z tabeli autopay_transakcje
           if (autopayData && autopayData.length > 0) {
             autopayData.forEach((a: any) => {
               const kwotaVal = Number(a.amount) || 0;
               const statusVal = a.status || 'pending';
               const gatewayInfo = a.gateway_response;
 
-              // Zabezpieczenie przed dublowaniem zakupów karnetów zarejestrowanych już w obu tabelach
               if (a.type === 'pass_purchase' || a.type === 'pass_extend') {
                 if (processedOrderIds.has(a.order_id)) return;
                 processedOrderIds.add(a.order_id);
@@ -166,7 +162,6 @@ export default function PortfelPage() {
             });
           }
 
-          // Sortowanie od najnowszych
           combinedHistory.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
           setHistoriaWszystkichOperacji(combinedHistory);
 
@@ -281,31 +276,31 @@ export default function PortfelPage() {
   });
 
   return (
-    <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
+    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
       {/* SEKCJA 1: MÓJ PORTFEL */}
       <div className="space-y-4">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">MÓJ PORTFEL</h2>
+        <h2 className="text-[12px] font-black text-slate-400 uppercase tracking-widest">MÓJ PORTFEL</h2>
         
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-sky-50 rounded-2xl flex items-center justify-center text-2xl border border-sky-100 shadow-sm">
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 bg-sky-50 rounded-2xl flex items-center justify-center text-xl border border-sky-100 shadow-sm shrink-0">
               💳
             </div>
             <div>
-              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Stan portfela</div>
-              <div className={`text-2xl font-black ${isNegative ? 'text-rose-600' : walletVal > 0 ? 'text-emerald-600' : 'text-slate-900'}`}>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Stan portfela</div>
+              <div className={`text-xl sm:text-2xl font-black ${isNegative ? 'text-rose-600' : walletVal > 0 ? 'text-emerald-600' : 'text-slate-900'}`}>
                 {currentUser?.wallet || '0.00 PLN'}
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
             {isNegative && (
               <button 
                 onClick={handleSplatPortfela}
                 disabled={isProcessingPayment}
-                className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black text-xs px-5 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black text-[11px] sm:text-xs px-4 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
               >
                 {isProcessingPayment ? 'Łączenie...' : 'Spłać zadłużenie (Autopay)'}
               </button>
@@ -313,35 +308,35 @@ export default function PortfelPage() {
             <button 
               onClick={() => setIsTopUpOpen(true)}
               disabled={isProcessingPayment}
-              className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+              className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black text-[11px] sm:text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-1.5"
             >
-              <span className="text-base leading-none">+</span> Doładuj portfel (Autopay)
+              <span className="text-sm leading-none">+</span> Doładuj portfel (Autopay)
             </button>
           </div>
         </div>
       </div>
 
       {/* BANER METOD PŁATNOŚCI */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-center overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-sm flex items-center justify-center overflow-hidden">
         <img 
           src="/autopay-banner.png" 
           alt="Dostępne metody płatności Autopay" 
-          className="w-full max-h-14 sm:max-h-16 object-contain"
+          className="w-full max-h-12 sm:max-h-14 object-contain"
           onError={(e: any) => { e.currentTarget.style.display = 'none'; }}
         />
       </div>
 
-      {/* SEKCJA 2: HISTORIA FINANSOWA */}
+      {/* SEKCJA 2: HISTORIA TRANSAKCJI FINANSOWYCH */}
       <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-          <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <h2 className="text-[12px] font-black text-slate-400 uppercase tracking-widest">
             HISTORIA TRANSAKCJI FINANSOWYCH
           </h2>
 
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
             <button
               onClick={() => setActiveFilter('all')}
-              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+              className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                 activeFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
@@ -349,7 +344,7 @@ export default function PortfelPage() {
             </button>
             <button
               onClick={() => setActiveFilter('autopay')}
-              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+              className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                 activeFilter === 'autopay' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
@@ -357,7 +352,7 @@ export default function PortfelPage() {
             </button>
             <button
               onClick={() => setActiveFilter('wallet')}
-              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+              className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                 activeFilter === 'wallet' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
@@ -366,22 +361,22 @@ export default function PortfelPage() {
           </div>
         </div>
         
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-max">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="w-full">
+            <table className="w-full text-left border-collapse table-auto">
               <thead>
-                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                  <th className="py-4 px-5">DATA</th>
-                  <th className="py-4 px-5">OPIS TRANSAKCJI</th>
-                  <th className="py-4 px-5">METODA / ŹRÓDŁO</th>
-                  <th className="py-4 px-5">KWOTA</th>
-                  <th className="py-4 px-5 text-right">STATUS</th>
+                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[9px] sm:text-[10px]">
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-3.5 w-28 sm:w-32">DATA</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-3.5">OPIS TRANSAKCJI</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-3.5 w-28 sm:w-36 text-center">METODA</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-3.5 w-24 sm:w-28 text-right">KWOTA</th>
+                  <th className="py-2.5 sm:py-3 px-2 sm:px-3.5 w-20 sm:w-24 text-right">STATUS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
+              <tbody className="divide-y divide-slate-100 text-slate-700 text-[11px] sm:text-xs">
                 {filteredHistory.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-10 text-center text-slate-400 font-medium">
+                    <td colSpan={5} className="py-8 text-center text-slate-400 font-medium">
                       Brak transakcji finansowych w wybranej kategorii.
                     </td>
                   </tr>
@@ -394,34 +389,34 @@ export default function PortfelPage() {
 
                     return (
                       <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5 font-mono text-slate-600">
+                        <td className="py-2.5 sm:py-3 px-2 sm:px-3.5 font-mono text-slate-500 text-[10px] sm:text-[11px] whitespace-nowrap align-top">
                           {formattedDate}
                         </td>
-                        <td className="py-4 px-5 font-medium text-slate-900">
-                          <div className="font-bold">{item.opis}</div>
+                        <td className="py-2.5 sm:py-3 px-2 sm:px-3.5 font-medium text-slate-900 align-top">
+                          <div className="font-bold leading-tight break-words text-[11px] sm:text-xs">{item.opis}</div>
                           {item.orderId && (
-                            <div className="text-[10px] font-mono text-slate-400 mt-0.5">ID: {item.orderId}</div>
+                            <div className="text-[9px] font-mono text-slate-400 mt-0.5 break-all">ID: {item.orderId}</div>
                           )}
                           {item.kodRabatowy && (
-                            <div className="text-[10px] text-emerald-600 font-bold mt-0.5">Zastosowany kod: {item.kodRabatowy}</div>
+                            <div className="text-[9px] text-emerald-600 font-bold mt-0.5">Kod: {item.kodRabatowy}</div>
                           )}
                         </td>
-                        <td className="py-4 px-5 font-semibold text-slate-600">
-                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] uppercase font-bold ${
+                        <td className="py-2.5 sm:py-3 px-2 sm:px-3.5 text-center align-top whitespace-nowrap">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] sm:text-[10px] font-bold uppercase ${
                             item.zrodlo === 'Bramka Autopay' 
                               ? 'bg-blue-50 text-blue-800 border border-blue-200' 
                               : 'bg-slate-100 text-slate-700 border border-slate-200'
                           }`}>
-                            {item.zrodlo === 'Bramka Autopay' ? '💳 Autopay Online' : '👛 Saldo Portfela'}
+                            {item.zrodlo === 'Bramka Autopay' ? '💳 Autopay' : '👛 Portfel'}
                           </span>
                         </td>
-                        <td className="py-4 px-5 font-black text-sm">
+                        <td className="py-2.5 sm:py-3 px-2 sm:px-3.5 font-black text-right whitespace-nowrap align-top text-[11px] sm:text-xs">
                           <span className={isPositive ? 'text-emerald-600' : isNegativeAmount ? 'text-rose-600' : 'text-slate-900'}>
                             {isPositive ? `+${Math.abs(kwotaNum).toFixed(2)}` : `-${Math.abs(kwotaNum).toFixed(2)}`} PLN
                           </span>
                         </td>
-                        <td className="py-4 px-5 text-right font-bold">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] uppercase ${
+                        <td className="py-2.5 sm:py-3 px-2 sm:px-3.5 text-right font-bold whitespace-nowrap align-top">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] uppercase ${
                             item.status === 'success' 
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
                             item.status === 'failed' 
