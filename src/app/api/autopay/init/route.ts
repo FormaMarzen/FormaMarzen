@@ -24,34 +24,33 @@ export async function POST(req: Request) {
     const gatewayUrl = (process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment').trim();
 
     if (!serviceId || !hashKey) {
-      console.error('[Autopay Init Error]: Brak kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w środowisku Vercel.');
+      console.error('[Autopay Init Error]: Brak kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w konfiguracji Vercel.');
       return NextResponse.json(
         { success: false, error: 'Brak klucza AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w konfiguracji Vercel' },
         { status: 500 }
       );
     }
 
-    // 1. Zapewnienie bezpiecznego formatu OrderID (maksymalnie 32 znaki zgodnie ze specyfikacją Autopay)
+    // 1. Zapewnienie bezpiecznego formatu OrderID (maksymalnie 32 znaki alfanumeryczne)
     const rawOrderId = String(orderId).replace(/[^a-zA-Z0-9-_]/g, '');
     const safeOrderId = rawOrderId.length > 32 ? rawOrderId.substring(0, 32) : rawOrderId;
 
-    // 2. Formatowanie kwoty z dokładnie dwoma miejscami po przecinku
+    // 2. Formatowanie kwoty (zawsze 2 miejsca po przecinku)
     const formattedAmount = Number(amount).toFixed(2);
     const currency = 'PLN';
-    const gatewayId = '0'; // 0 = wybór wszystkich kanałów płatności na stronie bramki
     const customerEmail = (email || '').trim().toLowerCase();
 
-    // 3. Oczyszczenie opisu z separatorów i znaków specjalnych
-    const cleanDescription = (description || `Zasilenie portfela ${formattedAmount} PLN`)
+    // 3. Bezpieczny opis transakcji bez znaków separatora
+    const cleanDescription = (description || `Doladowanie portfela ${formattedAmount} PLN`)
       .replace(/[|;]/g, ' ')
       .trim()
       .substring(0, 100);
 
-    // 4. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
+    // 4. Zapis transakcji w tabeli autopay_transakcje w Supabase ze statusem pending
     const { error: dbError } = await supabase
       .from('autopay_transakcje')
       .insert([{
-        user_id: userId,
+        user_id: Number(userId),
         amount: parseFloat(formattedAmount),
         status: 'pending',
         order_id: safeOrderId,
@@ -71,35 +70,31 @@ export async function POST(req: Request) {
       );
     }
 
-    // 5. Kanoniczny łańcuch Hash SHA-256 dla Autopay (ściśle określona kolejność pól bramki)
-    // Format: ServiceID|OrderID|Amount|Description|GatewayID|Currency|CustomerEmail|HashKey
+    // 5. Oficjalny kanoniczny łańcuch Hash Autopay dla Paywall:
+    // Format: ServiceID|OrderID|Amount|Description|Currency|CustomerEmail|HashKey
     const hashDataArray: string[] = [
       serviceId,
       safeOrderId,
       formattedAmount,
       cleanDescription,
-      gatewayId,
       currency
     ];
 
-    // Jeśli e-mail jest podany, wchodzi do obliczenia hasha
     if (customerEmail) {
       hashDataArray.push(customerEmail);
     }
 
-    // Klucz hashujący zawsze na końcu
     hashDataArray.push(hashKey);
 
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 6. Parametry przekazywane do formularza POST
+    // 6. Pola formularza POST przekazywane do bramki Autopay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: safeOrderId,
       Amount: formattedAmount,
       Description: cleanDescription,
-      GatewayID: gatewayId,
       Currency: currency,
       Hash: hash
     };
@@ -108,7 +103,6 @@ export async function POST(req: Request) {
       payload.CustomerEmail = customerEmail;
     }
 
-    // Diagnostyka w logach Vercel
     console.log('[Autopay Init Success] Przygotowano transakcję:', {
       safeOrderId,
       formattedAmount,
