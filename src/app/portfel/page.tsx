@@ -112,8 +112,6 @@ export default function PortfelPage() {
           userId: currentUser.id,
           description: description,
           email: currentUser["E-mail"] || currentUser.email || '',
-          firstName: currentUser.firstName,
-          lastName: currentUser.lastName,
           type: type
         })
       });
@@ -124,9 +122,11 @@ export default function PortfelPage() {
         throw new Error(data.error || 'Nie udało się zainicjalizować płatności w Autopay');
       }
 
+      // Bezpieczny formularz POST ze scisle zdefiniowanym kodowaniem UTF-8
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = data.gatewayUrl;
+      form.setAttribute('accept-charset', 'UTF-8');
 
       Object.keys(data.payload).forEach((key) => {
         const input = document.createElement('input');
@@ -156,8 +156,9 @@ export default function PortfelPage() {
       return;
     }
 
-    const orderId = `TOP-${currentUser.id}-${Date.now()}`;
-    const opisOperacji = topUpReason.trim() || `Doładowanie portfela Forma Marzeń: +${kwotaZmiany.toFixed(2)} PLN`;
+    // Unikalne OrderID ponizej 32 znakow
+    const orderId = `TOP-${currentUser.id}-${Date.now()}`.substring(0, 32);
+    const opisOperacji = topUpReason.trim() || `Doladowanie portfela ${kwotaZmiany.toFixed(2)} PLN`;
 
     setIsTopUpOpen(false);
     await redirectToAutopay(kwotaZmiany, orderId, opisOperacji, 'wallet_topup');
@@ -169,8 +170,8 @@ export default function PortfelPage() {
     if (currentWalletNum >= 0) return;
 
     const kwotaSplaty = Math.abs(currentWalletNum);
-    const orderId = `DEBT-${currentUser.id}-${Date.now()}`;
-    const opisOperacji = `Spłata debetu w portfelu Forma Marzeń: ${kwotaSplaty.toFixed(2)} PLN`;
+    const orderId = `DEBT-${currentUser.id}-${Date.now()}`.substring(0, 32);
+    const opisOperacji = `Splata salda ${kwotaSplaty.toFixed(2)} PLN`;
 
     await redirectToAutopay(kwotaSplaty, orderId, opisOperacji, 'wallet_settlement');
   };
@@ -259,7 +260,7 @@ export default function PortfelPage() {
                     const kwotaNum = Number(t.amount) || 0;
                     const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
                     const statusVal = t.status || 'pending';
-                    const gatewayInfo = t.gateway_response || t.gateway_respons;
+                    const gatewayInfo = t.gateway_response;
 
                     return (
                       <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
@@ -322,7 +323,7 @@ export default function PortfelPage() {
                 <label className="font-bold text-slate-700 block">Tytuł / Opis (opcjonalnie)</label>
                 <input 
                   type="text" 
-                  placeholder="np. Doładowanie online"
+                  placeholder="np. Doladowanie online"
                   value={topUpReason}
                   onChange={(e) => setTopUpReason(e.target.value)}
                   className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 text-slate-800"

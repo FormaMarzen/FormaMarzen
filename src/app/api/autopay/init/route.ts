@@ -24,29 +24,33 @@ export async function POST(req: Request) {
     const gatewayUrl = (process.env.AUTOPAY_URL || 'https://pay.autopay.eu/payment').trim();
 
     if (!serviceId || !hashKey) {
-      console.error('[Autopay Init Error]: Brak kluczy AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w konfiguracji Vercel.');
+      console.error('[Autopay Init Error]: Brak klucza AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w Vercel.');
       return NextResponse.json(
         { success: false, error: 'Brak klucza AUTOPAY_SERVICE_ID lub AUTOPAY_HASH_KEY w konfiguracji Vercel' },
         { status: 500 }
       );
     }
 
-    // 1. Zapewnienie bezpiecznego formatu OrderID (maksymalnie 32 znaki alfanumeryczne)
-    const rawOrderId = String(orderId).replace(/[^a-zA-Z0-9-_]/g, '');
+    // 1. Bezpieczny OrderID: litery, cyfry i myslniki, maks. 32 znaki
+    const rawOrderId = String(orderId).replace(/[^a-zA-Z0-9-]/g, '');
     const safeOrderId = rawOrderId.length > 32 ? rawOrderId.substring(0, 32) : rawOrderId;
 
-    // 2. Formatowanie kwoty (zawsze 2 miejsca po przecinku)
+    // 2. Format kwoty i podstawowe parametry
     const formattedAmount = Number(amount).toFixed(2);
     const currency = 'PLN';
-    const customerEmail = (email || '').trim().toLowerCase();
+    const gatewayId = '0'; // 0 = paywall z pelna lista metod platnosci
 
-    // 3. Bezpieczny opis transakcji bez znaków separatora
+    // 3. Czyszczenie opisu i emaila ze znakow mogacych zaburzyc hash URL
     const cleanDescription = (description || `Doladowanie portfela ${formattedAmount} PLN`)
-      .replace(/[|;]/g, ' ')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9 ._-]/g, '')
       .trim()
       .substring(0, 100);
 
-    // 4. Zapis transakcji w tabeli autopay_transakcje w Supabase ze statusem pending
+    const customerEmail = (email || '').trim().toLowerCase();
+
+    // 4. Zapis transakcji w tabeli autopay_transakcje ze statusem pending
     const { error: dbError } = await supabase
       .from('autopay_transakcje')
       .insert([{
@@ -63,20 +67,21 @@ export async function POST(req: Request) {
       }]);
 
     if (dbError) {
-      console.error('[Autopay Init DB Error]: Błąd zapisu do tabeli autopay_transakcje:', dbError);
+      console.error('[Autopay Init DB Error]:', dbError);
       return NextResponse.json(
         { success: false, error: `Błąd bazy danych: ${dbError.message}` },
         { status: 500 }
       );
     }
 
-    // 5. Oficjalny kanoniczny łańcuch Hash Autopay dla Paywall:
-    // Format: ServiceID|OrderID|Amount|Description|Currency|CustomerEmail|HashKey
+    // 5. Kanoniczny lancuch SHA-256 ze scisla specyfikacja pol bramki Autopay:
+    // Format: ServiceID|OrderID|Amount|Description|GatewayID|Currency|CustomerEmail|HashKey
     const hashDataArray: string[] = [
       serviceId,
       safeOrderId,
       formattedAmount,
       cleanDescription,
+      gatewayId,
       currency
     ];
 
@@ -89,12 +94,13 @@ export async function POST(req: Request) {
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 6. Pola formularza POST przekazywane do bramki Autopay
+    // 6. Pola formularza POST przekazywane do Autopay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: safeOrderId,
       Amount: formattedAmount,
       Description: cleanDescription,
+      GatewayID: gatewayId,
       Currency: currency,
       Hash: hash
     };
@@ -103,9 +109,10 @@ export async function POST(req: Request) {
       payload.CustomerEmail = customerEmail;
     }
 
-    console.log('[Autopay Init Success] Przygotowano transakcję:', {
+    console.log('[Autopay Init OK] Dane transakcji:', {
       safeOrderId,
       formattedAmount,
+      cleanDescription,
       hashString,
       hash
     });
