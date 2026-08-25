@@ -85,18 +85,18 @@ export default function DashboardPage() {
     return Array.from(keys);
   };
 
-  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW
+ // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH I ZAPISU DO HISTORII POWIADOMIEŃ
   const sendPushNotification = async (clientIds: number | number[], payload: { title: string; body: string; url?: string }) => {
     try {
       const ids = Array.isArray(clientIds) ? clientIds : [clientIds];
       if (ids.length === 0) return;
 
-      const { data: clients } = await supabase
+      const { data: clients, error: clientsErr } = await supabase
         .from('klienci')
-        .select('id, push_subscription')
+        .select('id, push_subscription, "Imię", "Nazwisko", firstName, lastName, "E-mail", email')
         .in('id', ids);
 
-      if (!clients || clients.length === 0) return;
+      if (clientsErr || !clients || clients.length === 0) return;
 
       const subscriptions = clients
         .map(c => {
@@ -109,21 +109,44 @@ export default function DashboardPage() {
         })
         .filter(Boolean);
 
-      if (subscriptions.length === 0) return;
+      if (subscriptions.length > 0) {
+        await fetch('/api/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriptions,
+            payload
+          })
+        });
+      }
 
-      await fetch('/api/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subscriptions,
-          payload
-        })
+      const historiaEntries = clients.map((c: any) => {
+        const imie = c.Imię || c.firstName || '';
+        const nazwisko = c.Nazwisko || c.lastName || '';
+        const mail = c['E-mail'] || c.email || '';
+        const pelnaNazwa = `${imie} ${nazwisko}`.trim();
+        const odbiorcaTekst = pelnaNazwa ? (mail ? `${pelnaNazwa} (${mail})` : pelnaNazwa) : (mail || `Klubowicz #${c.id}`);
+
+        return {
+          odbiorca: odbiorcaTekst,
+          odbiorca_id: c.id,
+          tytul: payload.title,
+          tresc: payload.body,
+          typ: 'PUSH',
+          status: c.push_subscription ? 'Wysłano' : 'Brak subskrypcji (Zapisano)'
+        };
       });
+
+      if (historiaEntries.length > 0) {
+        await supabase
+          .from('historia_powiadomien')
+          .insert(historiaEntries);
+      }
     } catch (err) {
-      console.error('Błąd podczas wysyłania powiadomienia push:', err);
+      console.error('Błąd podczas wysyłania/zapisywania powiadomienia push:', err);
     }
   };
-
+  
   // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
