@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// Bezpośrednia inicjalizacja klienta Supabase
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -32,7 +32,7 @@ export default function KlienciPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
   
-  // Dane grafiku i zapisów
+  // Dane grafiku i zapisów do pełnej synchronizacji
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
   const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
   const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
@@ -67,7 +67,7 @@ export default function KlienciPage() {
   const [walletAmountInput, setWalletAmountInput] = useState('');
   const [walletReasonInput, setWalletReasonInput] = useState('');
 
-  // STANY DLA ZAWIESZEŃ I BLOKAD
+  // STANY DLA ZAWIESZEŃ I BLOKAD (WSPÓLNY MODAL)
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
   const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
@@ -121,7 +121,7 @@ export default function KlienciPage() {
     if (!dateStr) return 0;
     let d = String(dateStr).trim();
     
-    // Obsługa DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
+    // Obsługa formatów DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
     const regexFull = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchFull = d.match(regexFull);
     if (matchFull) {
@@ -134,7 +134,7 @@ export default function KlienciPage() {
       if (!isNaN(parsed)) return parsed;
     }
 
-    // Obsługa YYYY-MM-DD
+    // Obsługa formatu YYYY-MM-DD
     const regexIso = /(\d{4})[\.\-\/](\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchIso = d.match(regexIso);
     if (matchIso) {
@@ -147,7 +147,7 @@ export default function KlienciPage() {
       if (!isNaN(parsed)) return parsed;
     }
 
-    // Obsługa skróconego formatu DD/MM lub DD.MM
+    // Obsługa krótkiego formatu DD/MM lub DD.MM
     const regexShort = /(\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchShort = d.match(regexShort);
     if (matchShort) {
@@ -695,7 +695,7 @@ export default function KlienciPage() {
         const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
         const effectiveBanReason = c.powodBlokady || c.powod_blokady || (finalKarnety[0]?.powodBlokady) || null;
 
-        // Łączenie historii zawieszeń ze WSZYSTKICH możliwych źródeł
+        // Łączenie historii zawieszeń ze WSZYSTKICH możliwych źródeł (w tym z profilu klubowicza)
         const rawHistZaw1 = safeJsonParse(c.historiaZawieszenGlobalna || c.historiazawieszenglobalna, []);
         const rawHistZaw2 = safeJsonParse(c.historiaZawieszen, []);
         const rawHistZaw3 = safeJsonParse(c.historiazawieszen, []);
@@ -1192,7 +1192,6 @@ export default function KlienciPage() {
       zawieszonyDo: null,
       historiaZawieszen: []
     };
-
     const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
     const uaktualnioneKarnety = [...stareKarnety, nowyKarnetObj];
     const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
@@ -1622,6 +1621,7 @@ export default function KlienciPage() {
   });
 
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
@@ -1895,7 +1895,6 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
-
       {/* MODAL PROFILU KLIENTA - RESPONSYWNY NA MOBILE */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
@@ -2329,14 +2328,23 @@ export default function KlienciPage() {
                           
                           if (classStartMs >= nowTime) {
                             const uniqueKey = z.class_key || `${z.id}`;
-                            const isKlubowicz = z.zapisujacy?.toLowerCase().includes('klubowicz') || z.zapisujacy?.toLowerCase().includes('użytkownik');
+                            
+                            // Poprawne rozróżnianie autora zapisu: domyślnie Klubowicz, chyba że jawnie wpisano admina/trenera/klub
+                            let author = 'Klubowicz';
+                            if (z.zapisujacy) {
+                              const zLow = String(z.zapisujacy).toLowerCase();
+                              if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
+                                author = z.zapisujacy;
+                              }
+                            }
+
                             upcomingMap.set(uniqueKey, {
                               id: z.id || uniqueKey,
                               classKey: z.class_key,
                               data: `${dateStr} ${timeStr}`.trim(),
                               zajecia: title,
                               status: z.status === 'krzesełko' ? 'LISTA REZERWOWA (KRZESEŁKO)' : 'ZAPISANY',
-                              zapisujacy: z.zapisujacy ? (isKlubowicz ? 'Klubowicz' : z.zapisujacy) : 'Klub (Administrator/Trener)',
+                              zapisujacy: author,
                               created_at: z.created_at || z.data_zapisu || null,
                               sortTime: classStartMs
                             });
@@ -2415,7 +2423,10 @@ export default function KlienciPage() {
                             </thead>
                             <tbody className="divide-y divide-slate-100 text-slate-700">
                               {upcomingList.length > 0 ? upcomingList.map((item: any, idx: number) => {
-                                const isKlubowicz = item.zapisujacy?.toLowerCase().includes('klubowicz') || item.zapisujacy?.toLowerCase().includes('użytkownik') || item.zapisujacy?.toLowerCase().includes('sam');
+                                const isKlubowicz = !item.zapisujacy || 
+                                                    item.zapisujacy.toLowerCase().includes('klubowicz') || 
+                                                    item.zapisujacy.toLowerCase().includes('użytkownik') || 
+                                                    item.zapisujacy.toLowerCase().includes('sam');
                                 return (
                                   <tr key={item.id || idx} className="hover:bg-slate-50 transition-colors">
                                     <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
@@ -2487,13 +2498,21 @@ export default function KlienciPage() {
                               obecnoscKlasa = 'bg-rose-100 text-rose-800 border-rose-300';
                             }
 
+                            let author = 'Klubowicz';
+                            if (z.zapisujacy) {
+                              const zLow = String(z.zapisujacy).toLowerCase();
+                              if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
+                                author = z.zapisujacy;
+                              }
+                            }
+
                             pastClassesList.push({
                               id: z.id || `${z.class_key}_${profileClient.id}`,
                               data: `${dateStr} ${timeStr}`.trim(),
                               zajecia: title,
                               obecnoscTekst: statusObecnosci,
                               obecnoscKlasa: obecnoscKlasa,
-                              zapisujacy: z.zapisujacy || 'Klubowicz',
+                              zapisujacy: author,
                               _sortTime: classStartMs
                             });
                           }
@@ -2534,7 +2553,10 @@ export default function KlienciPage() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
                             {pastClassesList.length > 0 ? pastClassesList.map((item: any, idx: number) => {
-                              const isKlubowicz = item.zapisujacy?.toLowerCase().includes('klubowicz') || item.zapisujacy?.toLowerCase().includes('użytkownik') || item.zapisujacy?.toLowerCase().includes('sam');
+                              const isKlubowicz = !item.zapisujacy || 
+                                                  item.zapisujacy.toLowerCase().includes('klubowicz') || 
+                                                  item.zapisujacy.toLowerCase().includes('użytkownik') || 
+                                                  item.zapisujacy.toLowerCase().includes('sam');
                               return (
                                 <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
                                   <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
@@ -2572,12 +2594,21 @@ export default function KlienciPage() {
                           const parts = (z.class_key || '').split('_');
                           const dateStr = parts[1] || '';
                           const tTime = z.created_at ? new Date(z.created_at).getTime() : Date.now();
+                          
+                          let author = 'Klubowicz';
+                          if (z.zapisujacy) {
+                            const zLow = String(z.zapisujacy).toLowerCase();
+                            if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
+                              author = z.zapisujacy;
+                            }
+                          }
+
                           allMovements.push({
                             id: `zapis_${z.id || z.class_key}`,
                             typ: 'ZAPISANIE NA ZAJĘCIA',
                             typKlasa: 'bg-emerald-100 text-emerald-800 border-emerald-200',
                             zajecia: z.class_title || `Trening (${dateStr})`,
-                            kto: z.zapisujacy || 'Klubowicz',
+                            kto: author,
                             dataZdarzenia: z.created_at ? new Date(z.created_at).toLocaleString('pl-PL') : 'Rejestracja w systemie',
                             sortTime: tTime
                           });
@@ -2636,7 +2667,10 @@ export default function KlienciPage() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
                             {allMovements.length > 0 ? allMovements.map((mov: any, idx: number) => {
-                              const isKlubowicz = mov.kto?.toLowerCase().includes('klubowicz') || mov.kto?.toLowerCase().includes('użytkownik');
+                              const isKlubowicz = !mov.kto || 
+                                                  mov.kto.toLowerCase().includes('klubowicz') || 
+                                                  mov.kto.toLowerCase().includes('użytkownik') || 
+                                                  mov.kto.toLowerCase().includes('sam');
                               return (
                                 <tr key={`${mov.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
                                   <td className="py-3 px-4 font-mono font-bold text-slate-700 whitespace-nowrap">{mov.dataZdarzenia}</td>
@@ -3298,7 +3332,7 @@ export default function KlienciPage() {
                       <label className="font-bold text-slate-700 block text-[10px]">Pozostało zawieszenia (dni)</label>
                       <input 
                         type="number" 
-                        min="0"
+                        min="0" 
                         max="30"
                         value={editingPassModal.contractSuspensionDaysLeft ?? 30} 
                         onChange={(e) => setEditingPassModal({...editingPassModal, contractSuspensionDaysLeft: parseInt(e.target.value, 10) || 0})} 
@@ -3590,7 +3624,7 @@ export default function KlienciPage() {
                         <label className="font-bold text-slate-700 block text-[10px]">Pozostałe dni zawieszenia</label>
                         <input 
                           type="number" 
-                          min="0"
+                          min="0" 
                           max="30"
                           value={newClient.customSuspensionDays}
                           onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})}
