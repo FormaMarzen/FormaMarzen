@@ -176,7 +176,7 @@ export default function FreeRegistrationPage() {
     setErrorMsg('');
 
     // Weryfikacja czy adres e-mail już istnieje w tabeli klienci
-    const { data: existingClientCheck, error: queryError } = await supabase
+    const { data: existingClientCheck } = await supabase
       .from('klienci')
       .select('id')
       .eq('E-mail', email)
@@ -282,6 +282,56 @@ export default function FreeRegistrationPage() {
         przeczytana: false
       }
     ]);
+
+    // 7. Wysłanie powiadomienia Web Push do Administratora i rejestracja w historia_powiadomien
+    try {
+      const { data: adminSubs } = await supabase
+        .from('push_subscriptions')
+        .select('subscription')
+        .eq('role', 'admin');
+
+      const subscriptions = (adminSubs || [])
+        .map(s => {
+          if (!s.subscription) return null;
+          try {
+            return typeof s.subscription === 'string' ? JSON.parse(s.subscription) : s.subscription;
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      const pushTitle = 'Nowy klubowicz zarejestrowany!';
+      const pushBody = `${firstName} ${lastName} (${email}) zarejestrował(a) się na bezpłatne zajęcia: ${selectedClass?.title || 'Zajęcia'} (${selectedClass?.date || todayIsoStr} ${selectedClass?.time || ''}).`;
+
+      if (subscriptions.length > 0) {
+        await fetch('/api/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriptions,
+            payload: {
+              title: pushTitle,
+              body: pushBody,
+              url: '/raporty/klienci'
+            }
+          })
+        });
+      }
+
+      await supabase.from('historia_powiadomien').insert([
+        {
+          odbiorca: `Administratorzy (${subscriptions.length} urządz.)`,
+          odbiorca_id: null,
+          tytul: pushTitle,
+          tresc: pushBody,
+          typ: 'PUSH',
+          status: subscriptions.length > 0 ? 'Wysłano' : 'Brak aktywnych urządzeń'
+        }
+      ]);
+    } catch (pushErr) {
+      console.error('Błąd podczas wysyłania powiadomienia push do administratora:', pushErr);
+    }
 
     setIsLoading(false);
     setIsSuccessModalOpen(true);
