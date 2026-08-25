@@ -34,15 +34,23 @@ export default function HistoriaPowiadomienPage() {
   const [loading, setLoading] = useState(true);
   const [filterQuery, setFilterQuery] = useState('');
   
-  // Status subskrypcji push na bieżącym urządzeniu
+  // Status subskrypcji push na bieżącym urządzeniu administratora
   const [pushStatus, setPushStatus] = useState<'prompt' | 'granted' | 'denied' | 'unsupported'>('prompt');
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
-  useEffect(() => {
-    fetchHistoria();
-    checkPushPermission();
-  }, []);
+  const fetchHistoria = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('historia_powiadomien')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      setHistoria(data);
+    }
+    setLoading(false);
+  };
 
   const checkPushPermission = async () => {
     if (typeof window === 'undefined') return;
@@ -59,18 +67,26 @@ export default function HistoriaPowiadomienPage() {
     }
   };
 
-  const fetchHistoria = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('historia_powiadomien')
-      .select('*')
-      .order('created_at', { ascending: false });
+  useEffect(() => {
+    fetchHistoria();
+    checkPushPermission();
 
-    if (!error && data) {
-      setHistoria(data);
-    }
-    setLoading(false);
-  };
+    // Automatyczna synchronizacja tabeli w czasie rzeczywistym
+    const channel = supabase
+      .channel('realtime-historia-powiadomien')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'historia_powiadomien' },
+        () => {
+          fetchHistoria();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const enablePushNotifications = async () => {
     if (typeof window === 'undefined') return;
@@ -113,7 +129,7 @@ export default function HistoriaPowiadomienPage() {
 
       const rawSub = JSON.parse(JSON.stringify(sub));
 
-      // Sprawdzenie czy subskrypcja z tym endpointem już istnieje w bazie (zapobieganie dublom)
+      // Sprawdzenie czy subskrypcja z tym endpointem już istnieje w bazie (ochrona przed duplikatami)
       const { data: existingSubs } = await supabase
         .from('push_subscriptions')
         .select('id, subscription')
@@ -251,7 +267,11 @@ export default function HistoriaPowiadomienPage() {
                       </span>
                     </td>
                     <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
+                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
+                        item.status?.toLowerCase().includes('brak')
+                          ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      }`}>
                         {item.status || 'Wysłano'}
                       </span>
                     </td>
