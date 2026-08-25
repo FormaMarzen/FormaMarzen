@@ -99,7 +99,7 @@ export default function HistoriaPowiadomienPage() {
 
       const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
       if (!vapidPublicKey) {
-        throw new Error('Brak zmiennej NEXT_PUBLIC_VAPID_PUBLIC_KEY');
+        throw new Error('Brak zmiennej środowiskowej NEXT_PUBLIC_VAPID_PUBLIC_KEY w konfiguracji Vercel.');
       }
 
       let sub = await registration.pushManager.getSubscription();
@@ -113,7 +113,7 @@ export default function HistoriaPowiadomienPage() {
 
       const rawSub = JSON.parse(JSON.stringify(sub));
 
-      // Sprawdzenie czy subskrypcja z tym endpointem już istnieje, aby uniknąć duplikatów
+      // Sprawdzenie czy subskrypcja z tym endpointem już istnieje w bazie (zapobieganie dublom)
       const { data: existingSubs } = await supabase
         .from('push_subscriptions')
         .select('id, subscription')
@@ -139,7 +139,7 @@ export default function HistoriaPowiadomienPage() {
         }
       }
 
-      setStatusMessage('✅ Urządzenie zostało pomyślnie zarejestrowane! Będziesz otrzymywać powiadomienia push.');
+      setStatusMessage('✅ Urządzenie zostało pomyślnie zarejestrowane! Będziesz otrzymywać powiadomienia push o nowych rejestracjach i zakupach.');
     } catch (err: any) {
       console.error('Błąd aktywacji push:', err);
       setStatusMessage(`❌ Błąd rejestracji: ${err.message || 'Nieznany błąd'}`);
@@ -157,14 +157,14 @@ export default function HistoriaPowiadomienPage() {
   return (
     <div className="p-4 sm:p-8 space-y-6 max-w-7xl mx-auto font-sans antialiased text-slate-800">
       
-      {/* Karta aktywacji urządzenia */}
+      {/* Karta aktywacji powiadomień na urządzeniu administratora */}
       <div className="bg-gradient-to-r from-sky-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="space-y-1">
           <h2 className="text-xl font-black tracking-wide flex items-center gap-2">
             🔔 Powiadomienia Push Administratora
           </h2>
           <p className="text-xs text-sky-100 max-w-xl leading-relaxed">
-            Kliknij poniższy przycisk, aby zarejestrować to urządzenie (tablet / telefon / komputer) do odbierania natychmiastowych powiadomień push o nowych rejestracjach klubowiczów oraz zakupach karnetów.
+            Kliknij poniższy przycisk, aby zarejestrować to urządzenie (iPad / iPhone / komputer) do odbierania natychmiastowych powiadomień push o nowych rejestracjach klubowiczów oraz zakupach karnetów.
           </p>
         </div>
         

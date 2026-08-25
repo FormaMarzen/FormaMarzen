@@ -409,7 +409,7 @@ export default function RootLayout({
       title: "Komunikacja",
       items: [
         { href: '/komunikacja/ogloszenia', label: 'Ogłoszenia', icon: '📢' },
-        { href: '/komunikacja/historia-wiadomosci', label: 'Historia powiadomień', icon: '💬' },
+        { href: '/komunikacja/historia-powiadomien', label: 'Historia powiadomień', icon: '💬' },
       ]
     },
     {
