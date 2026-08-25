@@ -11,7 +11,8 @@ let globalCreatingLock = false;
 
 export default function PortfelPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [transakcjeFinansowe, setTransakcjeFinansowe] = useState<any[]>([]);
+  const [historiaWszystkichOperacji, setHistoriaWszystkichOperacji] = useState<any[]>([]);
+  const [activeFilter, setActiveFilter] = useState<'all' | 'autopay' | 'wallet'>('all');
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   
@@ -21,6 +22,13 @@ export default function PortfelPage() {
 
   useEffect(() => {
     loadData();
+
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('status') === 'success') {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
   }, []);
 
   const loadData = async () => {
@@ -66,36 +74,80 @@ export default function PortfelPage() {
         if (klientData) {
           const rawClient = klientData as any;
 
-          // 1. Pobranie historii transakcji Autopay
+          // 1. Pobranie transakcji z bramki Autopay
           const { data: autopayData } = await supabase
             .from('autopay_transakcje')
             .select('*')
             .eq('user_id', rawClient.id)
             .order('created_at', { ascending: false });
 
-          const transactions = autopayData || [];
-          setTransakcjeFinansowe(transactions);
+          // 2. Pobranie transakcji ogólnych i portfelowych (zakupy karnetów, spłaty, raty)
+          const { data: localTransData } = await supabase
+            .from('transakcje')
+            .select('*')
+            .eq('klient_id', rawClient.id)
+            .order('created_at', { ascending: false });
 
-          // 2. Automatyczna synchronizacja salda z bazy
+          // 3. Połączenie i ujednolicenie historii operacji bez duplikatów
+          const combinedHistory: any[] = [];
+          const processedOrderIds = new Set<string>();
+
+          // A. Dodanie operacji z tabeli transakcje (wydatki z portfela, karnety)
+          if (localTransData && localTransData.length > 0) {
+            localTransData.forEach((t: any) => {
+              const kwotaVal = Number(t.kwota) || 0;
+              const isAutopayType = (t.typ_operacji || '').toLowerCase().includes('autopay');
+              
+              combinedHistory.push({
+                id: `loc-${t.id}`,
+                data: t.created_at || t.data || new Date().toISOString(),
+                opis: t.opis || t.typ_operacji || 'Operacja portfela',
+                zrodlo: isAutopayType ? 'Bramka Autopay' : 'Saldo Portfela',
+                kategoria: isAutopayType ? 'autopay' : 'wallet',
+                kwota: kwotaVal,
+                status: 'success',
+                statusTekst: 'Zrealizowana',
+                kodRabatowy: t.kod_rabatowy || null
+              });
+            });
+          }
+
+          // B. Dodanie operacji z bramki Autopay (doładowania, spłaty online)
+          if (autopayData && autopayData.length > 0) {
+            autopayData.forEach((a: any) => {
+              const kwotaVal = Number(a.amount) || 0;
+              const statusVal = a.status || 'pending';
+              const gatewayInfo = a.gateway_response;
+
+              // Jeśli transakcja dotyczyła zakupu karnetu przez Autopay, zabezpieczamy przed zdublowanym wpisem
+              if (a.type === 'pass_purchase' || a.type === 'pass_extend') {
+                if (processedOrderIds.has(a.order_id)) return;
+                processedOrderIds.add(a.order_id);
+              }
+
+              combinedHistory.push({
+                id: `ap-${a.id}`,
+                data: a.created_at || new Date().toISOString(),
+                opis: gatewayInfo?.opis || (a.type === 'wallet_topup' ? `Doładowanie portfela Autopay` : a.type === 'wallet_settlement' ? 'Spłata ujemnego salda Autopay' : 'Płatność online Autopay'),
+                zrodlo: 'Bramka Autopay',
+                kategoria: 'autopay',
+                kwota: a.type === 'wallet_topup' ? Math.abs(kwotaVal) : (statusVal === 'success' ? Math.abs(kwotaVal) : kwotaVal),
+                status: statusVal,
+                statusTekst: statusVal === 'success' ? 'Opłacona' : statusVal === 'failed' ? 'Nieudana' : 'Oczekuje',
+                orderId: a.order_id
+              });
+            });
+          }
+
+          // Sortowanie całej historii od najnowszej do najstarszej
+          combinedHistory.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+          setHistoriaWszystkichOperacji(combinedHistory);
+
+          // 4. Odczyt i formatowanie bieżącego salda portfela
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
           const isNegative = String(rawWalletStr).includes('-');
           let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
           if (isNegative) parsedWalletNum = -Math.abs(parsedWalletNum);
-
-          // Jeśli w historii są transakcje SUCCESS, a portfel jest pusty (0.00), synchronizujemy saldo
-          const successfulTopupsTotal = transactions
-            .filter((t: any) => t.status === 'success')
-            .reduce((acc: number, curr: any) => acc + (Number(curr.amount) || 0), 0);
-
-          if (successfulTopupsTotal > 0 && parsedWalletNum === 0) {
-            parsedWalletNum = successfulTopupsTotal;
-            const syncedWalletStr = `${parsedWalletNum.toFixed(2)} PLN`;
-            
-            await supabase
-              .from('klienci')
-              .update({ Portfel: syncedWalletStr })
-              .eq('id', rawClient.id);
-          }
 
           setCurrentUser({
             ...rawClient,
@@ -183,7 +235,7 @@ export default function PortfelPage() {
 
     const kwotaSplaty = Math.abs(currentWalletNum);
     const orderId = `DEBT-${currentUser.id}-${Date.now()}`.substring(0, 32);
-    const opisOperacji = `Splata salda ${kwotaSplaty.toFixed(2)} PLN`;
+    const opisOperacji = `Splata zadluzenia portfela ${kwotaSplaty.toFixed(2)} PLN`;
 
     await redirectToAutopay(kwotaSplaty, orderId, opisOperacji, 'wallet_settlement');
   };
@@ -194,6 +246,12 @@ export default function PortfelPage() {
 
   const walletVal = currentUser ? currentUser.rawWalletNum : 0;
   const isNegative = walletVal < 0;
+
+  const filteredHistory = historiaWszystkichOperacji.filter((item) => {
+    if (activeFilter === 'autopay') return item.kategoria === 'autopay';
+    if (activeFilter === 'wallet') return item.kategoria === 'wallet';
+    return true;
+  });
 
   return (
     <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
@@ -246,9 +304,40 @@ export default function PortfelPage() {
         />
       </div>
 
-      {/* SEKCJA 2: HISTORIA TRANSAKCJI AUTOPAY */}
+      {/* SEKCJA 2: PEŁNA HISTORIA OPERACJI I TRANSAKCJI */}
       <div className="space-y-4">
-        <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA PŁATNOŚCI AUTOPAY</h2>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+          <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">
+            HISTORIA OPERACJI I PŁATNOŚCI
+          </h2>
+
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+            <button
+              onClick={() => setActiveFilter('all')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Wszystkie ({historiaWszystkichOperacji.length})
+            </button>
+            <button
+              onClick={() => setActiveFilter('autopay')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeFilter === 'autopay' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Autopay Online
+            </button>
+            <button
+              onClick={() => setActiveFilter('wallet')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeFilter === 'wallet' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Wydatki z Portfela
+            </button>
+          </div>
+        </div>
         
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden text-xs">
           <div className="overflow-x-auto">
@@ -256,42 +345,64 @@ export default function PortfelPage() {
               <thead>
                 <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
                   <th className="py-4 px-5">DATA</th>
-                  <th className="py-4 px-5">ID ZAMÓWIENIA</th>
+                  <th className="py-4 px-5">TYP / OPIS OPERACJI</th>
+                  <th className="py-4 px-5">ŹRÓDŁO PŁATNOŚCI</th>
                   <th className="py-4 px-5">KWOTA</th>
-                  <th className="py-4 px-5">STATUS</th>
-                  <th className="py-4 px-5">TYP / OPIS</th>
+                  <th className="py-4 px-5 text-right">STATUS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {transakcjeFinansowe.length === 0 ? (
+                {filteredHistory.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-8 text-center text-slate-400">Brak transakcji Autopay dla tego konta.</td>
+                    <td colSpan={5} className="py-10 text-center text-slate-400">
+                      Brak zarejestrowanych operacji w wybranej kategorii.
+                    </td>
                   </tr>
                 ) : (
-                  transakcjeFinansowe.map((t: any) => {
-                    const kwotaNum = Number(t.amount) || 0;
-                    const formattedDate = t.created_at ? t.created_at.replace('T', ' ').substring(0, 16) : '-';
-                    const statusVal = t.status || 'pending';
-                    const gatewayInfo = t.gateway_response;
+                  filteredHistory.map((item: any) => {
+                    const kwotaNum = Number(item.kwota) || 0;
+                    const formattedDate = item.data ? item.data.replace('T', ' ').substring(0, 16) : '-';
+                    const isPositive = kwotaNum > 0 && item.kategoria === 'autopay';
+                    const isNegativeAmount = kwotaNum < 0;
 
                     return (
-                      <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5 font-mono text-slate-600">{formattedDate}</td>
-                        <td className="py-4 px-5 font-mono text-slate-500">{t.order_id}</td>
-                        <td className="py-4 px-5 font-bold text-slate-900">
-                          +{kwotaNum.toFixed(2)} PLN
+                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="py-4 px-5 font-mono text-slate-600">
+                          {formattedDate}
                         </td>
-                        <td className="py-4 px-5 font-bold">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] uppercase ${
-                            statusVal === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                            statusVal === 'failed' ? 'bg-rose-50 text-rose-700 border border-rose-200' :
-                            'bg-amber-50 text-amber-700 border border-amber-200'
+                        <td className="py-4 px-5 font-medium text-slate-900">
+                          <div className="font-bold">{item.opis}</div>
+                          {item.orderId && item.orderId !== '-' && (
+                            <div className="text-[10px] font-mono text-slate-400 mt-0.5">ID: {item.orderId}</div>
+                          )}
+                          {item.kodRabatowy && (
+                            <div className="text-[10px] text-emerald-600 font-bold mt-0.5">Kod: {item.kodRabatowy}</div>
+                          )}
+                        </td>
+                        <td className="py-4 px-5 font-semibold text-slate-600">
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] uppercase font-bold ${
+                            item.zrodlo === 'Bramka Autopay' 
+                              ? 'bg-blue-50 text-blue-800 border border-blue-200' 
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
                           }`}>
-                            {statusVal}
+                            {item.zrodlo === 'Bramka Autopay' ? '💳 Autopay' : '👛 Portfel'}
                           </span>
                         </td>
-                        <td className="py-4 px-5 font-medium text-slate-800">
-                          {gatewayInfo?.opis || t.type}
+                        <td className="py-4 px-5 font-black text-sm">
+                          <span className={isPositive ? 'text-emerald-600' : isNegativeAmount ? 'text-rose-600' : 'text-slate-900'}>
+                            {isPositive ? `+${kwotaNum.toFixed(2)}` : kwotaNum.toFixed(2)} PLN
+                          </span>
+                        </td>
+                        <td className="py-4 px-5 text-right font-bold">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] uppercase ${
+                            item.status === 'success' 
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                            item.status === 'failed' 
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200' :
+                              'bg-amber-50 text-amber-700 border border-amber-200'
+                          }`}>
+                            {item.statusTekst}
+                          </span>
                         </td>
                       </tr>
                     );
