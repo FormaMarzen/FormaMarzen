@@ -29,7 +29,7 @@ const fetchAllFromSupabase = async (
     }
     if (data && data.length > 0) {
       result.push(...data);
-      if (data.length < 1000) break; // Jeśli pobrano mniej niż 1000, to znaczy, że to już ostatnia strona
+      if (data.length < 1000) break;
     } else {
       break;
     }
@@ -182,7 +182,7 @@ export default function AutomatyczneZapisyPage() {
       }));
       setGrafikItems(combinedGrafik);
 
-      // 3. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika (ominięcie limitu)
+      // 3. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika
       const zapisyData = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
       if (zapisyData) setZapisyList(zapisyData);
 
@@ -192,7 +192,7 @@ export default function AutomatyczneZapisyPage() {
         setAutoBookingsList(autoData);
         await syncAutoBookings(autoData, enrichedClients, combinedGrafik);
         
-        // Odświeżenie zapisów po synchronizacji (by licznik zaktualizował się od razu)
+        // Odświeżenie zapisów po synchronizacji
         const refreshedZapisy = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
         if (refreshedZapisy) setZapisyList(refreshedZapisy);
       }
@@ -316,13 +316,22 @@ export default function AutomatyczneZapisyPage() {
               }
             ]);
 
-            newZapisyNadchodzace.unshift({
-              id: Date.now() + Math.random(),
-              data: `${year}-${month}-${day}`,
-              zajecia: classObj.title || classObj.nazwa,
-              karnet: 'Automatyczny zapis',
-              zapisujacy: 'Panel Administratora'
-            });
+            // Unikamy duplikatów w tablici zapisyNadchodzace
+            const dateStr = `${year}-${month}-${day}`;
+            const zajeciaTitle = classObj.title || classObj.nazwa;
+            const alreadyInArray = newZapisyNadchodzace.some(
+              (z: any) => z.data === dateStr && (z.zajecia || '').trim().toLowerCase() === zajeciaTitle.trim().toLowerCase()
+            );
+
+            if (!alreadyInArray) {
+              newZapisyNadchodzace.unshift({
+                id: Date.now() + Math.random(),
+                data: dateStr,
+                zajecia: zajeciaTitle,
+                karnet: 'Automatyczny zapis',
+                zapisujacy: 'Panel Administratora'
+              });
+            }
 
             hasUpdates = true;
           }
@@ -380,6 +389,7 @@ export default function AutomatyczneZapisyPage() {
       const clientName = `${clientObj.Imię} ${clientObj.Nazwisko}`;
       const classTitle = classObj.title || classObj.nazwa;
 
+      // Zapisujemy regułę – synchronizacja automatycznie wygeneruje wpisy bez ryzyka dublowania
       const { error: insertErr } = await supabase.from('automatyczne_zapisy').insert([
         {
           klient_id: Number(selectedClientId),
@@ -393,71 +403,7 @@ export default function AutomatyczneZapisyPage() {
 
       if (insertErr) throw insertErr;
 
-      const { data: existingBookings } = await supabase
-        .from('zapisy_zajec')
-        .select('class_key')
-        .eq('klient_id', Number(selectedClientId));
-
-      const bookedKeys = new Set((existingBookings || []).map(b => b.class_key));
-
-      const dayMap: { [key: string]: number } = { nd: 0, pon: 1, wt: 2, sr: 3, czw: 4, pt: 5, sb: 6 };
-      const activeDays = classObj.days || {};
-      const targetDayIndices = Object.keys(activeDays)
-        .filter(d => activeDays[d])
-        .map(d => dayMap[d])
-        .filter(idx => idx !== undefined);
-
-      const startDate = new Date();
-      let endDate = new Date();
-      const parsedExpiry = new Date(passExpiry);
-      if (!isNaN(parsedExpiry.getTime()) && parsedExpiry > startDate) {
-        endDate = parsedExpiry;
-      } else {
-        endDate.setDate(startDate.getDate() + 90);
-      }
-
-      let newBookingsCount = 0;
-      const newZapisyNadchodzace = [...(clientObj.zapisyNadchodzace || [])];
-
-      let curr = new Date(startDate);
-      while (curr <= endDate) {
-        if (targetDayIndices.includes(curr.getDay())) {
-          const month = String(curr.getMonth() + 1).padStart(2, '0');
-          const day = String(curr.getDate()).padStart(2, '0');
-          const year = curr.getFullYear();
-          const classKeyDisplay = `${classObj.id}_${day}/${month}`;
-          const classKeyIso = `${classObj.id}_${year}-${month}-${day}`;
-
-          if (!bookedKeys.has(classKeyDisplay) && !bookedKeys.has(classKeyIso)) {
-            await supabase.from('zapisy_zajec').insert([
-              {
-                class_key: classKeyDisplay,
-                klient_id: Number(selectedClientId),
-                status: 'zapisany',
-                obecny: false
-              }
-            ]);
-
-            newZapisyNadchodzace.unshift({
-              id: Date.now() + Math.random(),
-              data: `${year}-${month}-${day}`,
-              zajecia: classTitle,
-              karnet: 'Automatyczny zapis',
-              zapisujacy: 'Panel Administratora'
-            });
-
-            newBookingsCount++;
-          }
-        }
-        curr.setDate(curr.getDate() + 1);
-      }
-
-      await supabase
-        .from('klienci')
-        .update({ zapisyNadchodzace: newZapisyNadchodzace })
-        .eq('id', Number(selectedClientId));
-
-      showToast(`Ustawiono regułę! Dopisano na ${newBookingsCount} terminów (do ${passExpiry}).`);
+      showToast(`Ustawiono regułę automatycznego zapisu dla: ${clientName}!`);
       setSelectedClientId('');
       setClientSearchQuery('');
       setSelectedClassId('');
