@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import webpush from 'web-push';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -9,6 +10,37 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 function extractXmlTag(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
   return match ? match[1].trim() : '';
+}
+
+async function sendPushToAdmins(title: string, body: string, url: string = '/klienci') {
+  try {
+    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
+    const privateKey = process.env.VAPID_PRIVATE_KEY || '';
+    const subject = process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl';
+
+    if (!publicKey || !privateKey) return;
+
+    webpush.setVapidDetails(subject, publicKey, privateKey);
+
+    const { data: subs, error } = await supabase
+      .from('push_subscriptions')
+      .select('subscription')
+      .eq('role', 'admin');
+
+    if (error || !subs || subs.length === 0) return;
+
+    const payload = JSON.stringify({ title, body, url });
+
+    await Promise.allSettled(
+      subs.map(async (entry: any) => {
+        if (entry.subscription) {
+          return webpush.sendNotification(entry.subscription, payload);
+        }
+      })
+    );
+  } catch (err) {
+    console.error('[WebPush Error - Autopay Webhook]:', err);
+  }
 }
 
 export async function POST(req: Request) {
@@ -83,6 +115,8 @@ export async function POST(req: Request) {
         .single();
 
       if (!klientErr && klient) {
+        const clientName = `${klient['Imię'] || klient.imie || ''} ${klient['Nazwisko'] || klient.nazwisko || ''}`.trim();
+
         // A. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
         if (transakcja.type === 'pass_purchase' || transakcja.type === 'pass_extend') {
           const clientUpdatePayload: Record<string, any> = {};
@@ -113,6 +147,8 @@ export async function POST(req: Request) {
               .eq('id', klient.id);
           }
 
+          const opDescription = transakcja.gateway_response?.opis || (transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu');
+
           // Rejestracja transakcji w tabeli transakcje
           const { data: insertedTrans } = await supabase
             .from('transakcje')
@@ -120,7 +156,7 @@ export async function POST(req: Request) {
               klient_id: klient.id,
               typ_operacji: transakcja.type === 'pass_extend' ? 'przedluzenie_karnetu_autopay' : 'zakup_karnetu_autopay',
               kwota: -transactionAmount,
-              opis: `${transakcja.gateway_response?.opis || 'Zakup karnetu'} (Opłacono online Autopay)`,
+              opis: `${opDescription} (Opłacono online Autopay)`,
               kod_rabatowy: metadata.kod_rabatowy || null
             }])
             .select('id')
@@ -151,6 +187,13 @@ export async function POST(req: Request) {
               }]);
           }
 
+          // Wysłanie powiadomienia PUSH do administratora o zakupie/przedłużeniu karnetu
+          await sendPushToAdmins(
+            transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
+            `${clientName || 'Klubowicz'} opłacił(a) karnet: ${opDescription} (${transactionAmount} PLN)`,
+            '/klienci'
+          );
+
         } else {
           // B. OBSŁUGA STANDARDOWEGO DOŁADOWANIA PORTFELA LUB SPŁATY
           const rawWalletStr = klient.Portfel || klient.portfel || '0.00 PLN';
@@ -165,6 +208,13 @@ export async function POST(req: Request) {
             .from('klienci')
             .update({ Portfel: formattedNewWallet })
             .eq('id', klient.id);
+
+          // Wysłanie powiadomienia PUSH do administratora o doładowaniu portfela
+          await sendPushToAdmins(
+            'Doładowanie portfela / Spłata 💰',
+            `${clientName || 'Klubowicz'} doładował(a) portfel kwotą ${transactionAmount} PLN`,
+            '/klienci'
+          );
         }
       }
 
