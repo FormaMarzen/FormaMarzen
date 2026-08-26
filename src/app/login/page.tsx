@@ -7,7 +7,7 @@ import { supabase } from '../raporty/klienci/supabase';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false); // NOWY STAN: Widoczność hasła
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -22,7 +22,7 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Zachowujemy wsparcie dla localStorage (jeśli kiedyś będziesz chciał dynamicznie zmieniać logo w locie)
+    // Wsparcie dla dynamicznego logotypu z localStorage
     const savedLogo = localStorage.getItem('forma_marzen_logo');
     if (savedLogo) {
       setCustomLogo(savedLogo);
@@ -43,6 +43,16 @@ export default function LoginPage() {
       setErrorMsg('Nieprawidłowy e-mail lub hasło.');
       setIsLoading(false);
     } else if (data.user) {
+      try {
+        // Inkrementacja licznika logowań w metadanych konta
+        const currentCount = Number(data.user.user_metadata?.sign_in_count || 0) + 1;
+        await supabase.auth.updateUser({
+          data: { sign_in_count: currentCount }
+        });
+      } catch (err) {
+        console.error('Błąd aktualizacji licznika logowań:', err);
+      }
+
       window.location.href = '/'; 
     }
   };
