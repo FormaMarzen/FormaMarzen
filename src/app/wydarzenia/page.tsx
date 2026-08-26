@@ -30,7 +30,7 @@ interface Wydarzenie {
   status: string;
   uczestnicy?: Uczestnik[];
   
-  // Moduły strefy uczestnika sterowane checkboxami
+  // Moduły strefy uczestnika
   pokaz_whatsapp?: boolean;
   whatsapp_url?: string | null;
   
@@ -45,7 +45,7 @@ interface Wydarzenie {
   strefa_opis?: string | null;
   
   pokaz_plan_grafika?: boolean;
-  plan_grafika_url?: string | null;
+  plan_grafiki?: string[]; // Tablica wielu obrazków planu
 }
 
 export default function WydarzeniaPage() {
@@ -75,7 +75,6 @@ export default function WydarzeniaPage() {
     status: "wkrotce",
     uczestnicy: [] as Uczestnik[],
     
-    // Checkboxy i pola modułów
     pokaz_whatsapp: false,
     whatsapp_url: "",
     
@@ -90,7 +89,7 @@ export default function WydarzeniaPage() {
     strefa_opis: "",
     
     pokaz_plan_grafika: false,
-    plan_grafika_url: "" as string | null
+    plan_grafiki: [] as string[]
   });
 
   const [klientSearch, setKlientSearch] = useState("");
@@ -115,7 +114,6 @@ export default function WydarzeniaPage() {
       setIsAdmin(true);
     }
 
-    // Pobieranie wydarzeń
     const { data, error } = await supabase
       .from('wydarzenia')
       .select('*')
@@ -125,7 +123,6 @@ export default function WydarzeniaPage() {
       setWydarzenia(data);
     }
 
-    // Pobieranie bazy klientów z uwzględnieniem dokładnych nazw kolumn ze schematu tabeli klienci
     const { data: klienciData, error: klienciError } = await supabase
       .from('klienci')
       .select('id, "Imię", "Nazwisko", "E-mail"');
@@ -198,7 +195,7 @@ export default function WydarzeniaPage() {
       pokaz_opis_strefy: false,
       strefa_opis: "",
       pokaz_plan_grafika: false,
-      plan_grafika_url: null
+      plan_grafiki: []
     });
     setKlientSearch("");
     setIsAdminModalOpen(true);
@@ -233,7 +230,7 @@ export default function WydarzeniaPage() {
       strefa_opis: w.strefa_opis || "",
       
       pokaz_plan_grafika: !!w.pokaz_plan_grafika,
-      plan_grafika_url: w.plan_grafika_url || null
+      plan_grafiki: Array.isArray(w.plan_grafiki) ? w.plan_grafiki : []
     });
     setKlientSearch("");
     setIsAdminModalOpen(true);
@@ -283,11 +280,26 @@ export default function WydarzeniaPage() {
     }
   };
 
-  const handlePlanImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      handleImageCompress(file, (compressed) => setForm(prev => ({ ...prev, plan_grafika_url: compressed })));
-    }
+  // Obsługa wczytywania wielu obrazków planu
+  const handlePlanImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach((file) => {
+      handleImageCompress(file, (compressed) => {
+        setForm(prev => ({
+          ...prev,
+          plan_grafiki: [...prev.plan_grafiki, compressed]
+        }));
+      });
+    });
+  };
+
+  const handleRemovePlanImage = (indexToRemove: number) => {
+    setForm(prev => ({
+      ...prev,
+      plan_grafiki: prev.plan_grafiki.filter((_, idx) => idx !== indexToRemove)
+    }));
   };
 
   const handleAddParticipantFromDB = (k: KlientBaza) => {
@@ -346,7 +358,7 @@ export default function WydarzeniaPage() {
       strefa_opis: form.pokaz_opis_strefy ? form.strefa_opis : null,
       
       pokaz_plan_grafika: form.pokaz_plan_grafika,
-      plan_grafika_url: form.pokaz_plan_grafika ? form.plan_grafika_url : null
+      plan_grafiki: form.pokaz_plan_grafika ? form.plan_grafiki : []
     };
 
     if (editingId) {
@@ -485,7 +497,7 @@ export default function WydarzeniaPage() {
     (selectedEvent.pokaz_zbiorka && selectedEvent.zbiorka) ||
     (selectedEvent.pokaz_ekwipunek && selectedEvent.ekwipunek) ||
     (selectedEvent.pokaz_opis_strefy && selectedEvent.strefa_opis) ||
-    (selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafika_url)
+    (selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafiki && selectedEvent.plan_grafiki.length > 0)
   );
 
   return (
@@ -712,7 +724,7 @@ export default function WydarzeniaPage() {
                     </div>
                   )}
 
-                  {/* Moduł Zbiórka / Lokalizacja z linkiem do Google Maps */}
+                  {/* Moduł Zbiórka / Lokalizacja z Google Maps */}
                   {selectedEvent.pokaz_zbiorka && selectedEvent.zbiorka && (
                     <div className="bg-white p-5 rounded-2xl border border-amber-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                       <div className="space-y-1">
@@ -734,7 +746,7 @@ export default function WydarzeniaPage() {
                     </div>
                   )}
 
-                  {/* Moduł Ekwipunek / Checklista */}
+                  {/* Moduł Ekwipunek */}
                   {selectedEvent.pokaz_ekwipunek && selectedEvent.ekwipunek && (
                     <div className="bg-white p-5 rounded-2xl border border-sky-100">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -746,7 +758,7 @@ export default function WydarzeniaPage() {
                     </div>
                   )}
 
-                  {/* Moduł Szczegółowy opis planu */}
+                  {/* Moduł Opis Strefy */}
                   {selectedEvent.pokaz_opis_strefy && selectedEvent.strefa_opis && (
                     <div className="bg-white p-5 rounded-2xl border border-sky-100">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -758,18 +770,22 @@ export default function WydarzeniaPage() {
                     </div>
                   )}
 
-                  {/* Moduł Obraz Planu Wyjazdu */}
-                  {selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafika_url && (
-                    <div className="space-y-2">
+                  {/* Moduł Wiele Obrazków Planu Wyjazdu */}
+                  {selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafiki && selectedEvent.plan_grafiki.length > 0 && (
+                    <div className="space-y-3">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider flex items-center gap-2">
-                        <span>🗺️</span> Graficzny harmonogram wyjazdu
+                        <span>🗺️</span> Graficzny harmonogram wyjazdu ({selectedEvent.plan_grafiki.length})
                       </h4>
-                      <div className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
-                        <img 
-                          src={selectedEvent.plan_grafika_url} 
-                          alt="Plan wyjazdu" 
-                          className="w-full h-auto object-contain max-h-[500px]" 
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {selectedEvent.plan_grafiki.map((imgUrl, idx) => (
+                          <div key={idx} className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm p-2">
+                            <img 
+                              src={imgUrl} 
+                              alt={`Plan wyjazdu ${idx + 1}`} 
+                              className="w-full h-auto object-contain max-h-[400px] rounded-xl" 
+                            />
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -909,7 +925,6 @@ export default function WydarzeniaPage() {
                   </label>
                 </div>
 
-                {/* Autouzupełnianie z bazy klientów */}
                 <div className="space-y-2">
                   <input 
                     type="text" 
@@ -937,7 +952,6 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
 
-                {/* Ręczne dopisanie osoby */}
                 <div className="flex gap-2">
                   <input 
                     type="text" 
@@ -962,7 +976,6 @@ export default function WydarzeniaPage() {
                   </button>
                 </div>
 
-                {/* Pigułki aktualnie dodanych */}
                 {form.uczestnicy.length > 0 && (
                   <div className="flex flex-wrap gap-2 pt-2 border-t border-sky-200/60">
                     {form.uczestnicy.map((u, index) => (
@@ -1057,7 +1070,7 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
 
-                {/* 3. EKWIPUNEK / CHECKLISTA */}
+                {/* 3. EKWIPUNEK */}
                 <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input 
@@ -1082,7 +1095,7 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
 
-                {/* 4. SZCZEGÓŁOWY PLAN / OPIS STREFY */}
+                {/* 4. SZCZEGÓŁOWY PLAN */}
                 <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input 
@@ -1107,7 +1120,7 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
 
-                {/* 5. GRAFIKA PLANU WYJAZDU */}
+                {/* 5. WIELE OBRAZKÓW PLANU WYJAZDU */}
                 <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input 
@@ -1116,26 +1129,43 @@ export default function WydarzeniaPage() {
                       onChange={(e) => setForm({...form, pokaz_plan_grafika: e.target.checked})}
                       className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
                     />
-                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">🗺️ Graficzny plakat / harmonogram wyjazdu</span>
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">🗺️ Wiele grafik / plakatów planu wyjazdu</span>
                   </label>
 
                   {form.pokaz_plan_grafika && (
-                    <div className="pl-7 space-y-1">
-                      <input type="file" ref={planFileInputRef} onChange={handlePlanImageUpload} accept="image/*" className="hidden" />
-                      <div 
+                    <div className="pl-7 space-y-3">
+                      <input 
+                        type="file" 
+                        ref={planFileInputRef} 
+                        onChange={handlePlanImagesUpload} 
+                        accept="image/*" 
+                        multiple 
+                        className="hidden" 
+                      />
+                      <button 
+                        type="button" 
                         onClick={() => planFileInputRef.current?.click()}
-                        className="w-full h-24 bg-slate-50 border-2 border-dashed border-amber-300 rounded-xl flex items-center justify-center cursor-pointer hover:bg-amber-50 transition-colors overflow-hidden relative"
+                        className="w-full py-3 bg-amber-50 hover:bg-amber-100 border-2 border-dashed border-amber-300 rounded-xl font-bold text-xs text-amber-900 transition-colors cursor-pointer flex items-center justify-center gap-2"
                       >
-                        {form.plan_grafika_url ? (
-                          <div className="flex items-center gap-2 text-xs font-bold text-emerald-700">
-                            <span>✅</span> Plan wgrany pomyślnie (kliknij, aby zmienić)
-                          </div>
-                        ) : (
-                          <div className="text-xs font-bold text-amber-800">
-                            🗺️ Kliknij, aby wgrać plakat / grafikę planu
-                          </div>
-                        )}
-                      </div>
+                        <span>📁</span> Wybierz i dodaj zdjęcia (możesz zaznaczyć kilka naraz)
+                      </button>
+
+                      {form.plan_grafiki.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+                          {form.plan_grafiki.map((imgUrl, index) => (
+                            <div key={index} className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-50 h-24 group">
+                              <img src={imgUrl} alt={`Plan ${index + 1}`} className="w-full h-full object-cover" />
+                              <button 
+                                type="button" 
+                                onClick={() => handleRemovePlanImage(index)}
+                                className="absolute top-1 right-1 bg-rose-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-black shadow-md cursor-pointer hover:bg-rose-700 transition-colors"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
