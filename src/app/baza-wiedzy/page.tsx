@@ -171,23 +171,23 @@ export default function BazaWiedzyPage() {
     return KATEGORIE_ODZYWIANIE;
   }, [activeTab]);
 
+  // Wyszukiwanie w czasie rzeczywistym ściśle po nazwie pozycji
   const currentFilteredList = useMemo(() => {
     let sourceList: any[] = [];
     if (activeTab === "suplementy") sourceList = suplementy;
     else if (activeTab === "sport") sourceList = sportWpisy;
     else sourceList = odzywianieWpisy;
 
+    const cleanQuery = searchQuery.toLowerCase().trim();
+
     return sourceList
       .filter((item) => {
         const itemCats = parseCategories(item.kategoria);
-        const matchesQuery =
-          item.nazwa.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (item.opis && item.opis.toLowerCase().includes(searchQuery.toLowerCase())) ||
-          (item.wskazowki && item.wskazowki.toLowerCase().includes(searchQuery.toLowerCase()));
+        const matchesQuery = !cleanQuery || (item.nazwa && item.nazwa.toLowerCase().includes(cleanQuery));
         const matchesKat = selectedKategoria === "wszystkie" || itemCats.includes(selectedKategoria);
         return matchesQuery && matchesKat;
       })
-      .sort((a, b) => a.nazwa.localeCompare(b.nazwa, "pl"));
+      .sort((a, b) => (a.nazwa || "").localeCompare(b.nazwa || "", "pl"));
   }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, searchQuery, selectedKategoria]);
 
   const handleWyslijSugestie = async (e: React.FormEvent) => {
@@ -570,10 +570,10 @@ export default function BazaWiedzyPage() {
                 type="text"
                 placeholder={
                   activeTab === "suplementy"
-                    ? "Szukaj suplementu..."
+                    ? "Szukaj suplementu po nazwie..."
                     : activeTab === "sport"
-                    ? "Szukaj tematu treningowego..."
-                    : "Szukaj tematu dietetycznego..."
+                    ? "Szukaj ćwiczenia / tematu po nazwie..."
+                    : "Szukaj diety / tematu po nazwie..."
                 }
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
