@@ -6,7 +6,7 @@ import { supabase } from "../raporty/klienci/supabase";
 interface Suplement {
   id: number;
   nazwa: string;
-  kategoria: "witaminy" | "wytrzymalosc" | "sila" | string;
+  kategoria: "witaminy" | "suplementy" | "wytrzymalosc" | "sila" | string;
   opis: string;
   dawkowanie: string;
   grafika_url: string | null;
@@ -147,7 +147,7 @@ export default function BazaWiedzyPage() {
     setOriginatingSugestiaId(sugestia.id);
     setForm({
       nazwa: sugestia.nazwa,
-      kategoria: "witaminy",
+      kategoria: "suplementy",
       opis: "",
       dawkowanie: "",
       grafika_url: null,
@@ -251,6 +251,8 @@ export default function BazaWiedzyPage() {
     switch (kategoria) {
       case "witaminy":
         return { label: "Witaminy i Minerały", color: "bg-emerald-50 text-emerald-800 border-emerald-200", icon: "🌱" };
+      case "suplementy":
+        return { label: "Suplementy", color: "bg-indigo-50 text-indigo-800 border-indigo-200", icon: "💊" };
       case "wytrzymalosc":
         return { label: "Wytrzymałość / Kondycja", color: "bg-sky-50 text-sky-800 border-sky-200", icon: "⚡" };
       case "sila":
@@ -362,7 +364,7 @@ export default function BazaWiedzyPage() {
             </div>
           )}
 
-          {/* BOKS DLA KLUBOWICZA: ZAPROPONUJ NOWY SUPLEMENT DO BAZY (NA GÓRZE STRONY) */}
+          {/* BOKS DLA KLUBOWICZA: ZAPROPONUJ NOWY SUPLEMENT DO BAZY */}
           <div className="bg-white rounded-3xl border border-sky-100 p-5 sm:p-6 shadow-sm">
             <div className="max-w-3xl">
               <div className="flex items-center gap-2 mb-1.5">
@@ -431,6 +433,7 @@ export default function BazaWiedzyPage() {
                 {[
                   { id: "wszystkie", label: "Wszystkie" },
                   { id: "witaminy", label: "🌱 Witaminy" },
+                  { id: "suplementy", label: "💊 Suplementy" },
                   { id: "wytrzymalosc", label: "⚡ Wytrzymałość" },
                   { id: "sila", label: "💥 Siła" },
                 ].map((kat) => (
@@ -683,12 +686,13 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* Kategoria */}
+              {/* Kategoria - 4 kategorie w przejrzystej siatce */}
               <div className="space-y-2 pt-1 pb-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Kategoria</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
                     { id: "witaminy", label: "🌱 Witaminy" },
+                    { id: "suplementy", label: "💊 Suplementy" },
                     { id: "wytrzymalosc", label: "⚡ Wytrzymałość" },
                     { id: "sila", label: "💥 Siła" },
                   ].map((kat) => (
