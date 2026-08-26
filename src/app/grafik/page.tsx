@@ -36,7 +36,7 @@ export default function SchedulePage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
   
-  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW (LISTA GŁÓWNA ORAZ KRZESEŁKO)
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH DO KLUBOWICZÓW
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
@@ -146,7 +146,7 @@ export default function SchedulePage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ, WYPISYWANIA OSÓB I ZWROTU WEJŚĆ
+  // SILNIK AUTOMATYCZNEGO ODWOŁYWANIA ZAJĘĆ
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -202,8 +202,9 @@ export default function SchedulePage() {
 
             if (activeSignups.length < minRequired) {
               hasChanges = true;
+              const reasonText = `ODWOŁANE (BRAK MIN. ${minRequired} OS. NA ${deadlineMins} MIN PRZED)`;
               
-              // 1. Zapisujemy odwołanie w bazie
+              // 1. Zapisujemy odwołanie w bazie z powodem
               await supabase.from('nadpisania_zajec').upsert({
                 class_key: cls.classKey,
                 start: cls.start,
@@ -211,10 +212,11 @@ export default function SchedulePage() {
                 trainer: cls.trainer,
                 limit: cls.limit,
                 is_odwolane: true,
-                is_usuniete: false
+                is_usuniete: false,
+                powod_odwolania: reasonText
               });
 
-              // 2. Wypisujemy wszystkich uczestników i zwracamy wejścia
+              // 2. Wypisujemy uczestników i zwracamy wejścia
               const participantIds: number[] = [];
               for (const participant of classSignups) {
                 participantIds.push(participant.id);
@@ -246,7 +248,7 @@ export default function SchedulePage() {
                 }
               }
 
-              // 3. Wysyłamy powiadomienie Push do wszystkich zapisanych (główna + krzesełko)
+              // 3. Powiadomienia Push
               if (participantIds.length > 0) {
                 await sendPushNotification(participantIds, {
                   title: `Odwołano trening: ${cls.title}`,
@@ -258,11 +260,11 @@ export default function SchedulePage() {
               // 4. Usuwamy wpisy z tabeli zapisy_zajec
               await supabase.from('zapisy_zajec').delete().eq('class_key', cls.classKey);
 
-              // 5. Logujemy zdarzenie w booking_logs
+              // 5. Log w booking_logs
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
-                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób i zwrócono wejścia.`,
+                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.).`,
                 rule_applied: 'min_participants_auto_cancel',
                 payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
               }]);
@@ -277,7 +279,8 @@ export default function SchedulePage() {
 
   // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ W WIDOKU
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
-    if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
+    if (!classItem || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
+    if (classItem.powod_odwolania) return { isAutoCancelled: true, reason: classItem.powod_odwolania };
     
     const trainingName = classItem.title || '';
     const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
@@ -296,12 +299,12 @@ export default function SchedulePage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+      if (diffMinutes <= deadlineMins) {
         const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
         if (activeCount < minRequired) {
           return {
             isAutoCancelled: true,
-            reason: `ODWOŁANE (Brak min. ${minRequired} os. na ${deadlineMins} min przed)`
+            reason: `ODWOŁANE (BRAK MIN. ${minRequired} OS. NA ${deadlineMins} MIN PRZED)`
           };
         }
       }
@@ -357,7 +360,6 @@ export default function SchedulePage() {
 
   // GŁÓWNA FUNKCJA POBIERANIA DANYCH Z SUPABASE
   const loadDataFromSupabase = async () => {
-    // 0. Pobierz nadrzędne zasady zapisów z bazy
     let parsedRules = { ...bookingRules };
     const { data: rulesData } = await supabase
       .from('club_booking_rules')
@@ -387,7 +389,6 @@ export default function SchedulePage() {
       setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
     }
 
-    // Role detection
     const { data: { session } } = await supabase.auth.getSession();
     const userEmail = session?.user?.email;
     
@@ -407,7 +408,6 @@ export default function SchedulePage() {
       }
     }
 
-    // 1. Definicje karnetów
     const { data: karnetyDefData } = await supabase.from('karnety').select('*');
     let ustrukturyzowaneKarnetyDef: any[] = [];
     if (karnetyDefData) {
@@ -425,7 +425,6 @@ export default function SchedulePage() {
       })));
     }
 
-    // 2. Klienci
     const { data: klienciData } = await supabase.from('klienci').select('*');
     if (klienciData) {
       const parsedKlienci = klienciData.map((c: any) => {
@@ -479,7 +478,6 @@ export default function SchedulePage() {
       }
     }
 
-    // 3. Zapisy na zajęcia
     const { data: zapisyData } = await supabase.from('zapisy_zajec').select('*');
     const grouped: { [key: string]: any[] } = {};
     if (zapisyData) {
@@ -494,7 +492,6 @@ export default function SchedulePage() {
       setZapisyNaZajecia(grouped);
     }
 
-    // 4. Nadpisania zajęć (edycje, odwołania, usunięcia)
     const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
     const nadpisaniaMap: { [key: string]: any } = {};
     if (nadpisaniaData) {
@@ -505,13 +502,13 @@ export default function SchedulePage() {
           trainer: n.trainer,
           limit: n.limit,
           isOdwołane: n.is_odwolane,
-          isUsunięte: n.is_usuniete
+          isUsunięte: n.is_usuniete,
+          powod_odwolania: n.powod_odwolania
         };
       });
       setNadpisaneZajeciaDni(nadpisaniaMap);
     }
 
-    // 5. Wydarzenia kilkudniowe
     const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
     if (wydarzeniaData) {
       setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({
@@ -522,7 +519,6 @@ export default function SchedulePage() {
       })));
     }
 
-    // 6. Zajęcia jednorazowe/duplikowane
     const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
     let mappedJednorazowe: any[] = [];
     if (jednorazoweData) {
@@ -542,7 +538,6 @@ export default function SchedulePage() {
       setJednorazoweZajecia(mappedJednorazowe);
     }
 
-    // 7. Szablony grafiku stałego
     const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
     let mappedSzablony: any[] = [];
     if (szablonyData) {
@@ -560,13 +555,11 @@ export default function SchedulePage() {
       setZapisaneZajecia(mappedSzablony);
     }
 
-    // 8. Rodzaje zajęć
     const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
     if (rodzajeData) {
       setRodzajeZajec(rodzajeData);
     }
 
-    // 9. Dni bieżącego widoku
     const currentMon = getMonday(currentDate || new Date());
     const activeDays = Array.from({ length: 5 }).map((_, index) => {
       const dayDate = new Date(currentMon);
@@ -584,7 +577,6 @@ export default function SchedulePage() {
       };
     });
 
-    // Uruchomienie weryfikacji automatycznego odwoływania zajęć
     const changesOccurred = await processAutoCancellations(
       mappedSzablony,
       mappedJednorazowe,
@@ -772,7 +764,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // Zwrot wejść i usunięcie zapisów w trakcie wydarzenia + Push
     for (const col of daysList) {
       if (col.isoDate >= multiDayFrom && col.isoDate <= multiDayTo) {
         const standardoweDnia = zapisaneZajecia
@@ -1340,7 +1331,6 @@ export default function SchedulePage() {
         }
       }
 
-      // WYSYŁKA POWIADOMIENIA PUSH DO WSZYSTKICH ZAPISANYCH (GRUPA GŁÓWNA + KRZESEŁKO)
       if (participantIds.length > 0) {
         await sendPushNotification(participantIds, {
           title: `Odwołano trening: ${item.title}`,
@@ -1433,7 +1423,6 @@ export default function SchedulePage() {
         }
       }
 
-      // WYSYŁKA POWIADOMIENIA PUSH DO WSZYSTKICH ZAPISANYCH (GRUPA GŁÓWNA + KRZESEŁKO)
       if (participantIds.length > 0) {
         await sendPushNotification(participantIds, {
           title: `Usunięto trening: ${item.title}`,
@@ -1642,7 +1631,6 @@ export default function SchedulePage() {
           const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
           let zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
 
-          // UKRYWANIE USUNIĘTYCH ZAJĘĆ DLA KLUBOWICZA
           if (appRole === 'klubowicz') {
             zajeciaDnia = zajeciaDnia.filter((item: any) => !item.isUsunięte);
           }
@@ -1653,7 +1641,6 @@ export default function SchedulePage() {
                 {col.day} <span className="text-[10px] text-slate-500 font-normal">({col.date})</span>
               </div>
 
-              {/* WYŚWIETLANIE WYDARZEŃ KILKUDNIOWYCH */}
               {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
                 <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-2 shadow-sm relative overflow-hidden group">
                   <div className="py-2 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300 shadow-inner">
@@ -1688,7 +1675,6 @@ export default function SchedulePage() {
                   const liczbaKrzesełko = Math.max(0, zapisaniWszyscy.length - limitZajec);
                   const isFull = zapisaniWszyscy.length >= limitZajec;
 
-                  // WERYFIKACJA AUTOMATYCZNEGO ODWOŁANIA ZAJĘĆ
                   const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisaniWszyscy);
                   const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
 
@@ -1799,7 +1785,7 @@ export default function SchedulePage() {
                         </div>
                       ) : isClassCancelled ? (
                         <div className="py-1 px-3 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-xs uppercase tracking-wider border border-rose-200 leading-tight">
-                          {autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : 'ODWOŁANE'}
+                          {autoCancelStatus.reason || item.powod_odwolania || 'ODWOŁANE'}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1953,13 +1939,13 @@ export default function SchedulePage() {
                               <input 
                                 type="checkbox" 
                                 checked={osobaZapisana.obecny ?? false} 
-                                onChange={() => toggleObecny(osoba.id)}
+                                onChange={() => toggleObecny(osoba.id)} 
                                 className="w-4 h-4 accent-amber-600 rounded cursor-pointer" 
                               />
                               <span className="font-black text-amber-700 tracking-wider">OBECNY</span>
                             </label>
                             <button 
-                              onClick={() => setClientToUnregister(osoba)}
+                              onClick={() => setClientToUnregister(osoba)} 
                               className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
                             >
                               WYPISZ
@@ -2041,7 +2027,7 @@ export default function SchedulePage() {
                             <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
                               <span className="font-bold text-blue-800 text-[11px]">Oczekuje na wolne miejsce</span>
                               <button 
-                                onClick={() => setClientToUnregister(osoba)}
+                                onClick={() => setClientToUnregister(osoba)} 
                                 className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
                               >
                                 WYPISZ
