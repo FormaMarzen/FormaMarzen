@@ -3,6 +3,20 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
+interface Uczestnik {
+  id?: string | number;
+  imie: string;
+  nazwisko: string;
+  email?: string;
+}
+
+interface KlientBaza {
+  id: string | number;
+  imie: string;
+  nazwisko: string;
+  email?: string;
+}
+
 interface Wydarzenie {
   id: number;
   tytul: string;
@@ -10,35 +24,81 @@ interface Wydarzenie {
   data_do: string;
   cena: string;
   zadatek: string;
+  zadatek_do?: string | null;
   opis: string;
   grafika_url: string | null;
   status: string;
+  uczestnicy?: Uczestnik[];
+  
+  // Moduły strefy uczestnika (włączane checkboxami)
+  pokaz_whatsapp?: boolean;
+  whatsapp_url?: string | null;
+  
+  pokaz_zbiorka?: boolean;
+  zbiorka?: string | null;
+  google_maps_url?: string | null;
+  
+  pokaz_ekwipunek?: boolean;
+  ekwipunek?: string | null;
+  
+  pokaz_opis_strefy?: boolean;
+  strefa_opis?: string | null;
+  
+  pokaz_plan_grafika?: boolean;
+  plan_grafika_url?: string | null;
 }
 
 export default function WydarzeniaPage() {
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [wydarzenia, setWydarzenia] = useState<Wydarzenie[]>([]);
+  const [klienciBaza, setKlienciBaza] = useState<KlientBaza[]>([]);
 
   // Stany dla Modala Podglądu Klubowicza
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Wydarzenie | null>(null);
 
-  // Stany dla Modala Edycji/Dodawania Admina
+  // Stany dla Modala Edycji / Dodawania Admina
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  
   const [form, setForm] = useState({
     tytul: "",
     data_od: new Date().toISOString().split('T')[0],
     data_do: new Date().toISOString().split('T')[0],
     cena: "",
     zadatek: "",
+    zadatek_do: "",
     opis: "",
     grafika_url: "" as string | null,
-    status: "wkrotce"
+    status: "wkrotce",
+    uczestnicy: [] as Uczestnik[],
+    
+    // Checkboxy i pola strefy uczestnika
+    pokaz_whatsapp: false,
+    whatsapp_url: "",
+    
+    pokaz_zbiorka: false,
+    zbiorka: "",
+    google_maps_url: "",
+    
+    pokaz_ekwipunek: false,
+    ekwipunek: "",
+    
+    pokaz_opis_strefy: false,
+    strefa_opis: "",
+    
+    pokaz_plan_grafika: false,
+    plan_grafika_url: "" as string | null
   });
 
+  const [klientSearch, setKlientSearch] = useState("");
+  const [manualImie, setManualImie] = useState("");
+  const [manualNazwisko, setManualNazwisko] = useState("");
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const planFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchData();
@@ -49,6 +109,7 @@ export default function WydarzeniaPage() {
     
     const { data: { session } } = await supabase.auth.getSession();
     const email = session?.user?.email || "";
+    setCurrentUserEmail(email);
     
     if (email === "maciejklaput@gmail.com") {
       setIsAdmin(true);
@@ -61,6 +122,15 @@ export default function WydarzeniaPage() {
 
     if (!error && data) {
       setWydarzenia(data);
+    }
+
+    const { data: klienciData } = await supabase
+      .from('klienci')
+      .select('id, imie, nazwisko, email')
+      .order('nazwisko', { ascending: true });
+
+    if (klienciData) {
+      setKlienciBaza(klienciData);
     }
     
     setIsLoading(false);
@@ -86,6 +156,17 @@ export default function WydarzeniaPage() {
     .filter(w => w.status === 'planowane')
     .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
 
+  const isZapisyZamkniete = (w: Wydarzenie) => {
+    if (!w.zadatek_do) return false;
+    return w.zadatek_do < dzisiajStr;
+  };
+
+  const isUserZapisany = (w: Wydarzenie | null) => {
+    if (!w || !w.uczestnicy) return false;
+    if (isAdmin) return true;
+    if (!currentUserEmail) return false;
+    return w.uczestnicy.some(u => u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase());
+  };
 
   const handleOpenAdd = () => {
     setEditingId(null);
@@ -95,10 +176,24 @@ export default function WydarzeniaPage() {
       data_do: dzisiajStr, 
       cena: "", 
       zadatek: "", 
+      zadatek_do: "",
       opis: "", 
       grafika_url: null,
-      status: "wkrotce"
+      status: "wkrotce",
+      uczestnicy: [],
+      pokaz_whatsapp: false,
+      whatsapp_url: "",
+      pokaz_zbiorka: false,
+      zbiorka: "",
+      google_maps_url: "",
+      pokaz_ekwipunek: false,
+      ekwipunek: "",
+      pokaz_opis_strefy: false,
+      strefa_opis: "",
+      pokaz_plan_grafika: false,
+      plan_grafika_url: null
     });
+    setKlientSearch("");
     setIsAdminModalOpen(true);
   };
 
@@ -106,15 +201,34 @@ export default function WydarzeniaPage() {
     e.stopPropagation();
     setEditingId(w.id);
     setForm({
-      tytul: w.tytul,
-      data_od: w.data_od,
-      data_do: w.data_do || w.data_od,
+      tytul: w.tytul || "",
+      data_od: w.data_od || dzisiajStr,
+      data_do: w.data_do || w.data_od || dzisiajStr,
       cena: w.cena || "",
       zadatek: w.zadatek || "",
+      zadatek_do: w.zadatek_do || "",
       opis: w.opis || "",
-      grafika_url: w.grafika_url,
-      status: w.status || "wkrotce"
+      grafika_url: w.grafika_url || null,
+      status: w.status || "wkrotce",
+      uczestnicy: Array.isArray(w.uczestnicy) ? w.uczestnicy : [],
+      
+      pokaz_whatsapp: !!w.pokaz_whatsapp,
+      whatsapp_url: w.whatsapp_url || "",
+      
+      pokaz_zbiorka: !!w.pokaz_zbiorka,
+      zbiorka: w.zbiorka || "",
+      google_maps_url: w.google_maps_url || "",
+      
+      pokaz_ekwipunek: !!w.pokaz_ekwipunek,
+      ekwipunek: w.ekwipunek || "",
+      
+      pokaz_opis_strefy: !!w.pokaz_opis_strefy,
+      strefa_opis: w.strefa_opis || "",
+      
+      pokaz_plan_grafika: !!w.pokaz_plan_grafika,
+      plan_grafika_url: w.plan_grafika_url || null
     });
+    setKlientSearch("");
     setIsAdminModalOpen(true);
   };
 
@@ -126,50 +240,117 @@ export default function WydarzeniaPage() {
     fetchData();
   };
 
+  const handleImageCompress = (file: File, callback: (compressed: string) => void) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 1200;
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > height) {
+          if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+        } else {
+          if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d'); 
+        ctx?.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.75);
+        callback(compressed);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800;
-          const MAX_HEIGHT = 800;
-          let width = img.width; let height = img.height;
-          
-          if (width > height) {
-            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-          } else {
-            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-          }
-          
-          canvas.width = width; canvas.height = height;
-          const ctx = canvas.getContext('2d'); 
-          ctx?.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL('image/jpeg', 0.7);
-          
-          setForm({ ...form, grafika_url: compressed });
-        };
-        img.src = event.target?.result as string;
-      };
-      reader.readAsDataURL(file);
+      handleImageCompress(file, (compressed) => setForm(prev => ({ ...prev, grafika_url: compressed })));
     }
+  };
+
+  const handlePlanImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleImageCompress(file, (compressed) => setForm(prev => ({ ...prev, plan_grafika_url: compressed })));
+    }
+  };
+
+  const handleAddParticipantFromDB = (k: KlientBaza) => {
+    if (form.uczestnicy.some(u => (u.id && u.id === k.id) || (u.email && u.email === k.email))) {
+      return;
+    }
+    setForm(prev => ({
+      ...prev,
+      uczestnicy: [...prev.uczestnicy, { id: k.id, imie: k.imie, nazwisko: k.nazwisko, email: k.email }]
+    }));
+  };
+
+  const handleAddManualParticipant = () => {
+    if (!manualImie.trim()) return;
+    setForm(prev => ({
+      ...prev,
+      uczestnicy: [...prev.uczestnicy, { imie: manualImie.trim(), nazwisko: manualNazwisko.trim() }]
+    }));
+    setManualImie("");
+    setManualNazwisko("");
+  };
+
+  const handleRemoveParticipant = (indexToRemove: number) => {
+    setForm(prev => ({
+      ...prev,
+      uczestnicy: prev.uczestnicy.filter((_, idx) => idx !== indexToRemove)
+    }));
   };
 
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
+    const payload = {
+      tytul: form.tytul,
+      data_od: form.data_od,
+      data_do: form.data_do,
+      cena: form.cena,
+      zadatek: form.zadatek,
+      zadatek_do: form.zadatek_do || null,
+      opis: form.opis,
+      grafika_url: form.grafika_url,
+      status: form.status,
+      uczestnicy: form.uczestnicy,
+      
+      pokaz_whatsapp: form.pokaz_whatsapp,
+      whatsapp_url: form.pokaz_whatsapp ? form.whatsapp_url : null,
+      
+      pokaz_zbiorka: form.pokaz_zbiorka,
+      zbiorka: form.pokaz_zbiorka ? form.zbiorka : null,
+      google_maps_url: form.pokaz_zbiorka ? form.google_maps_url : null,
+      
+      pokaz_ekwipunek: form.pokaz_ekwipunek,
+      ekwipunek: form.pokaz_ekwipunek ? form.ekwipunek : null,
+      
+      pokaz_opis_strefy: form.pokaz_opis_strefy,
+      strefa_opis: form.pokaz_opis_strefy ? form.strefa_opis : null,
+      
+      pokaz_plan_grafika: form.pokaz_plan_grafika,
+      plan_grafika_url: form.pokaz_plan_grafika ? form.plan_grafika_url : null
+    };
+
     if (editingId) {
-      await supabase.from('wydarzenia').update(form).eq('id', editingId);
+      await supabase.from('wydarzenia').update(payload).eq('id', editingId);
     } else {
-      await supabase.from('wydarzenia').insert([form]);
+      await supabase.from('wydarzenia').insert([payload]);
     }
     setIsAdminModalOpen(false);
     fetchData();
   };
 
-  // Zmiana formatu daty z YYYY-MM-DD na DD.MM.RRRR
-  const formatDatePL = (dateString: string) => {
+  const formatDatePL = (dateString?: string | null) => {
     if (!dateString) return "";
     const parts = dateString.split('-');
     if (parts.length === 3) {
@@ -185,60 +366,119 @@ export default function WydarzeniaPage() {
     return `${sOd} — ${sDo}`;
   };
 
-  const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => (
-    <div 
-      onClick={() => !isPast && (setSelectedEvent(w), setIsViewModalOpen(true))}
-      className={`relative bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
-        isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
-      }`}
-    >
-      {/* Przyciski admina zawsze widoczne dla zalogowanego administratora */}
-      {isAdmin && (
-        <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
-          <button onClick={(e) => handleOpenEdit(w, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm">✏️</button>
-          <button onClick={(e) => handleDelete(w.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm">🗑️</button>
-        </div>
-      )}
+  const formatUczestnikName = (u: Uczestnik, userIsEnrolled: boolean) => {
+    if (userIsEnrolled || isAdmin) {
+      return `${u.imie} ${u.nazwisko || ""}`.trim();
+    }
+    const firstLetter = u.nazwisko ? `${u.nazwisko.charAt(0)}.` : "";
+    return `${u.imie} ${firstLetter}`.trim();
+  };
 
-      <div className="h-48 w-full bg-slate-100 relative overflow-hidden">
-        {w.grafika_url ? (
-          <img src={w.grafika_url} alt={w.tytul} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎟️</div>
-        )}
-        <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
-          <span>📅</span> {formatTermin(w.data_od, w.data_do)}
-        </div>
-      </div>
+  const getGoogleMapsLink = (mapsUrl?: string | null, textLocation?: string | null) => {
+    if (mapsUrl && mapsUrl.trim().length > 0) {
+      return mapsUrl.trim();
+    }
+    if (textLocation && textLocation.trim().length > 0) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(textLocation.trim())}`;
+    }
+    return null;
+  };
 
-      <div className="p-5 flex flex-col flex-grow">
-        <h3 className="font-black text-lg text-sky-950 leading-tight mb-2 line-clamp-2">{w.tytul}</h3>
-        <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{w.opis || "Brak dodatkowego opisu."}</p>
-        
-        <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cena wydarzenia</span>
-            <span className="font-black text-sky-900 text-base">{w.cena || "Darmowe"}</span>
-          </div>
-          {w.zadatek && (
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Zadatek</span>
-              <span className="font-black text-amber-700 text-sm">{w.zadatek}</span>
-            </div>
-          )}
-          {!isPast && !w.zadatek && (
-            <div className="w-10 h-10 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-900 transition-colors">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+  const filteredKlienci = klienciBaza.filter(k => 
+    `${k.imie} ${k.nazwisko} ${k.email || ""}`.toLowerCase().includes(klientSearch.toLowerCase())
   );
+
+  const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => {
+    const zamkniete = isZapisyZamkniete(w);
+    const uczestnicyCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.length : 0;
+
+    return (
+      <div 
+        onClick={() => !isPast && (setSelectedEvent(w), setIsViewModalOpen(true))}
+        className={`relative bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
+          isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
+        }`}
+      >
+        {isAdmin && (
+          <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
+            <button onClick={(e) => handleOpenEdit(w, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm cursor-pointer">✏️</button>
+            <button onClick={(e) => handleDelete(w.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm cursor-pointer">🗑️</button>
+          </div>
+        )}
+
+        <div className="h-48 w-full bg-slate-100 relative overflow-hidden">
+          {w.grafika_url ? (
+            <img src={w.grafika_url} alt={w.tytul} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎟️</div>
+          )}
+
+          <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
+            <span>📅</span> {formatTermin(w.data_od, w.data_do)}
+          </div>
+
+          {zamkniete && !isPast && (
+            <div className="absolute top-3 left-3 bg-rose-600 text-white px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 z-10 animate-pulse">
+              <span>🔒</span> Zapisy zamknięte
+            </div>
+          )}
+        </div>
+
+        <div className="p-5 flex flex-col flex-grow">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h3 className="font-black text-lg text-sky-950 leading-tight line-clamp-2">{w.tytul}</h3>
+          </div>
+
+          <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{w.opis || "Brak dodatkowego opisu."}</p>
+          
+          {uczestnicyCount > 0 && (
+            <div className="mt-3 py-1.5 px-3 bg-sky-50 rounded-xl text-xs font-bold text-sky-800 flex items-center gap-2">
+              <span>👥</span>
+              <span>Zapisanych osób: <strong className="font-black">{uczestnicyCount}</strong></span>
+            </div>
+          )}
+
+          <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cena wydarzenia</span>
+              <span className="font-black text-sky-900 text-base">{w.cena || "Darmowe"}</span>
+            </div>
+
+            {w.zadatek && (
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">
+                  {w.zadatek_do ? `Zadatek (do ${formatDatePL(w.zadatek_do)})` : "Zadatek"}
+                </span>
+                <span className="font-black text-amber-700 text-sm">{w.zadatek}</span>
+              </div>
+            )}
+
+            {!isPast && !w.zadatek && (
+              <div className="w-10 h-10 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-900 transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   if (isLoading) {
     return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie wydarzeń...</div>;
   }
+
+  const selectedIsClosed = selectedEvent ? isZapisyZamkniete(selectedEvent) : false;
+  const enrolledInSelected = isUserZapisany(selectedEvent);
+  const mapsLink = selectedEvent ? getGoogleMapsLink(selectedEvent.google_maps_url, selectedEvent.zbiorka) : null;
+
+  const hasAnyParticipantModule = selectedEvent && (
+    (selectedEvent.pokaz_whatsapp && selectedEvent.whatsapp_url) ||
+    (selectedEvent.pokaz_zbiorka && selectedEvent.zbiorka) ||
+    (selectedEvent.pokaz_ekwipunek && selectedEvent.ekwipunek) ||
+    (selectedEvent.pokaz_opis_strefy && selectedEvent.strefa_opis) ||
+    (selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafika_url)
+  );
 
   return (
     <div className="max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500 pb-12">
@@ -308,19 +548,18 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* NOWY, PIĘKNY MODAL PODGLĄDU KLUBOWICZA */}
+      {/* MODAL PODGLĄDU KLUBOWICZA / UCZESTNIKA */}
       {isViewModalOpen && selectedEvent && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
             
-            {/* Przycisk zamykania */}
             <button 
               onClick={() => setIsViewModalOpen(false)} 
               className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
             >✕</button>
             
-            {/* Sekcja pełnego plakatu z ładnym, kinowym tłem */}
-            <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: '300px', maxHeight: '65vh' }}>
+            {/* Plakat główny */}
+            <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: '300px', maxHeight: '60vh' }}>
               {selectedEvent.grafika_url ? (
                 <>
                   <div 
@@ -330,7 +569,7 @@ export default function WydarzeniaPage() {
                   <img 
                     src={selectedEvent.grafika_url} 
                     alt="Plakat wydarzenia" 
-                    className="relative z-10 w-full h-full object-contain max-h-[65vh] drop-shadow-2xl" 
+                    className="relative z-10 w-full h-full object-contain max-h-[60vh] drop-shadow-2xl" 
                   />
                 </>
               ) : (
@@ -341,16 +580,20 @@ export default function WydarzeniaPage() {
               )}
             </div>
 
-            {/* Treść wydarzenia */}
+            {/* Treść */}
             <div className="p-6 sm:p-10 space-y-8">
               
-              {/* Tytuł centralny */}
               <div className="text-center">
+                {selectedIsClosed && (
+                  <div className="inline-block bg-rose-100 text-rose-800 border border-rose-200 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider mb-3">
+                    🔒 Zapisy zostały zakończone
+                  </div>
+                )}
                 <h2 className="text-3xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter">{selectedEvent.tytul}</h2>
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-5 rounded-full"></div>
               </div>
 
-              {/* Kafelki z kluczowymi informacjami */}
+              {/* Kafelki z informacjami */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-sky-100">
                   <span className="text-3xl">📅</span>
@@ -359,6 +602,7 @@ export default function WydarzeniaPage() {
                     <div className="font-black text-sky-950 text-sm mt-0.5">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
                   </div>
                 </div>
+
                 <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-amber-100">
                   <span className="text-3xl">💳</span>
                   <div>
@@ -371,7 +615,9 @@ export default function WydarzeniaPage() {
                   <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-5 rounded-3xl shadow-sm border border-orange-100">
                     <span className="text-3xl">💰</span>
                     <div>
-                      <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">Zadatek</div>
+                      <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">
+                        {selectedEvent.zadatek_do ? `Zadatek (do ${formatDatePL(selectedEvent.zadatek_do)})` : "Zadatek"}
+                      </div>
                       <div className="font-black text-orange-950 text-sm mt-0.5">{selectedEvent.zadatek}</div>
                     </div>
                   </div>
@@ -386,42 +632,171 @@ export default function WydarzeniaPage() {
                 )}
               </div>
 
-              {/* Sekcja opisu ze sformatowanym układem */}
+              {/* Opis ogólny */}
               <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
-                <h3 className="font-black text-sm text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-3">
-                  <span className="text-xl">📝</span> Szczegóły wydarzenia
+                <h3 className="font-black text-sm text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-3">
+                  <span className="text-xl">📝</span> Informacje ogólne
                 </h3>
-                <div className="text-slate-700 text-base leading-loose whitespace-pre-wrap font-medium">
+                <div className="text-slate-700 text-base leading-relaxed whitespace-pre-wrap font-medium">
                   {selectedEvent.opis || "Organizator nie podał jeszcze szczegółowego opisu tego wydarzenia."}
                 </div>
               </div>
+
+              {/* LISTA UCZESTNIKÓW */}
+              {selectedEvent.uczestnicy && selectedEvent.uczestnicy.length > 0 && (
+                <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-sky-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-black text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
+                      <span>👥</span> Lista uczestników ({selectedEvent.uczestnicy.length})
+                    </h3>
+                    {!enrolledInSelected && !isAdmin && (
+                      <span className="text-[11px] text-slate-400 font-medium italic">
+                        Anonimizacja nazwisk dla osób niezapisanych
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {selectedEvent.uczestnicy.map((u, idx) => (
+                      <div key={idx} className="bg-sky-50/70 border border-sky-100/80 px-3.5 py-2 rounded-xl text-xs font-bold text-sky-950 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                        <span className="truncate">{formatUczestnikName(u, enrolledInSelected)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* STREFA DLA ZAPISANYCH KLUBOWICZÓW */}
+              {enrolledInSelected && hasAnyParticipantModule && (
+                <div className="bg-gradient-to-br from-amber-500/10 via-sky-500/10 to-indigo-500/10 p-6 sm:p-8 rounded-3xl border-2 border-amber-400 shadow-md space-y-6">
+                  <div className="flex items-center justify-between border-b border-amber-200 pb-4">
+                    <div>
+                      <span className="bg-amber-500 text-slate-950 font-black text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-md">
+                        Tylko dla zapisanych
+                      </span>
+                      <h3 className="text-xl font-black text-sky-950 mt-1 flex items-center gap-2">
+                        🌟 Twoja Strefa Uczestnika
+                      </h3>
+                    </div>
+                    {isAdmin && (
+                      <span className="text-xs bg-sky-950 text-white font-bold px-2 py-1 rounded-lg">Podgląd Admina</span>
+                    )}
+                  </div>
+
+                  {/* Moduł WhatsApp */}
+                  {selectedEvent.pokaz_whatsapp && selectedEvent.whatsapp_url && (
+                    <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <span className="text-3xl">💬</span>
+                        <div>
+                          <div className="font-black text-emerald-950 text-sm">Oficjalna grupa wyjazdu na WhatsApp</div>
+                          <div className="text-emerald-700 text-xs font-medium">Bądź na bieżąco z komunikatami i kontaktem z grupą</div>
+                        </div>
+                      </div>
+                      <a 
+                        href={selectedEvent.whatsapp_url} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-5 py-2.5 rounded-xl text-xs transition-colors shadow-sm uppercase tracking-wider shrink-0"
+                      >
+                        Dołącz do grupy 📲
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Moduł Zbiórka / Lokalizacja z linkiem do Google Maps */}
+                  {selectedEvent.pokaz_zbiorka && selectedEvent.zbiorka && (
+                    <div className="bg-white p-5 rounded-2xl border border-amber-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider flex items-center gap-2">
+                          <span>📍</span> Miejsce i czas zbiórki / Wyjazd
+                        </h4>
+                        <p className="text-sm font-bold text-slate-800 leading-snug">{selectedEvent.zbiorka}</p>
+                      </div>
+                      {mapsLink && (
+                        <a 
+                          href={mapsLink} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-sky-900 hover:bg-sky-950 text-white text-xs font-black px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-sm shrink-0 transition-colors uppercase tracking-wider"
+                        >
+                          <span>🗺️</span> Nawiguj w Google Maps
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Moduł Ekwipunek / Checklista */}
+                  {selectedEvent.pokaz_ekwipunek && selectedEvent.ekwipunek && (
+                    <div className="bg-white p-5 rounded-2xl border border-sky-100">
+                      <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <span>🎒</span> Co należy ze sobą zabrać (Ekwipunek)
+                      </h4>
+                      <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                        {selectedEvent.ekwipunek}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Moduł Szczegółowy opis planu */}
+                  {selectedEvent.pokaz_opis_strefy && selectedEvent.strefa_opis && (
+                    <div className="bg-white p-5 rounded-2xl border border-sky-100">
+                      <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <span>📋</span> Szczegółowy plan wyjazdu & wytyczne
+                      </h4>
+                      <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                        {selectedEvent.strefa_opis}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Moduł Obraz Planu Wyjazdu */}
+                  {selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafika_url && (
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider flex items-center gap-2">
+                        <span>🗺️</span> Graficzny harmonogram wyjazdu
+                      </h4>
+                      <div className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
+                        <img 
+                          src={selectedEvent.plan_grafika_url} 
+                          alt="Plan wyjazdu" 
+                          className="w-full h-auto object-contain max-h-[500px]" 
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              )}
+
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL ADMINA: DODAJ/EDYTUJ */}
+      {/* MODAL ADMINA: DODAJ / EDYTUJ WYDARZENIE */}
       {isAdminModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl relative border-2 border-sky-900 my-8">
-            <button onClick={() => setIsAdminModalOpen(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-8 max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setIsAdminModalOpen(false)} className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 font-bold text-lg cursor-pointer">✕</button>
             
             <div className="mb-6">
-              <h3 className="font-black text-xl text-sky-950 leading-tight">
-                {editingId ? "Edytuj wydarzenie" : "Kreator wydarzenia"}
+              <h3 className="font-black text-2xl text-sky-950 leading-tight">
+                {editingId ? "Edytuj wydarzenie" : "Kreator nowego wydarzenia"}
               </h3>
-              <p className="text-sm font-medium text-slate-500 mt-1">Uzupełnij informacje, które zobaczą klubowicze.</p>
+              <p className="text-sm font-medium text-slate-500 mt-1">Uzupełnij informacje ogólne, termin zadatku i aktywuj wybrane opcje strefy uczestnika.</p>
             </div>
 
-            <form onSubmit={handleSaveEvent} className="space-y-4">
+            <form onSubmit={handleSaveEvent} className="space-y-6">
               
+              {/* PLAKAT GŁÓWNY */}
               <div className="space-y-2">
-                <label className="font-bold text-slate-700 text-xs block uppercase">Grafika główna</label>
+                <label className="font-bold text-slate-700 text-xs block uppercase">Plakat główny wydarzenia</label>
                 <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
                 
                 <div 
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full h-32 bg-sky-50 border-2 border-dashed border-sky-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-sky-100 transition-colors overflow-hidden relative"
+                  className="w-full h-36 bg-sky-50 border-2 border-dashed border-sky-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-sky-100 transition-colors overflow-hidden relative"
                 >
                   {form.grafika_url ? (
                     <>
@@ -430,15 +805,15 @@ export default function WydarzeniaPage() {
                     </>
                   ) : (
                     <>
-                      <span className="text-2xl mb-1">📸</span>
-                      <span className="text-xs font-bold text-sky-700">Wybierz zdjęcie z dysku</span>
+                      <span className="text-3xl mb-1">📸</span>
+                      <span className="text-xs font-bold text-sky-700">Wybierz plakat z dysku</span>
                     </>
                   )}
                 </div>
               </div>
 
-              {/* SEKACJA WYBORU STATUSU WYDARZENIA */}
-              <div className="space-y-2 pt-2 pb-2">
+              {/* STATUS WYŚWIETLANIA */}
+              <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Gdzie wyświetlić wydarzenie?</label>
                 <div className="grid grid-cols-2 gap-4">
                   <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'wkrotce' ? 'border-sky-500 bg-sky-50 text-sky-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
@@ -452,25 +827,27 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
+              {/* TYTUŁ */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Tytuł wydarzenia</label>
                 <input 
                   type="text" required value={form.tytul} onChange={(e) => setForm({...form, tytul: e.target.value})}
-                  placeholder="np. Obóz sportowy WAŁCZ"
+                  placeholder="np. Obóz sportowy Świeradów-Zdrój"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
 
+              {/* TERMINY WYJAZDU */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase">Data od (Rozpoczęcie)</label>
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Data rozpoczęcia</label>
                   <input 
                     type="date" required value={form.data_od} onChange={(e) => setForm({...form, data_od: e.target.value})}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase">Data do (Zakończenie)</label>
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Data zakończenia</label>
                   <input 
                     type="date" required value={form.data_do} onChange={(e) => setForm({...form, data_do: e.target.value})}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
@@ -478,9 +855,10 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* CENA, ZADATEK I TERMIN ZADATKU */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase">Cena wydarzenia</label>
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Cena całkowita</label>
                   <input 
                     type="text" value={form.cena} onChange={(e) => setForm({...form, cena: e.target.value})}
                     placeholder="np. 1080 PLN"
@@ -488,30 +866,279 @@ export default function WydarzeniaPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase">Zadatek (opcjonalnie)</label>
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Zadatek (kwota)</label>
                   <input 
                     type="text" value={form.zadatek} onChange={(e) => setForm({...form, zadatek: e.target.value})}
-                    placeholder="np. 300 PLN"
+                    placeholder="np. 400 PLN"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">Zadatek płatny do (termin)</label>
+                  <input 
+                    type="date" value={form.zadatek_do} onChange={(e) => setForm({...form, zadatek_do: e.target.value})}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                   />
                 </div>
               </div>
 
+              {/* OPIS OGÓLNY */}
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 text-xs block uppercase">Opis szczegółowy / Link</label>
+                <label className="font-bold text-slate-700 text-xs block uppercase">Opis ogólny wydarzenia (publiczny)</label>
                 <textarea 
                   required value={form.opis} onChange={(e) => setForm({...form, opis: e.target.value})}
-                  placeholder="Wpisz szczegóły, harmonogram, co należy zabrać ze sobą..."
+                  placeholder="Wpisz punkty oferty, co zawiera cena, dla kogo jest wyjazd..."
                   rows={4}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none"
                 />
               </div>
 
-              <div className="pt-4 flex gap-2">
-                <button type="button" onClick={() => setIsAdminModalOpen(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3.5 rounded-xl transition-colors cursor-pointer text-sm">
+              {/* ZARZĄDZANIE UCZESTNIKAMI */}
+              <div className="p-5 bg-sky-50/60 rounded-2xl border border-sky-200 space-y-4">
+                <div className="flex items-center justify-between">
+                  <label className="font-black text-sky-950 text-xs uppercase tracking-wider block">
+                    👥 Lista uczestników wydarzenia ({form.uczestnicy.length})
+                  </label>
+                </div>
+
+                {/* Wybór z bazy klientów */}
+                <div className="space-y-2">
+                  <input 
+                    type="text" 
+                    value={klientSearch} 
+                    onChange={(e) => setKlientSearch(e.target.value)}
+                    placeholder="🔍 Szukaj klubowicza z bazy po nazwisku..."
+                    className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500"
+                  />
+                  {klientSearch.length > 0 && (
+                    <div className="max-h-36 overflow-y-auto bg-white border border-sky-200 rounded-xl p-2 space-y-1">
+                      {filteredKlienci.slice(0, 8).map(k => (
+                        <div 
+                          key={k.id} 
+                          onClick={() => handleAddParticipantFromDB(k)}
+                          className="p-2 hover:bg-sky-100 rounded-lg text-xs font-bold text-sky-950 flex justify-between items-center cursor-pointer transition-colors"
+                        >
+                          <span>{k.imie} {k.nazwisko} ({k.email || "brak email"})</span>
+                          <span className="text-emerald-600 font-black">+ Dodaj</span>
+                        </div>
+                      ))}
+                      {filteredKlienci.length === 0 && (
+                        <div className="text-xs text-slate-400 p-2 text-center">Brak wyników w bazie</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Ręczne dopisanie osoby spoza bazy */}
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    placeholder="Imię" 
+                    value={manualImie} 
+                    onChange={(e) => setManualImie(e.target.value)}
+                    className="flex-1 bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs font-semibold"
+                  />
+                  <input 
+                    type="text" 
+                    placeholder="Nazwisko" 
+                    value={manualNazwisko} 
+                    onChange={(e) => setManualNazwisko(e.target.value)}
+                    className="flex-1 bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs font-semibold"
+                  />
+                  <button 
+                    type="button" 
+                    onClick={handleAddManualParticipant}
+                    className="bg-sky-900 hover:bg-sky-950 text-white font-bold px-3 py-2 rounded-xl text-xs cursor-pointer"
+                  >
+                    Dopisz
+                  </button>
+                </div>
+
+                {/* Lista aktualnie dodanych */}
+                {form.uczestnicy.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-sky-200/60">
+                    {form.uczestnicy.map((u, index) => (
+                      <span key={index} className="inline-flex items-center gap-1.5 bg-white border border-sky-200 px-3 py-1 rounded-xl text-xs font-bold text-sky-950 shadow-sm">
+                        {u.imie} {u.nazwisko}
+                        <button 
+                          type="button" 
+                          onClick={() => handleRemoveParticipant(index)}
+                          className="text-rose-500 hover:text-rose-700 ml-1 font-black cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* SEKCJA: STREFA DLA ZAPISANYCH (Z CHECKBOXAMI AKTYWACJI) */}
+              <div className="p-5 bg-amber-500/10 rounded-2xl border border-amber-300 space-y-6">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🌟</span>
+                    <label className="font-black text-amber-950 text-sm uppercase tracking-wider block">
+                      Strefa Uczestnika (Włączaj potrzebne opcje)
+                    </label>
+                  </div>
+                  <p className="text-xs text-amber-800 mt-0.5">Zaznacz checkboxy przy modułach, które mają być aktywne dla tego wydarzenia.</p>
+                </div>
+
+                {/* 1. WHATSAPP */}
+                <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.pokaz_whatsapp} 
+                      onChange={(e) => setForm({...form, pokaz_whatsapp: e.target.checked})}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">💬 Grupa WhatsApp</span>
+                  </label>
+
+                  {form.pokaz_whatsapp && (
+                    <div className="pl-7 space-y-1">
+                      <label className="font-bold text-slate-600 text-[11px] block uppercase">Link z zaproszeniem do grupy WhatsApp</label>
+                      <input 
+                        type="url" 
+                        value={form.whatsapp_url} 
+                        onChange={(e) => setForm({...form, whatsapp_url: e.target.value})}
+                        placeholder="https://chat.whatsapp.com/..."
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. MIEJSCE ZBIÓRKI I GOOGLE MAPS */}
+                <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.pokaz_zbiorka} 
+                      onChange={(e) => setForm({...form, pokaz_zbiorka: e.target.checked})}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">📍 Miejsce zbiórki & Nawigacja Google Maps</span>
+                  </label>
+
+                  {form.pokaz_zbiorka && (
+                    <div className="pl-7 space-y-3">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-600 text-[11px] block uppercase">Opis miejsca i czas zbiórki</label>
+                        <input 
+                          type="text" 
+                          value={form.zbiorka} 
+                          onChange={(e) => setForm({...form, zbiorka: e.target.value})}
+                          placeholder="np. Parking pod klubem, godz. 06:30"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-600 text-[11px] block uppercase">Dokładny link do lokalizacji na Google Maps (opcjonalnie)</label>
+                        <input 
+                          type="url" 
+                          value={form.google_maps_url} 
+                          onChange={(e) => setForm({...form, google_maps_url: e.target.value})}
+                          placeholder="https://maps.app.goo.gl/... lub https://google.com/maps/..."
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. EKWIPUNEK / CHECKLISTA */}
+                <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.pokaz_ekwipunek} 
+                      onChange={(e) => setForm({...form, pokaz_ekwipunek: e.target.checked})}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">🎒 Co zabrać ze sobą (Ekwipunek / Checklista)</span>
+                  </label>
+
+                  {form.pokaz_ekwipunek && (
+                    <div className="pl-7 space-y-1">
+                      <textarea 
+                        value={form.ekwipunek} 
+                        onChange={(e) => setForm({...form, ekwipunek: e.target.value})}
+                        placeholder="- Buty do biegania w terenie&#10;- Strój kąpielowy i klapki&#10;- Wygodny strój sportowy"
+                        rows={3}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. SZCZEGÓŁOWY PLAN / OPIS STREFY */}
+                <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.pokaz_opis_strefy} 
+                      onChange={(e) => setForm({...form, pokaz_opis_strefy: e.target.checked})}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">📋 Szczegółowy plan wyjazdu & wytyczne</span>
+                  </label>
+
+                  {form.pokaz_opis_strefy && (
+                    <div className="pl-7 space-y-1">
+                      <textarea 
+                        value={form.strefa_opis} 
+                        onChange={(e) => setForm({...form, strefa_opis: e.target.value})}
+                        placeholder="Harmonogram poszczególnych dni, wytyczne, podział pokoi..."
+                        rows={3}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* 5. GRAFIKA PLANU WYJAZDU */}
+                <div className="bg-white p-4 rounded-xl border border-amber-200 space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.pokaz_plan_grafika} 
+                      onChange={(e) => setForm({...form, pokaz_plan_grafika: e.target.checked})}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">🗺️ Graficzny plakat / harmonogram wyjazdu</span>
+                  </label>
+
+                  {form.pokaz_plan_grafika && (
+                    <div className="pl-7 space-y-1">
+                      <input type="file" ref={planFileInputRef} onChange={handlePlanImageUpload} accept="image/*" className="hidden" />
+                      <div 
+                        onClick={() => planFileInputRef.current?.click()}
+                        className="w-full h-24 bg-slate-50 border-2 border-dashed border-amber-300 rounded-xl flex items-center justify-center cursor-pointer hover:bg-amber-50 transition-colors overflow-hidden relative"
+                      >
+                        {form.plan_grafika_url ? (
+                          <div className="flex items-center gap-2 text-xs font-bold text-emerald-700">
+                            <span>✅</span> Plan wgrany pomyślnie (kliknij, aby zmienić)
+                          </div>
+                        ) : (
+                          <div className="text-xs font-bold text-amber-800">
+                            🗺️ Kliknij, aby wgrać plakat / grafikę planu
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button type="button" onClick={() => setIsAdminModalOpen(false)} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer text-sm">
                   Anuluj
                 </button>
-                <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm">
+                <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm">
                   Zapisz do bazy
                 </button>
               </div>
