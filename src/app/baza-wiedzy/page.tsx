@@ -8,7 +8,9 @@ interface Suplement {
   nazwa: string;
   kategoria: "witaminy" | "suplementy" | "wytrzymalosc" | "sila" | string;
   opis: string;
-  dawkowanie: string;
+  dawkowanie?: string; // kompatybilność wsteczna
+  dawkowanie_podstawowe?: string;
+  dawkowanie_wyzsze?: string;
   grafika_url: string | null;
   created_at?: string;
 }
@@ -52,7 +54,8 @@ export default function BazaWiedzyPage() {
     nazwa: "",
     kategoria: "witaminy",
     opis: "",
-    dawkowanie: "",
+    dawkowanie_podstawowe: "",
+    dawkowanie_wyzsze: "",
     grafika_url: "" as string | null,
   });
 
@@ -149,7 +152,8 @@ export default function BazaWiedzyPage() {
       nazwa: sugestia.nazwa,
       kategoria: "suplementy",
       opis: "",
-      dawkowanie: "",
+      dawkowanie_podstawowe: "",
+      dawkowanie_wyzsze: "",
       grafika_url: null,
     });
     setIsAdminModalOpen(true);
@@ -162,7 +166,8 @@ export default function BazaWiedzyPage() {
       nazwa: "",
       kategoria: "witaminy",
       opis: "",
-      dawkowanie: "",
+      dawkowanie_podstawowe: "",
+      dawkowanie_wyzsze: "",
       grafika_url: null,
     });
     setIsAdminModalOpen(true);
@@ -176,7 +181,8 @@ export default function BazaWiedzyPage() {
       nazwa: item.nazwa,
       kategoria: item.kategoria || "witaminy",
       opis: item.opis || "",
-      dawkowanie: item.dawkowanie || "",
+      dawkowanie_podstawowe: item.dawkowanie_podstawowe || item.dawkowanie || "",
+      dawkowanie_wyzsze: item.dawkowanie_wyzsze || "",
       grafika_url: item.grafika_url || null,
     });
     setIsAdminModalOpen(true);
@@ -309,6 +315,24 @@ export default function BazaWiedzyPage() {
       {activeTab === "suplementy" && (
         <div className="space-y-6">
           
+          {/* OFICJALNA KLAUZULA INFORMACYJNA / ZASTRZEŻENIE MEDYCZNE */}
+          <div className="bg-amber-50 border-2 border-amber-300/80 rounded-3xl p-5 sm:p-6 shadow-sm flex items-start gap-4">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm">
+              ⚠️
+            </div>
+            <div className="space-y-1.5 text-xs text-amber-950 leading-relaxed">
+              <h4 className="font-black uppercase tracking-wider text-[11px] text-amber-900 flex items-center gap-1.5">
+                Ważna informacja prawno-medyczna
+              </h4>
+              <p className="font-medium text-slate-700">
+                Informacje i materiały publikowane w Bazie Wiedzy mają charakter <strong className="font-bold text-slate-900">wyłącznie edukacyjny oraz informacyjny</strong> i nie stanowią porady medycznej, lekarskiej ani farmaceutycznej. Treści te nie mogą zastępować indywidualnej diagnozy ani konsultacji z wykwalifikowanym personelem medycznym.
+              </p>
+              <p className="font-medium text-slate-700">
+                Suplementy diety nie mogą być stosowane jako substytut (zamiennik) zróżnicowanej diety. Wszelkie decyzje dotyczące wdrożenia suplementacji oraz jej dawkowania <strong className="font-bold text-slate-900">należy każdorazowo skonsultować z lekarzem, farmaceutą lub dietetykiem</strong>.
+              </p>
+            </div>
+          </div>
+
           {/* SEKCJA PROPOZYCJI DLA ADMINISTRATORA */}
           {isAdmin && (
             <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300 rounded-3xl p-5 shadow-sm space-y-4">
@@ -475,6 +499,8 @@ export default function BazaWiedzyPage() {
                   <tbody className="divide-y divide-slate-100 text-sm">
                     {filteredSuplementy.map((item) => {
                       const badge = getKategoriaBadge(item.kategoria);
+                      const podstawowe = item.dawkowanie_podstawowe || item.dawkowanie || "";
+                      const wyzsze = item.dawkowanie_wyzsze || "";
                       return (
                         <tr
                           key={item.id}
@@ -519,9 +545,20 @@ export default function BazaWiedzyPage() {
 
                           {/* Dawkowanie */}
                           <td className="py-4 px-6 hidden md:table-cell">
-                            <span className="text-xs font-medium text-slate-600 line-clamp-2 max-w-xs">
-                              {item.dawkowanie || "—"}
-                            </span>
+                            <div className="space-y-1 max-w-xs">
+                              <div className="text-xs font-medium text-slate-700 truncate">
+                                {podstawowe ? (
+                                  <span><strong className="text-slate-900 font-bold">Podstawowe:</strong> {podstawowe}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </div>
+                              {wyzsze && (
+                                <div className="text-[11px] text-amber-700 font-bold truncate">
+                                  ⚡ Wyższe: {wyzsze}
+                                </div>
+                              )}
+                            </div>
                           </td>
 
                           {/* Akcje / Przyciski */}
@@ -616,14 +653,44 @@ export default function BazaWiedzyPage() {
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
               </div>
 
-              {/* Sekcja Dawkowania */}
-              {selectedItem.dawkowanie && (
-                <div className="bg-amber-500/10 border border-amber-300/40 rounded-2xl p-5 flex items-start gap-4">
-                  <span className="text-2xl">⏰</span>
-                  <div>
-                    <h4 className="text-xs font-black uppercase tracking-wider text-amber-900">Sposób przyjmowania / Dawkowanie</h4>
-                    <p className="text-sm font-bold text-slate-800 mt-1 whitespace-pre-wrap">{selectedItem.dawkowanie}</p>
+              {/* SEKCJA DWÓCH DAWKOWAŃ */}
+              {(selectedItem.dawkowanie_podstawowe || selectedItem.dawkowanie_wyzsze || selectedItem.dawkowanie) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  
+                  {/* Dawkowanie Podstawowe */}
+                  <div className="bg-emerald-500/10 border border-emerald-300/60 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5">
+                    <span className="text-2xl">🌱</span>
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-black uppercase tracking-wider text-emerald-950">1. Dawkowanie podstawowe</h4>
+                      <p className="text-xs sm:text-sm font-bold text-slate-800 whitespace-pre-wrap leading-snug">
+                        {selectedItem.dawkowanie_podstawowe || selectedItem.dawkowanie || "Standardowe zalecenia producenta"}
+                      </p>
+                    </div>
                   </div>
+
+                  {/* Dawkowanie Wyższe */}
+                  {selectedItem.dawkowanie_wyzsze ? (
+                    <div className="bg-amber-500/10 border border-amber-300/60 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5">
+                      <span className="text-2xl">⚡</span>
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-black uppercase tracking-wider text-amber-950">2. Dawkowanie wyższe</h4>
+                        <p className="text-xs sm:text-sm font-bold text-slate-800 whitespace-pre-wrap leading-snug">
+                          {selectedItem.dawkowanie_wyzsze}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5 opacity-60">
+                      <span className="text-2xl">⚡</span>
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-500">2. Dawkowanie wyższe</h4>
+                        <p className="text-xs font-medium text-slate-500 leading-snug">
+                          Brak zaleceń zwiększonej dawki
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               )}
 
@@ -635,6 +702,11 @@ export default function BazaWiedzyPage() {
                 <div className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium">
                   {selectedItem.opis || "Brak szczegółowego opisu dla tej pozycji."}
                 </div>
+              </div>
+
+              {/* Zastrzeżenie w oknie modalnym */}
+              <div className="p-4 bg-slate-100 rounded-2xl text-[11px] text-slate-500 text-center font-medium">
+                ⚖️ Przed zastosowaniem preparatu lub zmianą dawkowania skonsultuj się z lekarzem bądź farmaceutą.
               </div>
             </div>
           </div>
@@ -686,7 +758,7 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* Kategoria - 4 kategorie w przejrzystej siatce */}
+              {/* Kategoria - 4 kategorie */}
               <div className="space-y-2 pt-1 pb-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Kategoria</label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -731,14 +803,26 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* Dawkowanie */}
+              {/* 1. Dawkowanie podstawowe */}
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 text-xs block uppercase">Zalecane dawkowanie / pory dnia</label>
+                <label className="font-bold text-slate-700 text-xs block uppercase">1. Dawkowanie podstawowe</label>
                 <input
                   type="text"
-                  value={form.dawkowanie}
-                  onChange={(e) => setForm({ ...form, dawkowanie: e.target.value })}
-                  placeholder="np. 5g rano na czczo lub po treningu z węglowodanami"
+                  value={form.dawkowanie_podstawowe}
+                  onChange={(e) => setForm({ ...form, dawkowanie_podstawowe: e.target.value })}
+                  placeholder="np. 1 kapsułka rano do posiłku / 3-5g dziennie"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {/* 2. Dawkowanie wyższe */}
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 text-xs block uppercase">2. Dawkowanie wyższe (opcjonalnie)</label>
+                <input
+                  type="text"
+                  value={form.dawkowanie_wyzsze}
+                  onChange={(e) => setForm({ ...form, dawkowanie_wyzsze: e.target.value })}
+                  placeholder="np. 2 kapsułki 30 min przed wysiłkiem / okres startowy"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
