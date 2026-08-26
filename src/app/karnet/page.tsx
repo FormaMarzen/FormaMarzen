@@ -117,7 +117,7 @@ const getContractRataInfo = (karnet: any) => {
   };
 };
 
-// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY (Zgodnie z zasadą: znika dopiero po upływie ważności)
+// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY (Znika dopiero po minięciu daty ważności)
 const isPassActive = (k: any) => {
   if (!k) return false;
   const today = new Date().toISOString().split('T')[0];
@@ -255,7 +255,9 @@ export default function KarnetyPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [selectedBuyPass, setSelectedBuyPass] = useState('');
   const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'autopay' | 'wallet'>('autopay');
+
+  // PŁATNOŚĆ HYBRYDOWA - UŻYCIE ŚRODKÓW Z PORTFELA
+  const [useWalletFunds, setUseWalletFunds] = useState(false);
 
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [passToExtend, setPassToExtend] = useState<any>(null);
@@ -271,6 +273,7 @@ export default function KarnetyPage() {
     setDiscountCodeInput('');
     setAppliedDiscountCode(null);
     setDiscountCodeStatus({ type: '', message: '' });
+    setUseWalletFunds(false);
   };
 
   // 🎂 OBSŁUGA URODZIN (20% RABATU PRZEZ 5 DNI - DOKŁADNIE 1 RAZ W ROKU)
@@ -998,7 +1001,7 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // POBIERANIE WSZYSTKICH AKTYWNYCH KARNETÓW KLIENTA (NOWO ZAKUPIONE SĄ PONIŻEJ POPRZEDNICH)
+  // POBIERANIE WSZYSTKICH AKTYWNYCH KARNETÓW KLIENTA (NOWO ZAKUPIONE POKAZUJĄ SIĘ PONIŻEJ)
   const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
   const activeKarnetyList = rawKarnetyList.filter(isPassActive);
   const karnetyList = [...activeKarnetyList].sort((a: any, b: any) => {
@@ -1053,7 +1056,7 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE ISTNIEJĄCEGO KARNETU / OPŁATA RATY 12M
+  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M (Z OBSŁUGĄ PORTFELA I AUTOPAY)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -1129,8 +1132,15 @@ export default function KarnetyPage() {
     const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum);
-    const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
-    const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
+    const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
+    const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
+
+    // KALKULACJA ŚRODKÓW Z PORTFELA I DOPŁATY AUTOPAY
+    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+    const walletDeduction = (!isBonus13thPeriod && useWalletFunds) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
+    const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
+    const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
+    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
     
     let updatedKarnetyList = [...karnetyList];
 
@@ -1162,6 +1172,7 @@ export default function KarnetyPage() {
           rata: isContract ? nextRataStr : undefined,
           cena: cenaStr,
           rabat: appliedLabel,
+          portfelUzyto: walletDeduction > 0 ? `${walletDeduction.toFixed(2)} PLN` : null,
           usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
         }];
 
@@ -1208,8 +1219,8 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
-    // PŁATNOŚĆ PRZEZ AUTOPAY (jeśli kwota > 0 i wybrano Autopay)
-    if (cenaWartosc > 0 && selectedPaymentMethod === 'autopay' && !isBonus13thPeriod) {
+    // PŁATNOŚĆ DOPŁATY PRZEZ AUTOPAY
+    if (amountToPayAutopay > 0 && !isBonus13thPeriod) {
       const orderId = `EXT-${currentUser.id}-${Date.now()}`.substring(0, 32);
       const opisOperacji = isContract 
         ? `Rata ${nextRataStr} ${passToExtend.nazwa}`
@@ -1222,6 +1233,8 @@ export default function KarnetyPage() {
         finalCyklInt,
         hasLostContinuity: false,
         cenaStr,
+        walletDeduction,
+        newWalletBalance: nowyStanPortfelaStr,
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
         appliedDiscountCodeId: appliedDiscountCode?.id || null
@@ -1229,15 +1242,11 @@ export default function KarnetyPage() {
 
       setIsExtendModalOpen(false);
       resetDiscountState();
-      await redirectToAutopay(cenaWartosc, orderId, opisOperacji, 'pass_extend', passMetadata);
+      await redirectToAutopay(amountToPayAutopay, orderId, opisOperacji, 'pass_extend', passMetadata);
       return;
     }
 
-    // PŁATNOŚĆ ZE ŚRODKÓW PORTFELA LUB BONUS (0 PLN)
-    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    const nowyStanPortfela = currentWalletNum - cenaWartosc;
-    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-
+    // PŁATNOŚĆ POKRYTA W 100% Z PORTFELA LUB OKRES BONUSOWY
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
     };
@@ -1268,15 +1277,15 @@ export default function KarnetyPage() {
     }
 
     let createdTransactionId: number | null = null;
-    if (cenaWartosc > 0) {
+    if (cenaPoRabacie > 0) {
       const opisOperacji = isContract 
-        ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`
-        : `Przedłużenie (Zakładka Karnet): ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`;
+        ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`
+        : `Przedłużenie: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`;
 
       const { data: transData } = await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
         typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
-        kwota: -cenaWartosc,
+        kwota: -walletDeduction,
         opis: opisOperacji,
         kod_rabatowy: appliedDiscountCode?.kod || null
       }]).select('id').maybeSingle();
@@ -1316,7 +1325,7 @@ export default function KarnetyPage() {
     if (isBonus13thPeriod) {
       showToast(`Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu zawieszenia karnetu!`, 'success');
     } else {
-      showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} za kwotę ${cenaStr}.` : `Karnet "${passToExtend.nazwa}" został przedłużony za kwotę ${cenaStr}.`, 'success');
+      showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} ze środków portfela (${cenaStr}).` : `Karnet "${passToExtend.nazwa}" został przedłużony ze środków portfela (${cenaStr}).`, 'success');
     }
     
     setIsExtendModalOpen(false);
@@ -1324,14 +1333,13 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // ZAKUP NOWEGO KARNETU (POPRZEDNI KARNET NIE ZNIKA, NOWY POJAWIA SIĘ PONIŻEJ)
+  // ZAKUP NOWEGO KARNETU (NOWY KARNET DODAJE SIĘ PONIŻEJ + PŁATNOŚĆ HYBRYDOWA)
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
 
-    // Pobieramy wszystkie aktualne karnety użytkownika bez ich nadpisywania
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) 
       ? [...currentUser.karnetyKlubowicza].filter(isPassActive) 
       : [];
@@ -1348,11 +1356,17 @@ export default function KarnetyPage() {
     }
     
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment);
-    const { finalPrice: cenaWartosc, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
-    const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
+    const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
+    const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
+
+    // KALKULACJA POBRANIA Z PORTFELA I AUTOPAY
+    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+    const walletDeduction = useWalletFunds ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
+    const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
+    const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
+    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
 
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
-    
     let nowaDataWygasnieciaStr = '';
 
     let baseCykl = 1;
@@ -1389,7 +1403,6 @@ export default function KarnetyPage() {
         zawieszonyOd: null,
         zawieszonyDo: null
       };
-      // Dodajemy nowy karnet na koniec listy
       updatedKarnetyList.push(nowyKarnetObj);
 
     } else {
@@ -1422,7 +1435,6 @@ export default function KarnetyPage() {
         zawieszonyOd: null,
         zawieszonyDo: null
       };
-      // Dodajemy nowy karnet na koniec listy (poprzedni karnet pozostaje nienaruszony)
       updatedKarnetyList.push(nowyKarnetObj);
     }
 
@@ -1442,8 +1454,8 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
-    // PŁATNOŚĆ PRZEZ AUTOPAY
-    if (cenaWartosc > 0 && selectedPaymentMethod === 'autopay') {
+    // PŁATNOŚĆ DOPŁATY PRZEZ BRAMKĘ AUTOPAY
+    if (amountToPayAutopay > 0) {
       const orderId = `BUY-${currentUser.id}-${Date.now()}`.substring(0, 32);
       const opisOperacji = `Zakup ${selectedBuyPass}`;
 
@@ -1454,6 +1466,8 @@ export default function KarnetyPage() {
         finalCyklInt,
         hasLostContinuity: false,
         cenaStr,
+        walletDeduction,
+        newWalletBalance: nowyStanPortfelaStr,
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
         appliedDiscountCodeId: appliedDiscountCode?.id || null
@@ -1461,15 +1475,11 @@ export default function KarnetyPage() {
 
       setIsBuyPassModalOpen(false);
       resetDiscountState();
-      await redirectToAutopay(cenaWartosc, orderId, opisOperacji, 'pass_purchase', passMetadata);
+      await redirectToAutopay(amountToPayAutopay, orderId, opisOperacji, 'pass_purchase', passMetadata);
       return;
     }
 
-    // PŁATNOŚĆ ZE ŚRODKÓW PORTFELA
-    const currentWalletNum = parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    const nowyStanPortfela = currentWalletNum - cenaWartosc;
-    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-
+    // PŁATNOŚĆ POKRYTA W 100% Z PORTFELA
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
     };
@@ -1498,12 +1508,12 @@ export default function KarnetyPage() {
     }
 
     let createdTransactionId: number | null = null;
-    if (cenaWartosc > 0) {
+    if (cenaPoRabacie > 0) {
       const { data: transData } = await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
         typ_operacji: 'zakup_karnetu',
-        kwota: -cenaWartosc,
-        opis: `Zakup (Zakładka Karnet): ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+        kwota: -walletDeduction,
+        opis: `Zakup z portfela: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
         kod_rabatowy: appliedDiscountCode?.kod || null
       }]).select('id').maybeSingle();
 
@@ -1530,7 +1540,7 @@ export default function KarnetyPage() {
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
     });
-    showToast(`Gratulacje! Aktywowano karnet za kwotę ${cenaStr}.`, 'success');
+    showToast(`Gratulacje! Aktywowano karnet ze środków portfela (${cenaStr}).`, 'success');
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
     resetDiscountState();
@@ -2097,7 +2107,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* SEKCJA 1: AKTYWNE KARNETY (LISTA WSZYSTKICH KARNETÓW) */}
+        {/* SEKCJA 1: AKTYWNE KARNETY (WSZYSTKIE KARNETY WIDOCZNE PONIŻEJ SIEBIE) */}
         <div>
           <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">TWOJE KARNETY</h2>
           
@@ -2204,7 +2214,7 @@ export default function KarnetyPage() {
                           </button>
                         ) : !contractInfo.isFullyPaid ? (
                           <button 
-                            onClick={() => { resetDiscountState(); setSelectedPaymentMethod('autopay'); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                            onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
                             className="bg-amber-600 hover:bg-amber-700 border border-amber-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
                           >
                             <span className="text-sm">💳</span> OPŁAĆ KOLEJNĄ RATĘ
@@ -2212,7 +2222,7 @@ export default function KarnetyPage() {
                         ) : null
                       ) : (
                         <button 
-                          onClick={() => { resetDiscountState(); setSelectedPaymentMethod('autopay'); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
                           className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
                         >
                           <span className="text-sm">🕒</span> PRZEDŁUŻ
@@ -2227,7 +2237,7 @@ export default function KarnetyPage() {
 
           <div className="mt-4 flex flex-wrap gap-3">
             <button 
-              onClick={() => { resetDiscountState(); setSelectedPaymentMethod('autopay'); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
+              onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
               className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs px-5 py-2.5 rounded-full shadow-sm transition-colors cursor-pointer flex items-center gap-2"
             >
               <span className="text-lg leading-none rounded-full bg-white/20 w-4 h-4 flex items-center justify-center">+</span> KUP NOWY KARNET
@@ -2469,7 +2479,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ */}
+        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ (ROZLICZENIE Z PORTFELEM I AUTOPAY) */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
           const contractInfo = getContractRataInfo(passToExtend);
@@ -2493,6 +2503,10 @@ export default function KarnetyPage() {
           const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePrice);
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
           const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
+
+          const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+          const walletDeduction = (!isBonus13Period && useWalletFunds) ? Math.min(currentWalletNum, finalPrice) : 0;
+          const amountToPayGateway = Math.max(0, finalPrice - walletDeduction);
 
           return (
             <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2565,44 +2579,41 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* WYBÓR METODY PŁATNOŚCI */}
-                  {!isBonus13Period && finalPrice > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-sky-100">
-                      <label className="font-bold text-slate-700 block">Wybierz metodę płatności:</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPaymentMethod('autopay')}
-                          className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
-                            selectedPaymentMethod === 'autopay'
-                              ? 'bg-blue-50 border-blue-500 text-blue-950 ring-2 ring-blue-500/20 shadow-sm'
-                              : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
-                          }`}
-                        >
-                          <span className="font-black text-xs flex items-center gap-1.5">
-                            <span>💳</span> Płatność Autopay
+                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
+                  {currentWalletNum > 0 && !isBonus13Period && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={useWalletFunds}
+                            onChange={(e) => setUseWalletFunds(e.target.checked)}
+                            className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                          />
+                          <span className="font-bold text-slate-800">
+                            Użyj środków z portfela
                           </span>
-                          <span className="text-[10px] text-slate-500 mt-1">BLIK, szybki przelew, karta</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPaymentMethod('wallet')}
-                          className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
-                            selectedPaymentMethod === 'wallet'
-                              ? 'bg-blue-50 border-blue-500 text-blue-950 ring-2 ring-blue-500/20 shadow-sm'
-                              : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
-                          }`}
-                        >
-                          <span className="font-black text-xs flex items-center gap-1.5">
-                            <span>👛</span> Ze środków portfela
-                          </span>
-                          <span className="text-[10px] text-slate-500 mt-1">Dostępne: {currentUser.wallet || '0.00 PLN'}</span>
-                        </button>
-                      </div>
+                        </div>
+                        <span className="font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg text-[11px]">
+                          Dostępne: {currentWalletNum.toFixed(2)} PLN
+                        </span>
+                      </label>
+                      {useWalletFunds && (
+                        <div className="text-[11px] text-slate-600 pl-6 space-y-0.5 border-t border-slate-200 pt-2 mt-1">
+                          <div className="flex justify-between">
+                            <span>Pobranie z portfela:</span>
+                            <strong className="text-emerald-700">-{walletDeduction.toFixed(2)} PLN</strong>
+                          </div>
+                          <div className="flex justify-between text-slate-500">
+                            <span>Pozostały stan portfela po operacji:</span>
+                            <span>{(currentWalletNum - walletDeduction).toFixed(2)} PLN</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   
+                  {/* PODSUMOWANIE KWOT */}
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                     <div className="flex justify-between text-slate-600">
                       <span>{isBonus13Period ? 'Wartość bonusu:' : isContract ? 'Miesięczna kwota raty:' : 'Cena katalogowa:'}</span>
@@ -2614,9 +2625,15 @@ export default function KarnetyPage() {
                         <span>{appliedLabel} (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
                       </div>
                     )}
+                    {useWalletFunds && walletDeduction > 0 && !isBonus13Period && (
+                      <div className="flex justify-between text-purple-700 font-bold">
+                        <span>Pokryto z portfela:</span>
+                        <span>-{walletDeduction.toFixed(2)} PLN</span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                      <span>Do zapłaty:</span>
-                      <span className="text-emerald-700 font-bold">{finalPrice.toFixed(2)} PLN</span>
+                      <span>{amountToPayGateway > 0 ? 'Do zapłaty przez Autopay:' : 'Do zapłaty (Portfel):'}</span>
+                      <span className="text-emerald-700 font-bold">{amountToPayGateway.toFixed(2)} PLN</span>
                     </div>
                   </div>
 
@@ -2633,9 +2650,9 @@ export default function KarnetyPage() {
                         ? 'Łączenie...' 
                         : isBonus13Period 
                         ? `AKTYWUJ BONUS +${contractInfo.totalSuspUsed} DNI (0.00 PLN)` 
-                        : isContract 
-                        ? `OPŁAĆ RATĘ ${nextRataNum}/12 (${finalPrice.toFixed(2)} PLN)` 
-                        : `Potwierdzam (${finalPrice.toFixed(2)} PLN)`}
+                        : amountToPayGateway > 0
+                        ? `PŁACĘ PRZEZ AUTOPAY (${amountToPayGateway.toFixed(2)} PLN)`
+                        : `OPŁAĆ ZE ŚRODKÓW PORTFELA (${finalPrice.toFixed(2)} PLN)`}
                     </button>
                   </div>
                 </form>
@@ -2644,7 +2661,7 @@ export default function KarnetyPage() {
           );
         })()}
 
-        {/* MODAL: KUP KARNET */}
+        {/* MODAL: KUP KARNET (ROZLICZENIE Z PORTFELEM I AUTOPAY) */}
         {isBuyPassModalOpen && (() => {
           const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
           const isContract = selectedPassDef?.isContract12M || selectedPassDef?.typKarnetu === 'Umowa 12 miesięcy';
@@ -2660,6 +2677,10 @@ export default function KarnetyPage() {
 
           const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment);
           const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
+
+          const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+          const walletDeduction = useWalletFunds ? Math.min(currentWalletNum, discountedPrice) : 0;
+          const amountToPayGateway = Math.max(0, discountedPrice - walletDeduction);
 
           return (
             <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2765,44 +2786,41 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* WYBÓR METODY PŁATNOŚCI */}
-                  {selectedBuyPass && selectedPassDef && discountedPrice > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-sky-100">
-                      <label className="font-bold text-slate-700 block">Wybierz metodę płatności:</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPaymentMethod('autopay')}
-                          className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
-                            selectedPaymentMethod === 'autopay'
-                              ? 'bg-blue-50 border-blue-500 text-blue-950 ring-2 ring-blue-500/20 shadow-sm'
-                              : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
-                          }`}
-                        >
-                          <span className="font-black text-xs flex items-center gap-1.5">
-                            <span>💳</span> Płatność Autopay
+                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
+                  {selectedBuyPass && selectedPassDef && currentWalletNum > 0 && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={useWalletFunds}
+                            onChange={(e) => setUseWalletFunds(e.target.checked)}
+                            className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                          />
+                          <span className="font-bold text-slate-800">
+                            Użyj środków z portfela
                           </span>
-                          <span className="text-[10px] text-slate-500 mt-1">BLIK, szybki przelew, karta</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPaymentMethod('wallet')}
-                          className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
-                            selectedPaymentMethod === 'wallet'
-                              ? 'bg-blue-50 border-blue-500 text-blue-950 ring-2 ring-blue-500/20 shadow-sm'
-                              : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
-                          }`}
-                        >
-                          <span className="font-black text-xs flex items-center gap-1.5">
-                            <span>👛</span> Ze środków portfela
-                          </span>
-                          <span className="text-[10px] text-slate-500 mt-1">Dostępne: {currentUser.wallet || '0.00 PLN'}</span>
-                        </button>
-                      </div>
+                        </div>
+                        <span className="font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg text-[11px]">
+                          Dostępne: {currentWalletNum.toFixed(2)} PLN
+                        </span>
+                      </label>
+                      {useWalletFunds && (
+                        <div className="text-[11px] text-slate-600 pl-6 space-y-0.5 border-t border-slate-200 pt-2 mt-1">
+                          <div className="flex justify-between">
+                            <span>Pobranie z portfela:</span>
+                            <strong className="text-emerald-700">-{walletDeduction.toFixed(2)} PLN</strong>
+                          </div>
+                          <div className="flex justify-between text-slate-500">
+                            <span>Pozostały stan portfela po zakupie:</span>
+                            <span>{(currentWalletNum - walletDeduction).toFixed(2)} PLN</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
+                  {/* PODSUMOWANIE KWOT */}
                   {selectedBuyPass && selectedPassDef && (
                     <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                       <div className="flex justify-between text-slate-600">
@@ -2815,9 +2833,15 @@ export default function KarnetyPage() {
                           <span>{appliedLabel} (-{(calculatedFirstPayment - discountedPrice).toFixed(2)} PLN)</span>
                         </div>
                       )}
+                      {useWalletFunds && walletDeduction > 0 && (
+                        <div className="flex justify-between text-purple-700 font-bold">
+                          <span>Pokryto z portfela:</span>
+                          <span>-{walletDeduction.toFixed(2)} PLN</span>
+                        </div>
+                      )}
                       <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                        <span>Do zapłaty:</span>
-                        <span className="text-emerald-700 font-bold">{discountedPrice.toFixed(2)} PLN</span>
+                        <span>{amountToPayGateway > 0 ? 'Do zapłaty przez Autopay:' : 'Do zapłaty (Portfel):'}</span>
+                        <span className="text-emerald-700 font-bold">{amountToPayGateway.toFixed(2)} PLN</span>
                       </div>
                     </div>
                   )}
@@ -2866,7 +2890,11 @@ export default function KarnetyPage() {
                       disabled={isProcessingPayment}
                       className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer"
                     >
-                      {isProcessingPayment ? 'Łączenie...' : `Potwierdzam zakup (${discountedPrice.toFixed(2)} PLN)`}
+                      {isProcessingPayment 
+                        ? 'Łączenie...' 
+                        : amountToPayGateway > 0 
+                        ? `PŁACĘ PRZEZ AUTOPAY (${amountToPayGateway.toFixed(2)} PLN)` 
+                        : `OPŁAĆ ZE ŚRODKÓW PORTFELA (${discountedPrice.toFixed(2)} PLN)`}
                     </button>
                   </div>
                 </form>
