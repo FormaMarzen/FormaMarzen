@@ -390,6 +390,7 @@ export default function RootLayout({
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
+        { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
       ]
     },
@@ -446,6 +447,7 @@ export default function RootLayout({
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
+        { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
       ]
     },
     {
@@ -476,6 +478,7 @@ export default function RootLayout({
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
+        { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
