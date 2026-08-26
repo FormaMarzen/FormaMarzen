@@ -30,7 +30,7 @@ interface Wydarzenie {
   status: string;
   uczestnicy?: Uczestnik[];
   
-  // Moduły strefy uczestnika
+  // Moduły strefy uczestnika sterowane checkboxami
   pokaz_whatsapp?: boolean;
   whatsapp_url?: string | null;
   
@@ -45,7 +45,15 @@ interface Wydarzenie {
   strefa_opis?: string | null;
   
   pokaz_plan_grafika?: boolean;
-  plan_grafiki?: string[]; // Tablica wielu obrazków planu
+  plan_grafiki?: string[];
+
+  // NOWY MODUŁ: Koszulki treningowe
+  pokaz_koszulki?: boolean;
+  koszulki_cena?: string | null;
+  koszulki_termin?: string | null;
+  koszulki_opis?: string | null;
+  koszulki_grafika_glowna?: string | null;
+  koszulki_grafiki?: string[];
 }
 
 export default function WydarzeniaPage() {
@@ -75,6 +83,7 @@ export default function WydarzeniaPage() {
     status: "wkrotce",
     uczestnicy: [] as Uczestnik[],
     
+    // Checkboxy i pola modułów
     pokaz_whatsapp: false,
     whatsapp_url: "",
     
@@ -89,7 +98,15 @@ export default function WydarzeniaPage() {
     strefa_opis: "",
     
     pokaz_plan_grafika: false,
-    plan_grafiki: [] as string[]
+    plan_grafiki: [] as string[],
+
+    // Koszulki treningowe
+    pokaz_koszulki: false,
+    koszulki_cena: "",
+    koszulki_termin: "",
+    koszulki_opis: "",
+    koszulki_grafika_glowna: "" as string | null,
+    koszulki_grafiki: [] as string[]
   });
 
   const [klientSearch, setKlientSearch] = useState("");
@@ -98,6 +115,8 @@ export default function WydarzeniaPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const planFileInputRef = useRef<HTMLInputElement>(null);
+  const koszulkaMainFileInputRef = useRef<HTMLInputElement>(null);
+  const koszulkaExtraFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchData();
@@ -195,7 +214,13 @@ export default function WydarzeniaPage() {
       pokaz_opis_strefy: false,
       strefa_opis: "",
       pokaz_plan_grafika: false,
-      plan_grafiki: []
+      plan_grafiki: [],
+      pokaz_koszulki: false,
+      koszulki_cena: "",
+      koszulki_termin: "",
+      koszulki_opis: "",
+      koszulki_grafika_glowna: null,
+      koszulki_grafiki: []
     });
     setKlientSearch("");
     setIsAdminModalOpen(true);
@@ -230,7 +255,14 @@ export default function WydarzeniaPage() {
       strefa_opis: w.strefa_opis || "",
       
       pokaz_plan_grafika: !!w.pokaz_plan_grafika,
-      plan_grafiki: Array.isArray(w.plan_grafiki) ? w.plan_grafiki : []
+      plan_grafiki: Array.isArray(w.plan_grafiki) ? w.plan_grafiki : [],
+
+      pokaz_koszulki: !!w.pokaz_koszulki,
+      koszulki_cena: w.koszulki_cena || "",
+      koszulki_termin: w.koszulki_termin || "",
+      koszulki_opis: w.koszulki_opis || "",
+      koszulki_grafika_glowna: w.koszulki_grafika_glowna || null,
+      koszulki_grafiki: Array.isArray(w.koszulki_grafiki) ? w.koszulki_grafiki : []
     });
     setKlientSearch("");
     setIsAdminModalOpen(true);
@@ -280,7 +312,7 @@ export default function WydarzeniaPage() {
     }
   };
 
-  // Obsługa wczytywania wielu obrazków planu
+  // Harmonogram / Plakat - wiele zdjęć
   const handlePlanImagesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -299,6 +331,36 @@ export default function WydarzeniaPage() {
     setForm(prev => ({
       ...prev,
       plan_grafiki: prev.plan_grafiki.filter((_, idx) => idx !== indexToRemove)
+    }));
+  };
+
+  // Koszulki - grafika główna
+  const handleKoszulkaMainUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleImageCompress(file, (compressed) => setForm(prev => ({ ...prev, koszulki_grafika_glowna: compressed })));
+    }
+  };
+
+  // Koszulki - grafiki dodatkowe (np. tabele rozmiarów)
+  const handleKoszulkaExtraUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach((file) => {
+      handleImageCompress(file, (compressed) => {
+        setForm(prev => ({
+          ...prev,
+          koszulki_grafiki: [...prev.koszulki_grafiki, compressed]
+        }));
+      });
+    });
+  };
+
+  const handleRemoveKoszulkaExtraImage = (indexToRemove: number) => {
+    setForm(prev => ({
+      ...prev,
+      koszulki_grafiki: prev.koszulki_grafiki.filter((_, idx) => idx !== indexToRemove)
     }));
   };
 
@@ -358,7 +420,14 @@ export default function WydarzeniaPage() {
       strefa_opis: form.pokaz_opis_strefy ? form.strefa_opis : null,
       
       pokaz_plan_grafika: form.pokaz_plan_grafika,
-      plan_grafiki: form.pokaz_plan_grafika ? form.plan_grafiki : []
+      plan_grafiki: form.pokaz_plan_grafika ? form.plan_grafiki : [],
+
+      pokaz_koszulki: form.pokaz_koszulki,
+      koszulki_cena: form.pokaz_koszulki ? form.koszulki_cena : null,
+      koszulki_termin: form.pokaz_koszulki ? (form.koszulki_termin || null) : null,
+      koszulki_opis: form.pokaz_koszulki ? form.koszulki_opis : null,
+      koszulki_grafika_glowna: form.pokaz_koszulki ? form.koszulki_grafika_glowna : null,
+      koszulki_grafiki: form.pokaz_koszulki ? form.koszulki_grafiki : []
     };
 
     if (editingId) {
@@ -497,7 +566,8 @@ export default function WydarzeniaPage() {
     (selectedEvent.pokaz_zbiorka && selectedEvent.zbiorka) ||
     (selectedEvent.pokaz_ekwipunek && selectedEvent.ekwipunek) ||
     (selectedEvent.pokaz_opis_strefy && selectedEvent.strefa_opis) ||
-    (selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafiki && selectedEvent.plan_grafiki.length > 0)
+    (selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafiki && selectedEvent.plan_grafiki.length > 0) ||
+    (selectedEvent.pokaz_koszulki && (selectedEvent.koszulki_grafika_glowna || selectedEvent.koszulki_cena || (selectedEvent.koszulki_grafiki && selectedEvent.koszulki_grafiki.length > 0)))
   );
 
   return (
@@ -787,6 +857,78 @@ export default function WydarzeniaPage() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {/* NOWY MODUŁ: Koszulki treningowe w podglądzie uczestnika */}
+                  {selectedEvent.pokaz_koszulki && (
+                    <div className="bg-white p-6 sm:p-7 rounded-3xl border-2 border-indigo-200 shadow-sm space-y-5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-50 pb-4">
+                        <div className="flex items-center gap-3">
+                          <span className="text-3xl">👕</span>
+                          <div>
+                            <h4 className="text-base font-black text-indigo-950 uppercase tracking-tight">
+                              Oficjalna koszulka treningowa
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium">Pamiątkowa koszulka klubowa dedykowana na to wydarzenie</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-start sm:self-auto">
+                          {selectedEvent.koszulki_cena && (
+                            <div className="bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-indigo-500 uppercase tracking-wider">Cena koszulki</div>
+                              <div className="font-black text-indigo-950 text-xs">{selectedEvent.koszulki_cena}</div>
+                            </div>
+                          )}
+                          {selectedEvent.koszulki_termin && (
+                            <div className="bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-rose-500 uppercase tracking-wider">Płatność do</div>
+                              <div className="font-black text-rose-950 text-xs">{formatDatePL(selectedEvent.koszulki_termin)}</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {selectedEvent.koszulki_opis && (
+                        <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100 font-medium">
+                          {selectedEvent.koszulki_opis}
+                        </div>
+                      )}
+
+                      {/* Zdjęcie główne koszulki */}
+                      {selectedEvent.koszulki_grafika_glowna && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">Wizualizacja koszulki</span>
+                          <div className="bg-slate-50 rounded-2xl overflow-hidden border border-indigo-100 p-2 max-w-md mx-auto shadow-sm">
+                            <img 
+                              src={selectedEvent.koszulki_grafika_glowna} 
+                              alt="Koszulka treningowa" 
+                              className="w-full h-auto object-contain max-h-[350px] rounded-xl"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Dodatkowe grafiki (np. tabele rozmiarów) */}
+                      {selectedEvent.koszulki_grafiki && selectedEvent.koszulki_grafiki.length > 0 && (
+                        <div className="space-y-2 pt-2 border-t border-indigo-50">
+                          <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">
+                            📐 Tabela rozmiarów & Warianty ({selectedEvent.koszulki_grafiki.length})
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {selectedEvent.koszulki_grafiki.map((imgUrl, idx) => (
+                              <div key={idx} className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-200 p-2">
+                                <img 
+                                  src={imgUrl} 
+                                  alt={`Tabela rozmiarów ${idx + 1}`} 
+                                  className="w-full h-auto object-contain max-h-[300px] rounded-xl"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1147,7 +1289,7 @@ export default function WydarzeniaPage() {
                         onClick={() => planFileInputRef.current?.click()}
                         className="w-full py-3 bg-amber-50 hover:bg-amber-100 border-2 border-dashed border-amber-300 rounded-xl font-bold text-xs text-amber-900 transition-colors cursor-pointer flex items-center justify-center gap-2"
                       >
-                        <span>📁</span> Wybierz i dodaj zdjęcia (możesz zaznaczyć kilka naraz)
+                        <span>📁</span> Wybierz i dodaj zdjęcia planu (możesz zaznaczyć kilka)
                       </button>
 
                       {form.plan_grafiki.length > 0 && (
@@ -1166,6 +1308,118 @@ export default function WydarzeniaPage() {
                           ))}
                         </div>
                       )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 6. KOSZULKI TRENINGOWE */}
+                <div className="bg-white p-4 rounded-xl border border-indigo-200 space-y-4">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={form.pokaz_koszulki} 
+                      onChange={(e) => setForm({...form, pokaz_koszulki: e.target.checked})}
+                      className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <span className="font-black text-xs text-slate-800 uppercase tracking-wider">👕 Koszulki treningowe (zamówienia / rozmiary)</span>
+                  </label>
+
+                  {form.pokaz_koszulki && (
+                    <div className="pl-7 space-y-4">
+                      
+                      {/* Cena i data płatności za koszulkę */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-600 text-[11px] block uppercase">Cena koszulki</label>
+                          <input 
+                            type="text" 
+                            value={form.koszulki_cena} 
+                            onChange={(e) => setForm({...form, koszulki_cena: e.target.value})}
+                            placeholder="np. 99 PLN"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-600 text-[11px] block uppercase">Płatność do kiedy (termin)</label>
+                          <input 
+                            type="date" 
+                            value={form.koszulki_termin} 
+                            onChange={(e) => setForm({...form, koszulki_termin: e.target.value})}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Opis / instrukcja */}
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-600 text-[11px] block uppercase">Informacje / instrukcja zamawiania</label>
+                        <textarea 
+                          value={form.koszulki_opis} 
+                          onChange={(e) => setForm({...form, koszulki_opis: e.target.value})}
+                          placeholder="Wpisz wytyczne (np. rozmiary prosimy zgłaszać na recepcji lub w wiadomości)..."
+                          rows={2}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-indigo-500 resize-none"
+                        />
+                      </div>
+
+                      {/* Obrazek główny koszulki */}
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-600 text-[11px] block uppercase">Obrazek główny koszulki (Wizualizacja)</label>
+                        <input type="file" ref={koszulkaMainFileInputRef} onChange={handleKoszulkaMainUpload} accept="image/*" className="hidden" />
+                        
+                        <div 
+                          onClick={() => koszulkaMainFileInputRef.current?.click()}
+                          className="w-full h-24 bg-slate-50 border-2 border-dashed border-indigo-200 rounded-xl flex items-center justify-center cursor-pointer hover:bg-indigo-50/50 transition-colors overflow-hidden relative"
+                        >
+                          {form.koszulki_grafika_glowna ? (
+                            <div className="flex items-center gap-2 text-xs font-bold text-indigo-700">
+                              <span>✅</span> Grafika główna wgrana (kliknij, aby zmienić)
+                            </div>
+                          ) : (
+                            <div className="text-xs font-bold text-indigo-700">
+                              👕 Kliknij, aby wgrać główne zdjęcie koszulki
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Dodatkowe grafiki (np. tabele rozmiarów) */}
+                      <div className="space-y-2">
+                        <label className="font-bold text-slate-600 text-[11px] block uppercase">Tabele rozmiarów / dodatkowe warianty</label>
+                        <input 
+                          type="file" 
+                          ref={koszulkaExtraFileInputRef} 
+                          onChange={handleKoszulkaExtraUpload} 
+                          accept="image/*" 
+                          multiple 
+                          className="hidden" 
+                        />
+                        <button 
+                          type="button" 
+                          onClick={() => koszulkaExtraFileInputRef.current?.click()}
+                          className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 border-2 border-dashed border-indigo-300 rounded-xl font-bold text-xs text-indigo-900 transition-colors cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <span>📐</span> Dodaj tabele rozmiarów / warianty (wiele zdjęć)
+                        </button>
+
+                        {form.koszulki_grafiki.length > 0 && (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+                            {form.koszulki_grafiki.map((imgUrl, index) => (
+                              <div key={index} className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-50 h-24 group">
+                                <img src={imgUrl} alt={`Rozmiar ${index + 1}`} className="w-full h-full object-cover" />
+                                <button 
+                                  type="button" 
+                                  onClick={() => handleRemoveKoszulkaExtraImage(index)}
+                                  className="absolute top-1 right-1 bg-rose-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-black shadow-md cursor-pointer hover:bg-rose-700 transition-colors"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
                     </div>
                   )}
                 </div>
