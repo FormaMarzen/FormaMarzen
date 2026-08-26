@@ -117,14 +117,11 @@ const getContractRataInfo = (karnet: any) => {
   };
 };
 
-// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY
+// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY (Zgodnie z zasadą: znika dopiero po upływie ważności)
 const isPassActive = (k: any) => {
   if (!k) return false;
   const today = new Date().toISOString().split('T')[0];
   if (k.waznyDo && k.waznyDo < today) {
-    return false;
-  }
-  if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
     return false;
   }
   return true;
@@ -1001,13 +998,13 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // POBIERANIE TYLKO AKTYWNYCH KARNETÓW KLIENTA
+  // POBIERANIE WSZYSTKICH AKTYWNYCH KARNETÓW KLIENTA (NOWO ZAKUPIONE SĄ PONIŻEJ POPRZEDNICH)
   const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
   const activeKarnetyList = rawKarnetyList.filter(isPassActive);
   const karnetyList = [...activeKarnetyList].sort((a: any, b: any) => {
-    const dateA = a.waznyDo || '9999-12-31';
-    const dateB = b.waznyDo || '9999-12-31';
-    return dateA.localeCompare(dateB);
+    const idA = Number(a.id) || 0;
+    const idB = Number(b.id) || 0;
+    return idA - idB;
   });
 
   const hasActivePasses = karnetyList.length > 0;
@@ -1053,14 +1050,10 @@ export default function KarnetyPage() {
       if (hasOtherPass && defKarnetu.kupInnyKarnet === false) return false;
     }
 
-    const limitWejscBaza = defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null;
-    const isTimeBased = limitWejscBaza === null || limitWejscBaza === '';
-    if (isTimeBased && alreadyOwnedThis && defKarnetu.ponownyZakup === false) return false;
-
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M
+  // PRZEDŁUŻENIE ISTNIEJĄCEGO KARNETU / OPŁATA RATY 12M
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -1331,14 +1324,17 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // ZAKUP NOWEGO KARNETU
+  // ZAKUP NOWEGO KARNETU (POPRZEDNI KARNET NIE ZNIKA, NOWY POJAWIA SIĘ PONIŻEJ)
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
 
-    let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza].filter(isPassActive) : [];
+    // Pobieramy wszystkie aktualne karnety użytkownika bez ich nadpisywania
+    let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) 
+      ? [...currentUser.karnetyKlubowicza].filter(isPassActive) 
+      : [];
     
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     const isContract = defKarnetu?.isContract12M || defKarnetu?.typKarnetu === 'Umowa 12 miesięcy';
@@ -1356,9 +1352,7 @@ export default function KarnetyPage() {
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
 
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
-    const isTimeBased = limitWejscBaza === null;
-    const existingPassIndex = updatedKarnetyList.findIndex(k => k.nazwa === selectedBuyPass);
-
+    
     let nowaDataWygasnieciaStr = '';
 
     let baseCykl = 1;
@@ -1371,72 +1365,33 @@ export default function KarnetyPage() {
     let statusTekst = '';
 
     if (isContract) {
-        nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
-        statusTekst = `Umowa 12M (Rata 0/12 - wyrównanie do końca m-ca: ${contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni)`;
-        
-        updatedKarnetyList = updatedKarnetyList.map(k => ({ ...k, cykl: 1 }));
+      nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
+      statusTekst = `Umowa 12M (Rata 0/12 - wyrównanie do końca m-ca: ${contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni)`;
+      
+      const nowyKarnetObj = {
+        id: Date.now(),
+        nazwa: selectedBuyPass,
+        waznyDo: nowaDataWygasnieciaStr,
+        pozostaloWejsc: null,
+        poczatkoweWejsc: null,
+        cena: `${basePriceNum.toFixed(2)} PLN`,
+        cykl: 1,
+        znizkaProcentowa: appliedLabel,
+        rata: '0 / 12',
+        statusTekst: statusTekst,
+        isContract12M: true,
+        contractSuspensionDaysLeft: 30,
+        totalSuspendedDaysUsed: 0,
+        bonusActivated: false,
+        bonusClaimed: false,
+        blokadaDo: null,
+        powodBlokady: null,
+        zawieszonyOd: null,
+        zawieszonyDo: null
+      };
+      // Dodajemy nowy karnet na koniec listy
+      updatedKarnetyList.push(nowyKarnetObj);
 
-        const nowyKarnetObj = {
-          id: Date.now(),
-          nazwa: selectedBuyPass,
-          waznyDo: nowaDataWygasnieciaStr,
-          pozostaloWejsc: null,
-          poczatkoweWejsc: null,
-          cena: `${basePriceNum.toFixed(2)} PLN`,
-          cykl: 1,
-          znizkaProcentowa: appliedLabel,
-          rata: '0 / 12',
-          statusTekst: statusTekst,
-          isContract12M: true,
-          contractSuspensionDaysLeft: 30,
-          totalSuspendedDaysUsed: 0,
-          bonusActivated: false,
-          bonusClaimed: false,
-          blokadaDo: null,
-          powodBlokady: null,
-          zawieszonyOd: null,
-          zawieszonyDo: null
-        };
-        updatedKarnetyList.push(nowyKarnetObj);
-
-    } else if (isTimeBased && existingPassIndex !== -1 && !isContract) {
-      const prevCykl = typeof updatedKarnetyList[existingPassIndex].cykl === 'number' ? updatedKarnetyList[existingPassIndex].cykl : 1;
-      nextCykl = appliedDiscountCode ? prevCykl : prevCykl + 1;
-
-      updatedKarnetyList = updatedKarnetyList.map((k, index) => {
-        if (index === existingPassIndex) {
-          let baseDate = new Date();
-          if (activationMode === 'after' && k.waznyDo) {
-            const parts = k.waznyDo.split('-');
-            if (parts.length === 3) {
-              baseDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            }
-          }
-          
-          const calcTargetDate = calculatePassValidityDaysOrEndDate(baseDate, defKarnetu || k);
-          nowaDataWygasnieciaStr = `${calcTargetDate.getFullYear()}-${String(calcTargetDate.getMonth() + 1).padStart(2, '0')}-${String(calcTargetDate.getDate()).padStart(2, '0')}`;
-
-          const nowaHistoria = [...(k.historiaPrzedluzen || []), {
-            data: todayStr,
-            staraWaznosc: k.waznyDo,
-            nowaWaznosc: nowaDataWygasnieciaStr,
-            cena: cenaStr,
-            rabat: appliedLabel,
-            usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
-          }];
-
-          return {
-            ...k,
-            waznyDo: nowaDataWygasnieciaStr,
-            cena: cenaStr,
-            cykl: nextCykl,
-            historiaPrzedluzen: nowaHistoria,
-            znizkaProcentowa: appliedLabel,
-            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
-          };
-        }
-        return k;
-      });
     } else {
       let baseStartDate = new Date(); 
       if (activationMode === 'after' && maxDateStr) {
@@ -1467,6 +1422,7 @@ export default function KarnetyPage() {
         zawieszonyOd: null,
         zawieszonyDo: null
       };
+      // Dodajemy nowy karnet na koniec listy (poprzedni karnet pozostaje nienaruszony)
       updatedKarnetyList.push(nowyKarnetObj);
     }
 
@@ -2141,7 +2097,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* SEKCJA 1: AKTYWNE KARNETY */}
+        {/* SEKCJA 1: AKTYWNE KARNETY (LISTA WSZYSTKICH KARNETÓW) */}
         <div>
           <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">TWOJE KARNETY</h2>
           
@@ -2232,12 +2188,12 @@ export default function KarnetyPage() {
                     
                     <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
                       {isSuspendedLocal ? (
-                         <button 
-                           onClick={() => { setPassToUnsuspendId(karnet.id.toString()); setIsUnsuspendModalOpen(true); }}
-                           className="bg-slate-800 border border-slate-900 text-white hover:bg-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                         >
-                           <span className="text-sm">🔓</span> ODWIEŚ KARNET
-                         </button>
+                        <button 
+                          onClick={() => { setPassToUnsuspendId(karnet.id.toString()); setIsUnsuspendModalOpen(true); }}
+                          className="bg-slate-800 border border-slate-900 text-white hover:bg-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                        >
+                          <span className="text-sm">🔓</span> ODWIEŚ KARNET
+                        </button>
                       ) : isContract ? (
                         contractInfo.canActivateBonus ? (
                           <button 
@@ -2298,15 +2254,15 @@ export default function KarnetyPage() {
                 <p className="text-xs text-slate-500 mt-1">Dla umów 12M masz 30 dni w roku. Niewykorzystane dni zostaną automatycznie doliczone po 12. racie jako <strong>bezpłatny okres bonusowy (0.00 PLN)</strong>.</p>
               </div>
               {suspendedPasses.length > 0 ? (
-                 <button 
-                   onClick={() => {
-                     setPassToUnsuspendId(suspendedPasses[0].id.toString());
-                     setIsUnsuspendModalOpen(true);
-                   }}
-                   className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
-                 >
-                   <span>🔓</span> ODWIEŚ KARNET
-                 </button>
+                <button 
+                  onClick={() => {
+                    setPassToUnsuspendId(suspendedPasses[0].id.toString());
+                    setIsUnsuspendModalOpen(true);
+                  }}
+                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>🔓</span> ODWIEŚ KARNET
+                </button>
               ) : (
                 <button 
                   onClick={() => {
@@ -2492,7 +2448,7 @@ export default function KarnetyPage() {
                     <input 
                       type="date" 
                       required 
-                      min={suspendStartDate || todayStr}
+                      min={suspendStartDate || todayStr} 
                       value={suspendEndDate} 
                       onChange={(e) => setSuspendEndDate(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
@@ -3512,7 +3468,7 @@ export default function KarnetyPage() {
               : toast.type === 'info'
               ? 'bg-slate-900 border-sky-500/30 text-white'
               : 'bg-slate-900 border-slate-800 text-white'
-            }`}>
+          }`}>
             <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
               toast.type === 'error' ? 'bg-rose-600 text-white' :
               toast.type === 'info' ? 'bg-sky-600 text-white' :
