@@ -47,7 +47,7 @@ interface Wydarzenie {
   pokaz_plan_grafika?: boolean;
   plan_grafiki?: string[];
 
-  // NOWY MODUŁ: Koszulki treningowe
+  // Moduł: Koszulki treningowe
   pokaz_koszulki?: boolean;
   koszulki_cena?: string | null;
   koszulki_termin?: string | null;
@@ -66,6 +66,9 @@ export default function WydarzeniaPage() {
   // Stany dla Modala Podglądu Klubowicza
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Wydarzenie | null>(null);
+
+  // Stan dla pełnoekranowego powiększenia obrazka (Lightbox)
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   // Stany dla Modala Edycji / Dodawania Admina
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
@@ -121,6 +124,19 @@ export default function WydarzeniaPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Obsługa zamykania powiększenia klawiszem ESC
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (previewImage) {
+          setPreviewImage(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewImage]);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -282,8 +298,8 @@ export default function WydarzeniaPage() {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 1200;
-        const MAX_HEIGHT = 1200;
+        const MAX_WIDTH = 1400;
+        const MAX_HEIGHT = 1400;
         let width = img.width;
         let height = img.height;
         
@@ -297,7 +313,7 @@ export default function WydarzeniaPage() {
         canvas.height = height;
         const ctx = canvas.getContext('2d'); 
         ctx?.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.75);
+        const compressed = canvas.toDataURL('image/jpeg', 0.8);
         callback(compressed);
       };
       img.src = event.target?.result as string;
@@ -342,7 +358,7 @@ export default function WydarzeniaPage() {
     }
   };
 
-  // Koszulki - grafiki dodatkowe (np. tabele rozmiarów)
+  // Koszulki - grafiki dodatkowe (tabele rozmiarów)
   const handleKoszulkaExtraUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -648,8 +664,8 @@ export default function WydarzeniaPage() {
               className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
             >✕</button>
             
-            {/* Plakat główny */}
-            <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: '300px', maxHeight: '60vh' }}>
+            {/* Plakat główny (z opcją powiększenia po kliknięciu) */}
+            <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden group" style={{ minHeight: '300px', maxHeight: '60vh' }}>
               {selectedEvent.grafika_url ? (
                 <>
                   <div 
@@ -659,8 +675,13 @@ export default function WydarzeniaPage() {
                   <img 
                     src={selectedEvent.grafika_url} 
                     alt="Plakat wydarzenia" 
-                    className="relative z-10 w-full h-full object-contain max-h-[60vh] drop-shadow-2xl" 
+                    onClick={() => setPreviewImage(selectedEvent.grafika_url)}
+                    className="relative z-10 w-full h-full object-contain max-h-[60vh] drop-shadow-2xl cursor-zoom-in hover:scale-[1.02] transition-transform duration-300" 
+                    title="Kliknij, aby powiększyć plakat"
                   />
+                  <div className="absolute bottom-3 right-3 z-20 bg-black/60 backdrop-blur-sm text-white text-[11px] font-bold px-3 py-1 rounded-lg pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+                    🔍 Kliknij, aby powiększyć
+                  </div>
                 </>
               ) : (
                 <div className="w-full h-full min-h-[300px] bg-gradient-to-br from-sky-900 to-slate-800 flex flex-col items-center justify-center text-sky-100">
@@ -840,7 +861,7 @@ export default function WydarzeniaPage() {
                     </div>
                   )}
 
-                  {/* Moduł Wiele Obrazków Planu Wyjazdu */}
+                  {/* Moduł Wiele Obrazków Planu Wyjazdu (Kliknięcie powiększa) */}
                   {selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafiki && selectedEvent.plan_grafiki.length > 0 && (
                     <div className="space-y-3">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider flex items-center gap-2">
@@ -848,19 +869,26 @@ export default function WydarzeniaPage() {
                       </h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {selectedEvent.plan_grafiki.map((imgUrl, idx) => (
-                          <div key={idx} className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm p-2">
+                          <div 
+                            key={idx} 
+                            onClick={() => setPreviewImage(imgUrl)}
+                            className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm p-2 cursor-zoom-in group relative"
+                          >
                             <img 
                               src={imgUrl} 
                               alt={`Plan wyjazdu ${idx + 1}`} 
-                              className="w-full h-auto object-contain max-h-[400px] rounded-xl" 
+                              className="w-full h-auto object-contain max-h-[400px] rounded-xl group-hover:opacity-95 transition-opacity" 
                             />
+                            <div className="absolute inset-2 rounded-xl bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
+                              <span>🔍</span> Kliknij, aby powiększyć
+                            </div>
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
 
-                  {/* NOWY MODUŁ: Koszulki treningowe w podglądzie uczestnika */}
+                  {/* MODUŁ: Koszulki treningowe (Kliknięcie powiększa) */}
                   {selectedEvent.pokaz_koszulki && (
                     <div className="bg-white p-6 sm:p-7 rounded-3xl border-2 border-indigo-200 shadow-sm space-y-5">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-50 pb-4">
@@ -896,21 +924,27 @@ export default function WydarzeniaPage() {
                         </div>
                       )}
 
-                      {/* Zdjęcie główne koszulki */}
+                      {/* Zdjęcie główne koszulki z opcją powiększenia */}
                       {selectedEvent.koszulki_grafika_glowna && (
                         <div className="space-y-2">
                           <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">Wizualizacja koszulki</span>
-                          <div className="bg-slate-50 rounded-2xl overflow-hidden border border-indigo-100 p-2 max-w-md mx-auto shadow-sm">
+                          <div 
+                            onClick={() => setPreviewImage(selectedEvent.koszulki_grafika_glowna!)}
+                            className="bg-slate-50 rounded-2xl overflow-hidden border border-indigo-100 p-2 max-w-md mx-auto shadow-sm cursor-zoom-in group relative"
+                          >
                             <img 
                               src={selectedEvent.koszulki_grafika_glowna} 
                               alt="Koszulka treningowa" 
-                              className="w-full h-auto object-contain max-h-[350px] rounded-xl"
+                              className="w-full h-auto object-contain max-h-[350px] rounded-xl group-hover:opacity-95 transition-opacity"
                             />
+                            <div className="absolute inset-2 rounded-xl bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
+                              <span>🔍</span> Kliknij, aby powiększyć
+                            </div>
                           </div>
                         </div>
                       )}
 
-                      {/* Dodatkowe grafiki (np. tabele rozmiarów) */}
+                      {/* Dodatkowe grafiki: tabele rozmiarów z opcją powiększenia */}
                       {selectedEvent.koszulki_grafiki && selectedEvent.koszulki_grafiki.length > 0 && (
                         <div className="space-y-2 pt-2 border-t border-indigo-50">
                           <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">
@@ -918,12 +952,19 @@ export default function WydarzeniaPage() {
                           </span>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {selectedEvent.koszulki_grafiki.map((imgUrl, idx) => (
-                              <div key={idx} className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-200 p-2">
+                              <div 
+                                key={idx} 
+                                onClick={() => setPreviewImage(imgUrl)}
+                                className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-200 p-2 cursor-zoom-in group relative shadow-sm"
+                              >
                                 <img 
                                   src={imgUrl} 
                                   alt={`Tabela rozmiarów ${idx + 1}`} 
-                                  className="w-full h-auto object-contain max-h-[300px] rounded-xl"
+                                  className="w-full h-auto object-contain max-h-[300px] rounded-xl group-hover:opacity-95 transition-opacity"
                                 />
+                                <div className="absolute inset-2 rounded-xl bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
+                                  <span>🔍</span> Kliknij, aby powiększyć tabelę
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -936,6 +977,28 @@ export default function WydarzeniaPage() {
               )}
 
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* PEŁNOEKRANOWY LIGHTBOX / ZOOM OBRAZKA */}
+      {previewImage && (
+        <div 
+          onClick={() => setPreviewImage(null)}
+          className="fixed inset-0 bg-slate-950/95 z-[100] flex items-center justify-center p-3 sm:p-6 backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 cursor-zoom-out"
+        >
+          <button 
+            onClick={() => setPreviewImage(null)} 
+            className="absolute top-5 right-5 z-20 bg-white/10 hover:bg-white text-white hover:text-slate-950 w-12 h-12 rounded-full flex items-center justify-center transition-all shadow-2xl cursor-pointer font-black text-xl border border-white/20"
+          >
+            ✕
+          </button>
+          <div className="relative max-w-[95vw] max-h-[92vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <img 
+              src={previewImage} 
+              alt="Powiększenie" 
+              className="max-w-full max-h-[92vh] object-contain rounded-2xl shadow-2xl border border-white/10"
+            />
           </div>
         </div>
       )}
@@ -1383,7 +1446,7 @@ export default function WydarzeniaPage() {
                         </div>
                       </div>
 
-                      {/* Dodatkowe grafiki (np. tabele rozmiarów) */}
+                      {/* Dodatkowe grafiki (tabele rozmiarów) */}
                       <div className="space-y-2">
                         <label className="font-bold text-slate-600 text-[11px] block uppercase">Tabele rozmiarów / dodatkowe warianty</label>
                         <input 
