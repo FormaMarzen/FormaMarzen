@@ -13,10 +13,19 @@ interface Suplement {
   created_at?: string;
 }
 
+interface Sugestia {
+  id: number;
+  nazwa: string;
+  klient_email: string | null;
+  status: string;
+  created_at: string;
+}
+
 type TabType = "suplementy" | "kolejna_zakladka";
 
 export default function BazaWiedzyPage() {
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>("suplementy");
 
@@ -25,6 +34,12 @@ export default function BazaWiedzyPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedKategoria, setSelectedKategoria] = useState<string>("wszystkie");
 
+  // Propozycje klubowiczów
+  const [sugestie, setSugestie] = useState<Sugestia[]>([]);
+  const [nowaSugestiaNazwa, setNowaSugestiaNazwa] = useState("");
+  const [isSendingSugestia, setIsSendingSugestia] = useState(false);
+  const [sugestiaSuccess, setSugestiaSuccess] = useState(false);
+
   // Modal Podglądu (dla Klubowicza / Podgląd detali)
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Suplement | null>(null);
@@ -32,6 +47,7 @@ export default function BazaWiedzyPage() {
   // Modal Zarządzania Admina (Dodaj / Edytuj)
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [originatingSugestiaId, setOriginatingSugestiaId] = useState<number | null>(null);
   const [form, setForm] = useState({
     nazwa: "",
     kategoria: "witaminy",
@@ -51,18 +67,32 @@ export default function BazaWiedzyPage() {
 
     const { data: { session } } = await supabase.auth.getSession();
     const email = session?.user?.email || "";
+    setUserEmail(email);
 
-    if (email === "maciejklaput@gmail.com") {
+    const cleanEmail = email.toLowerCase().trim();
+    if (cleanEmail === "maciejklaput@gmail.com" || cleanEmail === "maciejklaput@icloud.com") {
       setIsAdmin(true);
     }
 
-    const { data, error } = await supabase
+    // Pobieranie suplementów
+    const { data: suplData } = await supabase
       .from("suplementy")
       .select("*")
       .order("nazwa", { ascending: true });
 
-    if (!error && data) {
-      setSuplementy(data);
+    if (suplData) {
+      setSuplementy(suplData);
+    }
+
+    // Pobieranie propozycji
+    const { data: sugData } = await supabase
+      .from("sugestie_suplementow")
+      .select("*")
+      .eq("status", "oczekujace")
+      .order("created_at", { ascending: false });
+
+    if (sugData) {
+      setSugestie(sugData);
     }
 
     setIsLoading(false);
@@ -80,8 +110,54 @@ export default function BazaWiedzyPage() {
       .sort((a, b) => a.nazwa.localeCompare(b.nazwa, "pl"));
   }, [suplementy, searchQuery, selectedKategoria]);
 
+  // Zgłaszanie nowej propozycji przez Klubowicza
+  const handleWyslijSugestie = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nowaSugestiaNazwa.trim()) return;
+
+    setIsSendingSugestia(true);
+    const { error } = await supabase.from("sugestie_suplementow").insert([
+      {
+        nazwa: nowaSugestiaNazwa.trim(),
+        klient_email: userEmail || "anonim@klubowicz.pl",
+        status: "oczekujace",
+      },
+    ]);
+
+    if (!error) {
+      setNowaSugestiaNazwa("");
+      setSugestiaSuccess(true);
+      setTimeout(() => setSugestiaSuccess(false), 5000);
+      fetchData();
+    } else {
+      alert("Błąd podczas wysyłania: " + error.message);
+    }
+    setIsSendingSugestia(false);
+  };
+
+  // Odznaczenie / Usunięcie propozycji przez Admina
+  const handleUsunSugestie = async (id: number) => {
+    await supabase.from("sugestie_suplementow").delete().eq("id", id);
+    setSugestie((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  // Szybkie dodanie suplementu z propozycji
+  const handleQuickAddFromSugestia = (sugestia: Sugestia) => {
+    setEditingId(null);
+    setOriginatingSugestiaId(sugestia.id);
+    setForm({
+      nazwa: sugestia.nazwa,
+      kategoria: "witaminy",
+      opis: "",
+      dawkowanie: "",
+      grafika_url: null,
+    });
+    setIsAdminModalOpen(true);
+  };
+
   const handleOpenAdd = () => {
     setEditingId(null);
+    setOriginatingSugestiaId(null);
     setForm({
       nazwa: "",
       kategoria: "witaminy",
@@ -95,6 +171,7 @@ export default function BazaWiedzyPage() {
   const handleOpenEdit = (item: Suplement, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingId(item.id);
+    setOriginatingSugestiaId(null);
     setForm({
       nazwa: item.nazwa,
       kategoria: item.kategoria || "witaminy",
@@ -162,6 +239,10 @@ export default function BazaWiedzyPage() {
       await supabase.from("suplementy").update(form).eq("id", editingId);
     } else {
       await supabase.from("suplementy").insert([form]);
+      // Jeśli dodano z propozycji, usuwamy ją z listy oczekujących
+      if (originatingSugestiaId) {
+        await supabase.from("sugestie_suplementow").delete().eq("id", originatingSugestiaId);
+      }
     }
     setIsAdminModalOpen(false);
     fetchData();
@@ -204,12 +285,12 @@ export default function BazaWiedzyPage() {
             onClick={handleOpenAdd}
             className="bg-sky-900 hover:bg-sky-950 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
           >
-            <span>+</span> DODAJ WPIS
+            <span>+</span> DODAJ SUPLEMENT
           </button>
         )}
       </div>
 
-      {/* SYSTEM ZAKŁADEK (TABS) */}
+      {/* SYSTEM ZAKŁADEK */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
         <button
           onClick={() => setActiveTab("suplementy")}
@@ -221,14 +302,67 @@ export default function BazaWiedzyPage() {
         >
           <span>💊</span> Suplementy i Witaminy
         </button>
-
-        {/* Miejsce na kolejne zakładki w przyszłości */}
       </div>
 
       {/* ZAWARTOŚĆ ZAKŁADKI: SUPLEMENTY I WITAMINY */}
       {activeTab === "suplementy" && (
         <div className="space-y-6">
           
+          {/* SEKCJA PROPOZYCJI DLA ADMINISTRATORA */}
+          {isAdmin && (
+            <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300 rounded-3xl p-5 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">📬</span>
+                  <h3 className="font-black text-sky-950 text-sm sm:text-base uppercase tracking-tight">
+                    Propozycje od Klubowiczów ({sugestie.length})
+                  </h3>
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 bg-amber-200/70 px-2.5 py-1 rounded-lg">
+                  Panel Administratora
+                </span>
+              </div>
+
+              {sugestie.length === 0 ? (
+                <p className="text-xs text-slate-500 font-medium">
+                  Brak oczekujących propozycji. Gdy klubowicze wpiszą propozycję, pojawi się ona w tym miejscu.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+                  {sugestie.map((sug) => (
+                    <div
+                      key={sug.id}
+                      className="bg-white p-3.5 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-between gap-3 group hover:border-amber-400 transition-all"
+                    >
+                      <div>
+                        <div className="font-black text-slate-900 text-sm">{sug.nazwa}</div>
+                        <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                          <span>👤</span> {sug.klient_email || "Klubowicz"}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          onClick={() => handleQuickAddFromSugestia(sug)}
+                          className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] py-1.5 px-3 rounded-lg transition-colors flex items-center justify-center gap-1 shadow-sm cursor-pointer"
+                        >
+                          <span>+</span> Dodaj do bazy
+                        </button>
+                        <button
+                          onClick={() => handleUsunSugestie(sug.id)}
+                          className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-700 rounded-lg transition-colors cursor-pointer text-xs"
+                          title="Odznacz / Usuń z listy"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* PASEK WYSZUKIWANIA I FILTRY KATEGORII */}
           <div className="bg-white p-4 sm:p-5 rounded-3xl border border-sky-100 shadow-sm space-y-4">
             <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
@@ -246,7 +380,7 @@ export default function BazaWiedzyPage() {
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery("")}
-                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
                   >
                     ✕
                   </button>
@@ -280,7 +414,7 @@ export default function BazaWiedzyPage() {
 
           {/* LISTA / TABELA ALFABETYCZNA */}
           {filteredSuplementy.length === 0 ? (
-            <div className="text-center py-20 bg-white rounded-3xl border border-sky-100 border-dashed">
+            <div className="text-center py-16 bg-white rounded-3xl border border-sky-100 border-dashed">
               <div className="text-5xl mb-4">🧪</div>
               <h3 className="text-lg font-black text-sky-950 mb-1">Brak wyników</h3>
               <p className="text-slate-500 text-sm">Nie znaleziono pozycji spełniających podane kryteria.</p>
@@ -385,10 +519,50 @@ export default function BazaWiedzyPage() {
               </div>
             </div>
           )}
+
+          {/* BOKS DLA KLUBOWICZA: ZAPROPONUJ NOWY SUPLEMENT DO BAZY */}
+          <div className="bg-white rounded-3xl border border-sky-100 p-6 sm:p-8 shadow-sm">
+            <div className="max-w-2xl">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">💡</span>
+                <h3 className="font-black text-sky-950 text-base sm:text-lg uppercase tracking-tight">
+                  Nie znalazłeś suplementu w bazie?
+                </h3>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-500 font-medium mb-4">
+                Wpisz nazwę witaminy, minerału lub suplementu, o którym chciałbyś dowiedzieć się więcej. Sprawdzimy go i uzupełnimy opis w bazie wiedzy!
+              </p>
+
+              <form onSubmit={handleWyslijSugestie} className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  required
+                  placeholder="np. Cytrulina, Kurkumina z Piperyną, Cynk..."
+                  value={nowaSugestiaNazwa}
+                  onChange={(e) => setNowaSugestiaNazwa(e.target.value)}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500 transition-colors"
+                />
+                <button
+                  type="submit"
+                  disabled={isSendingSugestia}
+                  className="bg-sky-900 hover:bg-sky-950 disabled:bg-slate-300 text-white font-black text-xs px-6 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer shrink-0 flex items-center justify-center gap-2"
+                >
+                  {isSendingSugestia ? "Wysyłanie..." : "🚀 Wyślij propozycję"}
+                </button>
+              </form>
+
+              {sugestiaSuccess && (
+                <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs rounded-xl animate-in fade-in flex items-center gap-2">
+                  <span>✅</span> Dziękujemy! Twoja propozycja została przesłana i czeka na weryfikację trenera.
+                </div>
+              )}
+            </div>
+          </div>
+
         </div>
       )}
 
-      {/* MODAL PODGLĄDU DLA KLUBOWICZA / UŻYTKOWNIKA */}
+      {/* MODAL PODGLĄDU DLA KLUBOWICZA */}
       {isViewModalOpen && selectedItem && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
@@ -579,7 +753,7 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* Przyciski zapisu */}
+              {/* Przyciski */}
               <div className="pt-4 flex gap-2">
                 <button
                   type="button"
