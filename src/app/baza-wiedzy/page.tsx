@@ -239,7 +239,6 @@ export default function BazaWiedzyPage() {
       await supabase.from("suplementy").update(form).eq("id", editingId);
     } else {
       await supabase.from("suplementy").insert([form]);
-      // Jeśli dodano z propozycji, usuwamy ją z listy oczekujących
       if (originatingSugestiaId) {
         await supabase.from("sugestie_suplementow").delete().eq("id", originatingSugestiaId);
       }
@@ -362,6 +361,45 @@ export default function BazaWiedzyPage() {
               )}
             </div>
           )}
+
+          {/* BOKS DLA KLUBOWICZA: ZAPROPONUJ NOWY SUPLEMENT DO BAZY (NA GÓRZE STRONY) */}
+          <div className="bg-white rounded-3xl border border-sky-100 p-5 sm:p-6 shadow-sm">
+            <div className="max-w-3xl">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-2xl">💡</span>
+                <h3 className="font-black text-sky-950 text-base sm:text-lg uppercase tracking-tight">
+                  Nie znalazłeś suplementu w bazie?
+                </h3>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-500 font-medium mb-4">
+                Wpisz nazwę witaminy, minerału lub suplementu, o którym chciałbyś dowiedzieć się więcej. Sprawdzimy go i uzupełnimy opis w bazie wiedzy!
+              </p>
+
+              <form onSubmit={handleWyslijSugestie} className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  required
+                  placeholder="np. Cytrulina, Kurkumina z Piperyną, Cynk..."
+                  value={nowaSugestiaNazwa}
+                  onChange={(e) => setNowaSugestiaNazwa(e.target.value)}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500 transition-colors"
+                />
+                <button
+                  type="submit"
+                  disabled={isSendingSugestia}
+                  className="bg-sky-900 hover:bg-sky-950 disabled:bg-slate-300 text-white font-black text-xs px-6 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer shrink-0 flex items-center justify-center gap-2"
+                >
+                  {isSendingSugestia ? "Wysyłanie..." : "🚀 Wyślij propozycję"}
+                </button>
+              </form>
+
+              {sugestiaSuccess && (
+                <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs rounded-xl animate-in fade-in flex items-center gap-2">
+                  <span>✅</span> Dziękujemy! Twoja propozycja została przesłana i czeka na weryfikację trenera.
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* PASEK WYSZUKIWANIA I FILTRY KATEGORII */}
           <div className="bg-white p-4 sm:p-5 rounded-3xl border border-sky-100 shadow-sm space-y-4">
@@ -519,45 +557,6 @@ export default function BazaWiedzyPage() {
               </div>
             </div>
           )}
-
-          {/* BOKS DLA KLUBOWICZA: ZAPROPONUJ NOWY SUPLEMENT DO BAZY */}
-          <div className="bg-white rounded-3xl border border-sky-100 p-6 sm:p-8 shadow-sm">
-            <div className="max-w-2xl">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-2xl">💡</span>
-                <h3 className="font-black text-sky-950 text-base sm:text-lg uppercase tracking-tight">
-                  Nie znalazłeś suplementu w bazie?
-                </h3>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-500 font-medium mb-4">
-                Wpisz nazwę witaminy, minerału lub suplementu, o którym chciałbyś dowiedzieć się więcej. Sprawdzimy go i uzupełnimy opis w bazie wiedzy!
-              </p>
-
-              <form onSubmit={handleWyslijSugestie} className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  required
-                  placeholder="np. Cytrulina, Kurkumina z Piperyną, Cynk..."
-                  value={nowaSugestiaNazwa}
-                  onChange={(e) => setNowaSugestiaNazwa(e.target.value)}
-                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500 transition-colors"
-                />
-                <button
-                  type="submit"
-                  disabled={isSendingSugestia}
-                  className="bg-sky-900 hover:bg-sky-950 disabled:bg-slate-300 text-white font-black text-xs px-6 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer shrink-0 flex items-center justify-center gap-2"
-                >
-                  {isSendingSugestia ? "Wysyłanie..." : "🚀 Wyślij propozycję"}
-                </button>
-              </form>
-
-              {sugestiaSuccess && (
-                <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs rounded-xl animate-in fade-in flex items-center gap-2">
-                  <span>✅</span> Dziękujemy! Twoja propozycja została przesłana i czeka na weryfikację trenera.
-                </div>
-              )}
-            </div>
-          </div>
 
         </div>
       )}
