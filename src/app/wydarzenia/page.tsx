@@ -30,7 +30,7 @@ interface Wydarzenie {
   status: string;
   uczestnicy?: Uczestnik[];
   
-  // Moduły strefy uczestnika (włączane checkboxami)
+  // Moduły strefy uczestnika sterowane checkboxami
   pokaz_whatsapp?: boolean;
   whatsapp_url?: string | null;
   
@@ -75,7 +75,7 @@ export default function WydarzeniaPage() {
     status: "wkrotce",
     uczestnicy: [] as Uczestnik[],
     
-    // Checkboxy i pola strefy uczestnika
+    // Checkboxy i pola modułów
     pokaz_whatsapp: false,
     whatsapp_url: "",
     
@@ -115,6 +115,7 @@ export default function WydarzeniaPage() {
       setIsAdmin(true);
     }
 
+    // Pobieranie wydarzeń
     const { data, error } = await supabase
       .from('wydarzenia')
       .select('*')
@@ -124,13 +125,19 @@ export default function WydarzeniaPage() {
       setWydarzenia(data);
     }
 
-    const { data: klienciData } = await supabase
+    // Pobieranie bazy klientów z uwzględnieniem dokładnych nazw kolumn ze schematu tabeli klienci
+    const { data: klienciData, error: klienciError } = await supabase
       .from('klienci')
-      .select('id, imie, nazwisko, email')
-      .order('nazwisko', { ascending: true });
+      .select('id, "Imię", "Nazwisko", "E-mail"');
 
-    if (klienciData) {
-      setKlienciBaza(klienciData);
+    if (!klienciError && klienciData) {
+      const mapped: KlientBaza[] = klienciData.map((k: any) => ({
+        id: k.id,
+        imie: (k["Imię"] || k.imie || "").trim(),
+        nazwisko: (k["Nazwisko"] || k.nazwisko || "").trim(),
+        email: (k["E-mail"] || k.email || "").trim()
+      }));
+      setKlienciBaza(mapped);
     }
     
     setIsLoading(false);
@@ -284,13 +291,14 @@ export default function WydarzeniaPage() {
   };
 
   const handleAddParticipantFromDB = (k: KlientBaza) => {
-    if (form.uczestnicy.some(u => (u.id && u.id === k.id) || (u.email && u.email === k.email))) {
+    if (form.uczestnicy.some(u => (u.id && u.id === k.id) || (u.email && u.email.toLowerCase() === k.email?.toLowerCase()))) {
       return;
     }
     setForm(prev => ({
       ...prev,
       uczestnicy: [...prev.uczestnicy, { id: k.id, imie: k.imie, nazwisko: k.nazwisko, email: k.email }]
     }));
+    setKlientSearch("");
   };
 
   const handleAddManualParticipant = () => {
@@ -901,7 +909,7 @@ export default function WydarzeniaPage() {
                   </label>
                 </div>
 
-                {/* Wybór z bazy klientów */}
+                {/* Autouzupełnianie z bazy klientów */}
                 <div className="space-y-2">
                   <input 
                     type="text" 
@@ -911,25 +919,25 @@ export default function WydarzeniaPage() {
                     className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500"
                   />
                   {klientSearch.length > 0 && (
-                    <div className="max-h-36 overflow-y-auto bg-white border border-sky-200 rounded-xl p-2 space-y-1">
-                      {filteredKlienci.slice(0, 8).map(k => (
+                    <div className="max-h-40 overflow-y-auto bg-white border border-sky-200 rounded-xl p-2 space-y-1 shadow-md">
+                      {filteredKlienci.slice(0, 10).map(k => (
                         <div 
                           key={k.id} 
                           onClick={() => handleAddParticipantFromDB(k)}
                           className="p-2 hover:bg-sky-100 rounded-lg text-xs font-bold text-sky-950 flex justify-between items-center cursor-pointer transition-colors"
                         >
-                          <span>{k.imie} {k.nazwisko} ({k.email || "brak email"})</span>
+                          <span>{k.imie} {k.nazwisko} <span className="text-slate-400 font-normal">({k.email || "brak e-mail"})</span></span>
                           <span className="text-emerald-600 font-black">+ Dodaj</span>
                         </div>
                       ))}
                       {filteredKlienci.length === 0 && (
-                        <div className="text-xs text-slate-400 p-2 text-center">Brak wyników w bazie</div>
+                        <div className="text-xs text-slate-400 p-2 text-center">Brak klubowiczów pasujących do wyszukiwania</div>
                       )}
                     </div>
                   )}
                 </div>
 
-                {/* Ręczne dopisanie osoby spoza bazy */}
+                {/* Ręczne dopisanie osoby */}
                 <div className="flex gap-2">
                   <input 
                     type="text" 
@@ -954,7 +962,7 @@ export default function WydarzeniaPage() {
                   </button>
                 </div>
 
-                {/* Lista aktualnie dodanych */}
+                {/* Pigułki aktualnie dodanych */}
                 {form.uczestnicy.length > 0 && (
                   <div className="flex flex-wrap gap-2 pt-2 border-t border-sky-200/60">
                     {form.uczestnicy.map((u, index) => (
