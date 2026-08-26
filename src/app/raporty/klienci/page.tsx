@@ -67,7 +67,7 @@ export default function KlienciPage() {
   const [walletAmountInput, setWalletAmountInput] = useState('');
   const [walletReasonInput, setWalletReasonInput] = useState('');
 
-  // STANY DLA ZAWIESZEŃ I BLOKAD (WSPÓLNY MODAL)
+  // STANY DLA ZAWIESZEŃ I BLOKAD
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
   const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
@@ -116,12 +116,12 @@ export default function KlienciPage() {
     customContractPrice: ''
   });
 
-  // --- KULOODPORNY PARSER DAT ---
-  const parseClassDate = (dateStr: string) => {
+  // KULOODPORNY PARSER DAT
+  const parseClassDate = (dateStr: string): number => {
     if (!dateStr) return 0;
     let d = String(dateStr).trim();
     
-    // Obsługa formatów DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
+    // Format DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
     const regexFull = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchFull = d.match(regexFull);
     if (matchFull) {
@@ -134,7 +134,7 @@ export default function KlienciPage() {
       if (!isNaN(parsed)) return parsed;
     }
 
-    // Obsługa formatu YYYY-MM-DD
+    // Format YYYY-MM-DD
     const regexIso = /(\d{4})[\.\-\/](\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchIso = d.match(regexIso);
     if (matchIso) {
@@ -147,7 +147,7 @@ export default function KlienciPage() {
       if (!isNaN(parsed)) return parsed;
     }
 
-    // Obsługa krótkiego formatu DD/MM lub DD.MM
+    // Format DD/MM lub DD.MM
     const regexShort = /(\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchShort = d.match(regexShort);
     if (matchShort) {
@@ -164,7 +164,26 @@ export default function KlienciPage() {
     return isNaN(fallback) ? 0 : fallback;
   };
 
-  // --- HELPERY SYNCHRONIZACJI DATY WAŻNOŚCI I CENY DO SUPABASE ---
+  // HELPER UNIFIKACJI DATY I SYGNATURY DEDUKUJĄCEJ DUPLIKATY
+  const normalizeDateToIsoDay = (dateStr: string): string => {
+    if (!dateStr) return '';
+    const ms = parseClassDate(dateStr);
+    if (ms > 0) {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    const isoMatch = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    return String(dateStr).trim();
+  };
+
+  const normalizeClassSignature = (dateStr: string, titleStr: string): string => {
+    const day = normalizeDateToIsoDay(dateStr);
+    const cleanTitle = (titleStr || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return `${day}_${cleanTitle}`;
+  };
+
+  // HELPERY SYNCHRONIZACJI DATY WAŻNOŚCI I CENY DO SUPABASE
   const getLatestPassExpiry = (passes: any[]): string | null => {
     if (!passes || passes.length === 0) return null;
     const validDates = passes
@@ -182,7 +201,7 @@ export default function KlienciPage() {
     return latest?.cena || '0.00 PLN';
   };
 
-  // --- FUNKCJE POMOCNICZE I RABATOWE ---
+  // FUNKCJE POMOCNICZE I RABATOWE
   const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
 
   const calculateStandardSystemDiscount = (client: any) => {
@@ -231,7 +250,7 @@ export default function KlienciPage() {
     return calculateSystemDiscount(client);
   };
 
-  // --- AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ (KRZESEŁKA) ---
+  // AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ
   const promoteWaitlistForClass = async (classKey: string) => {
     const { data: participants } = await supabase
       .from('zapisy_zajec')
@@ -292,7 +311,7 @@ export default function KlienciPage() {
     }
   };
 
-  // --- AUTOMATYCZNE WYPISYWANIE PO BLOKADZIE ---
+  // AUTOMATYCZNE WYPISYWANIE PO BLOKADZIE
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -343,7 +362,7 @@ export default function KlienciPage() {
     }
   };
 
-  // --- AUTOMATYCZNE WYPISYWANIE PO ZAWIESZENIU ---
+  // AUTOMATYCZNE WYPISYWANIE PO ZAWIESZENIU
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -434,8 +453,13 @@ export default function KlienciPage() {
       await promoteWaitlistForClass(zajecieItem.classKey);
     }
 
+    const sigToRemove = normalizeClassSignature(zajecieItem.data, zajecieItem.zajecia);
     const stareNadchodzace = safeJsonParse(profileClient.zapisyNadchodzace, []);
-    const uaktualnioneNadchodzace = stareNadchodzace.filter((z: any) => z.id !== zajecieItem.id && z.classKey !== zajecieItem.classKey);
+    const uaktualnioneNadchodzace = stareNadchodzace.filter((z: any) => {
+      const itemSig = normalizeClassSignature(z.data, z.zajecia);
+      return z.id !== zajecieItem.id && z.classKey !== zajecieItem.classKey && itemSig !== sigToRemove;
+    });
+
     const nowyWypis = { 
       ...zajecieItem, 
       id: Date.now(),
@@ -695,7 +719,6 @@ export default function KlienciPage() {
         const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
         const effectiveBanReason = c.powodBlokady || c.powod_blokady || (finalKarnety[0]?.powodBlokady) || null;
 
-        // Łączenie historii zawieszeń ze WSZYSTKICH możliwych źródeł (w tym z profilu klubowicza)
         const rawHistZaw1 = safeJsonParse(c.historiaZawieszenGlobalna || c.historiazawieszenglobalna, []);
         const rawHistZaw2 = safeJsonParse(c.historiaZawieszen, []);
         const rawHistZaw3 = safeJsonParse(c.historiazawieszen, []);
@@ -1583,8 +1606,22 @@ export default function KlienciPage() {
     (c.phone || '').includes(searchQuery)
   );
 
+  // LOGIKA SORTOWANIA GŁÓWNEJ TABELI KLIENTÓW
   const sortedClients = [...filteredClients].sort((a, b) => {
-    if (!sortField) return 0;
+    // Domyślne sortowanie: najszybciej wygasające karnety na samej górze, brak karnetów na samym dole
+    if (!sortField) {
+      const expA = a.expiresDate || a.Wygasa || a.karnetyKlubowicza?.[0]?.waznyDo || '';
+      const expB = b.expiresDate || b.Wygasa || b.karnetyKlubowicza?.[0]?.waznyDo || '';
+
+      const hasPassA = Boolean(expA && a.karnetyKlubowicza && a.karnetyKlubowicza.length > 0);
+      const hasPassB = Boolean(expB && b.karnetyKlubowicza && b.karnetyKlubowicza.length > 0);
+
+      if (hasPassA && !hasPassB) return -1;
+      if (!hasPassA && hasPassB) return 1;
+      if (!hasPassA && !hasPassB) return (a.lastName || '').localeCompare(b.lastName || '');
+
+      return expA.localeCompare(expB);
+    }
     
     let valA: any = '';
     let valB: any = '';
@@ -1604,8 +1641,16 @@ export default function KlienciPage() {
       return sortDirection === 'asc' ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
     }
     else if (sortField === 'expiresDate') { 
-      valA = a.karnetyKlubowicza?.[0]?.waznyDo || ''; 
-      valB = b.karnetyKlubowicza?.[0]?.waznyDo || ''; 
+      const expA = a.expiresDate || a.Wygasa || a.karnetyKlubowicza?.[0]?.waznyDo || '';
+      const expB = b.expiresDate || b.Wygasa || b.karnetyKlubowicza?.[0]?.waznyDo || '';
+      const hasPassA = Boolean(expA && a.karnetyKlubowicza && a.karnetyKlubowicza.length > 0);
+      const hasPassB = Boolean(expB && b.karnetyKlubowicza && b.karnetyKlubowicza.length > 0);
+
+      if (hasPassA && !hasPassB) return -1;
+      if (!hasPassA && hasPassB) return 1;
+      if (!hasPassA && !hasPassB) return 0;
+
+      return sortDirection === 'asc' ? expA.localeCompare(expB) : expB.localeCompare(expA);
     }
     else if (sortField === 'wallet') { 
       valA = parseFloat(String(a.wallet).replace(/[^0-9.-]+/g, "")) || 0; 
@@ -1895,7 +1940,8 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
-      {/* MODAL PROFILU KLIENTA - RESPONSYWNY NA MOBILE */}
+
+      {/* MODAL PROFILU KLIENTA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto overflow-x-hidden">
@@ -1910,7 +1956,7 @@ export default function KlienciPage() {
 
             <div className="p-4 sm:p-6 space-y-6 sm:space-y-8 flex-1">
               
-              {/* KARTA PROFILOWA: IMIĘ, AVATAR, DANE */}
+              {/* KARTA PROFILOWA */}
               <div className="flex flex-col-reverse sm:flex-row justify-between items-start sm:items-center gap-6 bg-slate-50/70 border border-slate-200 rounded-2xl p-4 sm:p-6 w-full">
                 <div className="space-y-3 flex-1 min-w-0 w-full">
                   <div className="flex items-center gap-3 flex-wrap">
@@ -2273,7 +2319,6 @@ export default function KlienciPage() {
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Aktywność klubowicza</h3>
                 
                 <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-                  {/* Przewijany horyzontalnie pasek 4 zakładek dopasowany do ekranu telefonu */}
                   <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-bold text-slate-600 overflow-x-auto no-scrollbar">
                     <button 
                       onClick={() => setActiveZapisyTab('nadchodzace')} 
@@ -2303,11 +2348,12 @@ export default function KlienciPage() {
 
                   <div className="overflow-x-auto w-full">
                     
-                    {/* 1. NADCHODZĄCE ZAJĘCIA (ZAPISY KLUBOWICZA ORAZ ADMINISTRATORA / KLUBU) */}
+                    {/* 1. NADCHODZĄCE ZAJĘCIA */}
                     {activeZapisyTab === 'nadchodzace' && (() => {
                       const now = new Date();
                       const nowTime = now.getTime();
                       const upcomingMap = new Map<string, any>();
+                      const seenSignatures = new Set<string>();
 
                       // A. Zapisy z globalnej tabeli 'zapisy_zajec'
                       (wszystkieZapisy || [])
@@ -2328,8 +2374,8 @@ export default function KlienciPage() {
                           
                           if (classStartMs >= nowTime) {
                             const uniqueKey = z.class_key || `${z.id}`;
+                            const sig = normalizeClassSignature(`${dateStr} ${timeStr}`, title);
                             
-                            // Poprawne rozróżnianie autora zapisu: domyślnie Klubowicz, chyba że jawnie wpisano admina/trenera/klub
                             let author = 'Klubowicz';
                             if (z.zapisujacy) {
                               const zLow = String(z.zapisujacy).toLowerCase();
@@ -2337,6 +2383,9 @@ export default function KlienciPage() {
                                 author = z.zapisujacy;
                               }
                             }
+
+                            seenSignatures.add(sig);
+                            seenSignatures.add(uniqueKey);
 
                             upcomingMap.set(uniqueKey, {
                               id: z.id || uniqueKey,
@@ -2351,19 +2400,25 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // B. Zapisy z tabeli 'automatyczne_zapisy' (zapisy stałe dokonane przez klub)
+                      // B. Zapisy z tabeli 'automatyczne_zapisy'
                       (automatyczneZapisy || [])
                         .filter((az: any) => String(az.klient_id) === String(profileClient.id))
                         .forEach((az: any) => {
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
                           if (stdClass) {
                             const uniqueKey = `auto_${az.id}_${az.grafik_id}`;
-                            if (!upcomingMap.has(uniqueKey)) {
+                            const fullDateStr = `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${stdClass.start || stdClass.start_time || ''}`.trim();
+                            const title = az.class_title || stdClass.title || stdClass.nazwa || 'Zajęcia stałe';
+                            const sig = normalizeClassSignature(fullDateStr, title);
+
+                            if (!upcomingMap.has(uniqueKey) && !seenSignatures.has(sig)) {
+                              seenSignatures.add(sig);
+                              seenSignatures.add(uniqueKey);
                               upcomingMap.set(uniqueKey, {
                                 id: uniqueKey,
                                 classKey: `auto_${az.grafik_id}`,
-                                data: `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${stdClass.start || stdClass.start_time || ''}`.trim(),
-                                zajecia: az.class_title || stdClass.title || stdClass.nazwa || 'Zajęcia stałe',
+                                data: fullDateStr,
+                                zajecia: title,
                                 status: 'ZAPIS STAŁY (KLUB)',
                                 zapisujacy: 'Klub (Administrator)',
                                 created_at: az.created_at || null,
@@ -2373,12 +2428,16 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // C. Dodatkowe nadchodzące zapisy z profilu klienta (JSONB w klienci)
+                      // C. Dodatkowe nadchodzące zapisy z profilu klienta
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         const classStartMs = parseClassDate(item.data);
                         if (classStartMs >= nowTime) {
                           const uniqueKey = item.classKey || `${item.id}`;
-                          if (!upcomingMap.has(uniqueKey)) {
+                          const sig = normalizeClassSignature(item.data, item.zajecia || 'Trening');
+
+                          if (!upcomingMap.has(uniqueKey) && !seenSignatures.has(sig) && !(item.classKey && seenSignatures.has(item.classKey))) {
+                            seenSignatures.add(sig);
+                            seenSignatures.add(uniqueKey);
                             upcomingMap.set(uniqueKey, {
                               id: item.id || uniqueKey,
                               classKey: item.classKey,
@@ -2465,11 +2524,12 @@ export default function KlienciPage() {
                       );
                     })()}
 
-                    {/* 2. HISTORIA PRZESZŁYCH ZAJĘĆ (OBECNY / NIEOBECNY + KTO ZAPISAŁ) */}
+                    {/* 2. HISTORIA PRZESZŁYCH ZAJĘĆ */}
                     {activeZapisyTab === 'historia_zajec' && (() => {
                       const now = new Date();
                       const nowTime = now.getTime();
                       const pastClassesList: any[] = [];
+                      const pastSignatures = new Set<string>();
 
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
@@ -2488,6 +2548,9 @@ export default function KlienciPage() {
                           const classStartMs = parseClassDate(`${dateStr} ${timeStr}`);
 
                           if (classStartMs > 0 && classStartMs < nowTime) {
+                            const sig = normalizeClassSignature(`${dateStr} ${timeStr}`, title);
+                            pastSignatures.add(sig);
+
                             let statusObecnosci = '⏳ Oczekuje na oznaczenie';
                             let obecnoscKlasa = 'bg-slate-100 text-slate-700 border-slate-300';
                             if (z.obecny) {
@@ -2520,22 +2583,27 @@ export default function KlienciPage() {
 
                       (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
                         const st = parseClassDate(item.data);
-                        let statusObecnosci = '🟢 OBECNY';
-                        let obecnoscKlasa = 'bg-emerald-100 text-emerald-800 border-emerald-300';
-                        const ob = (item.obecnosc || '').toLowerCase();
-                        if (ob.includes('nieobecny') || ob.includes('nieobecność')) {
-                          statusObecnosci = '🔴 NIEOBECNY';
-                          obecnoscKlasa = 'bg-rose-100 text-rose-800 border-rose-300';
+                        const sig = normalizeClassSignature(item.data, item.zajecia || 'Trening');
+                        
+                        if (!pastSignatures.has(sig)) {
+                          pastSignatures.add(sig);
+                          let statusObecnosci = '🟢 OBECNY';
+                          let obecnoscKlasa = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+                          const ob = (item.obecnosc || '').toLowerCase();
+                          if (ob.includes('nieobecny') || ob.includes('nieobecność')) {
+                            statusObecnosci = '🔴 NIEOBECNY';
+                            obecnoscKlasa = 'bg-rose-100 text-rose-800 border-rose-300';
+                          }
+                          pastClassesList.push({
+                            id: item.id || Date.now(),
+                            data: item.data,
+                            zajecia: item.zajecia,
+                            obecnoscTekst: statusObecnosci,
+                            obecnoscKlasa: obecnoscKlasa,
+                            zapisujacy: item.zapisujacy || 'Klub / System',
+                            _sortTime: st || nowTime - 1000
+                          });
                         }
-                        pastClassesList.push({
-                          id: item.id || Date.now(),
-                          data: item.data,
-                          zajecia: item.zajecia,
-                          obecnoscTekst: statusObecnosci,
-                          obecnoscKlasa: obecnoscKlasa,
-                          zapisujacy: item.zapisujacy || 'Klub / System',
-                          _sortTime: st || nowTime - 1000
-                        });
                       });
 
                       pastClassesList.sort((a, b) => b._sortTime - a._sortTime);
@@ -2584,9 +2652,10 @@ export default function KlienciPage() {
                       );
                     })()}
 
-                    {/* 3. HISTORIA WSZYSTKICH RUCHÓW (ZAPISY, WYPISY, KTO, KIEDY) */}
+                    {/* 3. HISTORIA WSZYSTKICH RUCHÓW */}
                     {activeZapisyTab === 'ruchy' && (() => {
                       const allMovements: any[] = [];
+                      const seenMovementIds = new Set<string>();
 
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
@@ -2594,6 +2663,7 @@ export default function KlienciPage() {
                           const parts = (z.class_key || '').split('_');
                           const dateStr = parts[1] || '';
                           const tTime = z.created_at ? new Date(z.created_at).getTime() : Date.now();
+                          const mId = `zapis_${z.id || z.class_key}`;
                           
                           let author = 'Klubowicz';
                           if (z.zapisujacy) {
@@ -2603,53 +2673,68 @@ export default function KlienciPage() {
                             }
                           }
 
-                          allMovements.push({
-                            id: `zapis_${z.id || z.class_key}`,
-                            typ: 'ZAPISANIE NA ZAJĘCIA',
-                            typKlasa: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-                            zajecia: z.class_title || `Trening (${dateStr})`,
-                            kto: author,
-                            dataZdarzenia: z.created_at ? new Date(z.created_at).toLocaleString('pl-PL') : 'Rejestracja w systemie',
-                            sortTime: tTime
-                          });
+                          if (!seenMovementIds.has(mId)) {
+                            seenMovementIds.add(mId);
+                            allMovements.push({
+                              id: mId,
+                              typ: 'ZAPISANIE NA ZAJĘCIA',
+                              typKlasa: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                              zajecia: z.class_title || `Trening (${dateStr})`,
+                              kto: author,
+                              dataZdarzenia: z.created_at ? new Date(z.created_at).toLocaleString('pl-PL') : 'Rejestracja w systemie',
+                              sortTime: tTime
+                            });
+                          }
                         });
 
                       (profileClient.zapisyWypisy || []).forEach((item: any) => {
                         const tTime = item.data_operacji ? new Date(item.data_operacji).getTime() : Date.now();
-                        allMovements.push({
-                          id: `wypis_${item.id || Math.random()}`,
-                          typ: 'WYPISANIE Z ZAJĘĆ',
-                          typKlasa: 'bg-rose-100 text-rose-800 border-rose-200',
-                          zajecia: `${item.zajecia || 'Zajęcia'} (${item.data || ''})`,
-                          kto: item.wypisujacy || 'Administrator / Trener',
-                          dataZdarzenia: item.data_operacji ? new Date(item.data_operacji).toLocaleString('pl-PL') : 'Wcześniejsza operacja',
-                          sortTime: tTime
-                        });
+                        const mId = `wypis_${item.id || item.classKey || Math.random()}`;
+                        if (!seenMovementIds.has(mId)) {
+                          seenMovementIds.add(mId);
+                          allMovements.push({
+                            id: mId,
+                            typ: 'WYPISANIE Z ZAJĘĆ',
+                            typKlasa: 'bg-rose-100 text-rose-800 border-rose-200',
+                            zajecia: `${item.zajecia || 'Zajęcia'} (${item.data || ''})`,
+                            kto: item.wypisujacy || 'Administrator / Trener',
+                            dataZdarzenia: item.data_operacji ? new Date(item.data_operacji).toLocaleString('pl-PL') : 'Wcześniejsza operacja',
+                            sortTime: tTime
+                          });
+                        }
                       });
 
                       (profileClient.transakcje || []).forEach((t: any) => {
                         if (t.typ_operacji === 'zajecia_wypis' && t.opis) {
                           const tTime = new Date(t.created_at).getTime();
-                          allMovements.push({
-                            id: `trans_wypis_${t.id}`,
-                            typ: 'WYPISANIE (LOG TRANSAKCJI)',
-                            typKlasa: 'bg-rose-100 text-rose-800 border-rose-200',
-                            zajecia: t.opis.replace('Wypisano z zajęć: ', '').replace('Automatycznie wypisano z ', 'Trening: '),
-                            kto: 'System / Panel Zarządzania',
-                            dataZdarzenia: new Date(t.created_at).toLocaleString('pl-PL'),
-                            sortTime: tTime
-                          });
+                          const mId = `trans_wypis_${t.id}`;
+                          if (!seenMovementIds.has(mId)) {
+                            seenMovementIds.add(mId);
+                            allMovements.push({
+                              id: mId,
+                              typ: 'WYPISANIE (LOG TRANSAKCJI)',
+                              typKlasa: 'bg-rose-100 text-rose-800 border-rose-200',
+                              zajecia: t.opis.replace('Wypisano z zajęć: ', '').replace('Automatycznie wypisano z ', 'Trening: '),
+                              kto: 'System / Panel Zarządzania',
+                              dataZdarzenia: new Date(t.created_at).toLocaleString('pl-PL'),
+                              sortTime: tTime
+                            });
+                          }
                         } else if (t.typ_operacji === 'zajecia_awans_rezerwa' && t.opis) {
                           const tTime = new Date(t.created_at).getTime();
-                          allMovements.push({
-                            id: `trans_awans_${t.id}`,
-                            typ: 'AWANS Z LISTY REZERWOWEJ',
-                            typKlasa: 'bg-blue-100 text-blue-800 border-blue-200',
-                            zajecia: t.opis,
-                            kto: 'Automatyczny algorytm kolejki',
-                            dataZdarzenia: new Date(t.created_at).toLocaleString('pl-PL'),
-                            sortTime: tTime
-                          });
+                          const mId = `trans_awans_${t.id}`;
+                          if (!seenMovementIds.has(mId)) {
+                            seenMovementIds.add(mId);
+                            allMovements.push({
+                              id: mId,
+                              typ: 'AWANS Z LISTY REZERWOWEJ',
+                              typKlasa: 'bg-blue-100 text-blue-800 border-blue-200',
+                              zajecia: t.opis,
+                              kto: 'Automatyczny algorytm kolejki',
+                              dataZdarzenia: new Date(t.created_at).toLocaleString('pl-PL'),
+                              sortTime: tTime
+                            });
+                          }
                         }
                       });
 
@@ -2697,11 +2782,10 @@ export default function KlienciPage() {
                       );
                     })()}
 
-                    {/* 4. HISTORIA ZAWIESZEŃ KARNETU (KLUBOWICZ + ADMINISTRACJA) */}
+                    {/* 4. HISTORIA ZAWIESZEŃ KARNETU */}
                     {activeZapisyTab === 'zawieszenia' && (() => {
                       const suspensionsList: any[] = [];
 
-                      // A. Zawieszenia z obiektów wewnątrz karnetyKlubowicza
                       (profileClient.karnetyKlubowicza || []).forEach((karnet: any) => {
                         if (karnet.zawieszonyOd) {
                           suspensionsList.push({
@@ -2733,7 +2817,6 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // B. Zawieszenia z kolumn 'historiaZawieszenGlobalna', 'historiaZawieszen' i 'historiazawieszen'
                       (profileClient.historiaZawieszen || []).forEach((hz: any) => {
                         const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik') || hz.by?.toLowerCase().includes('user') || !hz.kto;
                         suspensionsList.push({
@@ -2749,7 +2832,6 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // C. Rejestr transakcji związanych z zawieszeniem
                       (wszystkieTransakcje || [])
                         .filter((t: any) => String(t.klient_id) === String(profileClient.id))
                         .forEach((t: any) => {
@@ -3215,7 +3297,7 @@ export default function KlienciPage() {
                         <label className="font-bold text-slate-700 block text-[10px]">Dni zawieszenia</label>
                         <input 
                           type="number" 
-                          min="0"
+                          min="0" 
                           max="30"
                           placeholder="30"
                           value={newPassCustomSuspensionDays}
@@ -3615,9 +3697,9 @@ export default function KlienciPage() {
                         <label className="font-bold text-slate-700 block text-[10px]">Numer raty (np. 4 / 12)</label>
                         <input 
                           type="text" 
-                          value={newClient.customRata}
-                          onChange={(e) => setNewClient({...newClient, customRata: e.target.value})}
-                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                          value={newClient.customRata} 
+                          onChange={(e) => setNewClient({...newClient, customRata: e.target.value})} 
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
                         />
                       </div>
                       <div className="space-y-1">
@@ -3626,9 +3708,9 @@ export default function KlienciPage() {
                           type="number" 
                           min="0" 
                           max="30"
-                          value={newClient.customSuspensionDays}
-                          onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})}
-                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                          value={newClient.customSuspensionDays} 
+                          onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})} 
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
                         />
                       </div>
                     </div>
