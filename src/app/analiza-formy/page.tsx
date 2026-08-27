@@ -293,9 +293,14 @@ export default function AnalizaFormyPage() {
           new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
         );
         setEdycjeRedukcji(sorted);
-        const active = sorted.find((e: any) => e.status !== 'zakonczone') || sorted[0];
-        setSelectedEdycjaId(active.id);
-        await loadEdycjaDetails(active.id);
+        // Jeśli nie wybrano jeszcze edycji, wybierz najnowszą aktywną (lub pierwszą z brzegu)
+        if (!selectedEdycjaId) {
+          const active = sorted.find((e: any) => e.status !== 'zakonczone') || sorted[0];
+          setSelectedEdycjaId(active.id);
+          await loadEdycjaDetails(active.id);
+        } else {
+          await loadEdycjaDetails(selectedEdycjaId);
+        }
       }
     } catch (err) {
       console.error("Błąd ładowania wyzwań redukcji:", err);
@@ -572,7 +577,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Autentyczna integracja płatności Autopay (wzorowana na zakładce Portfel)
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string) => {
     setIsProcessingPayment(true);
     try {
@@ -1763,7 +1767,7 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {/* SELEKTOR EDYCJI Z NAPISEM "Wybierz edycję wyzwania" I ZABEZPIECZENIEM MOBILNYM */}
+                  {/* SELEKTOR EDYCJI Z NAPISEM "Wybierz edycję wyzwania" */}
                   {aktywneEdycje.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
@@ -2217,7 +2221,21 @@ export default function AnalizaFormyPage() {
                     className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between ${selectedEdycjaId === ed.id ? 'bg-amber-50 border-amber-400 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'}`}
                   >
                     <div>
-                      <div className="font-black text-xs text-slate-900">{ed.nazwa}</div>
+                      <div className="flex items-center justify-between">
+                        <div className="font-black text-xs text-slate-900">{ed.nazwa}</div>
+                        {appRole === 'admin' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteEdycja(ed.id);
+                            }}
+                            className="text-rose-500 hover:text-rose-700 text-xs font-bold p-1"
+                            title="Usuń to archiwalne wyzwanie"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </div>
                       <div className="text-[10px] text-slate-500 mt-1">
                         Zakończone: {ed.data_koniec} (Start: {ed.data_start})
                       </div>
@@ -2234,7 +2252,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA PRZEZ ADMINA */}
+      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA */}
       {isManualAddModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -2298,7 +2316,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: DODAWANIE NAGRODY (ADMIN) */}
+      {/* MODAL: DODAWANIE NAGRODY */}
       {isAddNagrodaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -2740,7 +2758,7 @@ export default function AnalizaFormyPage() {
                       step="0.1"
                       placeholder="cm"
                       value={formData.udo}
-                      onChange={(e) => setFormData({...formData, udo: e.target.value})}
+                      onChange={(e) => setFormData({...formData,udo: e.target.value})}
                       className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none"
                     />
                   </div>
