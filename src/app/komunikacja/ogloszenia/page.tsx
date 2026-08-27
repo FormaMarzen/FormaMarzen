@@ -13,6 +13,7 @@ interface KlientItem {
   imie: string;
   nazwisko: string;
   email: string;
+  avatarUrl?: string;
 }
 
 export default function OgloszeniaPage() {
@@ -99,19 +100,25 @@ export default function OgloszeniaPage() {
         ]);
       }
 
-      // 3. Pobieranie listy klubowiczów z tabeli klienci
+      // 3. Bezpieczne pobieranie listy klubowiczów z tabeli klienci
       const { data: klienciData, error: klienciError } = await supabase
         .from('klienci')
-        .select('id, "Imię", "Nazwisko", "E-mail", imie, nazwisko, email')
-        .order('Nazwisko', { ascending: true });
+        .select('*');
 
-      if (!klienciError && klienciData) {
-        const mappedClients: KlientItem[] = klienciData.map((k: any) => ({
-          id: k.id,
-          imie: k['Imię'] || k.imie || '',
-          nazwisko: k['Nazwisko'] || k.nazwisko || '',
-          email: k['E-mail'] || k.email || ''
-        }));
+      if (klienciError) {
+        console.error("Błąd pobierania listy klientów:", klienciError);
+      } else if (klienciData && klienciData.length > 0) {
+        const mappedClients: KlientItem[] = klienciData
+          .map((k: any) => ({
+            id: k.id,
+            imie: k['Imię'] || k.Imię || k.imie || '',
+            nazwisko: k['Nazwisko'] || k.Nazwisko || k.nazwisko || '',
+            email: k['E-mail'] || k.email || '',
+            avatarUrl: k.avatarUrl || null
+          }))
+          .filter(k => k.imie || k.nazwisko || k.email)
+          .sort((a, b) => (a.nazwisko || a.imie).localeCompare(b.nazwisko || b.imie, 'pl'));
+
         setKlienciBaza(mappedClients);
       }
     } catch (err) {
@@ -166,7 +173,7 @@ export default function OgloszeniaPage() {
 
   const filteredKlienciModal = useMemo(() => {
     if (!clientFilterQuery.trim()) return klienciBaza;
-    const q = clientFilterQuery.toLowerCase();
+    const q = clientFilterQuery.toLowerCase().trim();
     return klienciBaza.filter(k => 
       `${k.imie} ${k.nazwisko}`.toLowerCase().includes(q) ||
       k.email.toLowerCase().includes(q)
@@ -539,7 +546,7 @@ export default function OgloszeniaPage() {
 
                     <input 
                       type="text" 
-                      placeholder="Filtruj listę (imię, nazwisko, e-mail)..."
+                      placeholder="Filtruj listę (np. Joanna, Kowalski)..."
                       value={clientFilterQuery}
                       onChange={(e) => setClientFilterQuery(e.target.value)}
                       className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 font-medium"
@@ -559,10 +566,14 @@ export default function OgloszeniaPage() {
                             }`}
                           >
                             <div className="flex items-center gap-2.5">
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] uppercase ${
+                              <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] uppercase overflow-hidden ${
                                 isSelected ? 'bg-amber-500 text-slate-950 font-black' : 'bg-sky-100 text-sky-900'
                               }`}>
-                                {k.imie?.[0] || 'K'}{k.nazwisko?.[0] || ''}
+                                {k.avatarUrl ? (
+                                  <img src={k.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                                ) : (
+                                  `${k.imie?.[0] || 'K'}${k.nazwisko?.[0] || ''}`
+                                )}
                               </div>
                               <div>
                                 <div className="font-bold text-slate-900">{k.imie} {k.nazwisko}</div>
