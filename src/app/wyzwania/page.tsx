@@ -62,6 +62,9 @@ export default function WyzwaniaPage() {
   const [selectedWinnerId, setSelectedWinnerId] = useState<any | null>(null);
   const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
   
+  // Nowy stan do powiększania odznaki w okienku modalnym
+  const [selectedBadgeForZoom, setSelectedBadgeForZoom] = useState<any | null>(null);
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
@@ -952,7 +955,11 @@ export default function WyzwaniaPage() {
                     return (
                       <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
-                          <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0 overflow-hidden">
+                          <div 
+                            onClick={() => setSelectedBadgeForZoom(def)}
+                            className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0 overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                            title="Kliknij, aby powiększyć"
+                          >
                             {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
                           </div>
                           <div>
@@ -1003,24 +1010,31 @@ export default function WyzwaniaPage() {
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoja gablota odznak</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {odznaki.map((o: any) => (
-                    <div key={o.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex items-center gap-4">
-                      <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/50 flex items-center justify-center text-3xl shadow-inner shrink-0 overflow-hidden">
-                        {renderBadgeGraphic(o.klub_odznaki_definicje?.ikona, "w-16 h-16", "text-3xl")}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-black text-xs uppercase text-slate-900 tracking-wider">{o.klub_odznaki_definicje?.nazwa}</h4>
-                          <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">{o.klub_odznaki_definicje?.punkty || 1} pkt</span>
+                  {odznaki.map((o: any) => {
+                    const def = o.klub_odznaki_definicje || {};
+                    return (
+                      <div key={o.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex items-center gap-4">
+                        <div 
+                          onClick={() => setSelectedBadgeForZoom(def)}
+                          className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-400/50 flex items-center justify-center text-3xl shadow-inner shrink-0 overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                          title="Kliknij, aby powiększyć"
+                        >
+                          {renderBadgeGraphic(def.ikona, "w-16 h-16", "text-3xl")}
                         </div>
-                        <p className="text-[10px] text-slate-500 mt-0.5">{o.klub_odznaki_definicje?.opis}</p>
-                        {o.klub_odznaki_definicje?.warunek && (
-                          <p className="text-[9px] text-amber-800/80 mt-1 font-mono">🎯 {o.klub_odznaki_definicje?.warunek}</p>
-                        )}
-                        <div className="text-[9px] text-slate-400 font-mono mt-2 italic">Zdobyto: {new Date(o.przyznano_at).toLocaleDateString('pl-PL')}</div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-black text-xs uppercase text-slate-900 tracking-wider">{def.nazwa}</h4>
+                            <span className="text-[9px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5">{def.opis}</p>
+                          {def.warunek && (
+                            <p className="text-[9px] text-amber-800/80 mt-1 font-mono">🎯 {def.warunek}</p>
+                          )}
+                          <div className="text-[9px] text-slate-400 font-mono mt-2 italic">Zdobyto: {new Date(o.przyznano_at).toLocaleDateString('pl-PL')}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
 
                   {odznaki.length === 0 && (
                     <div className="col-span-full bg-white rounded-3xl p-12 text-center border-2 border-dashed border-sky-100 text-slate-400 text-xs space-y-2">
@@ -1502,6 +1516,52 @@ export default function WyzwaniaPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* MODAL: POWIĘKSZENIE ODZNAKI (ZOOM) */}
+      {selectedBadgeForZoom && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-[2.5rem] max-w-sm w-full p-8 shadow-2xl space-y-6 text-center border border-sky-100 relative">
+            <button 
+              onClick={() => setSelectedBadgeForZoom(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 font-bold text-base bg-slate-100 w-9 h-9 rounded-full flex items-center justify-center cursor-pointer transition-colors"
+            >
+              ✕
+            </button>
+
+            <div className="flex justify-center pt-2">
+              <div className="w-32 h-32 rounded-3xl bg-amber-500/10 border-2 border-amber-400/60 flex items-center justify-center text-6xl shadow-inner overflow-hidden">
+                {renderBadgeGraphic(selectedBadgeForZoom.ikona, "w-32 h-32", "text-6xl")}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="inline-block bg-amber-100 text-amber-800 font-black text-xs px-3 py-1 rounded-full">
+                {selectedBadgeForZoom.punkty || 1} punktów
+              </div>
+              <h3 className="font-black text-base uppercase text-slate-950 tracking-wider">
+                {selectedBadgeForZoom.nazwa}
+              </h3>
+              <p className="text-xs text-slate-600 font-medium">
+                {selectedBadgeForZoom.opis}
+              </p>
+              {selectedBadgeForZoom.warunek && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-[11px] text-amber-900 font-mono mt-3">
+                  🎯 <b>Warunek:</b> {selectedBadgeForZoom.warunek}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2">
+              <button 
+                onClick={() => setSelectedBadgeForZoom(null)}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Zamknij okienko
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
