@@ -750,27 +750,24 @@ export default function AnalizaFormyPage() {
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
   const activeUserParticipant = (uczestnicyRedukcji || []).find(u => String(u.klient_id) === String(activeUserKlientId));
 
-  const aktywneEdycje = useMemo(() => {
-    return (edycjeRedukcji || [])
-      .filter(e => e.status !== 'zakonczone')
-      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+  const wszystkyEdycjeDoWyboru = useMemo(() => {
+    return (edycjeRedukcji || []).sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
   }, [edycjeRedukcji]);
 
   const archiwalneEdycje = useMemo(() => {
-    return (edycjeRedukcji || [])
-      .filter(e => e.status === 'zakonczone')
-      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+    return (edycjeRedukcji || []).filter(e => e.status === 'zakonczone');
   }, [edycjeRedukcji]);
 
+  // Zabezpieczenie przed ucinaniem pierwszej litery nazwiska
   const formatParticipantDisplayName = (fullName: string) => {
     if (appRole === 'admin' || isCurrentUserJoined) {
       return fullName;
     }
-    const parts = (fullName || "").trim().split(" ");
+    const parts = (fullName || "").trim().split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {
       return `${parts[0]} ${parts[1].charAt(0)}.`;
     }
-    return fullName || "Klubowicz";
+    return parts[0] || "Klubowicz";
   };
 
   const rankingRedukcji = useMemo(() => {
@@ -1766,7 +1763,7 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {/* SELEKTOR WSZYSTKICH EDYCJI */}
+                  {/* SELEKTOR EDYCJI Z NAPISEM "Wybierz edycję wyzwania" */}
                   {edycjeRedukcji.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
@@ -1909,7 +1906,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA - WIDOCZNA DLA KLUBOWICZA TYLKO PO DOŁĄCZENIU */}
+          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA */}
           {(selectedKlient || currentUserId) && activeEdycjaObj && (appRole !== 'klubowicz' || isCurrentUserJoined) ? (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3 p-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 pb-3">
