@@ -482,6 +482,37 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  const handleDeleteEdycja = async (id: number) => {
+    if (!confirm("Czy na pewno chcesz CAŁOWICIE USUNĄĆ to wyzwanie oraz wszystkich jego uczestników i pomiary? Operacji tej nie można cofnąć!")) return;
+    const { error } = await supabase
+      .from('klub_redukcja_edycje')
+      .delete()
+      .eq('id', id);
+
+    if (!error) {
+      alert("Wyzwanie zostało trwale usunięte.");
+      setSelectedEdycjaId(null);
+      await fetchRedukcjaData();
+    } else {
+      alert("Błąd usuwania wyzwania: " + error.message);
+    }
+  };
+
+  const handleDeleteParticipant = async (uczestnikId: number) => {
+    if (!confirm("Czy na pewno chcesz usunąć tego uczestnika z wyzwania?")) return;
+    const { error } = await supabase
+      .from('klub_redukcja_uczestnicy')
+      .delete()
+      .eq('id', uczestnikId);
+
+    if (!error && selectedEdycjaId) {
+      alert("Uczestnik został usunięty z wyzwania.");
+      await loadEdycjaDetails(selectedEdycjaId);
+    } else if (error) {
+      alert("Błąd usuwania uczestnika: " + error.message);
+    }
+  };
+
   const handleManualAddParticipant = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEdycjaId || !manualAddKlientId) {
@@ -541,6 +572,53 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // Autentyczna integracja płatności Autopay (wzorowana na zakładce Portfel)
+  const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string) => {
+    setIsProcessingPayment(true);
+    try {
+      const response = await fetch('/api/autopay/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amount,
+          orderId: orderId,
+          userId: selectedKlient?.id || currentUserId,
+          description: description,
+          email: selectedKlient ? selectedKlient['E-mail'] : currentUserEmail,
+          type: type,
+          edycja_id: selectedEdycjaId
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nie udało się zainicjalizować płatności w Autopay');
+      }
+
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = data.gatewayUrl;
+      form.setAttribute('accept-charset', 'UTF-8');
+
+      Object.keys(data.payload).forEach((key) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = data.payload[key];
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      form.submit();
+
+    } catch (err: any) {
+      console.error("Błąd przekierowania do Autopay:", err);
+      alert(`Wystąpił błąd: ${err.message}`);
+      setIsProcessingPayment(false);
+    }
+  };
+
   const handleConfirmJoinWithPayment = async () => {
     const kId = selectedKlient?.id || currentUserId;
     if (!kId || !selectedEdycjaId) {
@@ -549,49 +627,22 @@ export default function AnalizaFormyPage() {
     }
 
     const edycja = edycjeRedukcji.find(e => e.id === selectedEdycjaId);
-    const kwota = edycja?.wpisowe_kwota || 30.00;
+    const kwota = Number(edycja?.wpisowe_kwota) || 30.00;
 
     if (selectedPaymentMethod === 'autopay') {
-      setIsProcessingPayment(true);
-      try {
-        const response = await fetch('/api/autopay/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            client_id: kId,
-            email: selectedKlient ? selectedKlient['E-mail'] : currentUserEmail,
-            title: `Wpisowe: ${edycja?.nazwa || 'Wyzwanie Redukcji'}`,
-            amount: kwota,
-            service_type: 'redukcja',
-            edycja_id: selectedEdycjaId
-          })
-        });
+      const orderId = `RED-${selectedEdycjaId}-${kId}-${Date.now()}`.substring(0, 32);
+      const opisOperacji = `Wpisowe: ${edycja?.nazwa || 'Wyzwanie Redukcji'}`;
 
-        const data = await response.json();
+      await supabase.from('klub_redukcja_uczestnicy').upsert([{
+        edycja_id: selectedEdycjaId,
+        klient_id: kId,
+        oplacone: false,
+        metoda_platnosci: 'autopay',
+        brak_pomiaru_koncowego: false,
+        punkty_calkowite: 0.00
+      }], { onConflict: 'edycja_id,klient_id' });
 
-        await supabase.from('klub_redukcja_uczestnicy').upsert([{
-          edycja_id: selectedEdycjaId,
-          klient_id: kId,
-          oplacone: false,
-          metoda_platnosci: 'autopay',
-          brak_pomiaru_koncowego: false,
-          punkty_calkowite: 0.00
-        }], { onConflict: 'edycja_id,klient_id' });
-
-        if (data && (data.paymentUrl || data.url)) {
-          window.location.href = data.paymentUrl || data.url;
-          return;
-        } else {
-          alert("Zapisano do wyzwania z metodą Autopay! Jeśli płatność się powiodła, odśwież stronę.");
-          setIsJoinModalOpen(false);
-          await loadEdycjaDetails(selectedEdycjaId);
-        }
-      } catch (err) {
-        console.error("Błąd inicjowania płatności Autopay:", err);
-        alert("Wystąpił problem z połączeniem z Autopay. Spróbuj ponownie lub wybierz gotówkę.");
-      } finally {
-        setIsProcessingPayment(false);
-      }
+      await redirectToAutopay(kwota, orderId, opisOperacji, 'redukcja_fee');
     } else {
       const { error } = await supabase.from('klub_redukcja_uczestnicy').upsert([{
         edycja_id: selectedEdycjaId,
@@ -696,7 +747,6 @@ export default function AnalizaFormyPage() {
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
   const activeUserParticipant = (uczestnicyRedukcji || []).find(u => String(u.klient_id) === String(activeUserKlientId));
 
-  // Sortowanie po dacie zakończenia malejąco (najpóźniej kończące się u góry)
   const aktywneEdycje = useMemo(() => {
     return (edycjeRedukcji || [])
       .filter(e => e.status !== 'zakonczone')
@@ -720,26 +770,18 @@ export default function AnalizaFormyPage() {
     return fullName || "Klubowicz";
   };
 
-  // Ranking z priorytetem DNF na samym dole
   const rankingRedukcji = useMemo(() => {
     return (uczestnicyRedukcji || []).map(uczestnik => {
       const klientObj = (klienci || []).find(k => String(k.id) === String(uczestnik.klient_id));
       const startP = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'start');
       const koniecP = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'koniec');
 
-      let pktWaga = 0;
-      let pktFat = 0;
-      let pktMuscle = 0;
-      let pktVisceral = 0;
       let totalPkt = 0;
       let hasBoth = false;
-
       let deltaWagaKg = 0;
       let deltaWagaProc = 0;
       let deltaFatProc = 0;
       let deltaMuscleKg = 0;
-      let deltaMuscleProc = 0;
-      let deltaVisceral = 0;
 
       if (startP && koniecP) {
         hasBoth = true;
@@ -756,13 +798,13 @@ export default function AnalizaFormyPage() {
         deltaWagaProc = sW > 0 ? ((sW - kW) / sW) * 100 : 0;
         deltaFatProc = sF - kF;
         deltaMuscleKg = kM - sM;
-        deltaMuscleProc = sM > 0 ? ((kM - sM) / sM) * 100 : 0;
-        deltaVisceral = sV - kV;
+        const deltaMuscleProc = sM > 0 ? ((kM - sM) / sM) * 100 : 0;
+        const deltaVisceral = sV - kV;
 
-        pktWaga = deltaWagaProc;
-        pktFat = deltaFatProc * 1.5;
-        pktMuscle = deltaMuscleProc * 1.2;
-        pktVisceral = deltaVisceral * 2.0;
+        const pktWaga = deltaWagaProc;
+        const pktFat = deltaFatProc * 1.5;
+        const pktMuscle = deltaMuscleProc * 1.2;
+        const pktVisceral = deltaVisceral * 2.0;
 
         totalPkt = parseFloat((pktWaga + pktFat + pktMuscle + pktVisceral).toFixed(2)) || 0;
       }
@@ -781,8 +823,6 @@ export default function AnalizaFormyPage() {
         deltaWagaProc,
         deltaFatProc,
         deltaMuscleKg,
-        deltaMuscleProc,
-        deltaVisceral,
         totalPkt
       };
     }).sort((a, b) => {
@@ -1713,17 +1753,24 @@ export default function AnalizaFormyPage() {
                       >
                         Zamknij wyzwanie ➔
                       </button>
+                      <button
+                        onClick={() => handleDeleteEdycja(activeEdycjaObj.id)}
+                        className="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        title="Usuń całe wyzwanie"
+                      >
+                        Usuń wyzwanie 🗑️
+                      </button>
                     </>
                   )}
 
-                  {/* SELEKTOR EDYCJI WYBORU */}
+                  {/* SELEKTOR EDYCJI Z NAPISEM "Wybierz edycję wyzwania" I ZABEZPIECZENIEM MOBILNYM */}
                   {aktywneEdycje.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
                       onChange={(e) => setSelectedEdycjaId(Number(e.target.value))}
-                      className="bg-sky-900/80 border border-sky-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none cursor-pointer"
+                      className="bg-sky-900/80 border border-sky-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none cursor-pointer max-w-[200px] sm:max-w-xs truncate"
                     >
-                      <option value="" disabled>Wybierz edycję wyzwania...</option>
+                      <option value="" disabled>Wybierz edycję wyzwania</option>
                       {aktywneEdycje.map(ed => (
                         <option key={ed.id} value={ed.id}>
                           {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec})
@@ -1919,7 +1966,7 @@ export default function AnalizaFormyPage() {
                             <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.waga_kg} kg` : '-'}</td>
                             <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.fat_proc}%` : '-'}</td>
                             <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.muscle_kg} kg` : '-'}</td>
-                            <td className="p-3 text-center font-black text-slate-900">{sP ? sP.visceral_level : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.visceral_level}` : '-'}</td>
                             <td className="p-3 text-right text-slate-400 font-bold">---</td>
                           </tr>
 
@@ -1932,7 +1979,7 @@ export default function AnalizaFormyPage() {
                             <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.waga_kg} kg` : '-'}</td>
                             <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.fat_proc}%` : '-'}</td>
                             <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.muscle_kg} kg` : '-'}</td>
-                            <td className="p-3 text-center font-black text-slate-900">{kP ? kP.visceral_level : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.visceral_level}` : '-'}</td>
                             <td className="p-3 text-right text-slate-400 font-bold">---</td>
                           </tr>
 
@@ -1958,7 +2005,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* GŁÓWNY RANKING Z CHECKBOXEM ADMINA */}
+          {/* GŁÓWNY RANKING Z OPCJĄ USUWANIA I DNF */}
           {activeEdycjaObj && (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-4 p-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-100 pb-3">
@@ -2018,7 +2065,6 @@ export default function AnalizaFormyPage() {
                           </div>
                         </td>
 
-                        {/* CHECKBOX OPŁACENIA W DOWOLNYM MOMENCIE */}
                         <td className="p-3 text-center">
                           {appRole === 'admin' ? (
                             <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all">
@@ -2106,7 +2152,7 @@ export default function AnalizaFormyPage() {
                         </td>
                         {appRole === 'admin' && (
                           <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
+                            <div className="flex items-center justify-center gap-1 flex-wrap">
                               <button
                                 onClick={() => handleOpenRedukcjaPomiarModal('start', row.klient_id)}
                                 className="bg-sky-50 hover:bg-sky-100 text-sky-800 font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
@@ -2126,7 +2172,14 @@ export default function AnalizaFormyPage() {
                                 className={`font-bold px-2 py-1 rounded text-[10px] cursor-pointer transition-colors ${row.brak_pomiaru_koncowego ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800 hover:bg-rose-200'}`}
                                 title={row.brak_pomiaru_koncowego ? "Przywróć do rankingu" : "Oznacz brak pomiaru końcowego (DNF)"}
                               >
-                                {row.brak_pomiaru_koncowego ? '✓ Przywróć' : '❌ Brak finału'}
+                                {row.brak_pomiaru_koncowego ? '✓ Przywróć' : '❌ DNF'}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteParticipant(row.id)}
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
+                                title="Usuń uczestnika z wyzwania"
+                              >
+                                Usuń
                               </button>
                             </div>
                           </td>
@@ -2460,7 +2513,7 @@ export default function AnalizaFormyPage() {
 
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setIsNewEdycjaModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer">Utwórz Wyzwanie</button>
+                <button type="submit" className="flex-1 bg-slate-900 text-white font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer">Utwórz Wyzwanie</button>
               </div>
             </form>
           </div>
