@@ -50,6 +50,39 @@ interface AnalizaFormyWpis {
   notatki_klubowicza?: string | null;
 }
 
+interface RedukcjaEdycja {
+  id: number;
+  nazwa: string;
+  data_start: string;
+  data_koniec: string;
+  wpisowe_kwota: number;
+  opis: string;
+  status: 'zapisy' | 'aktywne' | 'zakonczone';
+}
+
+interface RedukcjaUczestnik {
+  id: number;
+  edycja_id: number;
+  klient_id: number | string;
+  oplacone: boolean;
+  metoda_platnosci?: 'autopay' | 'gotowka' | 'inna';
+  punkty_calkowite: number;
+  data_zapisu: string;
+  klient?: Klient;
+}
+
+interface RedukcjaPomiar {
+  id: number;
+  edycja_id: number;
+  klient_id: number | string;
+  etap: 'start' | 'koniec';
+  data_pomiaru: string;
+  waga_kg: number;
+  fat_proc: number;
+  muscle_kg: number;
+  visceral_level: number;
+}
+
 // ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
 const fetchAllFromSupabase = async (
   table: string, 
@@ -84,6 +117,7 @@ export default function AnalizaFormyPage() {
   const [activeTab, setActiveTab] = useState<'pomiary' | 'makro' | 'redukcja'>('pomiary');
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
+  const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Wyszukiwarka i wybór klienta dla Admina / Trenera
@@ -92,13 +126,47 @@ export default function AnalizaFormyPage() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
 
-  // Pomiary i formularze
+  // Pomiary ogólne i formularze (Zakładka 1 & 2)
   const [measurements, setMeasurements] = useState<AnalizaFormyWpis[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [editingMeasurementId, setEditingMeasurementId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Stan formularza nowego / edytowanego pomiaru
+  // Stany dla Modułu Wyzwania Redukcji (Zakładka 3)
+  const [edycjeRedukcji, setEdycjeRedukcji] = useState<RedukcjaEdycja[]>([]);
+  const [selectedEdycjaId, setSelectedEdycjaId] = useState<number | null>(null);
+  const [uczestnicyRedukcji, setUczestnicyRedukcji] = useState<RedukcjaUczestnik[]>([]);
+  const [pomiaryRedukcji, setPomiaryRedukcji] = useState<RedukcjaPomiar[]>([]);
+  const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
+  
+  // Modale dla Redukcji
+  const [isNewEdycjaModalOpen, setIsNewEdycjaModalOpen] = useState<boolean>(false);
+  const [isRedukcjaPomiarModalOpen, setIsRedukcjaPomiarModalOpen] = useState<boolean>(false);
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState<boolean>(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'autopay' | 'gotowka'>('autopay');
+  const [targetPomiarEtap, setTargetPomiarEtap] = useState<'start' | 'koniec'>('start');
+  const [targetPomiarKlientId, setTargetPomiarKlientId] = useState<number | string | null>(null);
+
+  // Formularz nowej edycji wyzwania
+  const [edycjaFormData, setEdycjaFormData] = useState({
+    nazwa: "Wyzwanie Redukcji Tkanki Tłuszczowej",
+    data_start: new Date().toISOString().split('T')[0],
+    data_koniec: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    wpisowe_kwota: "30.00",
+    opis: "Wspólne wyzwanie utraty tkanki tłuszczowej. Pomiary na analizatorze na początku i końcu wyzwania. Pula nagród finansowana z wpisowego!",
+    status: 'aktywne'
+  });
+
+  // Formularz pomiaru analizy składu ciała w wyzwaniu (Tylko Admin)
+  const [redukcjaPomiarForm, setRedukcjaPomiarForm] = useState({
+    data_pomiaru: new Date().toISOString().split('T')[0],
+    waga_kg: '',
+    fat_proc: '',
+    muscle_kg: '',
+    visceral_level: ''
+  });
+
+  // Stan formularza nowego / edytowanego pomiaru ogólnego
   const [formData, setFormData] = useState({
     data_pomiaru: new Date().toISOString().split('T')[0],
     wzrost: '',
@@ -124,12 +192,12 @@ export default function AnalizaFormyPage() {
     notatki_klubowicza: ''
   });
 
-  // Stany dla Kalkulatora Katch-McArdle z uwzględnieniem płci i celów procentowych
+  // Stany dla Kalkulatora Katch-McArdle
   const [calcWeight, setCalcWeight] = useState<string>('');
   const [calcFat, setCalcFat] = useState<string>('');
-  const [calcGender, setCalcGender] = useState<string>('mezczyzna'); // 'mezczyzna' lub 'kobieta'
+  const [calcGender, setCalcGender] = useState<string>('mezczyzna');
   const [calcPal, setCalcPal] = useState<string>('1.4');
-  const [calcGoal, setCalcGoal] = useState<string>('-0.2'); // domyślnie -20%
+  const [calcGoal, setCalcGoal] = useState<string>('-0.2');
   const [calcResult, setCalcResult] = useState<{
     bmr: number;
     tdee: number;
@@ -150,9 +218,17 @@ export default function AnalizaFormyPage() {
         const cleanEmail = email.toLowerCase().trim();
         setCurrentUserEmail(cleanEmail);
 
+        const clientsData = await fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 10);
+        const mappedClients = (clientsData || []) as unknown as Klient[];
+        setKlienci(mappedClients);
+
+        const myClientProfile = mappedClients.find(c => (c['E-mail'] || '').toLowerCase().trim() === cleanEmail);
+        if (myClientProfile) {
+          setCurrentUserId(myClientProfile.id);
+        }
+
         if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
           setAppRole('admin');
-          await fetchClientsList();
         } else {
           const { data: trenerData } = await supabase
             .from('trenerzy')
@@ -162,43 +238,26 @@ export default function AnalizaFormyPage() {
 
           if (trenerData) {
             setAppRole('trener');
-            await fetchClientsList();
-
-            // Pobieramy dane osobowe trenera z tabeli 'klienci', aby traktować go jak klubowicza w jego własnej zakładce
-            const { data: trenerKlientData } = await supabase
-              .from('klienci')
-              .select('*')
-              .ilike('E-mail', cleanEmail)
-              .maybeSingle();
-
-            if (trenerKlientData) {
-              const k = trenerKlientData as unknown as Klient;
-              setSelectedKlient(k);
-              const g = (k.gender || k.Płeć || k.plec || '').toLowerCase();
+            if (myClientProfile) {
+              setSelectedKlient(myClientProfile);
+              const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
               if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
               else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+              await fetchMeasurements(myClientProfile.id, cleanEmail);
             }
-
-            await fetchMeasurements(trenerKlientData ? (trenerKlientData as any).id : 0, cleanEmail);
           } else {
             setAppRole('klubowicz');
-            const { data: klientData } = await supabase
-              .from('klienci')
-              .select('*')
-              .ilike('E-mail', cleanEmail)
-              .maybeSingle();
-
-            if (klientData) {
-              const k = klientData as unknown as Klient;
-              setSelectedKlient(k);
-              const g = (k.gender || k.Płeć || k.plec || '').toLowerCase();
+            if (myClientProfile) {
+              setSelectedKlient(myClientProfile);
+              const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
               if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
               else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
-
-              await fetchMeasurements(k.id, cleanEmail);
+              await fetchMeasurements(myClientProfile.id, cleanEmail);
             }
           }
         }
+
+        await fetchRedukcjaData();
       }
       setIsLoading(false);
     };
@@ -206,16 +265,46 @@ export default function AnalizaFormyPage() {
     initAuth();
   }, []);
 
-  // 2. Pobieranie bazy klientów dla autouzupełniania wyszukiwarki (Admin/Trener)
-  const fetchClientsList = async () => {
-    const data = await fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 10);
-
-    if (data) {
-      setKlienci(data as unknown as Klient[]);
+  // 2. Pobieranie danych modułu redukcji
+  const fetchRedukcjaData = async () => {
+    try {
+      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'id', false, 2);
+      if (edycjeData && edycjeData.length > 0) {
+        setEdycjeRedukcji(edycjeData as RedukcjaEdycja[]);
+        const active = edycjeData.find((e: any) => e.status === 'aktywne') || edycjeData[0];
+        setSelectedEdycjaId(active.id);
+        await loadEdycjaDetails(active.id);
+      }
+    } catch (err) {
+      console.error("Błąd ładowania wyzwań redukcji:", err);
     }
   };
 
-  // 3. Pobieranie pomiarów dla wybranego użytkownika
+  const loadEdycjaDetails = async (edycjaId: number) => {
+    try {
+      const [uczestnicyRes, pomiaryRes] = await Promise.all([
+        supabase.from('klub_redukcja_uczestnicy').select('*').eq('edycja_id', edycjaId),
+        supabase.from('klub_redukcja_pomiary').select('*').eq('edycja_id', edycjaId)
+      ]);
+
+      if (uczestnicyRes.data) {
+        setUczestnicyRedukcji(uczestnicyRes.data as RedukcjaUczestnik[]);
+      }
+      if (pomiaryRes.data) {
+        setPomiaryRedukcji(pomiaryRes.data as RedukcjaPomiar[]);
+      }
+    } catch (err) {
+      console.error("Błąd ładowania szczegółów edycji:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedEdycjaId) {
+      loadEdycjaDetails(selectedEdycjaId);
+    }
+  }, [selectedEdycjaId]);
+
+  // 3. Pobieranie pomiarów ogólnych dla wybranego użytkownika
   const fetchMeasurements = async (klientId: number | string, email: string) => {
     let query = supabase
       .from('analiza_formy')
@@ -236,7 +325,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Zmiana wybranego klienta z wyszukiwarki
   const handleSelectClient = (klient: Klient) => {
     setSelectedKlient(klient);
     setSearchQuery(`${klient.Imię} ${klient.Nazwisko}`);
@@ -249,67 +337,7 @@ export default function AnalizaFormyPage() {
     fetchMeasurements(klient.id, klient['E-mail']);
   };
 
-  // Otwarcie modala dodawania nowego pomiaru
-  const handleOpenAddModal = () => {
-    setEditingMeasurementId(null);
-    setFormData({
-      data_pomiaru: new Date().toISOString().split('T')[0],
-      wzrost: measurements[0]?.wzrost ? String(measurements[0].wzrost) : '',
-      waga: '',
-      obwod_pasa: '',
-      klatka: '',
-      ramie: '',
-      talia: '',
-      biodra: '',
-      udo: '',
-      lydka: '',
-      tkanka_tluszczowa: '',
-      miesnie: '',
-      kosci: '',
-      wiek_metaboliczny: '',
-      woda: '',
-      tluszcz_wisceralny: '',
-      kcal: measurements[0]?.kcal ? String(measurements[0].kcal) : '',
-      bialko: measurements[0]?.bialko ? String(measurements[0].bialko) : '',
-      tluszcz: measurements[0]?.tluszcz ? String(measurements[0].tluszcz) : '',
-      weglowodany: measurements[0]?.weglowodany ? String(measurements[0].weglowodany) : '',
-      uwagi_trenera: '',
-      notatki_klubowicza: ''
-    });
-    setIsAddModalOpen(true);
-  };
-
-  // Otwarcie modala w trybie edycji istniejącego pomiaru
-  const handleOpenEditModal = (m: AnalizaFormyWpis) => {
-    setEditingMeasurementId(m.id);
-    setFormData({
-      data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
-      wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : '',
-      waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
-      obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
-      klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
-      ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
-      talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
-      biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
-      udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
-      lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
-      tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
-      miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
-      kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
-      wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
-      woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
-      tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
-      kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
-      bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
-      tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
-      weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
-      uwagi_trenera: m.uwagi_trenera || '',
-      notatki_klubowicza: m.notatki_klubowicza || ''
-    });
-    setIsAddModalOpen(true);
-  };
-
-  // Obsługa zapisu (dodanie lub aktualizacja)
+  // Obsługa zapisu pomiaru ogólnego (Zakładka 1)
   const handleSubmitMeasurement = async (e: React.FormEvent) => {
     e.preventDefault();
     const targetKlientId = selectedKlient ? selectedKlient.id : null;
@@ -381,7 +409,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Usuwanie wpisu
   const handleDeleteMeasurement = async (id: number) => {
     if (!confirm("Czy na pewno chcesz trwale usunąć ten pomiar?")) return;
     const { error } = await supabase.from('analiza_formy').delete().eq('id', id);
@@ -392,7 +419,244 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Filtr podpowiedzi dla wyszukiwarki (po min. 2 znakach)
+  // =========================================================================
+  // LOGIKA PŁATNOŚCI AUTOPAY ORAZ GOTÓWKĄ DLA WYZWANIA REDUKCJI (ZAKŁADKA 3)
+  // =========================================================================
+
+  const handleCreateEdycja = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!edycjaFormData.nazwa.trim()) return;
+
+    const { data, error } = await supabase.from('klub_redukcja_edycje').insert([{
+      nazwa: edycjaFormData.nazwa.trim(),
+      data_start: edycjaFormData.data_start,
+      data_koniec: edycjaFormData.data_koniec,
+      wpisowe_kwota: parseFloat(edycjaFormData.wpisowe_kwota) || 30.00,
+      opis: edycjaFormData.opis.trim(),
+      status: edycjaFormData.status
+    }]).select();
+
+    if (!error && data) {
+      alert("Nowa edycja wyzwania została utworzona!");
+      setIsNewEdycjaModalOpen(false);
+      await fetchRedukcjaData();
+    } else {
+      alert("Błąd tworzenia edycji: " + error?.message);
+    }
+  };
+
+  // Inicjacja dołączenia i wyboru metody płatności
+  const handleConfirmJoinWithPayment = async () => {
+    const kId = selectedKlient?.id || currentUserId;
+    if (!kId || !selectedEdycjaId) {
+      alert("Nie można zidentyfikować profilu klubowicza.");
+      return;
+    }
+
+    const edycja = edycjeRedukcji.find(e => e.id === selectedEdycjaId);
+    const kwota = edycja?.wpisowe_kwota || 30.00;
+
+    // 1. PŁATNOŚĆ ONLINE (AUTOPAY)
+    if (selectedPaymentMethod === 'autopay') {
+      setIsProcessingPayment(true);
+      try {
+        const response = await fetch('/api/autopay/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: kId,
+            email: selectedKlient ? selectedKlient['E-mail'] : currentUserEmail,
+            title: `Wpisowe: ${edycja?.nazwa || 'Wyzwanie Redukcji'}`,
+            amount: kwota,
+            service_type: 'redukcja',
+            edycja_id: selectedEdycjaId
+          })
+        });
+
+        const data = await response.json();
+
+        // Dodajemy wstępny rekord uczestnika
+        await supabase.from('klub_redukcja_uczestnicy').upsert([{
+          edycja_id: selectedEdycjaId,
+          klient_id: kId,
+          oplacone: false,
+          metoda_platnosci: 'autopay',
+          punkty_calkowite: 0.00
+        }], { onConflict: 'edycja_id,klient_id' });
+
+        if (data && (data.paymentUrl || data.url)) {
+          window.location.href = data.paymentUrl || data.url;
+          return;
+        } else {
+          // Fallback symulacyjny jeśli endpoint nie zwraca zewnętrznego URL
+          alert("Zapisano do wyzwania z metodą Autopay! Jeśli płatność się powiodła, odśwież stronę.");
+          setIsJoinModalOpen(false);
+          await loadEdycjaDetails(selectedEdycjaId);
+        }
+      } catch (err) {
+        console.error("Błąd inicjowania płatności Autopay:", err);
+        alert("Wystąpił problem z połączeniem z Autopay. Spróbuj ponownie lub wybierz gotówkę.");
+      } finally {
+        setIsProcessingPayment(false);
+      }
+    } 
+    // 2. PŁATNOŚĆ GOTÓWKĄ NA RECEPCJI
+    else {
+      const { error } = await supabase.from('klub_redukcja_uczestnicy').upsert([{
+        edycja_id: selectedEdycjaId,
+        klient_id: kId,
+        oplacone: false,
+        metoda_platnosci: 'gotowka',
+        punkty_calkowite: 0.00
+      }], { onConflict: 'edycja_id,klient_id' });
+
+      if (!error) {
+        alert("Zostałeś pomyślnie zarejestrowany! Wybrałeś płatność gotówką na recepcji — poproś trenera o potwierdzenie wpłaty w systemie.");
+        setIsJoinModalOpen(false);
+        await loadEdycjaDetails(selectedEdycjaId);
+      } else {
+        alert("Błąd zapisu: " + error.message);
+      }
+    }
+  };
+
+  // Bezpośredni checkbox / przełącznik opłacenia przez Admina / Trenera
+  const handleCheckboxPaymentToggle = async (uczestnikId: number, newStatus: boolean) => {
+    const { error } = await supabase
+      .from('klub_redukcja_uczestnicy')
+      .update({ oplacone: newStatus })
+      .eq('id', uczestnikId);
+
+    if (!error && selectedEdycjaId) {
+      await loadEdycjaDetails(selectedEdycjaId);
+    } else if (error) {
+      alert("Błąd aktualizacji statusu płatności: " + error.message);
+    }
+  };
+
+  const handleOpenRedukcjaPomiarModal = (etap: 'start' | 'koniec', klientId: number | string) => {
+    setTargetPomiarEtap(etap);
+    setTargetPomiarKlientId(klientId);
+
+    const existing = pomiaryRedukcji.find(p => String(p.klient_id) === String(klientId) && p.etap === etap);
+
+    setRedukcjaPomiarForm({
+      data_pomiaru: existing ? existing.data_pomiaru : new Date().toISOString().split('T')[0],
+      waga_kg: existing ? String(existing.waga_kg) : '',
+      fat_proc: existing ? String(existing.fat_proc) : '',
+      muscle_kg: existing ? String(existing.muscle_kg) : '',
+      visceral_level: existing ? String(existing.visceral_level) : ''
+    });
+
+    setIsRedukcjaPomiarModalOpen(true);
+  };
+
+  const handleSaveRedukcjaPomiar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEdycjaId || !targetPomiarKlientId) return;
+
+    const payload = {
+      edycja_id: selectedEdycjaId,
+      klient_id: targetPomiarKlientId,
+      etap: targetPomiarEtap,
+      data_pomiaru: redukcjaPomiarForm.data_pomiaru,
+      waga_kg: parseFloat(redukcjaPomiarForm.waga_kg),
+      fat_proc: parseFloat(redukcjaPomiarForm.fat_proc),
+      muscle_kg: parseFloat(redukcjaPomiarForm.muscle_kg),
+      visceral_level: parseInt(redukcjaPomiarForm.visceral_level)
+    };
+
+    const { error } = await supabase
+      .from('klub_redukcja_pomiary')
+      .upsert(payload, { onConflict: 'edycja_id,klient_id,etap' });
+
+    if (!error) {
+      await supabase.rpc('fn_przelicz_wynik_redukcji', {
+        p_edycja_id: selectedEdycjaId,
+        p_klient_id: targetPomiarKlientId
+      });
+
+      alert(`Pomiar ${targetPomiarEtap === 'start' ? 'POCZĄTKOWY' : 'KOŃCOWY'} został pomyślnie zapisany!`);
+      setIsRedukcjaPomiarModalOpen(false);
+      await loadEdycjaDetails(selectedEdycjaId);
+    } else {
+      alert("Błąd zapisu pomiaru: " + error.message);
+    }
+  };
+
+  const activeEdycjaObj = edycjeRedukcji.find(e => e.id === selectedEdycjaId) || null;
+  const activeUserKlientId = selectedKlient?.id || currentUserId;
+  const isCurrentUserJoined = uczestnicyRedukcji.some(u => String(u.klient_id) === String(activeUserKlientId));
+  const activeUserParticipant = uczestnicyRedukcji.find(u => String(u.klient_id) === String(activeUserKlientId));
+
+  const rankingRedukcji = useMemo(() => {
+    return uczestnicyRedukcji.map(uczestnik => {
+      const klientObj = klienci.find(k => String(k.id) === String(uczestnik.klient_id));
+      const startP = pomiaryRedukcji.find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'start');
+      const koniecP = pomiaryRedukcji.find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'koniec');
+
+      let pktWaga = 0;
+      let pktFat = 0;
+      let pktMuscle = 0;
+      let pktVisceral = 0;
+      let totalPkt = 0;
+      let hasBoth = false;
+
+      let deltaWagaKg = 0;
+      let deltaWagaProc = 0;
+      let deltaFatProc = 0;
+      let deltaMuscleKg = 0;
+      let deltaMuscleProc = 0;
+      let deltaVisceral = 0;
+
+      if (startP && koniecP) {
+        hasBoth = true;
+        deltaWagaKg = koniecP.waga_kg - startP.waga_kg;
+        deltaWagaProc = ((startP.waga_kg - koniecP.waga_kg) / startP.waga_kg) * 100;
+        deltaFatProc = startP.fat_proc - koniecP.fat_proc;
+        deltaMuscleKg = koniecP.muscle_kg - startP.muscle_kg;
+        deltaMuscleProc = ((koniecP.muscle_kg - startP.muscle_kg) / startP.muscle_kg) * 100;
+        deltaVisceral = startP.visceral_level - koniecP.visceral_level;
+
+        pktWaga = deltaWagaProc;
+        pktFat = deltaFatProc * 1.5;
+        pktMuscle = deltaMuscleProc * 1.2;
+        pktVisceral = deltaVisceral * 2.0;
+
+        totalPkt = parseFloat((pktWaga + pktFat + pktMuscle + pktVisceral).toFixed(2));
+      }
+
+      return {
+        ...uczestnik,
+        klientName: klientObj ? `${klientObj.Imię} ${klientObj.Nazwisko}` : 'Klubowicz',
+        klientAvatar: klientObj?.avatarUrl || klientObj?.AvatarUrl || null,
+        startP,
+        koniecP,
+        hasBoth,
+        deltaWagaKg,
+        deltaWagaProc,
+        deltaFatProc,
+        deltaMuscleKg,
+        deltaMuscleProc,
+        deltaVisceral,
+        totalPkt
+      };
+    }).sort((a, b) => b.totalPkt - a.totalPkt);
+  }, [uczestnicyRedukcji, pomiaryRedukcji, klienci]);
+
+  const renderTrendIndicator = (val: number, isGoodWhenLower = true, unit = "") => {
+    if (val === 0) return <span className="text-slate-400 font-bold">0.0 {unit}</span>;
+    const isPositive = val > 0;
+    const isGood = isGoodWhenLower ? !isPositive : isPositive;
+
+    return (
+      <span className={`inline-flex items-center gap-0.5 font-black text-xs ${isGood ? 'text-emerald-600' : 'text-rose-600'}`}>
+        <span>{isPositive ? '↑' : '↓'}</span>
+        <span>{Math.abs(val).toFixed(1)}{unit}</span>
+      </span>
+    );
+  };
+
   const searchResults = useMemo(() => {
     if (searchQuery.trim().length < 2) return [];
     return klienci.filter(k => 
@@ -411,7 +675,6 @@ export default function AnalizaFormyPage() {
     return diff > 0 ? `+${diff.toFixed(1)}` : `${diff.toFixed(1)}`;
   };
 
-  // Filtrowanie pomiarów z ostatnich 24 miesięcy i sortowanie rosnąco chronologicznie do wykresów
   const chartData24Months = useMemo(() => {
     const cutoffDate = new Date();
     cutoffDate.setMonth(cutoffDate.getMonth() - 24);
@@ -421,12 +684,11 @@ export default function AnalizaFormyPage() {
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
-  // Wzór Katch-McArdle uwzględniający płeć oraz procentowe cele (-20%, -10%, 0%, +10%, +20%)
   const calculateKatchMcArdle = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
     const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
     const pal = parseFloat(calcPal);
-    const goalModifier = parseFloat(calcGoal); // np. -0.2, -0.1, 0, 0.1, 0.2
+    const goalModifier = parseFloat(calcGoal);
 
     if (!w || w <= 0 || !bf || bf <= 0) {
       alert("Wprowadź prawidłową wagę (kg) oraz poziom tkanki tłuszczowej (%).");
@@ -460,7 +722,6 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // Komponent renderujący pojedynczy wykres SVG
   const renderLineChart = (
     title: string, 
     dataKey: keyof AnalizaFormyWpis, 
@@ -583,18 +844,54 @@ export default function AnalizaFormyPage() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
+          {activeTab === 'pomiary' && ((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
             <button
-              onClick={handleOpenAddModal}
+              onClick={() => {
+                setEditingMeasurementId(null);
+                setFormData({
+                  data_pomiaru: new Date().toISOString().split('T')[0],
+                  wzrost: measurements[0]?.wzrost ? String(measurements[0].wzrost) : '',
+                  waga: '',
+                  obwod_pasa: '',
+                  klatka: '',
+                  ramie: '',
+                  talia: '',
+                  biodra: '',
+                  udo: '',
+                  lydka: '',
+                  tkanka_tluszczowa: '',
+                  miesnie: '',
+                  kosci: '',
+                  wiek_metaboliczny: '',
+                  woda: '',
+                  tluszcz_wisceralny: '',
+                  kcal: measurements[0]?.kcal ? String(measurements[0].kcal) : '',
+                  bialko: measurements[0]?.bialko ? String(measurements[0].bialko) : '',
+                  tluszcz: measurements[0]?.tluszcz ? String(measurements[0].tluszcz) : '',
+                  weglowodany: measurements[0]?.weglowodany ? String(measurements[0].weglowodany) : '',
+                  uwagi_trenera: '',
+                  notatki_klubowicza: ''
+                });
+                setIsAddModalOpen(true);
+              }}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
             >
               <span>+</span> {appRole === 'klubowicz' || appRole === 'trener' ? 'Dodaj swój pomiar' : 'Dodaj pomiar'}
             </button>
           )}
+
+          {activeTab === 'redukcja' && appRole === 'admin' && (
+            <button
+              onClick={() => setIsNewEdycjaModalOpen(true)}
+              className="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
+            >
+              <span>+</span> Nowa edycja wyzwania
+            </button>
+          )}
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK (RESPONSYWNA SIATKA DLA MOBILE) */}
+      {/* PASEK ZAKŁADEK */}
       <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -655,15 +952,10 @@ export default function AnalizaFormyPage() {
               <button
                 onClick={async () => {
                   setSearchQuery('');
-                  // Przywracamy dane trenera po wyczyszczeniu wyszukiwania
-                  const { data: trenerKlientData } = await supabase
-                    .from('klienci')
-                    .select('*')
-                    .ilike('E-mail', currentUserEmail)
-                    .maybeSingle();
-                  if (trenerKlientData) {
-                    setSelectedKlient(trenerKlientData as unknown as Klient);
-                    fetchMeasurements((trenerKlientData as any).id, currentUserEmail);
+                  const myProfile = klienci.find(c => c['E-mail']?.toLowerCase().trim() === currentUserEmail);
+                  if (myProfile) {
+                    setSelectedKlient(myProfile);
+                    fetchMeasurements(myProfile.id, currentUserEmail);
                   } else {
                     setSelectedKlient(null);
                     setMeasurements([]);
@@ -675,7 +967,6 @@ export default function AnalizaFormyPage() {
               </button>
             )}
 
-            {/* Lista rozwijana wyników wyszukiwania */}
             {isSearchFocused && searchResults.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-30 max-h-64 overflow-y-auto divide-y divide-sky-100">
                 {searchResults.map((klient) => {
@@ -712,7 +1003,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* KARTA WYBRANEGO PODOPIECZNEGO Z INFORMACJĄ O PŁCI */}
+      {/* KARTA WYBRANEGO PODOPIECZNEGO */}
       {selectedKlient ? (
         <div className="bg-gradient-to-r from-sky-950 to-slate-900 p-4 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
@@ -769,8 +1060,6 @@ export default function AnalizaFormyPage() {
       {/* ========================================================================= */}
       {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
-          
-          {/* KAFLE OSTATNIEGO POMIARU */}
           {latestMeasurement ? (
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
               <div className="bg-white p-3.5 rounded-2xl border border-sky-200 shadow-sm text-center">
@@ -843,7 +1132,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* TABELA POMIARÓW Z MOŻLIWOŚCIą EDYCJI */}
+          {/* TABELA HISTORII POMIARÓW OGÓLNYCH */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -910,7 +1199,34 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
-                              onClick={() => handleOpenEditModal(m)}
+                              onClick={() => {
+                                setEditingMeasurementId(m.id);
+                                setFormData({
+                                  data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
+                                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : '',
+                                  waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
+                                  obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
+                                  klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
+                                  ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
+                                  talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
+                                  biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
+                                  udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
+                                  lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
+                                  tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
+                                  miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
+                                  kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
+                                  wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
+                                  woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
+                                  tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
+                                  kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
+                                  bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
+                                  tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
+                                  weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
+                                  uwagi_trenera: m.uwagi_trenera || '',
+                                  notatki_klubowicza: m.notatki_klubowicza || ''
+                                });
+                                setIsAddModalOpen(true);
+                              }}
                               className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
                               title="Edytuj ten wpis"
                             >
@@ -939,16 +1255,14 @@ export default function AnalizaFormyPage() {
             </div>
           </div>
 
-          {/* ========================================================================= */}
-          {/* SEKCJA WYKRESÓW ZA OSTATNIE 24 MIESIĄCE */}
-          {/* ========================================================================= */}
+          {/* WYKRESY */}
           <div className="space-y-4 pt-4">
             <div className="flex items-center justify-between border-b border-sky-200 pb-2">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
                 <span>📈</span> Wykresy Progresu (Ostatnie 24 Miesiące)
               </h3>
               <span className="text-xs text-slate-500 font-bold">
-                Liczba pomiarów na osi: {chartData24Months.length}
+                Liczba pomiarów: {chartData24Months.length}
               </span>
             </div>
 
@@ -960,17 +1274,14 @@ export default function AnalizaFormyPage() {
               {renderLineChart("Tłuszcz Wisceralny", "tluszcz_wisceralny", "lvl", "#ef4444", "#ef4444")}
             </div>
           </div>
-
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* ZAKŁADKA 2: DIETA, MAKROSKŁADNIKI I KALKULATOR KATCH-MCARDLE Z PŁCIĄ */}
+      {/* ZAKŁADKA 2: DIETA, MAKROSKŁADNIKI I KALKULATOR KATCH-MCARDLE */}
       {/* ========================================================================= */}
       {activeTab === 'makro' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
-          
-          {/* GŁÓWNE KARTY KALORII I MAKRO */}
           {latestMeasurement ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-amber-500 to-amber-600 text-slate-950 p-5 rounded-2xl shadow-sm">
@@ -1018,7 +1329,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* HISTORIA ZALECEN DIETETYCZNYCH */}
+          {/* HISTORIA ZALECEN */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -1036,7 +1347,6 @@ export default function AnalizaFormyPage() {
                     <th className="p-3 border-r border-sky-900 text-center">Tłuszcz (g)</th>
                     <th className="p-3 border-r border-sky-900 text-center">Węglowodany (g)</th>
                     <th className="p-3">Zalecenia i Wskazówki Trenera</th>
-                    {(appRole === 'admin' || appRole === 'trener') && <th className="p-3 text-center">Edycja</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-100">
@@ -1061,22 +1371,11 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-slate-700 font-medium">
                           {m.uwagi_trenera || 'Brak dodatkowych uwag.'}
                         </td>
-                        {(appRole === 'admin' || appRole === 'trener') && (
-                          <td className="p-3 text-center">
-                            <button
-                              onClick={() => handleOpenEditModal(m)}
-                              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                              title="Edytuj ten plan"
-                            >
-                              ✏️
-                            </button>
-                          </td>
-                        )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={7} className="p-6 text-center text-slate-400 font-bold">
+                      <td colSpan={6} className="p-6 text-center text-slate-400 font-bold">
                         Brak historii planów dietetycznych.
                       </td>
                     </tr>
@@ -1086,9 +1385,7 @@ export default function AnalizaFormyPage() {
             </div>
           </div>
 
-          {/* ========================================================================= */}
-          {/* KALKULATOR KATCH-MCARDLE Z UWZGLĘDNIENIEM PŁCI I PROCENTÓW */}
-          {/* ========================================================================= */}
+          {/* KALKULATOR */}
           <div className="bg-white p-6 rounded-2xl border border-sky-200 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
               <div>
@@ -1099,14 +1396,6 @@ export default function AnalizaFormyPage() {
                   Precyzyjna metoda oparta na beztłuszczowej masie ciała (LBM) uwzględniająca płeć oraz cel procentowy.
                 </p>
               </div>
-              <span className="bg-amber-100 text-amber-950 text-[10px] font-black px-3 py-1 rounded-full uppercase border border-amber-300">
-                Wzór Katch-McArdle + Płeć
-              </span>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 font-bold flex items-center gap-2">
-              <span>⚠️</span>
-              <span>W celu prawidłowego obliczenia zapotrzebowania niezbędna jest informacja o płci podopiecznego (różnice w metabolizmie tkanek).</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 text-xs">
@@ -1187,7 +1476,6 @@ export default function AnalizaFormyPage() {
               </button>
             </div>
 
-            {/* WYNIK KALKULATORA */}
             {calcResult && (
               <div className="bg-gradient-to-br from-sky-950 to-slate-900 p-5 rounded-2xl text-white space-y-4 shadow-md">
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
@@ -1216,90 +1504,660 @@ export default function AnalizaFormyPage() {
                     <span className="text-lg font-black text-white">{calcResult.carbs} g</span>
                   </div>
                 </div>
-
-                <div className="flex justify-end pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData(prev => ({
-                        ...prev,
-                        kcal: String(calcResult.targetKcal),
-                        bialko: String(calcResult.protein),
-                        tluszcz: String(calcResult.fat),
-                        weglowodany: String(calcResult.carbs)
-                      }));
-                      setIsAddModalOpen(true);
-                    }}
-                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-4 py-2 rounded-xl transition-all shadow cursor-pointer uppercase tracking-wider"
-                  >
-                    Przepisz wyliczone makro do karty pomiaru ➔
-                  </button>
-                </div>
               </div>
             )}
           </div>
-
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* ZAKŁADKA 3: WYZWANIE REDUKCJI */}
+      {/* ZAKŁADKA 3: WYZWANIE REDUKCJI (AUTOPAY, GOTÓWKA, CHECKBOXY ADMINA) */}
       {/* ========================================================================= */}
-      {activeTab === 'redukcja' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
+      {activeTab === 'redukcja' && (
         <div className="space-y-6">
-          <div className="bg-gradient-to-br from-slate-900 to-sky-950 text-white p-6 rounded-2xl shadow-md space-y-4">
-            <div className="flex items-center gap-3">
-              <span className="text-3xl">🔥</span>
-              <div>
-                <h2 className="text-lg font-black uppercase tracking-wider text-amber-400">
-                  Wyzwanie Redukcji – Forma Marzeń
-                </h2>
-                <p className="text-xs text-sky-200">
-                  Monitoruj progres redukcji tkanki tłuszczowej, realizuj zadania treningowe i zdobywaj nagrody.
-                </p>
+          
+          {/* BANERY INFORMACYJNE O DOŁĄCZANIU I UMAWIANIU POMIARÓW */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex items-start gap-3 shadow-sm">
+              <span className="text-xl">📅</span>
+              <div className="text-xs text-emerald-950">
+                <span className="font-black uppercase block mb-0.5">Dołącz w dowolnym momencie</span>
+                Do trwającego wyzwania redukcji możesz przystąpić w każdym momencie! Twój czas na realizację celu liczy się od Twojego pomiaru startowego do finału.
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-start gap-3 shadow-sm">
+              <span className="text-xl">⚠️</span>
+              <div className="text-xs text-amber-950">
+                <span className="font-black uppercase block mb-0.5">Wcześniejsze umówienie pomiarów</span>
+                Analizę składu ciała (zarówno <b>startową</b>, jak i <b>finałową</b>) wykonujemy <b>po wcześniejszym umówieniu się z trenerem</b> (przed treningiem lub w osobnym terminie).
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-sky-950 uppercase">📉 Spadek Wagi</span>
-                <span className="text-xs font-bold text-amber-500">Etap 1</span>
-              </div>
-              <div className="text-2xl font-black text-slate-900">
-                {measurements.length >= 2 ? (
-                  `${(measurements[0].waga - measurements[measurements.length - 1].waga).toFixed(1)} kg`
-                ) : (
-                  '0.0 kg'
+          {/* GŁÓWNY BANER EDYCJI WYBRANEGO WYZWANIA */}
+          {activeEdycjaObj ? (
+            <div className="bg-gradient-to-br from-slate-900 via-sky-950 to-slate-950 text-white p-6 rounded-3xl shadow-xl space-y-6 border border-sky-900/50">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-800/80 pb-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">🔥</span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-lg font-black uppercase tracking-wider text-amber-400">
+                        {activeEdycjaObj.nazwa}
+                      </h2>
+                      <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 font-bold px-2.5 py-0.5 rounded-full uppercase">
+                        {activeEdycjaObj.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-sky-200/90 mt-0.5">{activeEdycjaObj.opis}</p>
+                  </div>
+                </div>
+
+                {edycjeRedukcji.length > 1 && (
+                  <select
+                    value={selectedEdycjaId || ""}
+                    onChange={(e) => setSelectedEdycjaId(Number(e.target.value))}
+                    className="bg-sky-900/80 border border-sky-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none cursor-pointer"
+                  >
+                    {edycjeRedukcji.map(ed => (
+                      <option key={ed.id} value={ed.id}>{ed.nazwa} ({ed.data_start} - {ed.data_koniec})</option>
+                    ))}
+                  </select>
                 )}
               </div>
-              <p className="text-[11px] text-slate-500">Całkowity bilans od pierwszego zarejestrowanego pomiaru.</p>
+
+              {/* KAFLE PODSUMOWUJĄCE: TERMIN, WPISOWE, PULA NAGRÓD, STATUS ZAPISU */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
+                  <span className="text-[10px] text-sky-300 uppercase font-bold block">Termin Wyzwania</span>
+                  <span className="text-xs font-black text-white mt-1 block">
+                    {activeEdycjaObj.data_start} ➔ {activeEdycjaObj.data_koniec}
+                  </span>
+                </div>
+
+                <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
+                  <span className="text-[10px] text-sky-300 uppercase font-bold block">Wpisowe</span>
+                  <span className="text-lg font-black text-amber-400 mt-0.5 block">
+                    {activeEdycjaObj.wpisowe_kwota} zł
+                  </span>
+                </div>
+
+                <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
+                  <span className="text-[10px] text-emerald-300 uppercase font-bold block">Pula Nagród</span>
+                  <span className="text-lg font-black text-emerald-400 mt-0.5 block">
+                    {(uczestnicyRedukcji.filter(u => u.oplacone).length * activeEdycjaObj.wpisowe_kwota).toFixed(0)} zł
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-medium">({uczestnicyRedukcji.filter(u => u.oplacone).length} opłaconych)</span>
+                </div>
+
+                <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60 flex flex-col justify-center items-center">
+                  <span className="text-[10px] text-sky-300 uppercase font-bold block">Twój Status</span>
+                  {isCurrentUserJoined ? (
+                    <div className="mt-1">
+                      <span className="text-xs font-black text-emerald-400 flex items-center justify-center gap-1">
+                        ✓ Zapisany
+                      </span>
+                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${activeUserParticipant?.oplacone ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                        {activeUserParticipant?.oplacone ? 'Opłacone' : 'Oczekuje na wpłatę'}
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setIsJoinModalOpen(true)}
+                      className="mt-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow transition-all cursor-pointer uppercase tracking-wider"
+                    >
+                      Dołącz do gry ➔
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white p-8 rounded-3xl border border-sky-200 text-center space-y-3">
+              <span className="text-4xl block">🔥</span>
+              <h3 className="font-black text-base text-sky-950 uppercase">Brak aktywnych edycji wyzwania redukcji</h3>
+              <p className="text-xs text-slate-500">Administrator może utworzyć nowe wyzwanie redukcji za pomocą przycisku powyżej.</p>
+            </div>
+          )}
+
+          {/* TABELA 1: DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA */}
+          {(selectedKlient || currentUserId) && activeEdycjaObj && (
+            <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3 p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 pb-3">
+                <div>
+                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                    <span>⚖️</span> Karta Analizy Składu Ciała (Wyzwanie Redukcji)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Uczestnik: <span className="font-bold text-slate-800">{selectedKlient ? `${selectedKlient.Imię} ${selectedKlient.Nazwisko}` : 'Twój Profil'}</span>
+                  </p>
+                </div>
+
+                {appRole === 'admin' && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleOpenRedukcjaPomiarModal('start', selectedKlient ? selectedKlient.id : currentUserId!)}
+                      className="bg-sky-100 hover:bg-sky-200 text-sky-950 font-black text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                    >
+                      + Pomiar Początkowy (Start)
+                    </button>
+                    <button
+                      onClick={() => handleOpenRedukcjaPomiarModal('koniec', selectedKlient ? selectedKlient.id : currentUserId!)}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                    >
+                      + Pomiar Końcowy (Finał)
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] border-b border-sky-100">
+                      <th className="p-3">Etap Pomiaru</th>
+                      <th className="p-3">Data</th>
+                      <th className="p-3 text-center">Waga (kg)</th>
+                      <th className="p-3 text-center">Tk. tłuszczowa (%)</th>
+                      <th className="p-3 text-center">Masa mięśniowa (kg)</th>
+                      <th className="p-3 text-center">Tłuszcz wisceralny (lvl)</th>
+                      <th className="p-3 text-right">Wynik Punktowy</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-sky-50">
+                    {(() => {
+                      const sP = pomiaryRedukcji.find(p => String(p.klient_id) === String(activeUserKlientId) && p.etap === 'start');
+                      const kP = pomiaryRedukcji.find(p => String(p.klient_id) === String(activeUserKlientId) && p.etap === 'koniec');
+                      
+                      return (
+                        <>
+                          <tr className="hover:bg-slate-50/50">
+                            <td className="p-3 font-bold text-sky-900 flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block"></span>
+                              <span>Pomiar Początkowy (START)</span>
+                            </td>
+                            <td className="p-3 text-slate-600">{sP ? sP.data_pomiaru : 'Brak pomiaru'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.waga_kg} kg` : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.fat_proc}%` : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{sP ? `${sP.muscle_kg} kg` : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{sP ? sP.visceral_level : '-'}</td>
+                            <td className="p-3 text-right text-slate-400 font-bold">---</td>
+                          </tr>
+
+                          <tr className="hover:bg-slate-50/50">
+                            <td className="p-3 font-bold text-amber-700 flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>
+                              <span>Pomiar Końcowy (FINAŁ)</span>
+                            </td>
+                            <td className="p-3 text-slate-600">{kP ? kP.data_pomiaru : 'Oczekuje na finał'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.waga_kg} kg` : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.fat_proc}%` : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{kP ? `${kP.muscle_kg} kg` : '-'}</td>
+                            <td className="p-3 text-center font-black text-slate-900">{kP ? kP.visceral_level : '-'}</td>
+                            <td className="p-3 text-right text-slate-400 font-bold">---</td>
+                          </tr>
+
+                          {sP && kP && (
+                            <tr className="bg-amber-50/40 font-black border-t-2 border-amber-200">
+                              <td className="p-3 text-slate-950 uppercase tracking-wider">
+                                Bilans Postępów (Zmiana):
+                              </td>
+                              <td className="p-3 text-slate-500 font-normal">Różnica</td>
+                              <td className="p-3 text-center">
+                                {renderTrendIndicator(kP.waga_kg - sP.waga_kg, true, " kg")}
+                              </td>
+                              <td className="p-3 text-center">
+                                {renderTrendIndicator(kP.fat_proc - sP.fat_proc, true, " %")}
+                              </td>
+                              <td className="p-3 text-center">
+                                {renderTrendIndicator(kP.muscle_kg - sP.muscle_kg, false, " kg")}
+                              </td>
+                              <td className="p-3 text-center">
+                                {renderTrendIndicator(kP.visceral_level - sP.visceral_level, true, " lvl")}
+                              </td>
+                              <td className="p-3 text-right text-amber-700 font-black text-sm">
+                                {activeUserParticipant?.punkty_calkowite || 0} pkt 🏆
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TABELA 2: GŁÓWNY RANKING UCZESTNIKÓW Z CHECKBOXEM ADMINA */}
+          {activeEdycjaObj && (
+            <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-4 p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-100 pb-3">
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                    <span>🏆</span> Oficjalny Ranking Wyzwania Redukcji
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Punkty liczone procentowo względem wagi wyjściowej dla pełnej sprawiedliwości.
+                  </p>
+                </div>
+                <span className="text-xs font-bold text-slate-500">
+                  Uczestników: {rankingRedukcji.length}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse min-w-[950px]">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] border-b border-sky-100">
+                      <th className="p-3 w-16">Miejsce</th>
+                      <th className="p-3">Klubowicz</th>
+                      <th className="p-3 text-center">Wpisowe / Status</th>
+                      <th className="p-3 text-center">Start ➔ Koniec (Waga)</th>
+                      <th className="p-3 text-center">Tk. Tłuszczowa</th>
+                      <th className="p-3 text-center">Masa Mięśniowa</th>
+                      <th className="p-3 text-center">Wisceralny</th>
+                      <th className="p-3 text-right">Punkty Procentowe</th>
+                      {appRole === 'admin' && <th className="p-3 text-center">Pomiary (Admin)</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-sky-50">
+                    {rankingRedukcji.map((row, idx) => (
+                      <tr key={row.id} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="p-3 font-black text-slate-800">
+                          {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `#${idx + 1}`}
+                        </td>
+                        <td className="p-3 font-bold text-slate-900 flex items-center gap-2.5">
+                          {row.klientAvatar ? (
+                            <img src={row.klientAvatar} alt="Avatar" className="w-7 h-7 rounded-full object-cover border border-amber-400" />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-900 font-bold text-[10px] flex items-center justify-center">
+                              {row.klientName.charAt(0)}
+                            </div>
+                          )}
+                          <div>
+                            <div>{row.klientName}</div>
+                            <div className="text-[9px] text-slate-400 font-normal">
+                              Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : '💵 Gotówka'}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* CHECKBOX OPŁACENIA DLA ADMINA / STATUS DLA KLUBOWICZA */}
+                        <td className="p-3 text-center">
+                          {appRole === 'admin' ? (
+                            <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all">
+                              <input
+                                type="checkbox"
+                                checked={row.oplacone}
+                                onChange={(e) => handleCheckboxPaymentToggle(row.id, e.target.checked)}
+                                className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
+                              />
+                              <span className={`text-[10px] font-black uppercase ${row.oplacone ? 'text-emerald-700' : 'text-rose-600'}`}>
+                                {row.oplacone ? 'Opłacone' : 'Do opłacenia'}
+                              </span>
+                            </label>
+                          ) : (
+                            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${row.oplacone ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'}`}>
+                              {row.oplacone ? '✓ Opłacone' : '⏳ Oczekuje na potwierdzenie'}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="p-3 text-center font-bold text-slate-800">
+                          {row.startP && row.koniecP ? (
+                            <div>
+                              <span>{row.startP.waga_kg} ➔ {row.koniecP.waga_kg} kg</span>
+                              <div className="text-[10px]">{renderTrendIndicator(row.deltaWagaKg, true, " kg")} ({row.deltaWagaProc.toFixed(1)}%)</div>
+                            </div>
+                          ) : row.startP ? (
+                            <span>{row.startP.waga_kg} kg (Start)</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">Brak startu</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center">
+                          {row.startP && row.koniecP ? (
+                            <div>
+                              <span>{row.startP.fat_proc}% ➔ {row.koniecP.fat_proc}%</span>
+                              <div className="text-[10px]">{renderTrendIndicator(row.koniecP.fat_proc - row.startP.fat_proc, true, " %")}</div>
+                            </div>
+                          ) : row.startP ? (
+                            <span>{row.startP.fat_proc}%</span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center">
+                          {row.startP && row.koniecP ? (
+                            <div>
+                              <span>{row.startP.muscle_kg} ➔ {row.koniecP.muscle_kg} kg</span>
+                              <div className="text-[10px]">{renderTrendIndicator(row.deltaMuscleKg, false, " kg")}</div>
+                            </div>
+                          ) : row.startP ? (
+                            <span>{row.startP.muscle_kg} kg</span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center">
+                          {row.startP && row.koniecP ? (
+                            <div>
+                              <span>{row.startP.visceral_level} ➔ {row.koniecP.visceral_level}</span>
+                              <div className="text-[10px]">{renderTrendIndicator(row.koniecP.visceral_level - row.startP.visceral_level, true, " lvl")}</div>
+                            </div>
+                          ) : row.startP ? (
+                            <span>{row.startP.visceral_level}</span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-right font-black text-sm text-amber-600">
+                          {row.hasBoth ? `${row.totalPkt} pkt` : <span className="text-slate-400 font-normal text-xs">W trakcie</span>}
+                        </td>
+                        {appRole === 'admin' && (
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => handleOpenRedukcjaPomiarModal('start', row.klient_id)}
+                                className="bg-sky-50 hover:bg-sky-100 text-sky-800 font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
+                                title="Edytuj pomiar startowy"
+                              >
+                                Start
+                              </button>
+                              <button
+                                onClick={() => handleOpenRedukcjaPomiarModal('koniec', row.klient_id)}
+                                className="bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
+                                title="Edytuj pomiar końcowy"
+                              >
+                                Finał
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                    {rankingRedukcji.length === 0 && (
+                      <tr>
+                        <td colSpan={appRole === 'admin' ? 9 : 8} className="p-8 text-center text-slate-400 italic">
+                          Brak zapisanych uczestników w tej edycji wyzwania.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: WYBÓR METODY PŁATNOŚCI (AUTOPAY / GOTÓWKA) */}
+      {/* ========================================================================= */}
+      {isJoinModalOpen && activeEdycjaObj && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-100">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <div>
+                <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                  Dołącz do Wyzwania Redukcji
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Wpisowe do puli nagród: <span className="font-bold text-amber-600">{activeEdycjaObj.wpisowe_kwota} zł</span>
+                </p>
+              </div>
+              <button onClick={() => setIsJoinModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-sky-950 uppercase">🎯 Cel Redukcyjny</span>
-                <span className="text-xs font-bold text-emerald-600">Aktywny</span>
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-slate-700 block">Wybierz sposób opłacenia wpisowego:</label>
+              
+              <div 
+                onClick={() => setSelectedPaymentMethod('autopay')}
+                className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedPaymentMethod === 'autopay' ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">⚡</span>
+                  <div>
+                    <div className="font-black text-xs text-slate-900">Płatność Online (Autopay / BLIK)</div>
+                    <div className="text-[10px] text-slate-500">Szybki przelew, BLIK lub karta – natychmiastowe potwierdzenie</div>
+                  </div>
+                </div>
+                <input type="radio" checked={selectedPaymentMethod === 'autopay'} onChange={() => setSelectedPaymentMethod('autopay')} className="text-amber-500" />
               </div>
-              <div className="text-2xl font-black text-slate-900">-5.0 kg</div>
-              <p className="text-[11px] text-slate-500">Indywidualny cel wyznaczony wspólnie z trenerem.</p>
+
+              <div 
+                onClick={() => setSelectedPaymentMethod('gotowka')}
+                className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedPaymentMethod === 'gotowka' ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">💵</span>
+                  <div>
+                    <div className="font-black text-xs text-slate-900">Gotówka w klubie (Recepcja)</div>
+                    <div className="text-[10px] text-slate-500">Wpłać 30 zł u trenera na sali, a trener odznaczy wpisowe</div>
+                  </div>
+                </div>
+                <input type="radio" checked={selectedPaymentMethod === 'gotowka'} onChange={() => setSelectedPaymentMethod('gotowka')} className="text-amber-500" />
+              </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-sky-950 uppercase">🏆 Status Wyzwania</span>
-                <span className="text-xs font-bold text-sky-600">W trakcie</span>
-              </div>
-              <div className="text-2xl font-black text-amber-500">W grze!</div>
-              <p className="text-[11px] text-slate-500">Kolejny pomiar kontrolny w wyznaczonym terminie.</p>
+            <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-[11px] text-sky-900">
+              ℹ️ Pamiętaj, aby po zapisaniu umówić się z trenerem na wykonanie <b>początkowej analizy składu ciała</b> na analizatorze.
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button 
+                type="button" 
+                onClick={() => setIsJoinModalOpen(false)} 
+                className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs cursor-pointer"
+              >
+                Anuluj
+              </button>
+              <button 
+                type="button" 
+                disabled={isProcessingPayment}
+                onClick={handleConfirmJoinWithPayment}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow disabled:opacity-50"
+              >
+                {isProcessingPayment ? 'Łączenie z bankiem...' : selectedPaymentMethod === 'autopay' ? 'Opłać wpisowe ➔' : 'Potwierdź zapis ➔'}
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL DODAWANIA I EDYCJI POMIARU */}
+      {/* MODAL: TWORZENIE NOWEJ EDYCJI WYZWANIA (ADMIN) */}
+      {/* ========================================================================= */}
+      {isNewEdycjaModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-sky-100">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                Utwórz Nową Edycję Wyzwania Redukcji
+              </h3>
+              <button onClick={() => setIsNewEdycjaModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateEdycja} className="space-y-4 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Nazwa Wyzwania</label>
+                <input
+                  type="text"
+                  required
+                  value={edycjaFormData.nazwa}
+                  onChange={(e) => setEdycjaFormData({...edycjaFormData, nazwa: e.target.value})}
+                  className="w-full p-3 border rounded-xl font-bold bg-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Data Rozpoczęcia</label>
+                  <input
+                    type="date"
+                    required
+                    value={edycjaFormData.data_start}
+                    onChange={(e) => setEdycjaFormData({...edycjaFormData, data_start: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Data Zakończenia (Finał)</label>
+                  <input
+                    type="date"
+                    required
+                    value={edycjaFormData.data_koniec}
+                    onChange={(e) => setEdycjaFormData({...edycjaFormData, data_koniec: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Kwota Wpisowego (zł)</label>
+                  <input
+                    type="number"
+                    step="5"
+                    required
+                    value={edycjaFormData.wpisowe_kwota}
+                    onChange={(e) => setEdycjaFormData({...edycjaFormData, wpisowe_kwota: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Status Edycji</label>
+                  <select
+                    value={edycjaFormData.status}
+                    onChange={(e) => setEdycjaFormData({...edycjaFormData, status: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  >
+                    <option value="aktywne">Aktywne</option>
+                    <option value="zapisy">Otwarte Zapisy</option>
+                    <option value="zakonczone">Zakończone</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Opis / Zasady dla uczestników</label>
+                <textarea
+                  rows={3}
+                  value={edycjaFormData.opis}
+                  onChange={(e) => setEdycjaFormData({...edycjaFormData, opis: e.target.value})}
+                  className="w-full p-3 border rounded-xl font-medium bg-white resize-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setIsNewEdycjaModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" className="flex-1 bg-slate-900 hover:bg-slate-800 text-white font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer">Utwórz Wyzwanie</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: WPROWADZANIE POMIARU ANALIZY SKŁADU CIAŁA (START / KONIEC - ADMIN) */}
+      {/* ========================================================================= */}
+      {isRedukcjaPomiarModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <div>
+                <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                  {targetPomiarEtap === 'start' ? '📊 Pomiar Początkowy (START)' : '🏆 Pomiar Końcowy (FINAŁ)'}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Dla: <span className="font-bold text-slate-800">{klienci.find(k => String(k.id) === String(targetPomiarKlientId))?.Imię || 'Klubowicz'}</span>
+                </p>
+              </div>
+              <button onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveRedukcjaPomiar} className="space-y-4 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Data Wykonania Analizy *</label>
+                <input
+                  type="date"
+                  required
+                  value={redukcjaPomiarForm.data_pomiaru}
+                  onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, data_pomiaru: e.target.value})}
+                  className="w-full p-3 border rounded-xl font-bold bg-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Waga (kg) *</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    required
+                    placeholder="np. 82.4"
+                    value={redukcjaPomiarForm.waga_kg}
+                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, waga_kg: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Tk. Tłuszczowa (%) *</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    required
+                    placeholder="np. 24.5"
+                    value={redukcjaPomiarForm.fat_proc}
+                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, fat_proc: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Masa Mięśniowa (kg) *</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    required
+                    placeholder="np. 34.2"
+                    value={redukcjaPomiarForm.muscle_kg}
+                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, muscle_kg: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Tłuszcz Wisceralny (lvl) *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    required
+                    placeholder="poziom (1-20)"
+                    value={redukcjaPomiarForm.visceral_level}
+                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, visceral_level: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow">Zapisz Pomiar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: DODAWANIE I EDYCJA POMIARU OGÓLNEGO (ZAKŁADKA 1) */}
       {/* ========================================================================= */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
@@ -1326,8 +2184,6 @@ export default function AnalizaFormyPage() {
             </div>
 
             <form onSubmit={handleSubmitMeasurement} className="space-y-6 text-xs">
-              
-              {/* Data i dane podstawowe */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-sky-50/50 p-3.5 rounded-xl border border-sky-100">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 block">Data pomiaru *</label>
@@ -1364,7 +2220,6 @@ export default function AnalizaFormyPage() {
                 </div>
               </div>
 
-              {/* Sekcja: Obwody Centymetrem */}
               <div className="space-y-2">
                 <div className="font-black text-sky-950 uppercase text-[11px] tracking-wider border-b border-sky-100 pb-1">
                   📏 Obwody Ciała (cm)
@@ -1450,7 +2305,6 @@ export default function AnalizaFormyPage() {
                 </div>
               </div>
 
-              {/* Sekcja: Skład Ciała */}
               <div className="space-y-2">
                 <div className="font-black text-sky-950 uppercase text-[11px] tracking-wider border-b border-sky-100 pb-1">
                   ⚖️ Analiza Składu Ciała
@@ -1523,7 +2377,6 @@ export default function AnalizaFormyPage() {
                 </div>
               </div>
 
-              {/* Sekcja: Dieta i Makro */}
               <div className="space-y-2">
                 <div className="font-black text-sky-950 uppercase text-[11px] tracking-wider border-b border-sky-100 pb-1">
                   🥗 Dieta i Makroskładniki
@@ -1575,7 +2428,6 @@ export default function AnalizaFormyPage() {
                 </div>
               </div>
 
-              {/* Uwagi trenera */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Zalecenia i uwagi trenera</label>
                 <textarea
@@ -1587,7 +2439,6 @@ export default function AnalizaFormyPage() {
                 />
               </div>
 
-              {/* Przyciski */}
               <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
                 <button
                   type="button"
