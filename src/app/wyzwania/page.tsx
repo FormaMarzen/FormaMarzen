@@ -268,7 +268,7 @@ export default function WyzwaniaPage() {
     if (data) setOdznakiHistoria(data);
   };
 
-  // Obliczanie rankingów
+  // Obliczanie obu rankingów
   const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
     const challengesData = await fetchAllFromSupabase("klub_wyzwania_historia", "zwyciezca_id", "id", false, 5);
     
@@ -346,7 +346,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika ręcznego przypisywania odznaki + powiadomienie Push i czat systemowy
+  // 3. Logika ręcznego przypisywania odznaki
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
@@ -391,7 +391,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 4. Zarządzanie definicjami odznak w Katalogu (Admin) z obsługą reguł automatycznych
+  // 4. Zarządzanie definicjami odznak w Katalogu (Admin)
   const handleCreateBadgeDef = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBadgeNazwa.trim() || !newBadgeOpis.trim()) {
@@ -713,6 +713,9 @@ export default function WyzwaniaPage() {
     switch (typ) {
       case "TRENINGI_ILOSC": return `⚡ Auto: ${prog || 1} treningów`;
       case "WYZWANIA_WYGRANE": return `⚔️ Auto: ${prog || 1} wygranych pojedynków`;
+      case "WYZWANIA_UDZIAL": return `⚔️ Auto: ${prog || 1} stoczonych pojedynków`;
+      case "ZYWIENIE_UDZIAL": return `🥗 Auto: ${prog || 1} wyzwań żywieniowych`;
+      case "ZYWIENIE_WYGRANE": return `🥗 Auto: ${prog || 1} wygranych wyzwań żywieniowych`;
       case "AUTO_ZAPISY": return `📅 Auto: Aktywny stały zapis`;
       default: return `✋ Ręczna (Admin)`;
     }
@@ -922,7 +925,7 @@ export default function WyzwaniaPage() {
                             {def.warunek && (
                               <p className="text-[9px] text-amber-200/70 mt-1 font-mono">🎯 Warunek: {def.warunek}</p>
                             )}
-                            <div className="flex gap-2 items-center mt-1">
+                            <div className="flex flex-wrap gap-2 items-center mt-1">
                               <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Kat: {def.kategoria || 'Wyzwania'}</span>
                               <span className="text-[9px] text-amber-400 font-semibold">{formatRegulaLabel(def.typ_reguly, def.wartosc_progowa)}</span>
                             </div>
@@ -1190,7 +1193,7 @@ export default function WyzwaniaPage() {
                 <form onSubmit={handleCreateBadgeDef} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Nazwa odznaki</label>
-                    <input type="text" value={newBadgeNazwa} onChange={(e) => setNewBadgeNazwa(e.target.value)} placeholder="np. Mistrz Frekwencji" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
+                    <input type="text" value={newBadgeNazwa} onChange={(e) => setNewBadgeNazwa(e.target.value)} placeholder="np. Mistrz Czystej Miski" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
                   </div>
                   
                   <div>
@@ -1229,12 +1232,12 @@ export default function WyzwaniaPage() {
 
                   <div className="sm:col-span-2">
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Krótki Opis Odznaki</label>
-                    <input type="text" value={newBadgeOpis} onChange={(e) => setNewBadgeOpis(e.target.value)} placeholder="np. Ukończ 50 treningów w klubie." className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
+                    <input type="text" value={newBadgeOpis} onChange={(e) => setNewBadgeOpis(e.target.value)} placeholder="np. Weź udział w 5 klubowych wyzwaniach żywieniowych." className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
                   </div>
                   
                   <div className="sm:col-span-2">
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Warunek Otrzymania (Dla klubowiczów)</label>
-                    <textarea value={newBadgeWarunek} onChange={(e) => setNewBadgeWarunek(e.target.value)} placeholder="np. Zarejestruj 50 obecności na zajęciach grupowych." className="w-full p-3 border rounded-xl text-xs font-bold bg-white h-16 resize-none" />
+                    <textarea value={newBadgeWarunek} onChange={(e) => setNewBadgeWarunek(e.target.value)} placeholder="np. Ukończ minimum 5 wyzwań dietetycznych / żywieniowych." className="w-full p-3 border rounded-xl text-xs font-bold bg-white h-16 resize-none" />
                   </div>
 
                   {/* POLA AUTOMATYZACJI */}
@@ -1246,8 +1249,11 @@ export default function WyzwaniaPage() {
                       className="w-full p-3 border border-amber-300 rounded-xl text-xs font-bold bg-white"
                     >
                       <option value="RECZNA">Brak (Tylko ręczne przyznanie)</option>
+                      <option value="ZYWIENIE_UDZIAL">Wyzwania żywieniowe - Udział</option>
+                      <option value="ZYWIENIE_WYGRANE">Wyzwania żywieniowe - Wygrane</option>
+                      <option value="WYZWANIA_UDZIAL">Pojedynki sportowe - Udział</option>
+                      <option value="WYZWANIA_WYGRANE">Pojedynki sportowe - Wygrane</option>
                       <option value="TRENINGI_ILOSC">Liczba ukończonych treningów</option>
-                      <option value="WYZWANIA_WYGRANE">Liczba wygranych pojedynków</option>
                       <option value="AUTO_ZAPISY">Włączenie stałego zapisu w grafiku</option>
                     </select>
                   </div>
@@ -1271,7 +1277,7 @@ export default function WyzwaniaPage() {
 
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Kategoria</label>
-                    <input type="text" value={newBadgeKategoria} onChange={(e) => setNewBadgeKategoria(e.target.value)} placeholder="np. Wytrzymałość / Siła / Pojedynki" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
+                    <input type="text" value={newBadgeKategoria} onChange={(e) => setNewBadgeKategoria(e.target.value)} placeholder="np. Żywienie / Wytrzymałość / Siła" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
                   </div>
 
                   <div className="sm:col-span-2">
@@ -1341,8 +1347,11 @@ export default function WyzwaniaPage() {
                                 className="w-full p-2 border border-amber-300 rounded-xl text-xs font-bold"
                               >
                                 <option value="RECZNA">Ręczna</option>
+                                <option value="ZYWIENIE_UDZIAL">Wyzwania żywieniowe - Udział</option>
+                                <option value="ZYWIENIE_WYGRANE">Wyzwania żywieniowe - Wygrane</option>
+                                <option value="WYZWANIA_UDZIAL">Pojedynki - Udział</option>
+                                <option value="WYZWANIA_WYGRANE">Pojedynki - Wygrane</option>
                                 <option value="TRENINGI_ILOSC">Treningi</option>
-                                <option value="WYZWANIA_WYGRANE">Wygrane wyzwania</option>
                                 <option value="AUTO_ZAPISY">Auto zapis</option>
                               </select>
                             </div>
@@ -1485,7 +1494,7 @@ export default function WyzwaniaPage() {
             <ul className="text-xs space-y-3 text-slate-700 list-decimal pl-4">
               <li>Rzuć wyzwanie przeciwnikowi w aplikacji.</li>
               <li>Jeśli wyzwanie odbywa się na treningu, <b>trener potwierdza wynik</b> bezpośrednio w klubie.</li>
-              <li>Jeśli wyzwanie to bieg/teren, <b>musisz przedstawić dowód</b> (np. zrzut ekranu z zegarka/aplikacji sportowej).</li>
+              <li>Jeśli wyzwanie to bieg/teren/żywienie, <b>musisz przedstawić dowód</b> (np. zrzut z zegarka lub raport dietetyczny).</li>
               <li>Administrator po sprawdzeniu dowodów zatwierdza wyzwanie i przyznaje status "Zweryfikowane".</li>
             </ul>
             <button onClick={() => setIsInfoModalOpen(false)} className="w-full bg-slate-900 text-white font-bold py-3 rounded-2xl text-xs cursor-pointer">Rozumiem</button>
