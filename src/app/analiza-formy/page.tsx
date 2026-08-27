@@ -293,7 +293,6 @@ export default function AnalizaFormyPage() {
           new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
         );
         setEdycjeRedukcji(sorted);
-        // Jeśli nie wybrano jeszcze edycji, wybierz najnowszą aktywną (lub pierwszą z brzegu)
         if (!selectedEdycjaId) {
           const active = sorted.find((e: any) => e.status !== 'zakonczone') || sorted[0];
           setSelectedEdycjaId(active.id);
@@ -751,16 +750,12 @@ export default function AnalizaFormyPage() {
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
   const activeUserParticipant = (uczestnicyRedukcji || []).find(u => String(u.klient_id) === String(activeUserKlientId));
 
-  const aktywneEdycje = useMemo(() => {
-    return (edycjeRedukcji || [])
-      .filter(e => e.status !== 'zakonczone')
-      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+  const wszystkyEdycjeDoWyboru = useMemo(() => {
+    return (edycjeRedukcji || []).sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
   }, [edycjeRedukcji]);
 
   const archiwalneEdycje = useMemo(() => {
-    return (edycjeRedukcji || [])
-      .filter(e => e.status === 'zakonczone')
-      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+    return (edycjeRedukcji || []).filter(e => e.status === 'zakonczone');
   }, [edycjeRedukcji]);
 
   const formatParticipantDisplayName = (fullName: string) => {
@@ -1767,17 +1762,17 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {/* SELEKTOR EDYCJI Z NAPISEM "Wybierz edycję wyzwania" */}
-                  {aktywneEdycje.length > 0 && (
+                  {/* SELEKTOR WSZYSTKICH EDYCJI (AKTYWNE ORAZ ARCHIWALNE) */}
+                  {wszystkyEdycjeDoWyboru.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
                       onChange={(e) => setSelectedEdycjaId(Number(e.target.value))}
                       className="bg-sky-900/80 border border-sky-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none cursor-pointer max-w-[200px] sm:max-w-xs truncate"
                     >
                       <option value="" disabled>Wybierz edycję wyzwania</option>
-                      {aktywneEdycje.map(ed => (
+                      {wszystkyEdycjeDoWyboru.map(ed => (
                         <option key={ed.id} value={ed.id}>
-                          {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec})
+                          {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec}) {ed.status === 'zakonczone' ? '[ARCHIWUM]' : ''}
                         </option>
                       ))}
                     </select>
@@ -2009,7 +2004,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* GŁÓWNY RANKING Z OPCJĄ USUWANIA I DNF */}
+          {/* GŁÓWNY RANKING Z CHECKBOXEM ADMINA */}
           {activeEdycjaObj && (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-4 p-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-100 pb-3">
@@ -2203,7 +2198,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* SEKCJA ARCHIWUM POPRZEDNICH EDYCJI */}
+          {/* SEKCJA ARCHIWUM POPRZEDNICH EDYCJI Z OPCJĄ USUWANIA ARCHIWUM */}
           {archiwalneEdycje.length > 0 && (
             <div className="pt-6 border-t border-sky-200 space-y-4">
               <div className="flex items-center gap-2">
@@ -2229,7 +2224,7 @@ export default function AnalizaFormyPage() {
                               e.stopPropagation();
                               handleDeleteEdycja(ed.id);
                             }}
-                            className="text-rose-500 hover:text-rose-700 text-xs font-bold p-1"
+                            className="text-rose-500 hover:text-rose-700 text-xs font-bold p-1 cursor-pointer"
                             title="Usuń to archiwalne wyzwanie"
                           >
                             🗑️
@@ -2758,7 +2753,7 @@ export default function AnalizaFormyPage() {
                       step="0.1"
                       placeholder="cm"
                       value={formData.udo}
-                      onChange={(e) => setFormData({...formData,udo: e.target.value})}
+                      onChange={(e) => setFormData({...formData, udo: e.target.value})}
                       className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none"
                     />
                   </div>
