@@ -13,6 +13,8 @@ interface Klient {
   plec?: string;
   gender?: string;
   Urodziny?: string;
+  urodziny?: string;
+  wzrost?: number | null;
   avatarUrl?: string;
   AvatarUrl?: string;
 }
@@ -87,6 +89,20 @@ interface RedukcjaNagroda {
   tytul: string;
   opis?: string;
 }
+
+// Funkcja pomocnicza do bezpiecznego wyliczania wieku na podstawie daty urodzenia
+const calculateAge = (birthDateString?: string | null): number | null => {
+  if (!birthDateString) return null;
+  const birth = new Date(birthDateString);
+  if (isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+    age--;
+  }
+  return age >= 0 ? age : null;
+};
 
 const fetchAllFromSupabase = async (
   table: string, 
@@ -209,18 +225,23 @@ export default function AnalizaFormyPage() {
     notatki_klubowicza: ''
   });
 
+  // Stany kalkulatora dietetycznego
   const [calcWeight, setCalcWeight] = useState<string>('');
   const [calcFat, setCalcFat] = useState<string>('');
+  const [calcHeight, setCalcHeight] = useState<string>('');
+  const [calcAge, setCalcAge] = useState<string>('');
   const [calcGender, setCalcGender] = useState<string>('mezczyzna');
   const [calcPal, setCalcPal] = useState<string>('1.4');
   const [calcGoal, setCalcGoal] = useState<string>('-0.2');
   const [calcResult, setCalcResult] = useState<{
     bmr: number;
+    bmrMifflin?: number | null;
     tdee: number;
     targetKcal: number;
     protein: number;
     fat: number;
     carbs: number;
+    water: number;
   } | null>(null);
 
   useEffect(() => {
@@ -259,6 +280,11 @@ export default function AnalizaFormyPage() {
                 const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
                 if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
                 else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+                
+                if (myClientProfile.wzrost) setCalcHeight(String(myClientProfile.wzrost));
+                const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
+                if (age) setCalcAge(String(age));
+
                 await fetchMeasurements(myClientProfile.id, cleanEmail);
               }
             } else {
@@ -268,6 +294,11 @@ export default function AnalizaFormyPage() {
                 const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
                 if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
                 else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+                
+                if (myClientProfile.wzrost) setCalcHeight(String(myClientProfile.wzrost));
+                const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
+                if (age) setCalcAge(String(age));
+
                 await fetchMeasurements(myClientProfile.id, cleanEmail);
               }
             }
@@ -367,6 +398,10 @@ export default function AnalizaFormyPage() {
     const g = (klient.gender || klient.Płeć || klient.plec || '').toLowerCase();
     if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
     else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+
+    if (klient.wzrost) setCalcHeight(String(klient.wzrost));
+    const age = calculateAge(klient.Urodziny || klient.urodziny);
+    if (age) setCalcAge(String(age));
 
     fetchMeasurements(klient.id, klient['E-mail']);
   };
@@ -758,7 +793,6 @@ export default function AnalizaFormyPage() {
     return (edycjeRedukcji || []).filter(e => e.status === 'zakonczone');
   }, [edycjeRedukcji]);
 
-  // Zabezpieczenie przed ucinaniem pierwszej litery nazwiska
   const formatParticipantDisplayName = (fullName: string) => {
     if (appRole === 'admin' || isCurrentUserJoined) {
       return fullName;
@@ -878,9 +912,12 @@ export default function AnalizaFormyPage() {
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
+  // Rozszerzony kalkulator zapotrzebowania Katch-McArdle + Wiek/Wzrost (Mifflin) + Woda
   const calculateKatchMcArdle = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
     const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
+    const h = parseFloat(calcHeight || (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : (latestMeasurement?.wzrost ? String(latestMeasurement.wzrost) : '0')));
+    const a = parseFloat(calcAge || (calculateAge(selectedKlient?.Urodziny || selectedKlient?.urodziny)?.toString() || '0'));
     const pal = parseFloat(calcPal);
     const goalModifier = parseFloat(calcGoal);
 
@@ -896,6 +933,16 @@ export default function AnalizaFormyPage() {
       bmr *= 0.96;
     }
 
+    // Dodatkowy wskaźnik referencyjny Mifflin-St Jeor (jeśli podano wzrost i wiek)
+    let bmrMifflin: number | null = null;
+    if (h > 0 && a > 0) {
+      if (calcGender === 'kobieta') {
+        bmrMifflin = Math.round((10 * w) + (6.25 * h) - (5 * a) - 161);
+      } else {
+        bmrMifflin = Math.round((10 * w) + (6.25 * h) - (5 * a) + 5);
+      }
+    }
+
     const tdee = bmr * pal;
     const targetKcal = tdee * (1 + goalModifier);
 
@@ -906,13 +953,18 @@ export default function AnalizaFormyPage() {
     const remainingKcal = Math.max(0, targetKcal - proteinKcal - fatKcal);
     const carbsG = Math.round(remainingKcal / 4);
 
+    // Zapotrzebowanie na wodę (35 ml / kg mc)
+    const waterMl = Math.round(w * 35);
+
     setCalcResult({
       bmr: Math.round(bmr),
+      bmrMifflin: bmrMifflin,
       tdee: Math.round(tdee),
       targetKcal: Math.round(targetKcal),
       protein: proteinG,
       fat: fatG,
-      carbs: carbsG
+      carbs: carbsG,
+      water: waterMl
     });
   };
 
@@ -1005,6 +1057,8 @@ export default function AnalizaFormyPage() {
   };
 
   const clientGenderDisplay = selectedKlient ? (selectedKlient.gender || selectedKlient.Płeć || selectedKlient.plec || 'Nie podano') : '';
+  const clientHeightDisplay = selectedKlient?.wzrost ? `${selectedKlient.wzrost} cm` : (latestMeasurement?.wzrost ? `${latestMeasurement.wzrost} cm` : 'Brak');
+  const clientCalculatedAge = selectedKlient ? calculateAge(selectedKlient.Urodziny || selectedKlient.urodziny) : null;
 
   const niezapisaniKlienci = useMemo(() => {
     return (klienci || []).filter(k => !(uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(k.id)));
@@ -1048,7 +1102,7 @@ export default function AnalizaFormyPage() {
                 setEditingMeasurementId(null);
                 setFormData({
                   data_pomiaru: new Date().toISOString().split('T')[0],
-                  wzrost: measurements[0]?.wzrost ? String(measurements[0].wzrost) : '',
+                  wzrost: selectedKlient?.wzrost ? String(selectedKlient.wzrost) : (measurements[0]?.wzrost ? String(measurements[0].wzrost) : ''),
                   waga: '',
                   obwod_pasa: '',
                   klatka: '',
@@ -1170,6 +1224,8 @@ export default function AnalizaFormyPage() {
                 {searchResults.map((klient) => {
                   const avatar = klient.avatarUrl || klient.AvatarUrl;
                   const plecTxt = klient.gender || klient.Płeć || klient.plec || 'Nie podano';
+                  const wTxt = klient.wzrost ? `${klient.wzrost} cm` : 'Brak wzrostu';
+                  const kAge = calculateAge(klient.Urodziny || klient.urodziny);
                   return (
                     <div
                       key={klient.id}
@@ -1185,7 +1241,12 @@ export default function AnalizaFormyPage() {
                           )}
                         </div>
                         <div>
-                          <div className="font-bold text-sky-950">{klient.Imię} {klient.Nazwisko} <span className="text-[10px] text-slate-400 font-normal">({plecTxt})</span></div>
+                          <div className="font-bold text-sky-950">
+                            {klient.Imię} {klient.Nazwisko} 
+                            <span className="text-[10px] text-slate-400 font-normal ml-1">
+                              ({plecTxt} • {wTxt} {kAge ? `• ${kAge} lat` : ''})
+                            </span>
+                          </div>
                           <div className="text-[10px] text-slate-500">{klient['E-mail']}</div>
                         </div>
                       </div>
@@ -1201,7 +1262,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* KARTA WYBRANEGO PODOPIECZNEGO */}
+      {/* KARTA WYBRANEGO PODOPIECZNEGO Z WZROSTEM I WIEKIEM */}
       {selectedKlient ? (
         <div className="bg-gradient-to-r from-sky-950 to-slate-900 p-4 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
@@ -1218,8 +1279,14 @@ export default function AnalizaFormyPage() {
                 <span className="bg-sky-900 text-sky-200 text-[10px] px-2 py-0.5 rounded-full border border-sky-700 font-bold">
                   Płeć: {clientGenderDisplay}
                 </span>
+                <span className="bg-sky-900 text-amber-300 text-[10px] px-2 py-0.5 rounded-full border border-sky-700 font-bold">
+                  Wzrost: {clientHeightDisplay}
+                </span>
+                <span className="bg-sky-900 text-emerald-300 text-[10px] px-2 py-0.5 rounded-full border border-sky-700 font-bold">
+                  Wiek: {clientCalculatedAge ? `${clientCalculatedAge} lat` : 'Brak'}
+                </span>
               </div>
-              <div className="text-xs text-sky-200/80">
+              <div className="text-xs text-sky-200/80 mt-0.5">
                 {selectedKlient['E-mail']} • {selectedKlient['Numer tel.'] || 'Brak tel.'}
               </div>
             </div>
@@ -1386,7 +1453,7 @@ export default function AnalizaFormyPage() {
                         <td className="p-3 text-center border-r border-sky-100">{m.kosci || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
                         <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.tluszcz_wisceralny || '-'}</td>
+                        <td className="p-3 text-center border-r border-sky-200">{m.tluszcz_wisceralny || '-'}</td>
                         <td className="p-3 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
@@ -1394,7 +1461,7 @@ export default function AnalizaFormyPage() {
                                 setEditingMeasurementId(m.id);
                                 setFormData({
                                   data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
-                                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : '',
+                                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : ''),
                                   waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
                                   obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
                                   klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
@@ -1576,21 +1643,21 @@ export default function AnalizaFormyPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
               <div>
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                  <span>🧮</span> Kalkulator Katch-McArdle (BMR & TDEE)
+                  <span>🧮</span> Kalkulator Katch-McArdle & Metabolizmu (BMR & TDEE)
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Precyzyjna metoda oparta na beztłuszczowej masie ciała (LBM) uwzględniająca płeć oraz cel procentowy.
+                  Precyzyjna metoda oparta na beztłuszczowej masie ciała (LBM), uwzględniająca wiek, wzrost, płeć oraz cel kaloryczny.
                 </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 text-xs">
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Płeć *</label>
                 <select
                   value={calcGender}
                   onChange={(e) => setCalcGender(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-bold text-sky-950 cursor-pointer"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none font-bold text-sky-950 cursor-pointer"
                 >
                   <option value="mezczyzna">👨 Mężczyzna</option>
                   <option value="kobieta">👩 Kobieta</option>
@@ -1605,19 +1672,42 @@ export default function AnalizaFormyPage() {
                   placeholder={latestMeasurement ? String(latestMeasurement.waga) : "np. 75"}
                   value={calcWeight}
                   onChange={(e) => setCalcWeight(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none font-bold"
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Tkanka tłuszczowa (%)</label>
+                <label className="font-bold text-slate-700 block">Tkanka tł. (%)</label>
                 <input
                   type="number"
                   step="0.1"
                   placeholder={latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : "np. 15"}
                   value={calcFat}
                   onChange={(e) => setCalcFat(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none font-bold"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Wzrost (cm)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="np. 175"
+                  value={calcHeight}
+                  onChange={(e) => setCalcHeight(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none font-bold"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Wiek (lat)</label>
+                <input
+                  type="number"
+                  placeholder="np. 35"
+                  value={calcAge}
+                  onChange={(e) => setCalcAge(e.target.value)}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none font-bold"
                 />
               </div>
 
@@ -1626,7 +1716,7 @@ export default function AnalizaFormyPage() {
                 <select
                   value={calcPal}
                   onChange={(e) => setCalcPal(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium cursor-pointer"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-2.5 py-2 text-slate-800 focus:outline-none font-medium cursor-pointer"
                 >
                   <option value="1.2">1.2 – Siedzący tryb</option>
                   <option value="1.375">1.375 – Lekka (1-3 treng.)</option>
@@ -1641,13 +1731,13 @@ export default function AnalizaFormyPage() {
                 <select
                   value={calcGoal}
                   onChange={(e) => setCalcGoal(e.target.value)}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none font-medium cursor-pointer"
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-xl px-2.5 py-2 text-slate-800 focus:outline-none font-medium cursor-pointer"
                 >
-                  <option value="-0.2">🔥 -20% kcal (Głęboka redukcja)</option>
-                  <option value="-0.1">📉 -10% kcal (Lekka redukcja)</option>
-                  <option value="0">⚖️ 0% kcal (Utrzymanie / Zero)</option>
-                  <option value="0.1">📈 +10% kcal (Lekka masa)</option>
-                  <option value="0.2">💪 +20% kcal (Budowa masy)</option>
+                  <option value="-0.2">🔥 -20% (Głęboka redukcja)</option>
+                  <option value="-0.1">📉 -10% (Lekka redukcja)</option>
+                  <option value="0">⚖️ 0% (Utrzymanie)</option>
+                  <option value="0.1">📈 +10% (Lekka masa)</option>
+                  <option value="0.2">💪 +20% (Budowa masy)</option>
                 </select>
               </div>
             </div>
@@ -1658,16 +1748,19 @@ export default function AnalizaFormyPage() {
                 onClick={calculateKatchMcArdle}
                 className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl shadow-sm text-xs uppercase tracking-wider transition-all cursor-pointer"
               >
-                Przelicz zapotrzebowanie Katch-McArdle ➔
+                Przelicz zapotrzebowanie ➔
               </button>
             </div>
 
             {calcResult && (
               <div className="bg-gradient-to-br from-sky-950 to-slate-900 p-5 rounded-2xl text-white space-y-4 shadow-md">
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 text-center">
                   <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
-                    <span className="text-[10px] text-sky-300 block uppercase font-bold">BMR (Podstawowe)</span>
+                    <span className="text-[10px] text-sky-300 block uppercase font-bold">BMR (Katch-McArdle)</span>
                     <span className="text-lg font-black text-white">{calcResult.bmr} kcal</span>
+                    {calcResult.bmrMifflin && (
+                      <span className="text-[9px] text-sky-300 block mt-0.5">Mifflin: {calcResult.bmrMifflin} kcal</span>
+                    )}
                   </div>
                   <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
                     <span className="text-[10px] text-sky-300 block uppercase font-bold">TDEE (Całkowite)</span>
@@ -1688,6 +1781,10 @@ export default function AnalizaFormyPage() {
                   <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
                     <span className="text-[10px] text-sky-300 block uppercase font-bold">Węglowodany</span>
                     <span className="text-lg font-black text-white">{calcResult.carbs} g</span>
+                  </div>
+                  <div className="bg-sky-900/40 p-3 rounded-xl border border-sky-800">
+                    <span className="text-[10px] text-cyan-300 block uppercase font-bold">Podaż Wody</span>
+                    <span className="text-lg font-black text-cyan-300">{(calcResult.water / 1000).toFixed(2)} L</span>
                   </div>
                 </div>
               </div>
@@ -1763,7 +1860,7 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {/* SELEKTOR EDYCJI Z NAPISEM "Wybierz edycję wyzwania" */}
+                  {/* SELEKTOR EDYCJI */}
                   {edycjeRedukcji.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
@@ -1797,7 +1894,6 @@ export default function AnalizaFormyPage() {
                   </span>
                 </div>
 
-                {/* UKRYCIE PULI NAGRÓD PRZED KLUBOWICZEM */}
                 <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
                   {appRole === 'admin' ? (
                     <>
@@ -2017,7 +2113,7 @@ export default function AnalizaFormyPage() {
             </div>
           ) : null}
 
-          {/* GŁÓWNY RANKING Z CHECKBOXEM ADMINA */}
+          {/* GŁÓWNY RANKING */}
           {activeEdycjaObj && (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-4 p-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-100 pb-3">
@@ -2546,97 +2642,120 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: POMIAR ANALIZY SKŁADU CIAŁA (ADMIN) */}
-      {isRedukcjaPomiarModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <div>
-                <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
-                  {targetPomiarEtap === 'start' ? '📊 Pomiar Początkowy (START)' : '🏆 Pomiar Końcowy (FINAŁ)'}
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Dla: <span className="font-bold text-slate-800">{(klienci || []).find(k => String(k.id) === String(targetPomiarKlientId))?.Imię || 'Klubowicz'}</span>
-                </p>
+      {/* MODAL: POMIAR ANALIZY SKŁADU CIAŁA (ADMIN) - ZE WZROSTEM I WIEKIEM */}
+      {isRedukcjaPomiarModalOpen && (() => {
+        const targetClient = (klienci || []).find(k => String(k.id) === String(targetPomiarKlientId));
+        const targetAge = targetClient ? calculateAge(targetClient.Urodziny || targetClient.urodziny) : null;
+        const targetHeight = targetClient?.wzrost ? `${targetClient.wzrost} cm` : 'Brak';
+        const targetGender = targetClient?.gender || targetClient?.Płeć || targetClient?.plec || 'Nie podano';
+
+        return (
+          <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                    {targetPomiarEtap === 'start' ? '📊 Pomiar Początkowy (START)' : '🏆 Pomiar Końcowy (FINAŁ)'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Dla: <span className="font-bold text-slate-800">{targetClient ? `${targetClient.Imię} ${targetClient.Nazwisko}` : 'Klubowicz'}</span>
+                  </p>
+                </div>
+                <button onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
               </div>
-              <button onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+
+              {/* BELKA DANYCH PODOPIECZNEGO W MODALU POMIARU */}
+              <div className="bg-sky-50 border border-sky-200 p-3 rounded-2xl flex items-center justify-between text-xs text-sky-950">
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Płeć</span>
+                  <span className="font-black">{targetGender}</span>
+                </div>
+                <div className="border-l border-sky-200 pl-3">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Wzrost</span>
+                  <span className="font-black text-amber-600">{targetHeight}</span>
+                </div>
+                <div className="border-l border-sky-200 pl-3">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Wiek</span>
+                  <span className="font-black text-emerald-600">{targetAge ? `${targetAge} lat` : 'Brak'}</span>
+                </div>
+              </div>
+
+              <form onSubmit={handleSaveRedukcjaPomiar} className="space-y-4 text-xs">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Data Wykonania Analizy *</label>
+                  <input
+                    type="date"
+                    required
+                    value={redukcjaPomiarForm.data_pomiaru}
+                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, data_pomiaru: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Waga (kg) *</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      required
+                      placeholder="np. 82.4"
+                      value={redukcjaPomiarForm.waga_kg}
+                      onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, waga_kg: e.target.value})}
+                      className="w-full p-3 border rounded-xl font-bold bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Tk. Tłuszczowa (%) *</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      required
+                      placeholder="np. 24.5"
+                      value={redukcjaPomiarForm.fat_proc}
+                      onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, fat_proc: e.target.value})}
+                      className="w-full p-3 border rounded-xl font-bold bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Masa Mięśniowa (kg) *</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      required
+                      placeholder="np. 34.2"
+                      value={redukcjaPomiarForm.muscle_kg}
+                      onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, muscle_kg: e.target.value})}
+                      className="w-full p-3 border rounded-xl font-bold bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Tłuszcz Wisceralny (lvl) *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      required
+                      placeholder="poziom (1-20)"
+                      value={redukcjaPomiarForm.visceral_level}
+                      onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, visceral_level: e.target.value})}
+                      className="w-full p-3 border rounded-xl font-bold bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button type="button" onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
+                  <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow">Zapisz Pomiar</button>
+                </div>
+              </form>
             </div>
-
-            <form onSubmit={handleSaveRedukcjaPomiar} className="space-y-4 text-xs">
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Data Wykonania Analizy *</label>
-                <input
-                  type="date"
-                  required
-                  value={redukcjaPomiarForm.data_pomiaru}
-                  onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, data_pomiaru: e.target.value})}
-                  className="w-full p-3 border rounded-xl font-bold bg-white"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Waga (kg) *</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    required
-                    placeholder="np. 82.4"
-                    value={redukcjaPomiarForm.waga_kg}
-                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, waga_kg: e.target.value})}
-                    className="w-full p-3 border rounded-xl font-bold bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Tk. Tłuszczowa (%) *</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    required
-                    placeholder="np. 24.5"
-                    value={redukcjaPomiarForm.fat_proc}
-                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, fat_proc: e.target.value})}
-                    className="w-full p-3 border rounded-xl font-bold bg-white"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Masa Mięśniowa (kg) *</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    required
-                    placeholder="np. 34.2"
-                    value={redukcjaPomiarForm.muscle_kg}
-                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, muscle_kg: e.target.value})}
-                    className="w-full p-3 border rounded-xl font-bold bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Tłuszcz Wisceralny (lvl) *</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="20"
-                    required
-                    placeholder="poziom (1-20)"
-                    value={redukcjaPomiarForm.visceral_level}
-                    onChange={(e) => setRedukcjaPomiarForm({...redukcjaPomiarForm, visceral_level: e.target.value})}
-                    className="w-full p-3 border rounded-xl font-bold bg-white"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow">Zapisz Pomiar</button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* MODAL: POMIAR OGÓLNY (ZAKŁADKA 1) */}
       {isAddModalOpen && (

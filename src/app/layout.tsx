@@ -46,6 +46,7 @@ export default function RootLayout({
   const [profilePhone, setProfilePhone] = useState('-');
   const [profileBirth, setProfileBirth] = useState('');
   const [profileGender, setProfileGender] = useState('');
+  const [profileHeight, setProfileHeight] = useState('');
   const [profileLang, setProfileLang] = useState('Polski');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
@@ -273,6 +274,7 @@ export default function RootLayout({
           setCurrentClientId(k.id);
           if (k.Urodziny) setProfileBirth(k.Urodziny);
           if (k.gender) setProfileGender(k.gender);
+          if (k.wzrost !== undefined && k.wzrost !== null) setProfileHeight(k.wzrost.toString());
           if (k['Numer tel.'] && k['Numer tel.'] !== '-') setProfilePhone(k['Numer tel.']);
           if (k.avatarUrl) setProfileAvatar(k.avatarUrl);
 
@@ -1025,39 +1027,55 @@ export default function RootLayout({
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Płeć</label>
-                  <select 
-                    value={profileGender}
-                    onChange={(e) => setProfileGender(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
-                  >
-                    <option value="">-- Wybierz płeć --</option>
-                    <option value="Mężczyzna">Mężczyzna</option>
-                    <option value="Kobieta">Kobieta</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Płeć</label>
+                    <select 
+                      value={profileGender}
+                      onChange={(e) => setProfileGender(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
+                    >
+                      <option value="">-- Wybierz płeć --</option>
+                      <option value="Mężczyzna">Mężczyzna</option>
+                      <option value="Kobieta">Kobieta</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Wzrost (cm)</label>
+                    <input 
+                      type="number" 
+                      step="any"
+                      placeholder="np. 175"
+                      value={profileHeight}
+                      onChange={(e) => setProfileHeight(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Urodziny</label>
-                  <input 
-                    type="date" 
-                    value={profileBirth}
-                    onChange={(e) => setProfileBirth(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Urodziny</label>
+                    <input 
+                      type="date" 
+                      value={profileBirth}
+                      onChange={(e) => setProfileBirth(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Język</label>
-                  <select 
-                    value={profileLang}
-                    onChange={(e) => setProfileLang(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="Polski">Polski</option>
-                    <option value="English">English</option>
-                  </select>
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Język</label>
+                    <select 
+                      value={profileLang}
+                      onChange={(e) => setProfileLang(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="Polski">Polski</option>
+                      <option value="English">English</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -1078,12 +1096,15 @@ export default function RootLayout({
                       return;
                     }
 
+                    const parsedHeight = profileHeight ? parseFloat(profileHeight) : null;
+
                     let updateClientQuery = supabase
                       .from('klienci')
                       .update({
                         'Numer tel.': profilePhone,
                         Urodziny: profileBirth,
-                        gender: profileGender
+                        gender: profileGender,
+                        wzrost: parsedHeight
                       });
 
                     if (currentClientId) {
@@ -1113,7 +1134,8 @@ export default function RootLayout({
                           .update({
                             'Numer tel.': profilePhone,
                             Urodziny: profileBirth,
-                            gender: profileGender
+                            gender: profileGender,
+                            wzrost: parsedHeight
                           })
                           .eq('id', existingClient.id);
                       }
@@ -1124,7 +1146,7 @@ export default function RootLayout({
                       .update({ telefon: profilePhone })
                       .ilike('email', cleanEmail);
 
-                    alert("Profil, płeć oraz data urodzin zostały zapisane pomyślnie!");
+                    alert("Profil, płeć, wzrost oraz data urodzin zostały zapisane pomyślnie!");
                     setIsProfileModalOpen(false);
                     window.location.reload();
                   }}
@@ -1182,7 +1204,7 @@ export default function RootLayout({
                               type="text" 
                               readOnly 
                               value={`webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
-                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
                             />
                             <button 
                               onClick={() => {
@@ -1205,7 +1227,7 @@ export default function RootLayout({
                               type="text" 
                               readOnly 
                               value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
-                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
                             />
                             <button 
                               onClick={() => {
