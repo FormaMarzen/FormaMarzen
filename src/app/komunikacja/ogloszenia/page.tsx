@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
@@ -8,10 +8,18 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+interface KlientItem {
+  id: number | string;
+  imie: string;
+  nazwisko: string;
+  email: string;
+}
+
 export default function OgloszeniaPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [ogloszenia, setOgloszenia] = useState<any[]>([]);
   const [karnetyBaza, setKarnetyBaza] = useState<string[]>([]);
+  const [klienciBaza, setKlienciBaza] = useState<KlientItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Stan modalu dodawania / edycji ogłoszenia
@@ -19,8 +27,10 @@ export default function OgloszeniaPage() {
   const [editingId, setEditingId] = useState<number | string | null>(null);
   const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().split('T')[0]);
   const [dateTo, setDateTo] = useState('2026-09-06');
-  const [targetType, setTargetType] = useState('Wszystkich');
+  const [targetType, setTargetType] = useState<'Wszystkich' | 'Wybrane' | 'Klient'>('Wszystkich');
   const [selectedPasses, setSelectedPasses] = useState<string[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string | number | null>(null);
+  const [clientFilterQuery, setClientFilterQuery] = useState('');
   const [content, setContent] = useState('');
 
   // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
@@ -88,6 +98,22 @@ export default function OgloszeniaPage() {
           'OGÓLNOROZWOJOWE I ROZCIĄGANIE - umowa 12 miesięcy'
         ]);
       }
+
+      // 3. Pobieranie listy klubowiczów z tabeli klienci
+      const { data: klienciData, error: klienciError } = await supabase
+        .from('klienci')
+        .select('id, "Imię", "Nazwisko", "E-mail", imie, nazwisko, email')
+        .order('Nazwisko', { ascending: true });
+
+      if (!klienciError && klienciData) {
+        const mappedClients: KlientItem[] = klienciData.map((k: any) => ({
+          id: k.id,
+          imie: k['Imię'] || k.imie || '',
+          nazwisko: k['Nazwisko'] || k.nazwisko || '',
+          email: k['E-mail'] || k.email || ''
+        }));
+        setKlienciBaza(mappedClients);
+      }
     } catch (err) {
       console.error("Błąd sieci:", err);
     } finally {
@@ -105,6 +131,8 @@ export default function OgloszeniaPage() {
     setDateTo('2026-09-06');
     setTargetType('Wszystkich');
     setSelectedPasses([]);
+    setSelectedClientId(null);
+    setClientFilterQuery('');
     setContent('');
     setIsModalOpen(true);
   };
@@ -113,16 +141,37 @@ export default function OgloszeniaPage() {
     setEditingId(ogloszenie.id);
     setDateFrom(ogloszenie.dateFrom || new Date().toISOString().split('T')[0]);
     setDateTo(ogloszenie.dateTo || '2026-09-06');
-    if (ogloszenie.targetArray && ogloszenie.targetArray[0] === 'Wszystkich') {
+    setClientFilterQuery('');
+
+    const targetFirst = ogloszenie.targetArray?.[0] || '';
+
+    if (targetFirst === 'Wszystkich' || !targetFirst) {
       setTargetType('Wszystkich');
+      setSelectedPasses([]);
+      setSelectedClientId(null);
+    } else if (typeof targetFirst === 'string' && targetFirst.startsWith('klient:')) {
+      setTargetType('Klient');
+      const cId = targetFirst.replace('klient:', '');
+      setSelectedClientId(cId);
       setSelectedPasses([]);
     } else {
       setTargetType('Wybrane');
       setSelectedPasses(ogloszenie.targetArray || []);
+      setSelectedClientId(null);
     }
+
     setContent(ogloszenie.content || '');
     setIsModalOpen(true);
   };
+
+  const filteredKlienciModal = useMemo(() => {
+    if (!clientFilterQuery.trim()) return klienciBaza;
+    const q = clientFilterQuery.toLowerCase();
+    return klienciBaza.filter(k => 
+      `${k.imie} ${k.nazwisko}`.toLowerCase().includes(q) ||
+      k.email.toLowerCase().includes(q)
+    );
+  }, [klienciBaza, clientFilterQuery]);
 
   const handleSaveOgloszenie = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,11 +180,23 @@ export default function OgloszeniaPage() {
       return;
     }
 
-    const targetText = targetType === 'Wszystkich' 
-      ? 'Wszystkich' 
-      : selectedPasses.length > 0 ? selectedPasses.join(', ') : 'Wszystkich';
+    if (targetType === 'Klient' && !selectedClientId) {
+      showToast("Wybierz klubowicza z listy!", 'error');
+      return;
+    }
 
-    const targetArr = targetType === 'Wszystkich' ? ['Wszystkich'] : selectedPasses;
+    let targetText = 'Wszystkich';
+    let targetArr: string[] = ['Wszystkich'];
+
+    if (targetType === 'Wybrane') {
+      targetText = selectedPasses.length > 0 ? selectedPasses.join(', ') : 'Wszystkich';
+      targetArr = selectedPasses.length > 0 ? selectedPasses : ['Wszystkich'];
+    } else if (targetType === 'Klient') {
+      const clientObj = klienciBaza.find(k => String(k.id) === String(selectedClientId));
+      const clientName = clientObj ? `${clientObj.imie} ${clientObj.nazwisko}`.trim() : 'Klubowicz';
+      targetText = `Klubowicz: ${clientName} (${clientObj?.email || ''})`;
+      targetArr = [`klient:${selectedClientId}`];
+    }
 
     const payload = {
       date_from: dateFrom,
@@ -234,8 +295,8 @@ export default function OgloszeniaPage() {
         <div className="relative">
           <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 text-xs">🔍</span>
           <input 
-            type="text"
-            placeholder="Wyszukaj ogłoszenie..."
+            type="text" 
+            placeholder="Wyszukaj ogłoszenie..." 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-sky-50/50 border border-sky-200 rounded-xl pl-9 pr-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors font-medium"
@@ -395,7 +456,7 @@ export default function OgloszeniaPage() {
                   <div className="space-y-1">
                     <label className="font-bold text-slate-700 block">Widoczny od dnia:</label>
                     <input 
-                      type="date"
+                      type="date" 
                       value={dateFrom}
                       onChange={(e) => setDateFrom(e.target.value)}
                       className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
@@ -405,7 +466,7 @@ export default function OgloszeniaPage() {
                   <div className="space-y-1">
                     <label className="font-bold text-slate-700 block">Widoczny do dnia:</label>
                     <input 
-                      type="date"
+                      type="date" 
                       value={dateTo}
                       onChange={(e) => setDateTo(e.target.value)}
                       className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
@@ -418,16 +479,26 @@ export default function OgloszeniaPage() {
                   <select 
                     value={targetType}
                     onChange={(e) => {
-                      setTargetType(e.target.value);
-                      if (e.target.value === 'Wszystkich') setSelectedPasses([]);
+                      const val = e.target.value as 'Wszystkich' | 'Wybrane' | 'Klient';
+                      setTargetType(val);
+                      if (val === 'Wszystkich') {
+                        setSelectedPasses([]);
+                        setSelectedClientId(null);
+                      } else if (val === 'Wybrane') {
+                        setSelectedClientId(null);
+                      } else if (val === 'Klient') {
+                        setSelectedPasses([]);
+                      }
                     }}
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer"
                   >
-                    <option value="Wszystkich">Wszystkich</option>
+                    <option value="Wszystkich">Wszyscy klubowicze (Publiczne)</option>
                     <option value="Wybrane">Wybrane karnety</option>
+                    <option value="Klient">Konkretny klubowicz (z bazy)</option>
                   </select>
                 </div>
 
+                {/* OPCJA 1: WYBRANE KARNETY */}
                 {targetType === 'Wybrane' && (
                   <div className="space-y-2 pt-2 bg-sky-50/50 p-4 rounded-2xl border border-sky-100 text-xs">
                     <span className="font-bold text-sky-950 block">Zaznacz karnety (jeden lub wiele):</span>
@@ -437,7 +508,7 @@ export default function OgloszeniaPage() {
                         return (
                           <label key={idx} className="flex items-center gap-2.5 p-2 bg-white rounded-xl border border-sky-200 cursor-pointer hover:bg-sky-50 transition-colors">
                             <input 
-                              type="checkbox"
+                              type="checkbox" 
                               checked={isChecked}
                               onChange={(e) => {
                                 if (e.target.checked) {
@@ -455,6 +526,67 @@ export default function OgloszeniaPage() {
                     </div>
                   </div>
                 )}
+
+                {/* OPCJA 2: KONKRETNY KLUBOWICZ */}
+                {targetType === 'Klient' && (
+                  <div className="space-y-3 pt-2 bg-sky-50/50 p-4 rounded-2xl border border-sky-100 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-sky-950 block">Wybierz klubowicza z listy:</span>
+                      <span className="text-[10px] text-slate-400 font-bold">
+                        Łącznie w bazie: {klienciBaza.length}
+                      </span>
+                    </div>
+
+                    <input 
+                      type="text" 
+                      placeholder="Filtruj listę (imię, nazwisko, e-mail)..."
+                      value={clientFilterQuery}
+                      onChange={(e) => setClientFilterQuery(e.target.value)}
+                      className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 font-medium"
+                    />
+
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                      {filteredKlienciModal.map((k) => {
+                        const isSelected = String(selectedClientId) === String(k.id);
+                        return (
+                          <div 
+                            key={k.id}
+                            onClick={() => setSelectedClientId(k.id)}
+                            className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${
+                              isSelected 
+                                ? 'bg-amber-50 border-amber-400 shadow-sm' 
+                                : 'bg-white border-sky-100 hover:bg-sky-50/80'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] uppercase ${
+                                isSelected ? 'bg-amber-500 text-slate-950 font-black' : 'bg-sky-100 text-sky-900'
+                              }`}>
+                                {k.imie?.[0] || 'K'}{k.nazwisko?.[0] || ''}
+                              </div>
+                              <div>
+                                <div className="font-bold text-slate-900">{k.imie} {k.nazwisko}</div>
+                                <div className="text-[10px] text-slate-400">{k.email || 'Brak e-mail'}</div>
+                              </div>
+                            </div>
+                            <input 
+                              type="radio" 
+                              name="selected_client"
+                              checked={isSelected}
+                              onChange={() => setSelectedClientId(k.id)}
+                              className="accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+                        );
+                      })}
+                      {filteredKlienciModal.length === 0 && (
+                        <div className="text-center py-4 text-slate-400 italic">
+                          Nie znaleziono klubowicza dla podanej frazy.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* SEKCJA: OGŁOSZENIE / TREŚĆ */}
@@ -464,8 +596,8 @@ export default function OgloszeniaPage() {
                 <div className="space-y-1 text-xs">
                   <label className="font-bold text-slate-700 block">TREŚĆ</label>
                   <textarea 
-                    rows={8}
-                    placeholder="Wpisz treść ogłoszenia widocznego dla klientów..."
+                    rows={8} 
+                    placeholder="Wpisz treść ogłoszenia widocznego dla klientów..." 
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-4 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm leading-relaxed resize-none font-medium"
