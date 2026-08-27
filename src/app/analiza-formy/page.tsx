@@ -95,23 +95,27 @@ const fetchAllFromSupabase = async (
   maxPages: number = 5
 ) => {
   let result: any[] = [];
-  for (let i = 0; i < maxPages; i++) {
-    const { data, error } = await supabase
-      .from(table)
-      .select(selectQuery)
-      .order(orderBy, { ascending })
-      .range(i * 1000, (i + 1) * 1000 - 1);
-    
-    if (error) {
-      console.error(`Błąd pobierania tabeli ${table}:`, error);
-      break;
+  try {
+    for (let i = 0; i < maxPages; i++) {
+      const { data, error } = await supabase
+        .from(table)
+        .select(selectQuery)
+        .order(orderBy, { ascending })
+        .range(i * 1000, (i + 1) * 1000 - 1);
+      
+      if (error) {
+        console.error(`Błąd pobierania tabeli ${table}:`, error);
+        break;
+      }
+      if (data && data.length > 0) {
+        result.push(...data);
+        if (data.length < 1000) break;
+      } else {
+        break;
+      }
     }
-    if (data && data.length > 0) {
-      result.push(...data);
-      if (data.length < 1000) break;
-    } else {
-      break;
-    }
+  } catch (err) {
+    console.error(`Wyjątek podczas pobierania tabeli ${table}:`, err);
   }
   return result;
 };
@@ -221,55 +225,60 @@ export default function AnalizaFormyPage() {
   useEffect(() => {
     const initAuth = async () => {
       setIsLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        const email = session.user.email || '';
-        const cleanEmail = email.toLowerCase().trim();
-        setCurrentUserEmail(cleanEmail);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session?.user) {
+          const email = session.user.email || '';
+          const cleanEmail = email.toLowerCase().trim();
+          setCurrentUserEmail(cleanEmail);
 
-        const clientsData = await fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 10);
-        const mappedClients = (clientsData || []) as unknown as Klient[];
-        setKlienci(mappedClients);
+          const clientsData = await fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 10);
+          const mappedClients = (clientsData || []) as unknown as Klient[];
+          setKlienci(mappedClients);
 
-        const myClientProfile = mappedClients.find(c => (c['E-mail'] || '').toLowerCase().trim() === cleanEmail);
-        if (myClientProfile) {
-          setCurrentUserId(myClientProfile.id);
-        }
+          const myClientProfile = mappedClients.find(c => (c['E-mail'] || '').toLowerCase().trim() === cleanEmail);
+          if (myClientProfile) {
+            setCurrentUserId(myClientProfile.id);
+          }
 
-        if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
-          setAppRole('admin');
-        } else {
-          const { data: trenerData } = await supabase
-            .from('trenerzy')
-            .select('*')
-            .ilike('email', cleanEmail)
-            .maybeSingle();
-
-          if (trenerData) {
-            setAppRole('trener');
-            if (myClientProfile) {
-              setSelectedKlient(myClientProfile);
-              const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
-              if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
-              else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
-              await fetchMeasurements(myClientProfile.id, cleanEmail);
-            }
+          if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
+            setAppRole('admin');
           } else {
-            setAppRole('klubowicz');
-            if (myClientProfile) {
-              setSelectedKlient(myClientProfile);
-              const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
-              if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
-              else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
-              await fetchMeasurements(myClientProfile.id, cleanEmail);
+            const { data: trenerData } = await supabase
+              .from('trenerzy')
+              .select('*')
+              .ilike('email', cleanEmail)
+              .maybeSingle();
+
+            if (trenerData) {
+              setAppRole('trener');
+              if (myClientProfile) {
+                setSelectedKlient(myClientProfile);
+                const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
+                if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
+                else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+                await fetchMeasurements(myClientProfile.id, cleanEmail);
+              }
+            } else {
+              setAppRole('klubowicz');
+              if (myClientProfile) {
+                setSelectedKlient(myClientProfile);
+                const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
+                if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
+                else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+                await fetchMeasurements(myClientProfile.id, cleanEmail);
+              }
             }
           }
-        }
 
-        await fetchRedukcjaData();
+          await fetchRedukcjaData();
+        }
+      } catch (err) {
+        console.error("Błąd podczas inicjalizacji widoku Analizy Formy:", err);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     };
 
     initAuth();
@@ -297,13 +306,13 @@ export default function AnalizaFormyPage() {
         supabase.from('klub_redukcja_nagrody').select('*').eq('edycja_id', edycjaId).order('miejsce', { ascending: true })
       ]);
 
-      if (uczestnicyRes.data) {
+      if (uczestnicyRes?.data) {
         setUczestnicyRedukcji(uczestnicyRes.data as RedukcjaUczestnik[]);
       }
-      if (pomiaryRes.data) {
+      if (pomiaryRes?.data) {
         setPomiaryRedukcji(pomiaryRes.data as RedukcjaPomiar[]);
       }
-      if (nagrodyRes.data) {
+      if (nagrodyRes?.data) {
         setNagrodyRedukcji(nagrodyRes.data as RedukcjaNagroda[]);
       }
     } catch (err) {
@@ -318,28 +327,33 @@ export default function AnalizaFormyPage() {
   }, [selectedEdycjaId]);
 
   const fetchMeasurements = async (klientId: number | string, email: string) => {
-    let query = supabase
-      .from('analiza_formy')
-      .select('*')
-      .order('data_pomiaru', { ascending: false });
+    try {
+      let query = supabase
+        .from('analiza_formy')
+        .select('*')
+        .order('data_pomiaru', { ascending: false });
 
-    if (klientId) {
-      query = query.or(`klient_id.eq.${klientId},email_klienta.ilike.${email.trim()}`);
-    } else {
-      query = query.ilike('email_klienta', email.trim());
-    }
+      if (klientId) {
+        query = query.or(`klient_id.eq.${klientId},email_klienta.ilike.${email.trim()}`);
+      } else {
+        query = query.ilike('email_klienta', email.trim());
+      }
 
-    const { data, error } = await query;
-    if (data && !error) {
-      setMeasurements(data as AnalizaFormyWpis[]);
-    } else {
+      const { data, error } = await query;
+      if (data && !error) {
+        setMeasurements(data as AnalizaFormyWpis[]);
+      } else {
+        setMeasurements([]);
+      }
+    } catch (err) {
+      console.error("Błąd pobierania pomiarów:", err);
       setMeasurements([]);
     }
   };
 
   const handleSelectClient = (klient: Klient) => {
     setSelectedKlient(klient);
-    setSearchQuery(`${klient.Imię} ${klient.Nazwisko}`);
+    setSearchQuery(`${klient.Imię || ''} ${klient.Nazwisko || ''}`.trim());
     setIsSearchFocused(false);
 
     const g = (klient.gender || klient.Płeć || klient.plec || '').toLowerCase();
@@ -464,7 +478,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Ręczne dodanie klubowicza do wyzwania przez Admina
   const handleManualAddParticipant = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEdycjaId || !manualAddKlientId) {
@@ -494,7 +507,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Dodawanie nagrody do edycji wyzwania
   const handleAddNagroda = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEdycjaId || !nagrodaFormData.tytul.trim()) return;
@@ -593,9 +605,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Bezpośrednia zmiana checkboxa w dowolnym momencie
   const handleCheckboxPaymentToggle = async (uczestnikId: number, newStatus: boolean) => {
-    // Natychmiastowa aktualizacja w stanie lokalnym dla płynności interfejsu
     setUczestnicyRedukcji(prev => prev.map(u => u.id === uczestnikId ? { ...u, oplacone: newStatus } : u));
 
     const { error } = await supabase
@@ -635,10 +645,10 @@ export default function AnalizaFormyPage() {
       klient_id: targetPomiarKlientId,
       etap: targetPomiarEtap,
       data_pomiaru: redukcjaPomiarForm.data_pomiaru,
-      waga_kg: parseFloat(redukcjaPomiarForm.waga_kg),
-      fat_proc: parseFloat(redukcjaPomiarForm.fat_proc),
-      muscle_kg: parseFloat(redukcjaPomiarForm.muscle_kg),
-      visceral_level: parseInt(redukcjaPomiarForm.visceral_level)
+      waga_kg: parseFloat(redukcjaPomiarForm.waga_kg) || 0,
+      fat_proc: parseFloat(redukcjaPomiarForm.fat_proc) || 0,
+      muscle_kg: parseFloat(redukcjaPomiarForm.muscle_kg) || 0,
+      visceral_level: parseInt(redukcjaPomiarForm.visceral_level) || 0
     };
 
     const { error } = await supabase
@@ -667,23 +677,22 @@ export default function AnalizaFormyPage() {
   const aktywneEdycje = edycjeRedukcji.filter(e => e.status !== 'zakonczone');
   const archiwalneEdycje = edycjeRedukcji.filter(e => e.status === 'zakonczone');
 
-  // Anonimizacja nazwisk dla osób niebiorących udziału
   const formatParticipantDisplayName = (fullName: string) => {
     if (appRole === 'admin' || isCurrentUserJoined) {
       return fullName;
     }
-    const parts = fullName.trim().split(" ");
+    const parts = (fullName || "").trim().split(" ");
     if (parts.length >= 2) {
       return `${parts[0]} ${parts[1].charAt(0)}.`;
     }
-    return fullName;
+    return fullName || "Klubowicz";
   };
 
   const rankingRedukcji = useMemo(() => {
-    return uczestnicyRedukcji.map(uczestnik => {
-      const klientObj = klienci.find(k => String(k.id) === String(uczestnik.klient_id));
-      const startP = pomiaryRedukcji.find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'start');
-      const koniecP = pomiaryRedukcji.find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'koniec');
+    return (uczestnicyRedukcji || []).map(uczestnik => {
+      const klientObj = (klienci || []).find(k => String(k.id) === String(uczestnik.klient_id));
+      const startP = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'start');
+      const koniecP = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(uczestnik.klient_id) && p.etap === 'koniec');
 
       let pktWaga = 0;
       let pktFat = 0;
@@ -701,25 +710,36 @@ export default function AnalizaFormyPage() {
 
       if (startP && koniecP) {
         hasBoth = true;
-        deltaWagaKg = koniecP.waga_kg - startP.waga_kg;
-        deltaWagaProc = ((startP.waga_kg - koniecP.waga_kg) / startP.waga_kg) * 100;
-        deltaFatProc = startP.fat_proc - koniecP.fat_proc;
-        deltaMuscleKg = koniecP.muscle_kg - startP.muscle_kg;
-        deltaMuscleProc = ((koniecP.muscle_kg - startP.muscle_kg) / startP.muscle_kg) * 100;
-        deltaVisceral = startP.visceral_level - koniecP.visceral_level;
+        const sW = Number(startP.waga_kg) || 0;
+        const kW = Number(koniecP.waga_kg) || 0;
+        const sF = Number(startP.fat_proc) || 0;
+        const kF = Number(koniecP.fat_proc) || 0;
+        const sM = Number(startP.muscle_kg) || 0;
+        const kM = Number(koniecP.muscle_kg) || 0;
+        const sV = Number(startP.visceral_level) || 0;
+        const kV = Number(koniecP.visceral_level) || 0;
+
+        deltaWagaKg = kW - sW;
+        deltaWagaProc = sW > 0 ? ((sW - kW) / sW) * 100 : 0;
+        deltaFatProc = sF - kF;
+        deltaMuscleKg = kM - sM;
+        deltaMuscleProc = sM > 0 ? ((kM - sM) / sM) * 100 : 0;
+        deltaVisceral = sV - kV;
 
         pktWaga = deltaWagaProc;
         pktFat = deltaFatProc * 1.5;
         pktMuscle = deltaMuscleProc * 1.2;
         pktVisceral = deltaVisceral * 2.0;
 
-        totalPkt = parseFloat((pktWaga + pktFat + pktMuscle + pktVisceral).toFixed(2));
+        totalPkt = parseFloat((pktWaga + pktFat + pktMuscle + pktVisceral).toFixed(2)) || 0;
       }
+
+      const clientRawName = klientObj ? `${klientObj.Imię || ''} ${klientObj.Nazwisko || ''}`.trim() : 'Klubowicz';
 
       return {
         ...uczestnik,
-        rawName: klientObj ? `${klientObj.Imię} ${klientObj.Nazwisko}` : 'Klubowicz',
-        klientName: formatParticipantDisplayName(klientObj ? `${klientObj.Imię} ${klientObj.Nazwisko}` : 'Klubowicz'),
+        rawName: clientRawName,
+        klientName: formatParticipantDisplayName(clientRawName),
         klientAvatar: klientObj?.avatarUrl || klientObj?.AvatarUrl || null,
         startP,
         koniecP,
@@ -736,7 +756,9 @@ export default function AnalizaFormyPage() {
   }, [uczestnicyRedukcji, pomiaryRedukcji, klienci, appRole, isCurrentUserJoined]);
 
   const renderTrendIndicator = (val: number, isGoodWhenLower = true, unit = "") => {
-    if (val === 0) return <span className="text-slate-400 font-bold">0.0 {unit}</span>;
+    if (val === 0 || isNaN(val) || val === null || val === undefined) {
+      return <span className="text-slate-400 font-bold">0.0 {unit}</span>;
+    }
     const isPositive = val > 0;
     const isGood = isGoodWhenLower ? !isPositive : isPositive;
 
@@ -749,10 +771,10 @@ export default function AnalizaFormyPage() {
   };
 
   const searchResults = useMemo(() => {
-    if (searchQuery.trim().length < 2) return [];
-    return klienci.filter(k => 
+    if (!searchQuery || searchQuery.trim().length < 2) return [];
+    return (klienci || []).filter(k => 
       `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      k['E-mail']?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (k['E-mail'] && k['E-mail'].toLowerCase().includes(searchQuery.toLowerCase())) ||
       (k['Numer tel.'] && k['Numer tel.'].includes(searchQuery))
     ).slice(0, 8);
   }, [klienci, searchQuery]);
@@ -770,8 +792,8 @@ export default function AnalizaFormyPage() {
     const cutoffDate = new Date();
     cutoffDate.setMonth(cutoffDate.getMonth() - 24);
     
-    return [...measurements]
-      .filter(m => new Date(m.data_pomiaru) >= cutoffDate)
+    return [...(measurements || [])]
+      .filter(m => m.data_pomiaru && new Date(m.data_pomiaru) >= cutoffDate)
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
@@ -820,12 +842,12 @@ export default function AnalizaFormyPage() {
     strokeColor: string, 
     fillGradient: string
   ) => {
-    const validPoints = chartData24Months
+    const validPoints = (chartData24Months || [])
       .map(item => ({
         date: item.data_pomiaru,
         val: item[dataKey] !== null && item[dataKey] !== undefined ? Number(item[dataKey]) : null
       }))
-      .filter((p): p is { date: string; val: number } => p.val !== null);
+      .filter((p): p is { date: string; val: number } => p.val !== null && !isNaN(p.val));
 
     if (validPoints.length < 2) {
       return (
@@ -850,7 +872,7 @@ export default function AnalizaFormyPage() {
 
     const points = validPoints.map((p, index) => {
       const x = margin.left + (index / (validPoints.length - 1)) * (width - margin.left - margin.right);
-      const y = height - margin.bottom - ((p.val - yMin) / (yMax - yMin)) * (height - margin.top - margin.bottom);
+      const y = height - margin.bottom - ((p.val - yMin) / (yMax - yMin || 1)) * (height - margin.top - margin.bottom);
       return { x, y, val: p.val, date: p.date };
     });
 
@@ -890,7 +912,7 @@ export default function AnalizaFormyPage() {
                 </text>
                 {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
                   <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
-                    {p.date.substring(5)}
+                    {p.date ? p.date.substring(5) : ''}
                   </text>
                 )}
               </g>
@@ -901,6 +923,12 @@ export default function AnalizaFormyPage() {
     );
   };
 
+  const clientGenderDisplay = selectedKlient ? (selectedKlient.gender || selectedKlient.Płeć || selectedKlient.plec || 'Nie podano') : '';
+
+  const niezapisaniKlienci = useMemo(() => {
+    return (klienci || []).filter(k => !(uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(k.id)));
+  }, [klienci, uczestnicyRedukcji]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -910,13 +938,6 @@ export default function AnalizaFormyPage() {
       </div>
     );
   }
-
-  const clientGenderDisplay = selectedKlient ? (selectedKlient.gender || selectedKlient.Płeć || selectedKlient.plec || 'Nie podano') : '';
-
-  // Lista klientów, którzy NIE są jeszcze zapisani do wybranej edycji (dla modalu ręcznego dodawania)
-  const niezapisaniKlienci = useMemo(() => {
-    return klienci.filter(k => !uczestnicyRedukcji.some(u => String(u.klient_id) === String(k.id)));
-  }, [klienci, uczestnicyRedukcji]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 font-sans antialiased">
@@ -1048,7 +1069,7 @@ export default function AnalizaFormyPage() {
               <button
                 onClick={async () => {
                   setSearchQuery('');
-                  const myProfile = klienci.find(c => c['E-mail']?.toLowerCase().trim() === currentUserEmail);
+                  const myProfile = (klienci || []).find(c => (c['E-mail'] || '').toLowerCase().trim() === currentUserEmail);
                   if (myProfile) {
                     setSelectedKlient(myProfile);
                     fetchMeasurements(myProfile.id, currentUserEmail);
@@ -1681,25 +1702,25 @@ export default function AnalizaFormyPage() {
                 <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
                   <span className="text-[10px] text-sky-300 uppercase font-bold block">Wpisowe</span>
                   <span className="text-lg font-black text-amber-400 mt-0.5 block">
-                    {activeEdycjaObj.wpisowe_kwota} zł
+                    {activeEdycjaObj.wpisowe_kwota || 30} zł
                   </span>
                 </div>
 
-                {/* UKRYCIE PULI NAGRÓD PRZED KLUBOWICZEM (WIDZI TYLKO LICZBĘ ZAPISANYCH) */}
+                {/* UKRYCIE PULI NAGRÓD PRZED KLUBOWICZEM */}
                 <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
                   {appRole === 'admin' ? (
                     <>
                       <span className="text-[10px] text-emerald-300 uppercase font-bold block">Pula Nagród (Admin)</span>
                       <span className="text-lg font-black text-emerald-400 mt-0.5 block">
-                        {(uczestnicyRedukcji.filter(u => u.oplacone).length * activeEdycjaObj.wpisowe_kwota).toFixed(0)} zł
+                        {((uczestnicyRedukcji || []).filter(u => u.oplacone).length * (activeEdycjaObj.wpisowe_kwota || 30)).toFixed(0)} zł
                       </span>
-                      <span className="text-[9px] text-slate-400 font-medium">({uczestnicyRedukcji.filter(u => u.oplacone).length} opłaconych)</span>
+                      <span className="text-[9px] text-slate-400 font-medium">({(uczestnicyRedukcji || []).filter(u => u.oplacone).length} opłaconych)</span>
                     </>
                   ) : (
                     <>
                       <span className="text-[10px] text-emerald-300 uppercase font-bold block">Zapisani Klubowicze</span>
                       <span className="text-lg font-black text-emerald-400 mt-0.5 block">
-                        {uczestnicyRedukcji.length} osób
+                        {(uczestnicyRedukcji || []).length} osób
                       </span>
                       <span className="text-[9px] text-slate-400 font-medium">w grze o trofea</span>
                     </>
@@ -1759,7 +1780,7 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {nagrodyRedukcji.map((n) => (
+                {(nagrodyRedukcji || []).map((n) => (
                   <div key={n.id} className="bg-gradient-to-br from-amber-50/60 to-amber-100/40 border border-amber-200 p-4 rounded-2xl flex items-start justify-between relative group">
                     <div className="flex items-start gap-3">
                       <span className="text-2xl">
@@ -1785,7 +1806,7 @@ export default function AnalizaFormyPage() {
                     )}
                   </div>
                 ))}
-                {nagrodyRedukcji.length === 0 && (
+                {(nagrodyRedukcji || []).length === 0 && (
                   <div className="col-span-full text-center text-slate-400 text-xs py-4 italic">
                     Brak zdefiniowanych nagród w tej edycji wyzwania.
                   </div>
@@ -1803,7 +1824,7 @@ export default function AnalizaFormyPage() {
                     <span>⚖️</span> Tabela Pomiarów Składu Ciała ({activeEdycjaObj.nazwa})
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    Uczestnik: <span className="font-bold text-slate-800">{selectedKlient ? `${selectedKlient.Imię} ${selectedKlient.Nazwisko}` : 'Twój Profil'}</span>
+                    Uczestnik: <span className="font-bold text-slate-800">{selectedKlient ? `${selectedKlient.Imię || ''} ${selectedKlient.Nazwisko || ''}` : 'Twój Profil'}</span>
                   </p>
                 </div>
 
@@ -1840,8 +1861,8 @@ export default function AnalizaFormyPage() {
                   </thead>
                   <tbody className="divide-y divide-sky-50">
                     {(() => {
-                      const sP = pomiaryRedukcji.find(p => String(p.klient_id) === String(activeUserKlientId) && p.etap === 'start');
-                      const kP = pomiaryRedukcji.find(p => String(p.klient_id) === String(activeUserKlientId) && p.etap === 'koniec');
+                      const sP = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(activeUserKlientId) && p.etap === 'start');
+                      const kP = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(activeUserKlientId) && p.etap === 'koniec');
                       
                       return (
                         <>
@@ -1875,10 +1896,10 @@ export default function AnalizaFormyPage() {
                             <tr className="bg-amber-50/40 font-black border-t-2 border-amber-200">
                               <td className="p-3 text-slate-950 uppercase tracking-wider">Bilans Zmian:</td>
                               <td className="p-3 text-slate-500 font-normal">Różnica</td>
-                              <td className="p-3 text-center">{renderTrendIndicator(kP.waga_kg - sP.waga_kg, true, " kg")}</td>
-                              <td className="p-3 text-center">{renderTrendIndicator(kP.fat_proc - sP.fat_proc, true, " %")}</td>
-                              <td className="p-3 text-center">{renderTrendIndicator(kP.muscle_kg - sP.muscle_kg, false, " kg")}</td>
-                              <td className="p-3 text-center">{renderTrendIndicator(kP.visceral_level - sP.visceral_level, true, " lvl")}</td>
+                              <td className="p-3 text-center">{renderTrendIndicator(Number(kP.waga_kg) - Number(sP.waga_kg), true, " kg")}</td>
+                              <td className="p-3 text-center">{renderTrendIndicator(Number(kP.fat_proc) - Number(sP.fat_proc), true, " %")}</td>
+                              <td className="p-3 text-center">{renderTrendIndicator(Number(kP.muscle_kg) - Number(sP.muscle_kg), false, " kg")}</td>
+                              <td className="p-3 text-center">{renderTrendIndicator(Number(kP.visceral_level) - Number(sP.visceral_level), true, " lvl")}</td>
                               <td className="p-3 text-right text-amber-700 font-black text-sm">
                                 {activeUserParticipant?.punkty_calkowite || 0} pkt 🏆
                               </td>
@@ -1986,7 +2007,7 @@ export default function AnalizaFormyPage() {
                           {row.startP && row.koniecP ? (
                             <div>
                               <span>{row.startP.fat_proc}% ➔ {row.koniecP.fat_proc}%</span>
-                              <div className="text-[10px]">{renderTrendIndicator(row.koniecP.fat_proc - row.startP.fat_proc, true, " %")}</div>
+                              <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.fat_proc) - Number(row.startP.fat_proc), true, " %")}</div>
                             </div>
                           ) : row.startP ? (
                             <span>{row.startP.fat_proc}%</span>
@@ -2010,7 +2031,7 @@ export default function AnalizaFormyPage() {
                           {row.startP && row.koniecP ? (
                             <div>
                               <span>{row.startP.visceral_level} ➔ {row.koniecP.visceral_level}</span>
-                              <div className="text-[10px]">{renderTrendIndicator(row.koniecP.visceral_level - row.startP.visceral_level, true, " lvl")}</div>
+                              <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.visceral_level) - Number(row.startP.visceral_level), true, " lvl")}</div>
                             </div>
                           ) : row.startP ? (
                             <span>{row.startP.visceral_level}</span>
@@ -2142,7 +2163,7 @@ export default function AnalizaFormyPage() {
                     onChange={(e) => setManualAddOplacone(e.target.checked)}
                     className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
                   />
-                  <span className="font-black text-slate-900">Oznacz wpisowe jako natychmiast opłacone ({activeEdycjaObj.wpisowe_kwota} zł)</span>
+                  <span className="font-black text-slate-900">Oznacz wpisowe jako opłacone ({activeEdycjaObj.wpisowe_kwota || 30} zł)</span>
                 </label>
               </div>
 
@@ -2213,7 +2234,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: WYBÓR PŁATNOŚCI (AUTOPAY / GOTÓWKA DLA KLUBOWICZA) */}
+      {/* MODAL: WYBÓR PŁATNOŚCI (KLUBOWICZ) */}
       {isJoinModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-100">
@@ -2223,7 +2244,7 @@ export default function AnalizaFormyPage() {
                   Dołącz do Wyzwania Redukcji
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Wpisowe do wyzwania: <span className="font-bold text-amber-600">{activeEdycjaObj.wpisowe_kwota} zł</span>
+                  Wpisowe do wyzwania: <span className="font-bold text-amber-600">{activeEdycjaObj.wpisowe_kwota || 30} zł</span>
                 </p>
               </div>
               <button onClick={() => setIsJoinModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
@@ -2387,7 +2408,7 @@ export default function AnalizaFormyPage() {
                   {targetPomiarEtap === 'start' ? '📊 Pomiar Początkowy (START)' : '🏆 Pomiar Końcowy (FINAŁ)'}
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Dla: <span className="font-bold text-slate-800">{klienci.find(k => String(k.id) === String(targetPomiarKlientId))?.Imię || 'Klubowicz'}</span>
+                  Dla: <span className="font-bold text-slate-800">{(klienci || []).find(k => String(k.id) === String(targetPomiarKlientId))?.Imię || 'Klubowicz'}</span>
                 </p>
               </div>
               <button onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
@@ -2479,7 +2500,7 @@ export default function AnalizaFormyPage() {
                   {editingMeasurementId ? "Edycja Pomiaru i Karty Formy" : "Nowy Pomiar i Karta Formy"}
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Dla: {selectedKlient ? `${selectedKlient.Imię} ${selectedKlient.Nazwisko}` : currentUserEmail}
+                  Dla: {selectedKlient ? `${selectedKlient.Imię || ''} ${selectedKlient.Nazwisko || ''}` : currentUserEmail}
                 </p>
               </div>
               <button 
