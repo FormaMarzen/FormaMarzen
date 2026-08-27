@@ -62,6 +62,7 @@ interface RedukcjaUczestnik {
   klient_id: number | string;
   oplacone: boolean;
   metoda_platnosci?: 'autopay' | 'gotowka' | 'inna';
+  brak_pomiaru_koncowego?: boolean;
   punkty_calkowite: number;
   data_zapisu: string;
   klient?: Klient;
@@ -286,10 +287,13 @@ export default function AnalizaFormyPage() {
 
   const fetchRedukcjaData = async () => {
     try {
-      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'id', false, 2);
+      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'data_koniec', false, 2);
       if (edycjeData && edycjeData.length > 0) {
-        setEdycjeRedukcji(edycjeData as RedukcjaEdycja[]);
-        const active = edycjeData.find((e: any) => e.status !== 'zakonczone') || edycjeData[0];
+        const sorted = (edycjeData as RedukcjaEdycja[]).sort((a, b) => 
+          new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
+        );
+        setEdycjeRedukcji(sorted);
+        const active = sorted.find((e: any) => e.status !== 'zakonczone') || sorted[0];
         setSelectedEdycjaId(active.id);
         await loadEdycjaDetails(active.id);
       }
@@ -490,6 +494,7 @@ export default function AnalizaFormyPage() {
       klient_id: manualAddKlientId,
       oplacone: manualAddOplacone,
       metoda_platnosci: manualAddMetoda,
+      brak_pomiaru_koncowego: false,
       punkty_calkowite: 0.00
     }]);
 
@@ -569,6 +574,7 @@ export default function AnalizaFormyPage() {
           klient_id: kId,
           oplacone: false,
           metoda_platnosci: 'autopay',
+          brak_pomiaru_koncowego: false,
           punkty_calkowite: 0.00
         }], { onConflict: 'edycja_id,klient_id' });
 
@@ -592,6 +598,7 @@ export default function AnalizaFormyPage() {
         klient_id: kId,
         oplacone: false,
         metoda_platnosci: 'gotowka',
+        brak_pomiaru_koncowego: false,
         punkty_calkowite: 0.00
       }], { onConflict: 'edycja_id,klient_id' });
 
@@ -619,11 +626,26 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  const handleToggleBrakPomiaru = async (uczestnikId: number, currentStatus: boolean) => {
+    const newStatus = !currentStatus;
+    setUczestnicyRedukcji(prev => prev.map(u => u.id === uczestnikId ? { ...u, brak_pomiaru_koncowego: newStatus } : u));
+
+    const { error } = await supabase
+      .from('klub_redukcja_uczestnicy')
+      .update({ brak_pomiaru_koncowego: newStatus })
+      .eq('id', uczestnikId);
+
+    if (error) {
+      alert("Błąd aktualizacji: " + error.message);
+      if (selectedEdycjaId) await loadEdycjaDetails(selectedEdycjaId);
+    }
+  };
+
   const handleOpenRedukcjaPomiarModal = (etap: 'start' | 'koniec', klientId: number | string) => {
     setTargetPomiarEtap(etap);
     setTargetPomiarKlientId(klientId);
 
-    const existing = pomiaryRedukcji.find(p => String(p.klient_id) === String(klientId) && p.etap === etap);
+    const existing = (pomiaryRedukcji || []).find(p => String(p.klient_id) === String(klientId) && p.etap === etap);
 
     setRedukcjaPomiarForm({
       data_pomiaru: existing ? existing.data_pomiaru : new Date().toISOString().split('T')[0],
@@ -671,11 +693,21 @@ export default function AnalizaFormyPage() {
 
   const activeEdycjaObj = edycjeRedukcji.find(e => e.id === selectedEdycjaId) || null;
   const activeUserKlientId = selectedKlient?.id || currentUserId;
-  const isCurrentUserJoined = uczestnicyRedukcji.some(u => String(u.klient_id) === String(activeUserKlientId));
-  const activeUserParticipant = uczestnicyRedukcji.find(u => String(u.klient_id) === String(activeUserKlientId));
+  const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
+  const activeUserParticipant = (uczestnicyRedukcji || []).find(u => String(u.klient_id) === String(activeUserKlientId));
 
-  const aktywneEdycje = edycjeRedukcji.filter(e => e.status !== 'zakonczone');
-  const archiwalneEdycje = edycjeRedukcji.filter(e => e.status === 'zakonczone');
+  // Sortowanie po dacie zakończenia malejąco (najpóźniej kończące się u góry)
+  const aktywneEdycje = useMemo(() => {
+    return (edycjeRedukcji || [])
+      .filter(e => e.status !== 'zakonczone')
+      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+  }, [edycjeRedukcji]);
+
+  const archiwalneEdycje = useMemo(() => {
+    return (edycjeRedukcji || [])
+      .filter(e => e.status === 'zakonczone')
+      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+  }, [edycjeRedukcji]);
 
   const formatParticipantDisplayName = (fullName: string) => {
     if (appRole === 'admin' || isCurrentUserJoined) {
@@ -688,6 +720,7 @@ export default function AnalizaFormyPage() {
     return fullName || "Klubowicz";
   };
 
+  // Ranking z priorytetem DNF na samym dole
   const rankingRedukcji = useMemo(() => {
     return (uczestnicyRedukcji || []).map(uczestnik => {
       const klientObj = (klienci || []).find(k => String(k.id) === String(uczestnik.klient_id));
@@ -752,7 +785,15 @@ export default function AnalizaFormyPage() {
         deltaVisceral,
         totalPkt
       };
-    }).sort((a, b) => b.totalPkt - a.totalPkt);
+    }).sort((a, b) => {
+      if (a.brak_pomiaru_koncowego !== b.brak_pomiaru_koncowego) {
+        return a.brak_pomiaru_koncowego ? 1 : -1;
+      }
+      if (a.hasBoth !== b.hasBoth) {
+        return a.hasBoth ? -1 : 1;
+      }
+      return b.totalPkt - a.totalPkt;
+    });
   }, [uczestnicyRedukcji, pomiaryRedukcji, klienci, appRole, isCurrentUserJoined]);
 
   const renderTrendIndicator = (val: number, isGoodWhenLower = true, unit = "") => {
@@ -1615,7 +1656,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* ZAKŁADKA 3: WYZWANIE REDUKCJI (ODRĘBNA TABELA POMIARÓW, NAGRODY, CHECKBOXY I ARCHIWUM) */}
+      {/* ZAKŁADKA 3: WYZWANIE REDUKCJI */}
       {activeTab === 'redukcja' && (
         <div className="space-y-8">
           
@@ -1658,7 +1699,6 @@ export default function AnalizaFormyPage() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* PRZYCISKI ADMINISTRATORA: DODAJ KLUBOWICZA / ZAMKNIJ EDYCJĘ */}
                   {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && (
                     <>
                       <button
@@ -1676,14 +1716,18 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {aktywneEdycje.length > 1 && (
+                  {/* SELEKTOR EDYCJI WYBORU */}
+                  {aktywneEdycje.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
                       onChange={(e) => setSelectedEdycjaId(Number(e.target.value))}
                       className="bg-sky-900/80 border border-sky-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none cursor-pointer"
                     >
+                      <option value="" disabled>Wybierz edycję wyzwania...</option>
                       {aktywneEdycje.map(ed => (
-                        <option key={ed.id} value={ed.id}>{ed.nazwa}</option>
+                        <option key={ed.id} value={ed.id}>
+                          {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec})
+                        </option>
                       ))}
                     </select>
                   )}
@@ -1815,7 +1859,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA W TEJ EDYCJI */}
+          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA */}
           {(selectedKlient || currentUserId) && activeEdycjaObj && (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3 p-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 pb-3">
@@ -1945,14 +1989,18 @@ export default function AnalizaFormyPage() {
                       <th className="p-3 text-center">Masa Mięśniowa</th>
                       <th className="p-3 text-center">Wisceralny</th>
                       <th className="p-3 text-right">Punkty Procentowe</th>
-                      {appRole === 'admin' && <th className="p-3 text-center">Pomiary (Admin)</th>}
+                      {appRole === 'admin' && <th className="p-3 text-center">Zarządzanie (Admin)</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-sky-50">
                     {rankingRedukcji.map((row, idx) => (
-                      <tr key={row.id} className="hover:bg-slate-50/60 transition-colors">
+                      <tr key={row.id} className={`transition-colors ${row.brak_pomiaru_koncowego ? 'bg-slate-100/60 opacity-60' : 'hover:bg-slate-50/60'}`}>
                         <td className="p-3 font-black text-slate-800">
-                          {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `#${idx + 1}`}
+                          {row.brak_pomiaru_koncowego ? (
+                            <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded">DNF</span>
+                          ) : (
+                            idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `#${idx + 1}`
+                          )}
                         </td>
                         <td className="p-3 font-bold text-slate-900 flex items-center gap-2.5">
                           {row.klientAvatar && (isCurrentUserJoined || appRole === 'admin') ? (
@@ -1970,7 +2018,7 @@ export default function AnalizaFormyPage() {
                           </div>
                         </td>
 
-                        {/* CHECKBOX OPŁACENIA W DOWOLNYM MOMENCIE DLA ADMINA */}
+                        {/* CHECKBOX OPŁACENIA W DOWOLNYM MOMENCIE */}
                         <td className="p-3 text-center">
                           {appRole === 'admin' ? (
                             <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all">
@@ -1992,7 +2040,9 @@ export default function AnalizaFormyPage() {
                         </td>
 
                         <td className="p-3 text-center font-bold text-slate-800">
-                          {row.startP && row.koniecP ? (
+                          {row.brak_pomiaru_koncowego ? (
+                            <span className="text-rose-600 font-bold text-xs">Brak finału</span>
+                          ) : row.startP && row.koniecP ? (
                             <div>
                               <span>{row.startP.waga_kg} ➔ {row.koniecP.waga_kg} kg</span>
                               <div className="text-[10px]">{renderTrendIndicator(row.deltaWagaKg, true, " kg")} ({row.deltaWagaProc.toFixed(1)}%)</div>
@@ -2004,7 +2054,9 @@ export default function AnalizaFormyPage() {
                           )}
                         </td>
                         <td className="p-3 text-center">
-                          {row.startP && row.koniecP ? (
+                          {row.brak_pomiaru_koncowego ? (
+                            <span className="text-slate-400">-</span>
+                          ) : row.startP && row.koniecP ? (
                             <div>
                               <span>{row.startP.fat_proc}% ➔ {row.koniecP.fat_proc}%</span>
                               <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.fat_proc) - Number(row.startP.fat_proc), true, " %")}</div>
@@ -2016,7 +2068,9 @@ export default function AnalizaFormyPage() {
                           )}
                         </td>
                         <td className="p-3 text-center">
-                          {row.startP && row.koniecP ? (
+                          {row.brak_pomiaru_koncowego ? (
+                            <span className="text-slate-400">-</span>
+                          ) : row.startP && row.koniecP ? (
                             <div>
                               <span>{row.startP.muscle_kg} ➔ {row.koniecP.muscle_kg} kg</span>
                               <div className="text-[10px]">{renderTrendIndicator(row.deltaMuscleKg, false, " kg")}</div>
@@ -2028,7 +2082,9 @@ export default function AnalizaFormyPage() {
                           )}
                         </td>
                         <td className="p-3 text-center">
-                          {row.startP && row.koniecP ? (
+                          {row.brak_pomiaru_koncowego ? (
+                            <span className="text-slate-400">-</span>
+                          ) : row.startP && row.koniecP ? (
                             <div>
                               <span>{row.startP.visceral_level} ➔ {row.koniecP.visceral_level}</span>
                               <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.visceral_level) - Number(row.startP.visceral_level), true, " lvl")}</div>
@@ -2039,8 +2095,14 @@ export default function AnalizaFormyPage() {
                             <span className="text-slate-400">-</span>
                           )}
                         </td>
-                        <td className="p-3 text-right font-black text-sm text-amber-600">
-                          {row.hasBoth ? `${row.totalPkt} pkt` : <span className="text-slate-400 font-normal text-xs">W trakcie</span>}
+                        <td className="p-3 text-right font-black text-sm">
+                          {row.brak_pomiaru_koncowego ? (
+                            <span className="text-rose-600 text-[10px] font-bold uppercase">Brak pomiaru (DNF)</span>
+                          ) : row.hasBoth ? (
+                            <span className="text-amber-600">{row.totalPkt} pkt</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal text-xs">W trakcie</span>
+                          )}
                         </td>
                         {appRole === 'admin' && (
                           <td className="p-3 text-center">
@@ -2058,6 +2120,13 @@ export default function AnalizaFormyPage() {
                                 title="Edytuj pomiar końcowy"
                               >
                                 Finał
+                              </button>
+                              <button
+                                onClick={() => handleToggleBrakPomiaru(row.id, !!row.brak_pomiaru_koncowego)}
+                                className={`font-bold px-2 py-1 rounded text-[10px] cursor-pointer transition-colors ${row.brak_pomiaru_koncowego ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800 hover:bg-rose-200'}`}
+                                title={row.brak_pomiaru_koncowego ? "Przywróć do rankingu" : "Oznacz brak pomiaru końcowego (DNF)"}
+                              >
+                                {row.brak_pomiaru_koncowego ? '✓ Przywróć' : '❌ Brak finału'}
                               </button>
                             </div>
                           </td>
