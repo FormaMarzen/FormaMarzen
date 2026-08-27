@@ -750,12 +750,16 @@ export default function AnalizaFormyPage() {
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
   const activeUserParticipant = (uczestnicyRedukcji || []).find(u => String(u.klient_id) === String(activeUserKlientId));
 
-  const wszystkyEdycjeDoWyboru = useMemo(() => {
-    return (edycjeRedukcji || []).sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
+  const aktywneEdycje = useMemo(() => {
+    return (edycjeRedukcji || [])
+      .filter(e => e.status !== 'zakonczone')
+      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
   }, [edycjeRedukcji]);
 
   const archiwalneEdycje = useMemo(() => {
-    return (edycjeRedukcji || []).filter(e => e.status === 'zakonczone');
+    return (edycjeRedukcji || [])
+      .filter(e => e.status === 'zakonczone')
+      .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
   }, [edycjeRedukcji]);
 
   const formatParticipantDisplayName = (fullName: string) => {
@@ -1762,15 +1766,15 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {/* SELEKTOR WSZYSTKICH EDYCJI (AKTYWNE ORAZ ARCHIWALNE) */}
-                  {wszystkyEdycjeDoWyboru.length > 0 && (
+                  {/* SELEKTOR WSZYSTKICH EDYCJI */}
+                  {edycjeRedukcji.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
                       onChange={(e) => setSelectedEdycjaId(Number(e.target.value))}
                       className="bg-sky-900/80 border border-sky-700 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none cursor-pointer max-w-[200px] sm:max-w-xs truncate"
                     >
                       <option value="" disabled>Wybierz edycję wyzwania</option>
-                      {wszystkyEdycjeDoWyboru.map(ed => (
+                      {edycjeRedukcji.map(ed => (
                         <option key={ed.id} value={ed.id}>
                           {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec}) {ed.status === 'zakonczone' ? '[ARCHIWUM]' : ''}
                         </option>
@@ -1905,8 +1909,8 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA */}
-          {(selectedKlient || currentUserId) && activeEdycjaObj && (
+          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA - WIDOCZNA DLA KLUBOWICZA TYLKO PO DOŁĄCZENIU */}
+          {(selectedKlient || currentUserId) && activeEdycjaObj && (appRole !== 'klubowicz' || isCurrentUserJoined) ? (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3 p-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 pb-3">
                 <div>
@@ -2002,7 +2006,19 @@ export default function AnalizaFormyPage() {
                 </table>
               </div>
             </div>
-          )}
+          ) : (appRole === 'klubowicz' && activeEdycjaObj && !isCurrentUserJoined) ? (
+            <div className="bg-sky-50 border border-sky-200 rounded-3xl p-6 text-center space-y-3">
+              <span className="text-3xl">🔒</span>
+              <h4 className="font-black text-xs uppercase text-sky-950">Tabela pomiarów jest zablokowana</h4>
+              <p className="text-xs text-slate-600">Dołącz do tego wyzwania, aby odblokować swoją kartę pomiarów składu ciała!</p>
+              <button
+                onClick={() => setIsJoinModalOpen(true)}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl shadow transition-all cursor-pointer uppercase tracking-wider inline-block"
+              >
+                Dołącz do wyzwania ➔
+              </button>
+            </div>
+          ) : null}
 
           {/* GŁÓWNY RANKING Z CHECKBOXEM ADMINA */}
           {activeEdycjaObj && (
@@ -2198,7 +2214,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* SEKCJA ARCHIWUM POPRZEDNICH EDYCJI Z OPCJĄ USUWANIA ARCHIWUM */}
+          {/* SEKCJA ARCHIWUM POPRZEDNICH EDYCJI */}
           {archiwalneEdycje.length > 0 && (
             <div className="pt-6 border-t border-sky-200 space-y-4">
               <div className="flex items-center gap-2">
