@@ -66,6 +66,7 @@ export default function WyzwaniaPage() {
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
   const [opisWyzwania, setOpisWyzwania] = useState("");
+  const [modalKategoria, setModalKategoria] = useState<'sport' | 'zywienie'>('sport');
   const [newDyscyplina, setNewDyscyplina] = useState("");
 
   // Stany tworzenia nowej odznaki w panelu Admina
@@ -97,7 +98,7 @@ export default function WyzwaniaPage() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
 
-  const [activeTab, setActiveTab] = useState<'aktywne' | 'odznaki' | 'ranking' | 'admin'>('aktywne');
+  const [activeTab, setActiveTab] = useState<'aktywne' | 'zywienie' | 'odznaki' | 'ranking' | 'admin'>('aktywne');
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -580,7 +581,8 @@ export default function WyzwaniaPage() {
           przeciwnik_id: selectedOpponent.id,
           dyscyplina: dyscyplina.trim(),
           opis: opisWyzwania.trim() || "Brak dodatkowego opisu",
-          status: "oczekujace"
+          status: "oczekujace",
+          kategoria_wyzwania: modalKategoria
         }
       ]);
 
@@ -589,7 +591,9 @@ export default function WyzwaniaPage() {
       return;
     }
 
-    const chatMessage = `⚔️ Rzuciłem Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"! Wejdź w zakładkę Wyzwania i Odznaki, aby je przyjąć.`;
+    const ikonaKategorii = modalKategoria === 'zywienie' ? '🥗' : '⚔️';
+    const chatMessage = `${ikonaKategorii} Rzuciłem Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"! Wejdź w zakładkę Wyzwania i Odznaki, aby je przyjąć.`;
+    
     await supabase.from("czat_wiadomosci").insert([
       {
         nadawca_id: currentUserId,
@@ -602,8 +606,8 @@ export default function WyzwaniaPage() {
     ]);
 
     await sendPushNotification(selectedOpponent.id, {
-      title: "⚔️ Nowe wyzwanie Head-to-Head!",
-      body: `${currentUserName} rzuca Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"!`,
+      title: `${ikonaKategorii} Nowe wyzwanie klubowe!`,
+      body: `${currentUserName} rzuca Ci wyzwanie w kategorii ${modalKategoria === 'zywienie' ? 'żywieniowej' : 'sportowej'}: "${dyscyplina.trim()}"!`,
       url: "/wyzwania"
     });
 
@@ -721,6 +725,103 @@ export default function WyzwaniaPage() {
     }
   };
 
+  // Helper do renderowania listy wyzwań dla wybranej kategorii
+  const renderChallengesList = (kategoria: 'sport' | 'zywienie') => {
+    const filteredActive = wyzwania.filter(w => {
+      const kat = w.kategoria_wyzwania || 'sport';
+      return kat === kategoria && w.status !== 'zweryfikowane' && w.status !== 'odrzucone';
+    });
+
+    const filteredCompleted = wyzwania.filter(w => {
+      const kat = w.kategoria_wyzwania || 'sport';
+      return kat === kategoria && (w.status === 'zweryfikowane' || w.status === 'odrzucone');
+    });
+
+    const isSport = kategoria === 'sport';
+
+    return (
+      <div className="space-y-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {filteredActive.map((w: any) => {
+            const przeciwnikName = getClientName(w.przeciwnik_id);
+            const tworcaName = getClientName(w.tworca_id);
+
+            return (
+              <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">{w.status}</span>
+                    <h3 className="font-black text-sm text-slate-900 mt-2">{w.dyscyplina}</h3>
+                    <p className="text-xs text-slate-600 mt-1">{w.opis}</p>
+                  </div>
+                  <span className="text-2xl">{isSport ? '🎯' : '🥗'}</span>
+                </div>
+
+                <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
+                  <div>
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Rzucający</div>
+                    <div className="font-bold text-slate-800">{tworcaName}</div>
+                  </div>
+                  <span className="font-black text-amber-500 text-sm">VS</span>
+                  <div className="text-right">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Przeciwnik</div>
+                    <div className="font-bold text-slate-800">{przeciwnikName}</div>
+                  </div>
+                </div>
+
+                {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
+                  <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
+                    <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Przyjmij wyzwanie</button>
+                    <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Odrzuć</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {filteredActive.length === 0 && (
+            <div className="col-span-full bg-white rounded-3xl p-8 text-center border border-sky-100 text-slate-400 text-xs italic">
+              Brak aktywnych wyzwań w tej sekcji.
+            </div>
+          )}
+        </div>
+
+        {/* Zakończone wyzwania */}
+        <div className="pt-6 border-t border-sky-100">
+          <h3 className="font-black text-xs uppercase text-slate-400 mb-4 px-2">Zakończone wyzwania</h3>
+          <div className="bg-white rounded-3xl border border-sky-100 overflow-hidden shadow-sm">
+            <table className="w-full text-xs text-left">
+              <thead>
+                <tr className="border-b border-sky-100 text-slate-400 uppercase font-bold text-[10px] bg-slate-50">
+                  <th className="py-3 px-4">Dyscyplina / Zadanie</th>
+                  <th className="py-3 px-4">Uczestnicy</th>
+                  <th className="py-3 px-4">Zwycięzca</th>
+                  <th className="py-3 px-4 text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCompleted.map((w: any) => (
+                  <tr key={w.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                    <td className="py-3 px-4 font-bold text-slate-900">{w.dyscyplina}</td>
+                    <td className="py-3 px-4 text-slate-600">{getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}</td>
+                    <td className="py-3 px-4 font-bold text-amber-600">{w.zwyciezca_id ? getClientName(w.zwyciezca_id) : "-"}</td>
+                    <td className="py-3 px-4 text-right">
+                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${w.status === 'zweryfikowane' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                        {w.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {filteredCompleted.length === 0 && (
+                  <tr><td colSpan={4} className="py-6 text-center text-slate-400 italic">Brak zakończonych wyzwań w tej kategorii.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (isLoading) return <div className="p-8 text-center text-sky-900 font-bold animate-pulse">Ładowanie modułu wyzwań...</div>;
 
   return (
@@ -732,11 +833,14 @@ export default function WyzwaniaPage() {
             <span>⚔️</span> Wyzwania i Odznaki Klubowe
             <button onClick={() => setIsInfoModalOpen(true)} className="text-[10px] bg-sky-100 text-sky-800 px-2.5 py-1 rounded-full cursor-pointer hover:bg-sky-200 transition-colors font-bold">ℹ️ Info</button>
           </h1>
-          <p className="text-xs text-slate-500 mt-1">Rzucaj wyzwania innym klubowiczom, rywalizuj w pojedynkach Head-to-Head i zbieraj trofea!</p>
+          <p className="text-xs text-slate-500 mt-1">Rzucaj wyzwania sportowe i żywieniowe, rywalizuj z klubowiczami i zdobywaj trofea!</p>
         </div>
 
         <button
-          onClick={() => setIsModalOpen(true)}
+          onClick={() => {
+            setModalKategoria(activeTab === 'zywienie' ? 'zywienie' : 'sport');
+            setIsModalOpen(true);
+          }}
           className="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-6 py-3.5 rounded-2xl transition-all shadow-lg uppercase tracking-wider flex items-center gap-2 cursor-pointer"
         >
           <span>⚡</span> Nowe wyzwanie
@@ -744,112 +848,46 @@ export default function WyzwaniaPage() {
       </div>
 
       {/* ZAKŁADKI GŁÓWNE */}
-      <div className="flex rounded-2xl bg-white p-1 border border-sky-100 text-xs font-bold shadow-sm max-w-xl">
+      <div className="flex flex-wrap rounded-2xl bg-white p-1 border border-sky-100 text-xs font-bold shadow-sm max-w-2xl gap-1">
         <button
           onClick={() => { setActiveTab('aktywne'); setSelectedMemberForComparison(null); }}
-          className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'aktywne' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+          className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'aktywne' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Pojedynki ⚔️
         </button>
         <button
+          onClick={() => { setActiveTab('zywienie'); setSelectedMemberForComparison(null); }}
+          className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'zywienie' ? 'bg-emerald-600 text-white font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+        >
+          Żywienie 🥗
+        </button>
+        <button
           onClick={() => { setActiveTab('odznaki'); setSelectedMemberForComparison(null); }}
-          className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'odznaki' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+          className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'odznaki' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Gablota odznak 🏆
         </button>
         <button
           onClick={() => { setActiveTab('ranking'); setSelectedMemberForComparison(null); }}
-          className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'ranking' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+          className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'ranking' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Ranking 🌍
         </button>
         {userRole === 'admin' && (
           <button
             onClick={() => { setActiveTab('admin'); setSelectedMemberForComparison(null); }}
-            className={`flex-1 py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'admin' ? 'bg-rose-600 text-white font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'admin' ? 'bg-rose-600 text-white font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Admin Panel 🛠️
           </button>
         )}
       </div>
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: WYZWANIA (POJEDYNKI) */}
-      {activeTab === 'aktywne' && (
-        <div className="space-y-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {wyzwania.filter(w => w.status !== 'zweryfikowane' && w.status !== 'odrzucone').map((w: any) => {
-              const przeciwnikName = getClientName(w.przeciwnik_id);
-              const tworcaName = getClientName(w.tworca_id);
+      {/* ZAWARTOŚĆ ZAKŁADKI: POJEDYNKI SPORTOWE */}
+      {activeTab === 'aktywne' && renderChallengesList('sport')}
 
-              return (
-                <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">{w.status}</span>
-                      <h3 className="font-black text-sm text-slate-900 mt-2">{w.dyscyplina}</h3>
-                      <p className="text-xs text-slate-600 mt-1">{w.opis}</p>
-                    </div>
-                    <span className="text-2xl">🎯</span>
-                  </div>
-
-                  <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
-                    <div>
-                      <div className="text-[10px] text-slate-400 font-bold uppercase">Rzucający</div>
-                      <div className="font-bold text-slate-800">{tworcaName}</div>
-                    </div>
-                    <span className="font-black text-amber-500 text-sm">VS</span>
-                    <div className="text-right">
-                      <div className="text-[10px] text-slate-400 font-bold uppercase">Przeciwnik</div>
-                      <div className="font-bold text-slate-800">{przeciwnikName}</div>
-                    </div>
-                  </div>
-
-                  {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
-                    <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
-                      <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Przyjmij wyzwanie</button>
-                      <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Odrzuć</button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Zakończone wyzwania */}
-          <div className="pt-6 border-t border-sky-100">
-            <h3 className="font-black text-xs uppercase text-slate-400 mb-4 px-2">Zakończone wyzwania</h3>
-            <div className="bg-white rounded-3xl border border-sky-100 overflow-hidden shadow-sm">
-              <table className="w-full text-xs text-left">
-                <thead>
-                  <tr className="border-b border-sky-100 text-slate-400 uppercase font-bold text-[10px] bg-slate-50">
-                    <th className="py-3 px-4">Dyscyplina</th>
-                    <th className="py-3 px-4">Uczestnicy</th>
-                    <th className="py-3 px-4">Zwycięzca</th>
-                    <th className="py-3 px-4 text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {wyzwania.filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone').map((w: any) => (
-                    <tr key={w.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                      <td className="py-3 px-4 font-bold text-slate-900">{w.dyscyplina}</td>
-                      <td className="py-3 px-4 text-slate-600">{getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}</td>
-                      <td className="py-3 px-4 font-bold text-amber-600">{w.zwyciezca_id ? getClientName(w.zwyciezca_id) : "-"}</td>
-                      <td className="py-3 px-4 text-right">
-                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${w.status === 'zweryfikowane' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                          {w.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                  {wyzwania.filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone').length === 0 && (
-                    <tr><td colSpan={4} className="py-6 text-center text-slate-400 italic">Brak zakończonych wyzwań.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ZAWARTOŚĆ ZAKŁADKI: WYZWANIA ŻYWIENIOWE */}
+      {activeTab === 'zywienie' && renderChallengesList('zywienie')}
 
       {/* ZAWARTOŚĆ ZAKŁADKI: GABLOTA ODZNAK */}
       {activeTab === 'odznaki' && (
@@ -927,7 +965,9 @@ export default function WyzwaniaPage() {
                             )}
                             <div className="flex flex-wrap gap-2 items-center mt-1">
                               <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Kat: {def.kategoria || 'Wyzwania'}</span>
-                              <span className="text-[9px] text-amber-400 font-semibold">{formatRegulaLabel(def.typ_reguly, def.wartosc_progowa)}</span>
+                              <span className="text-[9px] bg-amber-500/10 text-amber-300 font-semibold px-2 py-0.5 rounded-md border border-amber-400/20">
+                                {formatRegulaLabel(def.typ_reguly, def.wartosc_progowa)}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1144,24 +1184,31 @@ export default function WyzwaniaPage() {
             <table className="w-full text-xs text-left">
               <thead>
                 <tr className="border-b border-slate-100 text-slate-400 uppercase font-bold text-[10px]">
-                  <th className="py-3 px-2">Dyscyplina</th>
+                  <th className="py-3 px-2">Kategoria / Dyscyplina</th>
                   <th className="py-3 px-2">Status</th>
                   <th className="py-3 px-2 text-right">Akcja</th>
                 </tr>
               </thead>
-              <tbody>{wyzwania.map(w => <tr key={w.id} className="border-b border-slate-50">
-                <td className="py-4 px-2 font-bold text-slate-900">
-                  <div>{w.dyscyplina}</div>
-                  {w.zwyciezca_id && <div className="text-[10px] text-amber-600 font-normal">Zwycięzca: {getClientName(w.zwyciezca_id)}</div>}
-                </td>
-                <td className="py-4 px-2 text-slate-600">{w.status}</td>
-                <td className="py-4 px-2 text-right flex gap-2 justify-end">
-                  {w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && (
-                    <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors">Zatwierdź</button>
-                  )}
-                  <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
-                </td>
-              </tr>)}</tbody>
+              <tbody>{wyzwania.map(w => (
+                <tr key={w.id} className="border-b border-slate-50">
+                  <td className="py-4 px-2 font-bold text-slate-900">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${w.kategoria_wyzwania === 'zywienie' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {w.kategoria_wyzwania === 'zywienie' ? '🥗 Żywienie' : '⚔️ Sport'}
+                      </span>
+                      <span>{w.dyscyplina}</span>
+                    </div>
+                    {w.zwyciezca_id && <div className="text-[10px] text-amber-600 font-normal mt-0.5">Zwycięzca: {getClientName(w.zwyciezca_id)}</div>}
+                  </td>
+                  <td className="py-4 px-2 text-slate-600">{w.status}</td>
+                  <td className="py-4 px-2 text-right flex gap-2 justify-end">
+                    {w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && (
+                      <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors">Zatwierdź</button>
+                    )}
+                    <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
+                  </td>
+                </tr>
+              ))}</tbody>
             </table>
           )}
 
@@ -1506,7 +1553,27 @@ export default function WyzwaniaPage() {
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-[2rem] max-w-sm w-full p-6 shadow-2xl space-y-4 border border-sky-100 relative animate-in fade-in zoom-in-95 duration-150">
-            <h3 className="font-black text-sm text-sky-950">Rzuć wyzwanie</h3>
+            <h3 className="font-black text-sm text-sky-950">
+              {modalKategoria === 'zywienie' ? '🥗 Rzuć wyzwanie żywieniowe' : '⚔️ Rzuć wyzwanie sportowe'}
+            </h3>
+
+            {/* Wybór kategorii wewnątrz modalu */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setModalKategoria('sport')}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${modalKategoria === 'sport' ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-600'}`}
+              >
+                ⚔️ Sportowe
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalKategoria('zywienie')}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${modalKategoria === 'zywienie' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}
+              >
+                🥗 Żywieniowe
+              </button>
+            </div>
             
             <div className="relative">
               <input type="text" placeholder="Szukaj przeciwnika..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl bg-sky-50 text-xs font-bold" />
@@ -1525,7 +1592,7 @@ export default function WyzwaniaPage() {
             <select value={dyscyplina} onChange={(e) => setDyscyplina(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold bg-white">
                {dyscyplinyList.map(d => <option key={d.id} value={d.nazwa}>{d.nazwa}</option>)}
             </select>
-            <textarea placeholder="Dodatkowy opis..." value={opisWyzwania} onChange={(e) => setOpisWyzwania(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold h-20 resize-none" />
+            <textarea placeholder="Dodatkowy opis zadania / wyzwania..." value={opisWyzwania} onChange={(e) => setOpisWyzwania(e.target.value)} className="w-full p-3 border border-sky-100 rounded-2xl text-xs font-bold h-20 resize-none" />
             
             <div className="flex gap-2 pt-2">
               <button onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 text-slate-600 font-bold p-3 rounded-2xl text-xs cursor-pointer">Anuluj</button>
