@@ -715,6 +715,7 @@ export default function WyzwaniaPage() {
 
   const formatRegulaLabel = (typ: string, prog?: number) => {
     switch (typ) {
+      case "REJESTRACJA": return `🚀 Auto: Za rejestrację`;
       case "TRENINGI_ILOSC": return `⚡ Auto: ${prog || 1} treningów`;
       case "WYZWANIA_WYGRANE": return `⚔️ Auto: ${prog || 1} wygranych pojedynków`;
       case "WYZWANIA_UDZIAL": return `⚔️ Auto: ${prog || 1} stoczonych pojedynków`;
@@ -1296,6 +1297,7 @@ export default function WyzwaniaPage() {
                       className="w-full p-3 border border-amber-300 rounded-xl text-xs font-bold bg-white"
                     >
                       <option value="RECZNA">Brak (Tylko ręczne przyznanie)</option>
+                      <option value="REJESTRACJA">Rejestracja w aplikacji (Auto)</option>
                       <option value="ZYWIENIE_UDZIAL">Wyzwania żywieniowe - Udział</option>
                       <option value="ZYWIENIE_WYGRANE">Wyzwania żywieniowe - Wygrane</option>
                       <option value="WYZWANIA_UDZIAL">Pojedynki sportowe - Udział</option>
@@ -1312,7 +1314,7 @@ export default function WyzwaniaPage() {
                       min="1" 
                       value={newBadgeWartoscProgowa} 
                       onChange={(e) => setNewBadgeWartoscProgowa(e.target.value)} 
-                      disabled={newBadgeTypReguly === 'RECZNA'}
+                      disabled={newBadgeTypReguly === 'RECZNA' || newBadgeTypReguly === 'REJESTRACJA'}
                       className="w-full p-3 border border-amber-300 rounded-xl text-xs font-bold bg-white disabled:bg-slate-100 disabled:text-slate-400" 
                     />
                   </div>
@@ -1394,6 +1396,7 @@ export default function WyzwaniaPage() {
                                 className="w-full p-2 border border-amber-300 rounded-xl text-xs font-bold"
                               >
                                 <option value="RECZNA">Ręczna</option>
+                                <option value="REJESTRACJA">Rejestracja w aplikacji (Auto)</option>
                                 <option value="ZYWIENIE_UDZIAL">Wyzwania żywieniowe - Udział</option>
                                 <option value="ZYWIENIE_WYGRANE">Wyzwania żywieniowe - Wygrane</option>
                                 <option value="WYZWANIA_UDZIAL">Pojedynki - Udział</option>
