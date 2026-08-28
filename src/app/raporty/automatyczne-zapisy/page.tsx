@@ -43,7 +43,7 @@ const DEFAULT_RULES: BookingRules = {
   auto_cancel_deadline_per_class: {},
 };
 
-// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
+// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE
 const fetchAllFromSupabase = async (
   table: string, 
   selectQuery: string = '*', 
@@ -73,6 +73,20 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
+// Pomocnicze funkcje wyciągające dane klienta niezależnie od wielkości liter kolumn w bazie
+const getClientFullName = (client: any): string => {
+  if (!client) return '';
+  const imie = client.Imię || client.imie || client.Imie || client.first_name || '';
+  const nazwisko = client.Nazwisko || client.nazwisko || client.last_name || '';
+  const name = `${imie} ${nazwisko}`.trim();
+  return name || client.name || client.nazwa || `Klubowicz #${client.id}`;
+};
+
+const getClientEmail = (client: any): string => {
+  if (!client) return '';
+  return client['E-mail'] || client.email || client.Email || client.mail || 'Brak e-maila';
+};
+
 export default function AutomatyczneZapisyPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [klienciList, setKlienciList] = useState<any[]>([]);
@@ -95,7 +109,7 @@ export default function AutomatyczneZapisyPage() {
 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA I NAKŁADANIEM SIĘ (Race Condition)
+  // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA I RACE CONDITIONS
   const isFetchingRef = useRef(false);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -116,37 +130,44 @@ export default function AutomatyczneZapisyPage() {
   // Funkcja wyliczająca aktywny karnet i rzeczywistą datę ważności karnetu
   const getClientPassDetails = (client: any): { passExpiry: string | null; passName: string | null } => {
     if (!client) return { passExpiry: null, passName: null };
+    
     let parsedKarnety: any[] = [];
-    if (Array.isArray(client.karnetyKlubowicza)) {
-      parsedKarnety = client.karnetyKlubowicza;
-    } else if (typeof client.karnetyKlubowicza === 'string') {
+    const rawKarnety = client.karnetyKlubowicza || client.karnety_klubowicza || client.karnety;
+    if (Array.isArray(rawKarnety)) {
+      parsedKarnety = rawKarnety;
+    } else if (typeof rawKarnety === 'string') {
       try {
-        parsedKarnety = JSON.parse(client.karnetyKlubowicza);
+        parsedKarnety = JSON.parse(rawKarnety);
       } catch (e) {
         parsedKarnety = [];
       }
     }
 
     if (parsedKarnety && parsedKarnety.length > 0) {
-      const validPasses = parsedKarnety.filter((k: any) => k && k.waznyDo);
+      const validPasses = parsedKarnety.filter((k: any) => k && (k.waznyDo || k.wazny_do || k.expiry || k.data_waznosci));
       if (validPasses.length > 0) {
-        validPasses.sort((a: any, b: any) => (b.waznyDo || '').localeCompare(a.waznyDo || ''));
+        validPasses.sort((a: any, b: any) => {
+          const dateA = a.waznyDo || a.wazny_do || a.expiry || a.data_waznosci || '';
+          const dateB = b.waznyDo || b.wazny_do || b.expiry || b.data_waznosci || '';
+          return String(dateB).localeCompare(String(dateA));
+        });
         const activePass = validPasses[0];
         return {
-          passExpiry: activePass.waznyDo,
-          passName: activePass.nazwa || activePass.rodzaj || activePass.typ || null
+          passExpiry: activePass.waznyDo || activePass.wazny_do || activePass.expiry || activePass.data_waznosci,
+          passName: activePass.nazwa || activePass.rodzaj || activePass.typ || activePass.name || null
         };
       }
     }
 
-    if (client.Wygasa && client.Wygasa !== 'Brak' && client.Wygasa !== 'null') {
-      return { passExpiry: client.Wygasa, passName: null };
+    const wygasa = client.Wygasa || client.wygasa || client.karnet_wygasa;
+    if (wygasa && wygasa !== 'Brak' && wygasa !== 'null' && wygasa !== 'undefined') {
+      return { passExpiry: wygasa, passName: client.karnet || client.Karnet || null };
     }
 
     return { passExpiry: null, passName: null };
   };
 
-  // Wyliczenie efektywnej daty granicznej z uwzględnieniem tabeli club_booking_rules (expired_pass_grace_days / per_pass)
+  // Wyliczenie efektywnej daty granicznej z uwzględnieniem tabeli club_booking_rules
   const getEffectivePassExpiry = (
     client: any, 
     rules: BookingRules
@@ -162,7 +183,6 @@ export default function AutomatyczneZapisyPage() {
       return { effectiveDate: null, rawExpiry: null, passName: null, graceDays: 0, hasActiveOrGracePass: false };
     }
 
-    // Odczytanie dni karencji z zasad: indywidualnie wg nazwy karnetu lub globalnie
     let graceDays = rules.expired_pass_grace_days ?? 15;
     if (passName && rules.expired_pass_grace_per_pass && rules.expired_pass_grace_per_pass[passName] !== undefined) {
       graceDays = rules.expired_pass_grace_per_pass[passName];
@@ -173,7 +193,7 @@ export default function AutomatyczneZapisyPage() {
       return { effectiveDate: null, rawExpiry, passName, graceDays: 0, hasActiveOrGracePass: false };
     }
 
-    const effectiveDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + graceDays, 23, 59, 59);
+    const effectiveDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + (Number(graceDays) || 0), 23, 59, 59);
     const now = new Date();
     const hasActiveOrGracePass = effectiveDate >= now;
 
@@ -224,7 +244,7 @@ export default function AutomatyczneZapisyPage() {
     try {
       setLoading(true);
 
-      // 1. Pobierz zasady zapisów z właściwej tabeli club_booking_rules
+      // 1. Pobierz zasady zapisów
       let activeRules = DEFAULT_RULES;
       const { data: rulesData, error: rulesErr } = await supabase
         .from('club_booking_rules')
@@ -247,14 +267,8 @@ export default function AutomatyczneZapisyPage() {
       }
       setClubRules(activeRules);
 
-      // 2. Pobierz klientów z bazy z ominięciem limitu 1000
-      const klienciData = await fetchAllFromSupabase(
-        'klienci', 
-        'id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza, Status', 
-        'id', 
-        true, 
-        10
-      );
+      // 2. Pobierz wszystkich klientów bezpiecznym select('*')
+      const klienciData = await fetchAllFromSupabase('klienci', '*', 'id', true, 10);
       
       let enrichedClients: any[] = [];
       if (klienciData && klienciData.length > 0) {
@@ -262,6 +276,8 @@ export default function AutomatyczneZapisyPage() {
           const passDetails = getEffectivePassExpiry(c, activeRules);
           return {
             ...c,
+            fullName: getClientFullName(c),
+            email: getClientEmail(c),
             calculatedPassExpiry: passDetails.rawExpiry,
             displayPassExpiry: passDetails.rawExpiry || 'Brak',
             passName: passDetails.passName,
@@ -284,17 +300,16 @@ export default function AutomatyczneZapisyPage() {
       }));
       setGrafikItems(combinedGrafik);
 
-      // 4. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika
+      // 4. Pobierz zapisy
       const zapisyData = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
       if (zapisyData) setZapisyList(zapisyData);
 
-      // 5. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
+      // 5. Pobierz aktywne automatyczne zapisy i zsynchronizuj
       const autoData = await fetchAllFromSupabase('automatyczne_zapisy', '*', 'id', false, 5);
       if (autoData) {
         setAutoBookingsList(autoData);
         await syncAutoBookings(autoData, enrichedClients, combinedGrafik, activeRules);
         
-        // Odświeżenie zapisów po synchronizacji
         const refreshedZapisy = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
         if (refreshedZapisy) setZapisyList(refreshedZapisy);
       }
@@ -307,7 +322,7 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
-  // Automatyczna aktualizacja reguł i dopisywanie/odpisywanie terminów na podstawie bieżącej ważności karnetu oraz zasad karencji
+  // Automatyczna synchronizacja reguł z uwzględnieniem karencji
   const syncAutoBookings = async (rules: any[], clients: any[], grafik: any[], clubRuleObj: BookingRules) => {
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -350,12 +365,9 @@ export default function AutomatyczneZapisyPage() {
         .filter(idx => idx !== undefined);
 
       const startDate = new Date();
-      
-      // Wyliczenie granicy zapisu z uwzględnieniem dni karencji z club_booking_rules
       const { effectiveDate } = getEffectivePassExpiry(clientObj, clubRuleObj);
       const endDate = effectiveDate;
 
-      // Jeśli karnet + karencja wygasły w przeszłości, zwalniamy przyszłe rezerwacje
       if (!endDate || endDate < startDate) {
         const keysToRemove: string[] = [];
         (existingBookings || []).forEach((b: any) => {
@@ -370,7 +382,7 @@ export default function AutomatyczneZapisyPage() {
                 const p = datePart.split('-').map(Number);
                 yr = p[0]; m = p[1]; d = p[2];
               }
-              const [sh = '00', sm = '00'] = (classObj.time || classObj.start || '00:00').split(':');
+              const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || '00:00').split(':');
               const classDateTime = new Date(yr, m - 1, d, parseInt(sh, 10), parseInt(sm, 10), 0);
               if (classDateTime > now) {
                 keysToRemove.push(b.class_key);
@@ -389,7 +401,11 @@ export default function AutomatyczneZapisyPage() {
         continue;
       }
 
-      let newZapisyNadchodzace = [...(clientObj.zapisyNadchodzace || [])];
+      let rawNadchodzace = clientObj.zapisyNadchodzace || [];
+      if (typeof rawNadchodzace === 'string') {
+        try { rawNadchodzace = JSON.parse(rawNadchodzace); } catch (e) { rawNadchodzace = []; }
+      }
+      let newZapisyNadchodzace = Array.isArray(rawNadchodzace) ? [...rawNadchodzace] : [];
       let hasUpdates = false;
 
       let curr = new Date(startDate);
@@ -415,7 +431,6 @@ export default function AutomatyczneZapisyPage() {
               }
             ]);
 
-            // Zabezpieczenie przed zdublowaniem w tej samej pętli
             bookedKeys.add(classKeyDisplay);
             bookedKeys.add(classKeyIso);
 
@@ -490,7 +505,7 @@ export default function AutomatyczneZapisyPage() {
         return;
       }
 
-      const clientName = `${clientObj.Imię} ${clientObj.Nazwisko}`;
+      const clientName = getClientFullName(clientObj);
       const classTitle = classObj.title || classObj.nazwa;
 
       const { error: insertErr } = await supabase.from('automatyczne_zapisy').insert([
@@ -517,7 +532,6 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
-  // Usunięcie reguły oraz automatyczne wypisanie z przyszłych nieodbytych treningów
   const handleRemoveAutoBooking = async (id: number) => {
     try {
       const ruleToDelete = autoBookingsList.find(r => r.id === id);
@@ -639,16 +653,20 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
+  // Wyszukiwarka z obsługą różnych wariantów nazw pól w obiekcie klienta
   const filteredClients = klienciList.filter((k) => {
-    const query = clientSearchQuery.toLowerCase();
-    const fullName = `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase();
-    const email = (k['E-mail'] || '').toLowerCase();
-    return fullName.includes(query) || email.includes(query);
+    const query = clientSearchQuery.toLowerCase().trim();
+    if (!query) return true;
+    
+    const fullName = (k.fullName || getClientFullName(k)).toLowerCase();
+    const email = (k.email || getClientEmail(k)).toLowerCase();
+    const phone = String(k.Telefon || k.telefon || k.phone || '').toLowerCase();
+    
+    return fullName.includes(query) || email.includes(query) || phone.includes(query);
   });
 
   const selectedClientObject = klienciList.find(k => String(k.id) === String(selectedClientId));
 
-  // Filtrowanie listy aktywnych reguł
   const filteredAutoBookings = autoBookingsList.filter((item) => {
     const query = rulesSearchQuery.toLowerCase().trim();
     if (!query) return true;
@@ -697,7 +715,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System integruje reguły z tabeli <strong>club_booking_rules</strong> (karencja po wygaśnięciu karnetu/umowy: {clubRules.expired_pass_grace_days} dni).
+            System integruje reguły z tabeli <strong>club_booking_rules</strong> (karencja po wygaśnięciu karnetu/umowy: {clubRules.expired_pass_grace_days ?? 15} dni).
           </p>
         </div>
       </div>
@@ -720,7 +738,7 @@ export default function AutomatyczneZapisyPage() {
             <div className="relative">
               <input
                 type="text"
-                value={selectedClientObject ? `${selectedClientObject.Imię} ${selectedClientObject.Nazwisko}` : clientSearchQuery}
+                value={selectedClientObject ? getClientFullName(selectedClientObject) : clientSearchQuery}
                 onChange={(e) => {
                   setClientSearchQuery(e.target.value);
                   setSelectedClientId('');
@@ -730,7 +748,7 @@ export default function AutomatyczneZapisyPage() {
                 placeholder="Wpisz imię, nazwisko lub email..."
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 text-xs font-bold text-slate-800 focus:outline-none focus:border-sky-500 pr-8"
               />
-              {selectedClientId && (
+              {(selectedClientId || clientSearchQuery) && (
                 <button
                   type="button"
                   onClick={() => {
@@ -747,34 +765,38 @@ export default function AutomatyczneZapisyPage() {
             {isClientDropdownOpen && (
               <div className="absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-xl divide-y divide-slate-100">
                 {filteredClients.length > 0 ? (
-                  filteredClients.map((klient) => (
-                    <div
-                      key={klient.id}
-                      onClick={() => {
-                        setSelectedClientId(String(klient.id));
-                        setClientSearchQuery(`${klient.Imię} ${klient.Nazwisko}`);
-                        setIsClientDropdownOpen(false);
-                      }}
-                      className="p-3 hover:bg-sky-50/70 cursor-pointer transition-colors flex justify-between items-center text-xs"
-                    >
-                      <div>
-                        <div className="font-bold text-slate-900">{klient.Imię} {klient.Nazwisko}</div>
-                        <div className="text-[10px] text-slate-400">{klient['E-mail'] || 'Brak e-maila'}</div>
-                      </div>
-                      <div className="text-right flex flex-col items-end gap-1">
-                        <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold ${
-                          klient.hasActiveOrGracePass ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800'
-                        }`}>
-                          Karnet: {klient.displayPassExpiry}
-                        </span>
-                        {klient.graceDays > 0 && (
-                          <span className="text-[9px] px-2 py-0.5 rounded-md font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
-                            Karencja: +{klient.graceDays} dni
+                  filteredClients.map((klient) => {
+                    const cName = getClientFullName(klient);
+                    const cEmail = getClientEmail(klient);
+                    return (
+                      <div
+                        key={klient.id}
+                        onClick={() => {
+                          setSelectedClientId(String(klient.id));
+                          setClientSearchQuery(cName);
+                          setIsClientDropdownOpen(false);
+                        }}
+                        className="p-3 hover:bg-sky-50/70 cursor-pointer transition-colors flex justify-between items-center text-xs"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-900">{cName}</div>
+                          <div className="text-[10px] text-slate-400">{cEmail}</div>
+                        </div>
+                        <div className="text-right flex flex-col items-end gap-1">
+                          <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold ${
+                            klient.hasActiveOrGracePass ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800'
+                          }`}>
+                            Karnet: {klient.displayPassExpiry}
                           </span>
-                        )}
+                          {klient.graceDays > 0 && (
+                            <span className="text-[9px] px-2 py-0.5 rounded-md font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                              Karencja: +{klient.graceDays} dni
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="p-3 text-xs text-slate-400 text-center font-medium">
                     Nie znaleziono klubowicza
