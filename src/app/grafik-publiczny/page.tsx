@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
-// Bezpośrednia inicjalizacja klienta publicznego Supabase
+// Inicjalizacja klienta publicznego Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -19,7 +19,7 @@ export default function PublicSchedulePage() {
   const [wydarzeniaKilkudniowe, setWydarzeniaKilkudniowe] = useState<any[]>([]);
   const [zapisyNaZajecia, setZapisyNaZajecia] = useState<{ [key: string]: any[] }>({});
   const [rodzajeZajec, setRodzajeZajec] = useState<any[]>([]);
-  const [karnetyCennik, setKarnetyCennik] = useState<any[]>([]);
+  const [katalogKarnetow, setKatalogKarnetow] = useState<any[]>([]);
 
   const [currentDate, setCurrentDate] = useState<Date | null>(null);
   const [calendarViewDate, setCalendarViewDate] = useState<Date | null>(null);
@@ -203,19 +203,19 @@ export default function PublicSchedulePage() {
         setRodzajeZajec(rodzajeData);
       }
 
-      // 8. Obowiązujące karnety (z tabeli karnety w Supabase)
+      // 8. Katalog karnetów (z tabeli katalog_karnetow)
       const { data: karnetyData, error: karnetyError } = await supabase
-        .from('karnety')
+        .from('katalog_karnetow')
         .select('*')
-        .order('id', { ascending: true });
+        .order('kolejnosc', { ascending: true });
 
       if (karnetyData && karnetyData.length > 0) {
-        setKarnetyCennik(karnetyData);
+        setKatalogKarnetow(karnetyData.filter((k: any) => k.aktywny !== false));
       } else {
         if (karnetyError) {
-          console.error("Błąd podczas pobierania karnetów z bazy:", karnetyError);
+          console.error("Błąd podczas pobierania katalogu karnetów:", karnetyError);
         }
-        setKarnetyCennik([]);
+        setKatalogKarnetow([]);
       }
     } catch (err) {
       console.error("Błąd podczas pobierania publicznego grafiku:", err);
@@ -303,11 +303,27 @@ export default function PublicSchedulePage() {
   const totalDays = new Date(year, month + 1, 0).getDate();
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"];
 
+  // Pomocnik do formatowania dostępu do zajęć
+  const parseDostepZajecia = (dostep: any): string[] => {
+    if (!dostep) return [];
+    if (Array.isArray(dostep)) return dostep;
+    if (typeof dostep === 'string') {
+      try {
+        const parsed = JSON.parse(dostep);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        // format CSV lub zwykły tekst
+      }
+      return dostep.includes(',') ? dostep.split(',').map((s: string) => s.trim()) : [dostep];
+    }
+    return [];
+  };
+
   return (
     <div className="min-h-screen bg-slate-100/60 py-8 px-3 sm:px-6 font-sans antialiased text-slate-800">
       <div className="max-w-[1700px] mx-auto space-y-6">
 
-        {/* NAGŁÓWEK STRONY Z PRZEŁĄCZNIKIEM ZAKŁADEK I PRZYCISKAMI AKCJI */}
+        {/* GÓRNA BELKA Z ZAKŁADKAMI I PRZYCISKAMI AKCJI */}
         <header className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-5">
           
           {/* LOGO I TYTUŁ */}
@@ -325,7 +341,7 @@ export default function PublicSchedulePage() {
             </div>
           </div>
 
-          {/* ZAKŁADKI: GRAFIK / KARNETY */}
+          {/* PRZEŁĄCZNIK ZAKŁADEK: GRAFIK / KARNETY */}
           <div className="flex items-center bg-slate-100 p-1.5 rounded-2xl border border-sky-100">
             <button
               onClick={() => setActiveTab('grafik')}
@@ -367,7 +383,7 @@ export default function PublicSchedulePage() {
           </div>
         </header>
 
-        {/* MODAL: WYBÓR TYPU ZAPISU */}
+        {/* OKNO MODALNE (POPUP) PO KLIKNIĘCIU "ZAPISZ NA TRENING" */}
         {isSignupModalOpen && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
             <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-6 relative">
@@ -386,7 +402,7 @@ export default function PublicSchedulePage() {
                   Dołącz do treningu
                 </h2>
                 <p className="text-xs text-slate-500 font-medium">
-                  Wybierz jedną z opcji poniżej, aby rozpocząć treningi w naszym klubie:
+                  Wybierz jedną z poniższych opcji, aby rozpocząć:
                 </p>
               </div>
 
@@ -433,7 +449,7 @@ export default function PublicSchedulePage() {
           </div>
         )}
 
-        {/* WIDOK: ZAKŁADKA 1 - GRAFIK ZAJĘĆ */}
+        {/* WIDOK 1: GRAFIK ZAJĘĆ */}
         {activeTab === 'grafik' && (
           <>
             {/* NAWIGACJA TYGODNI */}
@@ -671,95 +687,170 @@ export default function PublicSchedulePage() {
           </>
         )}
 
-        {/* WIDOK: ZAKŁADKA 2 - OBOWIĄZUJĄCE KARNETY (Z BAZY DANYCH) */}
+        {/* WIDOK 2: OBOWIĄZUJĄCE KARNETY (KATALOG KARNETÓW - IDENTYCZNY JAK U KLUBOWICZÓW) */}
         {activeTab === 'karnety' && (
-          <section className="space-y-6 animate-in fade-in duration-200">
-            <div className="bg-white border border-sky-200 rounded-3xl p-6 sm:p-8 text-center max-w-3xl mx-auto space-y-3 shadow-sm">
-              <span className="bg-amber-100 text-amber-900 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider border border-amber-200">
-                Oferta klubu
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-black text-sky-950 uppercase tracking-tight">
-                Obowiązujące karnety
+          <section className="space-y-8 animate-in fade-in duration-200">
+            
+            {/* NAGŁÓWEK SEKCJI KARNETÓW */}
+            <div className="flex items-center gap-2 border-b border-amber-200 pb-3">
+              <span className="text-xl">⭐</span>
+              <h2 className="text-lg sm:text-xl font-black text-sky-950 uppercase tracking-wider">
+                POLECANE I BESTSELLERY
               </h2>
-              <p className="text-xs sm:text-sm text-slate-600 font-medium">
-                Wybierz dogodny karnet i dołącz do naszych treningów.
-              </p>
             </div>
 
-            {karnetyCennik.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                {karnetyCennik.map((karnet: any) => {
-                  const cenaWyswietlana = karnet.cena_brutto != null ? `${karnet.cena_brutto} zł` : 'Cennik w klubie';
-                  const waznoscText = karnet.dlugosc ? karnet.dlugosc : 'Standardowy okres';
-                  const iloscWejscText = karnet.ilosc_wejsc ? `${karnet.ilosc_wejsc} wejść` : 'Nielimitowane wejścia';
+            {katalogKarnetow.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
+                {katalogKarnetow.map((karnet: any) => {
+                  const dostepList = parseDostepZajecia(karnet.dostep_zajecia);
+                  const isPolecany = karnet.wyrozniony || (karnet.tag_wyroznienia && karnet.tag_wyroznienia.trim().length > 0);
+                  const tagText = karnet.tag_wyroznienia || (karnet.wyrozniony ? 'POLECANY' : null);
+
+                  const typKarnetu = karnet.typ_karnetu || 'UMOWA CYKLICZNA';
+                  const isPakiet = typKarnetu.toLowerCase().includes('pakiet') || typKarnetu.toLowerCase().includes('wejść');
+
+                  // Rozbicie opisu na linie/punkty
+                  const opisLinie = karnet.opis
+                    ? karnet.opis.split('\n').filter((l: string) => l.trim().length > 0)
+                    : [];
 
                   return (
                     <div
                       key={karnet.id}
-                      className="bg-white rounded-3xl p-6 border border-sky-100 transition-all flex flex-col justify-between relative shadow-sm hover:shadow-md hover:border-sky-300"
+                      className="bg-white rounded-3xl border-2 border-amber-400/70 shadow-sm hover:shadow-xl transition-all duration-200 flex flex-col justify-between overflow-hidden relative group"
                     >
-                      <div className="space-y-4">
-                        <div>
-                          {karnet.typ_karnetu && (
-                            <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                              {karnet.typ_karnetu}
-                            </span>
+                      {/* GÓRNA CZĘŚĆ: GRAFIKA + BADGE */}
+                      <div className="relative p-3 pb-0">
+                        <div className="relative h-52 sm:h-56 w-full rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 flex items-center justify-center">
+                          {karnet.grafika_url ? (
+                            <img
+                              src={karnet.grafika_url}
+                              alt={karnet.nazwa}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-tr from-slate-900 via-slate-800 to-amber-950 flex flex-col items-center justify-center text-amber-400 p-4 text-center">
+                              <span className="text-3xl font-black">FK</span>
+                              <span className="text-xs tracking-widest uppercase font-bold text-amber-200 mt-1">FORMA MARZEŃ</span>
+                            </div>
                           )}
-                          <h3 className="text-lg font-black text-sky-950 uppercase mt-2">
-                            {karnet.nazwa}
-                          </h3>
-                          {karnet.dostep_do_zajec && (
-                            <p className="text-xs text-slate-500 mt-1">
-                              {karnet.dostep_do_zajec}
-                            </p>
-                          )}
-                        </div>
 
-                        <div className="py-3 border-y border-slate-100">
-                          <div className="text-3xl font-black text-slate-900">
-                            {cenaWyswietlana}
-                          </div>
-                          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mt-1">
-                            Ważność: <span className="text-sky-950">{waznoscText}</span>
+                          {/* BADGE WYRÓŻNIENIA (np. ★ POLECANY / ★ BESTSELLER) */}
+                          {tagText && (
+                            <div className="absolute top-3 left-3 bg-amber-500 text-slate-950 text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-xl shadow-md flex items-center gap-1.5 border border-amber-300">
+                              <span>★</span>
+                              <span>{tagText}</span>
+                            </div>
+                          )}
+
+                          {/* PŁYWAJĄCE BADGE NA DOLE GRAFIKI */}
+                          <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2">
+                            {karnet.dlugosc && (
+                              <div className="bg-white/95 backdrop-blur-sm text-slate-900 text-[11px] font-black px-3 py-1 rounded-xl shadow border border-slate-200 flex items-center gap-1.5">
+                                <span>📅</span>
+                                <span>{karnet.dlugosc}</span>
+                              </div>
+                            )}
+
+                            {karnet.ilosc_wejsc && (
+                              <div className="bg-amber-500 text-slate-950 text-[11px] font-black px-3 py-1 rounded-xl shadow border border-amber-400 flex items-center gap-1.5 ml-auto">
+                                <span>🎟️</span>
+                                <span>{karnet.ilosc_wejsc}</span>
+                              </div>
+                            )}
                           </div>
                         </div>
-
-                        <ul className="space-y-2 text-xs text-slate-600">
-                          <li className="flex items-center gap-2">
-                            <span className="text-emerald-500 font-black">✓</span>
-                            <span>{iloscWejscText}</span>
-                          </li>
-                          {karnet.inne_ustawienia && (
-                            <li className="flex items-center gap-2">
-                              <span className="text-emerald-500 font-black">✓</span>
-                              <span>{karnet.inne_ustawienia}</span>
-                            </li>
-                          )}
-                        </ul>
                       </div>
 
-                      <div className="pt-6 mt-4 border-t border-slate-100">
-                        <Link
-                          href="https://forma-marzen.vercel.app/rejestracja-karnet"
-                          className="w-full py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider text-center block transition-transform active:scale-95 bg-sky-950 hover:bg-sky-900 text-white shadow-sm"
-                        >
-                          Kup karnet ↗
-                        </Link>
+                      {/* TREŚĆ KARTY */}
+                      <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                        
+                        <div className="space-y-3">
+                          {/* BADGE TYPU (np. UMOWA CYKLICZNA / PAKIET WEJŚĆ) */}
+                          <div>
+                            <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${
+                              isPakiet
+                                ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                : 'bg-purple-100 text-purple-900 border-purple-300'
+                            }`}>
+                              {typKarnetu}
+                            </span>
+                          </div>
+
+                          {/* TYTUŁ KARNETU */}
+                          <h3 className="text-base sm:text-lg font-black text-slate-900 leading-snug uppercase">
+                            {karnet.nazwa}
+                          </h3>
+
+                          {/* LISTA OPISU PUNKT PO PUNKCIE */}
+                          {opisLinie.length > 0 ? (
+                            <div className="space-y-1.5 text-xs text-slate-600 font-medium">
+                              {opisLinie.map((linia: string, lIdx: number) => (
+                                <p key={lIdx} className="leading-relaxed">
+                                  {linia.startsWith('-') ? linia : `- ${linia}`}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            karnet.opis && (
+                              <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                                {karnet.opis}
+                              </p>
+                            )
+                          )}
+
+                          {/* PILLS DOSTĘPNOŚCI ZAJĘĆ */}
+                          {dostepList.length > 0 && (
+                            <div className="pt-2 flex flex-wrap gap-1.5">
+                              {dostepList.map((zajecie: string, zIdx: number) => (
+                                <span
+                                  key={zIdx}
+                                  className="bg-sky-50 text-sky-950 border border-sky-200 text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1"
+                                >
+                                  <span className="text-sky-600 font-black">✓</span>
+                                  <span>{zajecie}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* STOPKA KARTY Z CENĄ I PRZYCISKIEM KUPNA */}
+                        <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3 mt-auto">
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              CENA KARNETU
+                            </div>
+                            <div className="text-2xl font-black text-sky-950">
+                              {karnet.cena != null ? `${karnet.cena} zł` : 'Cennik w klubie'}
+                            </div>
+                          </div>
+
+                          <Link
+                            href="https://forma-marzen.vercel.app/rejestracja-karnet"
+                            className="bg-sky-950 hover:bg-sky-900 text-white font-black px-5 py-3 rounded-xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 flex items-center gap-1.5 shrink-0 cursor-pointer"
+                          >
+                            <span>Kup karnet</span>
+                            <span>↗</span>
+                          </Link>
+                        </div>
+
                       </div>
                     </div>
                   );
                 })}
               </div>
             ) : (
-              <div className="bg-white border border-sky-100 rounded-3xl p-12 text-center text-slate-400 text-xs font-bold">
-                Brak dostępnych karnetów w bazie danych.
+              <div className="bg-white border border-sky-100 rounded-3xl p-12 text-center text-slate-400 text-xs font-bold shadow-sm">
+                Brak dostępnych karnetów w katalogu.
               </div>
             )}
+
           </section>
         )}
 
-        {/* STOPKA INFORMACYJNA */}
-        <footer className="bg-white border border-sky-200 rounded-3xl p-6 text-center text-xs text-slate-500 space-y-3">
+        {/* DOLNA STOPKA INFORMACYJNA */}
+        <footer className="bg-white border border-sky-200 rounded-3xl p-6 text-center text-xs text-slate-500 space-y-3 shadow-sm">
           <p className="font-bold text-slate-800 uppercase tracking-wide text-sm">
             Chcesz zapisać się na zajęcia lub dołączyć do klubu?
           </p>
