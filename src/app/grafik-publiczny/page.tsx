@@ -203,54 +203,19 @@ export default function PublicSchedulePage() {
         setRodzajeZajec(rodzajeData);
       }
 
-      // 8. Obowiązujące karnety
-      const { data: karnetyData } = await supabase
-        .from('cennik')
+      // 8. Obowiązujące karnety (z tabeli karnety w Supabase)
+      const { data: karnetyData, error: karnetyError } = await supabase
+        .from('karnety')
         .select('*')
         .order('id', { ascending: true });
 
       if (karnetyData && karnetyData.length > 0) {
         setKarnetyCennik(karnetyData);
       } else {
-        // Domyślny pakiet demonstracyjny w przypadku pustej tabeli
-        setKarnetyCennik([
-          {
-            id: 1,
-            nazwa: 'Karnet Open',
-            cena: '199 zł',
-            okres: '30 dni',
-            opis: 'Nielimitowany dostęp do wszystkich zajęć grupowych w klubie.',
-            popularny: true,
-            korzysci: ['Wszystkie zajęcia grupowe', 'Rezerwacja miejsc online', 'Brak umowy terminowej']
-          },
-          {
-            id: 2,
-            nazwa: 'Karnet 8 Wejść',
-            cena: '150 zł',
-            okres: '30 dni',
-            opis: 'Idealny wybór dla osób trenujących regularnie 2 razy w tygodniu.',
-            popularny: false,
-            korzysci: ['8 wejść na dowolne zajęcia', 'Ważność 30 dni', 'Elastyczne rezerwacje']
-          },
-          {
-            id: 3,
-            nazwa: 'Karnet 4 Wejścia',
-            cena: '90 zł',
-            okres: '30 dni',
-            opis: 'Świetny pakiet startowy dla osób zaczynających swoją przygodę.',
-            popularny: false,
-            korzysci: ['4 wejścia na zajęcia', 'Ważność 30 dni', 'Dostęp do panelu klienta']
-          },
-          {
-            id: 4,
-            nazwa: 'Wejście Jednorazowe',
-            cena: '35 zł',
-            okres: '1 trening',
-            opis: 'Pojedyncze wejście na wybrany trening grupowy.',
-            popularny: false,
-            korzysci: ['1 trening grupowy', 'Płatność przed wejściem', 'Pełna elastyczność']
-          }
-        ]);
+        if (karnetyError) {
+          console.error("Błąd podczas pobierania karnetów z bazy:", karnetyError);
+        }
+        setKarnetyCennik([]);
       }
     } catch (err) {
       console.error("Błąd podczas pobierania publicznego grafiku:", err);
@@ -427,26 +392,24 @@ export default function PublicSchedulePage() {
 
               <div className="space-y-3 pt-2">
                 {/* PRZYCISK 1: KUP KARNET */}
-                <button
-                  onClick={() => {
-                    setIsSignupModalOpen(false);
-                    setActiveTab('karnety');
-                  }}
+                <Link
+                  href="https://forma-marzen.vercel.app/rejestracja-karnet"
+                  onClick={() => setIsSignupModalOpen(false)}
                   className="w-full bg-sky-950 hover:bg-sky-900 text-white font-black py-4 px-6 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all flex items-center justify-between group cursor-pointer border border-sky-800"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-lg">🎟️</span>
                     <div className="text-left">
                       <div className="font-black">KUP KARNET</div>
-                      <div className="text-[10px] text-sky-200 font-normal">Zobacz dostępne pakiety i karnety</div>
+                      <div className="text-[10px] text-sky-200 font-normal">Wybierz pakiet i dołącz do klubu</div>
                     </div>
                   </div>
                   <span className="text-sky-300 group-hover:translate-x-1 transition-transform">→</span>
-                </button>
+                </Link>
 
                 {/* PRZYCISK 2: PIERWSZY BEZPŁATNY TRENING */}
                 <Link
-                  href="/login?first_free=true"
+                  href="https://forma-marzen.vercel.app/rejestracja"
                   onClick={() => setIsSignupModalOpen(false)}
                   className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black py-4 px-6 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all flex items-center justify-between group cursor-pointer border border-amber-400"
                 >
@@ -454,7 +417,7 @@ export default function PublicSchedulePage() {
                     <span className="text-lg">🎁</span>
                     <div className="text-left">
                       <div className="font-black">PIERWSZY BEZPŁATNY TRENING</div>
-                      <div className="text-[10px] text-amber-950/80 font-medium">Wypróbuj nasze zajęcia bez opłat</div>
+                      <div className="text-[10px] text-amber-950/80 font-medium">Zarejestruj się i wypróbuj bez opłat</div>
                     </div>
                   </div>
                   <span className="text-slate-950 group-hover:translate-x-1 transition-transform">→</span>
@@ -708,83 +671,90 @@ export default function PublicSchedulePage() {
           </>
         )}
 
-        {/* WIDOK: ZAKŁADKA 2 - OBOWIĄZUJĄCE KARNETY */}
+        {/* WIDOK: ZAKŁADKA 2 - OBOWIĄZUJĄCE KARNETY (Z BAZY DANYCH) */}
         {activeTab === 'karnety' && (
           <section className="space-y-6 animate-in fade-in duration-200">
-            <div className="bg-white border border-sky-200 rounded-3xl p-6 sm:p-8 text-center max-w-3xl mx-auto space-y-3">
-              <span className="bg-amber-100 text-amber-900 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider">
+            <div className="bg-white border border-sky-200 rounded-3xl p-6 sm:p-8 text-center max-w-3xl mx-auto space-y-3 shadow-sm">
+              <span className="bg-amber-100 text-amber-900 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider border border-amber-200">
                 Oferta klubu
               </span>
               <h2 className="text-2xl sm:text-3xl font-black text-sky-950 uppercase tracking-tight">
-                Wybierz karnet dla siebie
+                Obowiązujące karnety
               </h2>
               <p className="text-xs sm:text-sm text-slate-600 font-medium">
-                Przejrzyste zasady bez ukrytych opłat. Wybierz dogodny pakiet i ciesz się regularnymi treningami.
+                Wybierz dogodny karnet i dołącz do naszych treningów.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-              {karnetyCennik.map((karnet: any) => (
-                <div
-                  key={karnet.id}
-                  className={`bg-white rounded-3xl p-6 border transition-all flex flex-col justify-between relative shadow-sm hover:shadow-md ${
-                    karnet.popularny
-                      ? 'border-amber-400 shadow-amber-100 border-2 ring-2 ring-amber-400/20'
-                      : 'border-sky-100'
-                  }`}
-                >
-                  {karnet.popularny && (
-                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">
-                      Najczęściej wybierany
-                    </div>
-                  )}
+            {karnetyCennik.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                {karnetyCennik.map((karnet: any) => {
+                  const cenaWyswietlana = karnet.cena_brutto != null ? `${karnet.cena_brutto} zł` : 'Cennik w klubie';
+                  const waznoscText = karnet.dlugosc ? karnet.dlugosc : 'Standardowy okres';
+                  const iloscWejscText = karnet.ilosc_wejsc ? `${karnet.ilosc_wejsc} wejść` : 'Nielimitowane wejścia';
 
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="text-lg font-black text-sky-950 uppercase">
-                        {karnet.nazwa || karnet.title}
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-1">
-                        {karnet.opis || karnet.description || 'Dostęp do treningów grupowych'}
-                      </p>
-                    </div>
-
-                    <div className="py-2 border-y border-slate-100">
-                      <div className="text-3xl font-black text-slate-900">
-                        {karnet.cena || karnet.price}
-                      </div>
-                      <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">
-                        Ważność: {karnet.okres || karnet.duration || '30 dni'}
-                      </div>
-                    </div>
-
-                    {karnet.korzysci && Array.isArray(karnet.korzysci) && (
-                      <ul className="space-y-2 text-xs text-slate-600">
-                        {karnet.korzysci.map((korzysc: string, kIdx: number) => (
-                          <li key={kIdx} className="flex items-center gap-2">
-                            <span className="text-emerald-500 font-black">✓</span>
-                            <span>{korzysc}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-
-                  <div className="pt-6 mt-4 border-t border-slate-100">
-                    <Link
-                      href="/login"
-                      className={`w-full py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider text-center block transition-transform active:scale-95 ${
-                        karnet.popularny
-                          ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-md'
-                          : 'bg-sky-950 hover:bg-sky-900 text-white'
-                      }`}
+                  return (
+                    <div
+                      key={karnet.id}
+                      className="bg-white rounded-3xl p-6 border border-sky-100 transition-all flex flex-col justify-between relative shadow-sm hover:shadow-md hover:border-sky-300"
                     >
-                      Kup karnet ↗
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
+                      <div className="space-y-4">
+                        <div>
+                          {karnet.typ_karnetu && (
+                            <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                              {karnet.typ_karnetu}
+                            </span>
+                          )}
+                          <h3 className="text-lg font-black text-sky-950 uppercase mt-2">
+                            {karnet.nazwa}
+                          </h3>
+                          {karnet.dostep_do_zajec && (
+                            <p className="text-xs text-slate-500 mt-1">
+                              {karnet.dostep_do_zajec}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="py-3 border-y border-slate-100">
+                          <div className="text-3xl font-black text-slate-900">
+                            {cenaWyswietlana}
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mt-1">
+                            Ważność: <span className="text-sky-950">{waznoscText}</span>
+                          </div>
+                        </div>
+
+                        <ul className="space-y-2 text-xs text-slate-600">
+                          <li className="flex items-center gap-2">
+                            <span className="text-emerald-500 font-black">✓</span>
+                            <span>{iloscWejscText}</span>
+                          </li>
+                          {karnet.inne_ustawienia && (
+                            <li className="flex items-center gap-2">
+                              <span className="text-emerald-500 font-black">✓</span>
+                              <span>{karnet.inne_ustawienia}</span>
+                            </li>
+                          )}
+                        </ul>
+                      </div>
+
+                      <div className="pt-6 mt-4 border-t border-slate-100">
+                        <Link
+                          href="https://forma-marzen.vercel.app/rejestracja-karnet"
+                          className="w-full py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider text-center block transition-transform active:scale-95 bg-sky-950 hover:bg-sky-900 text-white shadow-sm"
+                        >
+                          Kup karnet ↗
+                        </Link>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-white border border-sky-100 rounded-3xl p-12 text-center text-slate-400 text-xs font-bold">
+                Brak dostępnych karnetów w bazie danych.
+              </div>
+            )}
           </section>
         )}
 
@@ -794,7 +764,7 @@ export default function PublicSchedulePage() {
             Chcesz zapisać się na zajęcia lub dołączyć do klubu?
           </p>
           <p className="max-w-md mx-auto">
-            Zaloguj się do swojego profilu klubowicza lub skontaktuj się bezpośrednio z recepcją klubu.
+            Zaloguj się do swojego profilu klubowicza lub zarejestruj się online.
           </p>
           <div className="pt-2 flex justify-center gap-3 flex-wrap">
             <button
