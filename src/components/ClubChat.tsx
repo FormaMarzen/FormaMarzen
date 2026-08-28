@@ -37,13 +37,13 @@ export default function ClubChat() {
   const [newMessage, setNewMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Załączniki
+  // Załączniki do wiadomości
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Modale Administratora
+  // Modale Administratora / Grupy
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
@@ -51,7 +51,13 @@ export default function ClubChat() {
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupType, setNewGroupType] = useState<"publiczna" | "zamknieta">("zamknieta");
+  const [newGroupIcon, setNewGroupIcon] = useState("🏋️‍♂️");
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<(number | string)[]>([]);
+
+  // Modal edycji grupy
+  const [showEditGroupModal, setShowEditGroupModal] = useState(false);
+  const [editGroupName, setEditGroupName] = useState("");
+  const [editGroupIcon, setEditGroupIcon] = useState("");
 
   // Przeciąganie dymka
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -334,6 +340,10 @@ export default function ClubChat() {
 
       if (!error && data) {
         setGroups(data);
+        if (selectedGroup) {
+          const updated = data.find((g: any) => g.id === selectedGroup.id);
+          if (updated) setSelectedGroup(updated);
+        }
       }
     } catch (err) {
       console.error("Błąd pobierania grup:", err);
@@ -438,7 +448,7 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
-  // Obsługa plików
+  // Obsługa plików (wiadomości)
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -477,6 +487,26 @@ export default function ClubChat() {
     } catch (err) {
       console.error("Upload error:", err);
       return null;
+    }
+  };
+
+  // Pomocnicza funkcja do wgrywania własnego obrazka ikony grupy
+  const handleGroupIconImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, isEditing: boolean) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Maksymalny rozmiar ikony to 5MB");
+      return;
+    }
+
+    const uploaded = await uploadFileToSupabase(file);
+    if (uploaded && uploaded.url) {
+      if (isEditing) {
+        setEditGroupIcon(uploaded.url);
+      } else {
+        setNewGroupIcon(uploaded.url);
+      }
     }
   };
 
@@ -615,7 +645,7 @@ export default function ClubChat() {
     setIsSendingBroadcast(false);
   };
 
-  // Tworzenie nowej grupy przez Admina
+  // Tworzenie nowej grupy
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGroupName.trim()) return;
@@ -633,6 +663,7 @@ export default function ClubChat() {
           tworca_id: senderId,
           czlonkowie_ids: allMembers,
           typ: newGroupType,
+          ikona: newGroupIcon,
         },
       ])
       .select();
@@ -640,10 +671,30 @@ export default function ClubChat() {
     if (!error && data && data.length > 0) {
       setNewGroupName("");
       setNewGroupType("zamknieta");
+      setNewGroupIcon("🏋️‍♂️");
       setSelectedGroupMembers([]);
       setShowCreateGroupModal(false);
       fetchGroups();
       setSelectedGroup(data[0]);
+    }
+  };
+
+  // Aktualizacja danych grupy (nazwa + ikona)
+  const handleUpdateGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedGroup || !editGroupName.trim()) return;
+
+    const { error } = await supabase
+      .from("czat_grupy")
+      .update({
+        nazwa: editGroupName.trim(),
+        ikona: editGroupIcon,
+      })
+      .eq("id", selectedGroup.id);
+
+    if (!error) {
+      setShowEditGroupModal(false);
+      fetchGroups();
     }
   };
 
@@ -877,6 +928,14 @@ export default function ClubChat() {
     return isPublic && !isAlreadyMember;
   });
 
+  const renderGroupIcon = (iconValue: string, type: string) => {
+    if (!iconValue) return type === "publiczna" ? "🌐" : "👥";
+    if (iconValue.startsWith("http")) {
+      return <img src={iconValue} alt="Ikona" className="w-full h-full object-cover rounded-full" />;
+    }
+    return <span>{iconValue}</span>;
+  };
+
   return (
     <div
       ref={containerRef}
@@ -918,16 +977,31 @@ export default function ClubChat() {
                   </button>
                   {selectedGroup ? (
                     <>
-                      <div className="w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0">
-                        {selectedGroup.typ === "publiczna" ? "🌐" : "🔒"}
+                      <div className="w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-sm border border-amber-300 shrink-0 overflow-hidden">
+                        {renderGroupIcon(selectedGroup.ikona, selectedGroup.typ)}
                       </div>
-                      <div className="overflow-hidden">
-                        <div className="font-bold text-xs truncate max-w-[150px]">{selectedGroup.nazwa}</div>
-                        <div className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
-                          <span>{selectedGroup.typ === "publiczna" ? "Grupa Publiczna" : "Grupa Zamknięta"}</span>
-                          <span>•</span>
-                          <span>{Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} osób</span>
+                      <div className="overflow-hidden flex items-center gap-1.5">
+                        <div>
+                          <div className="font-bold text-xs truncate max-w-[130px]">{selectedGroup.nazwa}</div>
+                          <div className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
+                            <span>{selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"}</span>
+                            <span>•</span>
+                            <span>{Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} osób</span>
+                          </div>
                         </div>
+                        {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
+                          <button
+                            onClick={() => {
+                              setEditGroupName(selectedGroup.nazwa);
+                              setEditGroupIcon(selectedGroup.ikona || "🏋️‍♂️");
+                              setShowEditGroupModal(true);
+                            }}
+                            className="text-slate-400 hover:text-amber-400 p-1 text-xs cursor-pointer"
+                            title="Edytuj nazwę lub ikonę grupy"
+                          >
+                            ✏️
+                          </button>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -1179,8 +1253,8 @@ export default function ClubChat() {
                               className="w-full p-2.5 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group"
                             >
                               <div className="flex items-center gap-3 overflow-hidden">
-                                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border ${isPublic ? "bg-amber-100 text-amber-900 border-amber-300" : "bg-slate-100 text-slate-900 border-slate-300"}`}>
-                                  {isPublic ? "🌐" : "🔒"}
+                                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border overflow-hidden ${isPublic ? "bg-amber-100 text-amber-900 border-amber-300" : "bg-slate-100 text-slate-900 border-slate-300"}`}>
+                                  {renderGroupIcon(group.ikona, group.typ)}
                                 </div>
                                 <div className="overflow-hidden">
                                   <div className="font-bold text-xs text-slate-900 truncate">{group.nazwa}</div>
@@ -1213,8 +1287,8 @@ export default function ClubChat() {
                             className="w-full p-2.5 rounded-2xl border bg-white border-amber-200 flex items-center justify-between shadow-sm"
                           >
                             <div className="flex items-center gap-3 overflow-hidden">
-                              <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center font-bold text-sm shrink-0">
-                                🌐
+                              <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden">
+                                {renderGroupIcon(group.ikona, group.typ)}
                               </div>
                               <div className="overflow-hidden">
                                 <div className="font-bold text-xs text-slate-900 truncate">{group.nazwa}</div>
@@ -1459,6 +1533,90 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* MODAL EDYCJI GRUPY (NAZWA + IKONA / WŁASNY OBRAZ / EMOJI) */}
+          {showEditGroupModal && (
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                    <span>✏️</span> Edytuj Grupę
+                  </div>
+                  <button onClick={() => setShowEditGroupModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleUpdateGroup} className="space-y-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 mb-1 block">Nazwa grupy:</label>
+                    <input
+                      type="text"
+                      value={editGroupName}
+                      onChange={(e) => setEditGroupName(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 mb-1 block">Ikona grupy (Emoji lub własny obrazek):</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={editGroupIcon}
+                        onChange={(e) => setEditGroupIcon(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                        placeholder="np. 🏋️‍♂️ lub wgraj plik obok"
+                        required
+                      />
+                      <label className="w-9 h-9 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 flex items-center justify-center text-base cursor-pointer shrink-0 shadow-sm" title="Wgraj własny obrazek z urządzenia">
+                        📷
+                        <input
+                          type="file"
+                          onChange={(e) => handleGroupIconImageUpload(e, true)}
+                          className="hidden"
+                          accept="image/*"
+                        />
+                      </label>
+                      <div className="w-9 h-9 rounded-full bg-amber-100 border border-amber-300 flex items-center justify-center text-base shrink-0 overflow-hidden">
+                        {renderGroupIcon(editGroupIcon, selectedGroup?.typ || "zamknieta")}
+                      </div>
+                    </div>
+                    <div className="flex gap-1 mt-2 text-base">
+                      {["🏋️‍♂️", "🚴", "🏕️", "🥇", "🔥", "⚽", "🥊", "💪"].map((emo) => (
+                        <button
+                          key={emo}
+                          type="button"
+                          onClick={() => setEditGroupIcon(emo)}
+                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-amber-100 flex items-center justify-center cursor-pointer transition-colors"
+                        >
+                          {emo}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowEditGroupModal(false)}
+                      className="flex-1 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200"
+                    >
+                      Anuluj
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!editGroupName.trim()}
+                      className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-slate-900 hover:bg-slate-800 shadow-md disabled:opacity-50"
+                    >
+                      Zapisz zmiany
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {/* MODAL BROADCAST (DO WSZYSTKICH) */}
           {showBroadcastModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
@@ -1536,12 +1694,50 @@ export default function ClubChat() {
                 <form onSubmit={handleCreateGroup} className="space-y-3">
                   <input
                     type="text"
-                    placeholder="Nazwa grupy (np. Obóz Wałcz 2026, Hyrox Squad)..."
+                    placeholder="Nazwa grupy (np. Obóz Wałcz 2026)..."
                     value={newGroupName}
                     onChange={(e) => setNewGroupName(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
                     required
                   />
+
+                  {/* WYBÓR IKONY GRUPY (EMOJI LUB WŁASNY OBRAZ) */}
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 mb-1 block">Ikona grupy (Emoji lub własny obrazek):</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={newGroupIcon}
+                        onChange={(e) => setNewGroupIcon(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                        required
+                      />
+                      <label className="w-9 h-9 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 flex items-center justify-center text-base cursor-pointer shrink-0 shadow-sm" title="Wgraj własny obrazek z urządzenia">
+                        📷
+                        <input
+                          type="file"
+                          onChange={(e) => handleGroupIconImageUpload(e, false)}
+                          className="hidden"
+                          accept="image/*"
+                        />
+                      </label>
+                      <div className="w-9 h-9 rounded-full bg-amber-100 border border-amber-300 flex items-center justify-center text-base shrink-0 overflow-hidden">
+                        {renderGroupIcon(newGroupIcon, newGroupType)}
+                      </div>
+                    </div>
+                    <div className="flex gap-1 mt-1.5 text-base">
+                      {["🏋️‍♂️", "🚴", "🏕️", "🥇", "🔥", "⚽", "🥊", "💪"].map((emo) => (
+                        <button
+                          key={emo}
+                          type="button"
+                          onClick={() => setNewGroupIcon(emo)}
+                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-amber-100 flex items-center justify-center cursor-pointer transition-colors"
+                        >
+                          {emo}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
                   {/* WYBÓR TYPU GRUPY */}
                   <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
@@ -1550,14 +1746,14 @@ export default function ClubChat() {
                       onClick={() => setNewGroupType("zamknieta")}
                       className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${newGroupType === "zamknieta" ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                     >
-                      🔒 Zamknięta (Obóz / Team)
+                      🔒 Zamknięta
                     </button>
                     <button
                       type="button"
                       onClick={() => setNewGroupType("publiczna")}
                       className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${newGroupType === "publiczna" ? "bg-amber-400 text-slate-950 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                     >
-                      🌐 Publiczna (Otwarta)
+                      🌐 Publiczna
                     </button>
                   </div>
 
@@ -1565,7 +1761,7 @@ export default function ClubChat() {
                   {newGroupType === "zamknieta" ? (
                     <div>
                       <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
-                      <div className="max-h-36 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                      <div className="max-h-28 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                         {klienci
                           .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
                           .map((user) => {
@@ -1593,7 +1789,7 @@ export default function ClubChat() {
                     </div>
                   ) : (
                     <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900">
-                      ℹ️ Grupa publiczna będzie widoczna dla wszystkich klubowiczów w zakładce <strong>"Odkrywaj otwarte"</strong> i każdy będzie mógł do niej samodzielnie dołączyć.
+                      ℹ️ Grupa publiczna będzie widoczna dla wszystkich klubowiczów w zakładce <strong>"Odkrywaj otwarte"</strong>.
                     </div>
                   )}
 
