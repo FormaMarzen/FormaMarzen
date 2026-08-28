@@ -392,22 +392,32 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-// PRECYZYJNY HELPER ROZWIĄZYWANIA SZCZEGÓŁÓW ZAJĘĆ (ŚCISŁE DOPASOWANIE DNIA TYGODNIA)
+// PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ (PEŁNA OBSŁUGA ROKU 2026 I 2027)
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
     let d = 1, m = 1;
-    let year = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const now = new Date();
+    let year = now.getFullYear();
 
-    if (dateStr.includes('/')) {
-      const parts = dateStr.split('/').map(Number);
-      d = parts[0];
-      m = parts[1];
-    } else if (dateStr.includes('-')) {
+    if (dateStr.includes('-')) {
       const parts = dateStr.split('-').map(Number);
       if (parts.length === 3) {
         year = parts[0];
         m = parts[1];
         d = parts[2];
+      }
+    } else if (dateStr.includes('/')) {
+      const parts = dateStr.split('/').map(Number);
+      d = parts[0];
+      m = parts[1];
+      const currentMonth = now.getMonth() + 1;
+      const currentDay = now.getDate();
+      
+      // Jeśli miesiąc/dzień już minął w 2026 roku, wpis dotyczy roku 2027
+      if (m < currentMonth || (m === currentMonth && d < currentDay)) {
+        year = now.getFullYear() + 1;
+      } else {
+        year = now.getFullYear();
       }
     }
 
@@ -422,22 +432,21 @@ export default function DashboardPage() {
     // 1. Sprawdzamy zajęcia jednorazowe przypisane dokładnie do tej daty
     const jednorazClass = jednorazoweZajecia.find(j => 
       String(j.id) === String(classId) && 
-      (j.displayDate === displayDateStr || j.displayDate === dateStr || j.fullDateStr === isoDateStr || j.fullDateStr === dateStr)
+      (j.fullDateStr === isoDateStr || j.displayDate === displayDateStr || j.displayDate === dateStr)
     );
 
-    // 2. Sprawdzamy szablon grafiku stałego TYLKO jeśli ma aktywny ten konkretny dzień tygodnia
+    // 2. Sprawdzamy szablon grafiku stałego TYLKO jeśli ma aktywny ten dzień tygodnia
     const stdClass = zapisaneZajecia.find(z => 
       String(z.id) === String(classId) && z.days && z.days[dayKey] === true
     );
 
     const baseClass = jednorazClass || stdClass;
-    // Jeśli zajęcia nie odbywają się w ten dzień tygodnia – odrzucamy (brak błędnego fallbacku)
     if (!baseClass) return null;
 
     const classKey = `${classId}_${dateStr}`;
     const override = nadpisaneZajeciaDni[classKey] || 
-      nadpisaneZajeciaDni[`${classId}_${displayDateStr}`] || 
-      nadpisaneZajeciaDni[`${classId}_${isoDateStr}`];
+      nadpisaneZajeciaDni[`${classId}_${isoDateStr}`] || 
+      nadpisaneZajeciaDni[`${classId}_${displayDateStr}`];
 
     if (override) {
       if (override.isUsunięte) return null;
@@ -3879,7 +3888,7 @@ export default function DashboardPage() {
       if (!hasAnyValid) { needsNewPass = true; }
     }
 
-    prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
+   prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
     const now = new Date();
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
       const mojZapis = Array.isArray(uczestnicy) ? uczestnicy.find((u: any) => String(u.id) === String(currentUser.id)) : null;
@@ -3908,11 +3917,13 @@ export default function DashboardPage() {
                 const progWorkout = getProgrammedWorkout(classInfo, classInfo.isoDateStr, classInfo.displayDateStr);
                 const cancelInfo = getCancelDeadlineInfo(classInfo, classInfo.displayDateStr);
 
+                // DEDUPLIKACJA PO PEŁNEJ DACIE ISO (ROK-MIESIĄC-DZIEŃ) DZIĘKI CZEMU WIDOCZNE SĄ ZAPISY NA CAŁY ROK (2026/2027)
                 if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.isoDateStr === classInfo.isoDateStr)) {
                   myUpcomingClasses.push({
                     ...classInfo,
                     classKey,
                     displayDate: classInfo.displayDateStr,
+                    isoDateStr: classInfo.isoDateStr,
                     fullDateObj: classInfo.targetDayDate,
                     signupStatus: mojZapis.status || 'zapisany',
                     isKrzeselko: mojZapis.status === 'krzesełko',
