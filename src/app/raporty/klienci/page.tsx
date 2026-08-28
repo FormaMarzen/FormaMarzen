@@ -24,6 +24,17 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
+// Pomocniczy kalkulator dni do wygaśnięcia
+const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | null => {
+  if (!expiryDateStr || expiryDateStr === '-') return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expDate = new Date(expiryDateStr);
+  expDate.setHours(0, 0, 0, 0);
+  if (isNaN(expDate.getTime())) return null;
+  return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+};
+
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -121,7 +132,7 @@ export default function KlienciPage() {
     if (!dateStr) return 0;
     let d = String(dateStr).trim();
     
-    // Format DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
+    // DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
     const regexFull = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
     const matchFull = d.match(regexFull);
     if (matchFull) {
@@ -1666,7 +1677,6 @@ export default function KlienciPage() {
   });
 
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
@@ -1772,6 +1782,10 @@ export default function KlienciPage() {
                 const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : '';
                 const dataWygasnieciaKarnetu = maKarnet ? client.karnetyKlubowicza[0].waznyDo : '-';
 
+                // WERYFIKACJA 5 DNI DO WYGAŚNIĘCIA
+                const daysUntilExp = getDaysUntilExpiry(dataWygasnieciaKarnetu);
+                const isPassExpiringSoon = maKarnet && daysUntilExp !== null && daysUntilExp <= 5;
+
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
                     <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
@@ -1808,7 +1822,21 @@ export default function KlienciPage() {
                       </div>
                     </td>
                     <td className="py-3.5 px-3 font-medium text-slate-800 whitespace-nowrap">{client.price}</td>
-                    <td className="py-3.5 px-3 font-mono text-slate-600 whitespace-nowrap">{maKarnet ? dataWygasnieciaKarnetu : '-'}</td>
+                    <td className="py-3.5 px-3 font-mono whitespace-nowrap">
+                      {maKarnet && dataWygasnieciaKarnetu !== '-' ? (
+                        isPassExpiringSoon ? (
+                          <span className="bg-rose-100 text-rose-800 font-bold px-2.5 py-1 rounded-lg border border-rose-300 inline-block shadow-sm">
+                            {dataWygasnieciaKarnetu}
+                          </span>
+                        ) : (
+                          <span className="text-slate-700 font-medium">
+                            {dataWygasnieciaKarnetu}
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
+                    </td>
                     <td className="py-3.5 px-3 font-bold whitespace-nowrap">
                       <span className={`px-2 py-0.5 rounded-lg text-xs whitespace-nowrap ${negativeW ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'}`}>
                         {client.wallet}
@@ -3064,7 +3092,7 @@ export default function KlienciPage() {
       {/* MODAL: EDYCJA DANYCH KONTA */}
       {isEditProfileInfoOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+          <div className="bg-white rounded-2xl max-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane konta</h3>
               <button onClick={() => setIsEditProfileInfoOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
