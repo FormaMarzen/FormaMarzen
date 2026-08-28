@@ -387,7 +387,7 @@ export default function ClubChat() {
     initUser();
   }, []);
 
-  // Pobieranie grup (bezpieczne bez auto-nadpisywania selectedGroup)
+  // Pobieranie grup
   const fetchGroups = async () => {
     if (!currentUserId) return;
     try {
@@ -564,7 +564,7 @@ export default function ClubChat() {
     }
   };
 
-  // Wysyłanie wiadomości (Direct / Grupa)
+  // Wysyłanie wiadomości (Direct / Grupa) z obsługą błędów DB
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -593,10 +593,13 @@ export default function ClubChat() {
 
     if (selectedGroup) {
       payload.grupa_id = selectedGroup.id;
-      payload.odbiorca_id = null;
+      payload.odbiorca_id = null; // Jawnie null dla grupy
 
       const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
-      if (!error) {
+      if (error) {
+        console.error("Błąd bazy danych przy wysyłce do grupy:", error);
+        alert("Nie udało się wysłać wiadomości: " + error.message);
+      } else {
         setNewMessage("");
         setSelectedFile(null);
         setFilePreview(null);
@@ -609,7 +612,10 @@ export default function ClubChat() {
       payload.grupa_id = null;
 
       const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
-      if (!error) {
+      if (error) {
+        console.error("Błąd bazy danych przy wysyłce 1-na-1:", error);
+        alert("Nie udało się wysłać wiadomości: " + error.message);
+      } else {
         setNewMessage("");
         setSelectedFile(null);
         setFilePreview(null);
@@ -1040,8 +1046,8 @@ export default function ClubChat() {
           } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
         >
           {/* NAGŁÓWEK CZATU */}
-          <div className="bg-slate-900 text-white px-3.5 py-3 flex items-center justify-between shadow-sm select-none">
-            <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0 mr-2">
+          <div className="bg-slate-900 text-white px-3 py-2.5 flex items-center justify-between shadow-sm select-none">
+            <div className="flex items-center gap-1.5 overflow-hidden flex-1 min-w-0 mr-1">
               {selectedUser || selectedGroup ? (
                 <>
                   {/* PRZYCISK POWROTU */}
@@ -1134,7 +1140,7 @@ export default function ClubChat() {
                     e.stopPropagation();
                     handleToggleMuteGroup();
                   }}
-                  className={`text-xs px-2 py-1.5 rounded-lg border transition-colors ${
+                  className={`text-xs p-1.5 rounded-lg border transition-colors ${
                     isCurrentGroupMuted
                       ? "bg-rose-950/80 text-rose-300 border-rose-800"
                       : "bg-slate-800 text-slate-300 border-slate-700"
@@ -1151,7 +1157,7 @@ export default function ClubChat() {
                     e.stopPropagation();
                     handleToggleGroupMembership(selectedGroup, false);
                   }}
-                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-800 transition-colors"
+                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-1.5 rounded-lg border border-rose-800 transition-colors"
                   title="Opuść tę grupę"
                 >
                   Opuść
