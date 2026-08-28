@@ -103,7 +103,7 @@ export default function PublicSchedulePage() {
     return { isAutoCancelled: false, reason: '' };
   };
 
-  // Precyzyjne dopasowanie nadpisań i odwołań z panelu trenera
+  // Dopasowanie nadpisań i odwołań z panelu
   const findOverride = (item: any, col: any) => {
     const keysToCheck = [
       `${item.id}_${col.date}`,
@@ -119,7 +119,7 @@ export default function PublicSchedulePage() {
     return null;
   };
 
-  // Pobieranie zapisów klubowiczów
+  // Pobieranie zapisów na zajęcia
   const getSignups = (item: any, col: any) => {
     const keysToCheck = [
       `${item.id}_${col.date}`,
@@ -355,13 +355,21 @@ export default function PublicSchedulePage() {
     <div className="min-h-screen bg-slate-100/60 pt-6 sm:pt-8 pb-32 px-3 sm:px-6 font-sans antialiased text-slate-800">
       <div className="max-w-[1700px] mx-auto space-y-6">
 
-        {/* GÓRNA BELKA Z ZAKŁADKAMI I PRZYCISKAMI AKCJI */}
+        {/* GÓRNA BELKA Z LOGO, ZAKŁADKAMI I PRZYCISKAMI AKCJI */}
         <header className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-5">
           
-          {/* LOGO I TYTUŁ */}
+          {/* LOGO Z PUBLIC/LOGO.PNG I TYTUŁ */}
           <div className="flex items-center gap-4 text-center lg:text-left">
-            <div className="w-14 h-14 bg-gradient-to-tr from-sky-600 to-amber-500 rounded-2xl flex items-center justify-center text-white text-2xl font-black shadow-md shrink-0">
-              ⚡
+            <div className="w-14 h-14 rounded-2xl bg-white border border-sky-200 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
+              <img
+                src="/logo.png"
+                alt="Logo Forma Marzeń"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  // Awaryjny fallback, gdyby plik nie został znaleziony
+                  (e.currentTarget as HTMLElement).style.display = 'none';
+                }}
+              />
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-black uppercase tracking-wider text-sky-950">
@@ -427,8 +435,12 @@ export default function PublicSchedulePage() {
               </button>
 
               <div className="text-center space-y-2">
-                <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center text-xl mx-auto font-black shadow-inner">
-                  ✨
+                <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 p-1.5 flex items-center justify-center mx-auto shadow-inner">
+                  <img
+                    src="/logo.png"
+                    alt="Logo Forma Marzeń"
+                    className="w-full h-full object-contain"
+                  />
                 </div>
                 <h2 className="text-xl font-black text-sky-950 uppercase tracking-wide">
                   Dołącz do treningu
