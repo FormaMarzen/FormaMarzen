@@ -1328,11 +1328,15 @@ export default function DashboardPage() {
         }
       }
 
-      const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
+ const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
       if (ogloszeniaData) {
-        const activeUserId = matchedCurrentClient ? matchedCurrentClient.id : null;
-        const activeUserEmail = userEmail || '';
-        const activeUserName = matchedCurrentClient ? `${matchedCurrentClient.firstName} ${matchedCurrentClient.lastName}`.trim().toLowerCase() : '';
+        const activeUserId = matchedCurrentClient ? String(matchedCurrentClient.id) : null;
+        const activeUserEmail = (userEmail || '').toLowerCase().trim();
+        const activeUserName = matchedCurrentClient 
+          ? `${matchedCurrentClient.firstName || ''} ${matchedCurrentClient.lastName || ''}`.toLowerCase().trim() 
+          : '';
+        const userPasses = (matchedCurrentClient?.karnetyKlubowicza || []).map((k: any) => (k.nazwa || '').toLowerCase().trim());
+        if (matchedCurrentClient?.pass) userPasses.push(matchedCurrentClient.pass.toLowerCase().trim());
 
         const parsedOgloszenia = ogloszeniaData
           .map((o: any) => {
@@ -1361,20 +1365,25 @@ export default function DashboardPage() {
             if (determinedRole === 'admin') return true;
             if (!o.isVisible) return false;
 
-            if (o.targetUserId && activeUserId) {
-              if (String(o.targetUserId) === String(activeUserId)) return true;
-            }
+            const dzisStr = new Date().toISOString().split('T')[0];
+            if (o.dateFrom && o.dateFrom > dzisStr) return false;
+            if (o.dateTo && o.dateTo < dzisStr) return false;
 
-            const targetStr = (o.target || '').trim();
-            const lowerTargets = (o.targetArray || []).map((t: string) => String(t).trim().toLowerCase());
+            if (o.targetUserId && activeUserId && String(o.targetUserId) === activeUserId) return true;
 
-            if (targetStr === 'Wszystkich' || lowerTargets.includes('wszystkich')) return true;
-            if (determinedRole === 'trener' && (targetStr === 'Trener' || lowerTargets.includes('trener') || lowerTargets.includes('trenerzy'))) return true;
-            if (determinedRole === 'klubowicz' && (targetStr === 'Klubowicz' || lowerTargets.includes('klubowicz') || lowerTargets.includes('klubowicze'))) return true;
+            const mainTarget = (o.target || '').toLowerCase().trim();
+            const targetsList = (o.targetArray || []).map((t: string) => String(t).toLowerCase().trim());
+            const allTargets = [mainTarget, ...targetsList];
 
-            if (activeUserId && (lowerTargets.includes(String(activeUserId)) || lowerTargets.includes(`id:${activeUserId}`))) return true;
-            if (activeUserEmail && lowerTargets.includes(activeUserEmail.toLowerCase())) return true;
-            if (activeUserName && lowerTargets.includes(activeUserName)) return true;
+            if (allTargets.includes('wszystkich') || allTargets.includes('wszyscy')) return true;
+            if (determinedRole === 'klubowicz' && (allTargets.includes('klubowicz') || allTargets.includes('klubowicze'))) return true;
+            if (determinedRole === 'trener' && (allTargets.includes('trener') || allTargets.includes('trenerzy'))) return true;
+
+            if (activeUserId && allTargets.some(t => t === activeUserId || t === `id:${activeUserId}` || t.includes(`id: ${activeUserId}`))) return true;
+            if (activeUserEmail && allTargets.some(t => t === activeUserEmail)) return true;
+            if (activeUserName && allTargets.some(t => t.includes(activeUserName) || activeUserName.includes(t))) return true;
+
+           if (userPasses.some((p: any) => allTargets.includes(p))) return true;
 
             return false;
           });
@@ -2720,11 +2729,11 @@ export default function DashboardPage() {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
-  // PRECYZYJNE ZLICZANIE AKTYWNYCH ZAPISÓW
+// PRECYZYJNE ZLICZANIE WSZYSTKICH AKTYWNYCH ZAPISÓW W PRZÓD (NA CAŁY ROK)
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
-    const countedNormalizedKeys = new Set<string>();
+    const countedIsoKeys = new Set<string>();
 
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
       const parts = classKey.split('_');
@@ -2733,8 +2742,8 @@ export default function DashboardPage() {
       if (dateStr) {
         const classDetails = findClassDetails(classId, dateStr);
         if (classDetails) {
-          const normalizedKey = `${classDetails.id}_${classDetails.displayDateStr}`;
-          if (countedNormalizedKeys.has(normalizedKey)) return;
+          const uniqueKey = `${classDetails.id}_${classDetails.isoDateStr}`;
+          if (countedIsoKeys.has(uniqueKey)) return;
 
           const [sh = '00', sm = '00'] = (classDetails.start || '00:00').split(':');
           const classStartDateTime = new Date(
@@ -2749,7 +2758,7 @@ export default function DashboardPage() {
           if (classStartDateTime >= now) {
             if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) {
               count++;
-              countedNormalizedKeys.add(normalizedKey);
+              countedIsoKeys.add(uniqueKey);
             }
           }
         }
@@ -3899,7 +3908,7 @@ export default function DashboardPage() {
                 const progWorkout = getProgrammedWorkout(classInfo, classInfo.isoDateStr, classInfo.displayDateStr);
                 const cancelInfo = getCancelDeadlineInfo(classInfo, classInfo.displayDateStr);
 
-                if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === classInfo.displayDateStr)) {
+                if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.isoDateStr === classInfo.isoDateStr)) {
                   myUpcomingClasses.push({
                     ...classInfo,
                     classKey,
