@@ -5,11 +5,19 @@ export async function POST(request: Request) {
   try {
     const publicKey = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').trim();
     const privateKey = (process.env.VAPID_PRIVATE_KEY || '').trim();
-    const subject = (process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl').trim();
+    let subject = (process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl').trim();
 
     if (!publicKey || !privateKey) {
       console.error('Brak skonfigurowanych kluczy VAPID w zmiennych środowiskowych Vercel.');
-      return NextResponse.json({ success: false, error: 'Brak konfiguracji VAPID na serwerze' }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: 'Brak konfiguracji VAPID na serwerze' },
+        { status: 500 }
+      );
+    }
+
+    // Walidacja i formatowanie subject wymaganego przez standard WebPush / Apple APNs
+    if (!subject.startsWith('mailto:') && !subject.startsWith('http://') && !subject.startsWith('https://')) {
+      subject = `mailto:${subject}`;
     }
 
     webpush.setVapidDetails(subject, publicKey, privateKey);
@@ -18,25 +26,29 @@ export async function POST(request: Request) {
     const { subscriptions, payload } = bodyData;
 
     if (!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) {
-      return NextResponse.json({ success: false, error: 'Brak aktywnych subskrypcji' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: 'Brak aktywnych subskrypcji' },
+        { status: 400 }
+      );
     }
 
     const notificationPayload = JSON.stringify({
       title: payload?.title || 'FORMA MARZEŃ',
       body: payload?.body || '',
       url: payload?.url || '/',
-      icon: '/logo.png',
-      badge: '/logo.png',
+      icon: payload?.icon || '/logo.png',
+      badge: payload?.badge || '/logo.png',
       data: {
-        url: payload?.url || '/'
+        url: payload?.url || '/',
+        dateOfArrival: Date.now()
       }
     });
 
     const pushOptions = {
-      TTL: 86400, // 24 godziny ważności w kolejce APNs / FCM
+      TTL: 86400, // 24 godziny ważności w kolejce Apple APNs / Google FCM
       urgency: 'high' as const,
       headers: {
-        'Urgency': 'high'
+        Urgency: 'high'
       }
     };
 
@@ -44,7 +56,7 @@ export async function POST(request: Request) {
       subscriptions.map(async (rawSub: any) => {
         let subObj = rawSub;
 
-        // Bezpieczne odpakowanie subskrypcji
+        // Bezpieczne odpakowanie subskrypcji w formacie tekstowym lub zagnieżdżonym
         if (typeof subObj === 'string') {
           try {
             subObj = JSON.parse(subObj);
@@ -65,29 +77,46 @@ export async function POST(request: Request) {
 
         try {
           const response = await webpush.sendNotification(subObj, notificationPayload, pushOptions);
-          return { success: true, statusCode: response.statusCode };
+          return {
+            success: true,
+            statusCode: response.statusCode,
+            endpoint: subObj.endpoint
+          };
         } catch (err: any) {
           console.error('Błąd bramki push (FCM/APNs):', {
             message: err.message,
             statusCode: err.statusCode,
-            body: err.body
+            body: err.body,
+            endpoint: subObj.endpoint
           });
-          throw err;
+
+          // Identyfikacja wygasłych lub usuniętych subskrypcji (np. odinstalowana aplikacja)
+          const isExpired = err.statusCode === 404 || err.statusCode === 410;
+          return Promise.reject({
+            success: false,
+            statusCode: err.statusCode,
+            isExpired,
+            message: err.message,
+            endpoint: subObj.endpoint
+          });
         }
       })
     );
 
-    const successfulCount = results.filter(r => r.status === 'fulfilled').length;
-    const failedCount = results.filter(r => r.status === 'rejected').length;
+    const delivered = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
 
     return NextResponse.json({
       success: true,
-      delivered: successfulCount,
-      failed: failedCount,
+      delivered,
+      failed,
       total: subscriptions.length
     });
   } catch (error: any) {
     console.error('Błąd krytyczny endpointu /api/push/send:', error);
-    return NextResponse.json({ success: false, error: error.message || 'Błąd serwera' }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: error.message || 'Błąd serwera' },
+      { status: 500 }
+    );
   }
 }

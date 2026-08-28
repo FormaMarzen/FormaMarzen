@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -59,29 +58,44 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // POMOCNIK GENEROWANIA WSZYSTKICH WARIANTÓW CLASS_KEY (DD/MM ORAZ YYYY-MM-DD)
+  // POMOCNIK GENEROWANIA WSZYSTKICH MOŻLIWYCH WARIANTÓW CLASS_KEY (DD/MM, D/M, YYYY-MM-DD)
   const getKeysVariants = (classId: string | number, dateStr: string) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
     
+    keys.add(`${classId}_${dateStr}`);
+
     if (dateStr.includes('/')) {
-      const [d, m] = dateStr.split('/');
-      const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-      keys.add(`${classId}_${dateStr}`);
-      keys.add(`${classId}_${d.padStart(2, '0')}/${m.padStart(2, '0')}`);
-      keys.add(`${classId}_${yr}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
+      const parts = dateStr.split('/');
+      const d = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const now = new Date();
+      let yr = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
+      
+      // Obsługa przełomu roku
+      if (m < (now.getMonth() + 1) || (m === (now.getMonth() + 1) && d < now.getDate())) {
+        yr = now.getFullYear() + 1;
+      }
+
+      const dPadded = String(d).padStart(2, '0');
+      const mPadded = String(m).padStart(2, '0');
+
+      keys.add(`${classId}_${dPadded}/${mPadded}`);
+      keys.add(`${classId}_${d}/${m}`);
+      keys.add(`${classId}_${yr}-${mPadded}-${dPadded}`);
     } else if (dateStr.includes('-')) {
       const parts = dateStr.split('-');
       if (parts.length === 3) {
-        const [yr, m, d] = parts;
-        keys.add(`${classId}_${dateStr}`);
-        keys.add(`${classId}_${d.padStart(2, '0')}/${m.padStart(2, '0')}`);
-        keys.add(`${classId}_${yr}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`);
-      } else {
-        keys.add(`${classId}_${dateStr}`);
+        const yr = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        const dPadded = String(d).padStart(2, '0');
+        const mPadded = String(m).padStart(2, '0');
+
+        keys.add(`${classId}_${dPadded}/${mPadded}`);
+        keys.add(`${classId}_${d}/${m}`);
+        keys.add(`${classId}_${yr}-${mPadded}-${dPadded}`);
       }
-    } else {
-      keys.add(`${classId}_${dateStr}`);
     }
     return Array.from(keys);
   };
@@ -90,7 +104,7 @@ export default function DashboardPage() {
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
-      const validIds = rawIds.map(Number).filter(id => id > 0 && id !== 5000 && id !== 999999999);
+      const validIds = rawIds.map(id => String(id)).filter(id => id && id !== '0' && id !== '5000' && id !== '999999999');
       if (validIds.length === 0) return;
 
       const { data: clients, error: clientsErr } = await supabase
@@ -392,7 +406,7 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-// PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ (PEŁNA OBSŁUGA ROKU 2026 I 2027)
+  // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ (PEŁNA OBSŁUGA ROKU 2026 I 2027)
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
     let d = 1, m = 1;
@@ -413,7 +427,6 @@ export default function DashboardPage() {
       const currentMonth = now.getMonth() + 1;
       const currentDay = now.getDate();
       
-      // Jeśli miesiąc/dzień już minął w 2026 roku, wpis dotyczy roku 2027
       if (m < currentMonth || (m === currentMonth && d < currentDay)) {
         year = now.getFullYear() + 1;
       } else {
@@ -423,7 +436,6 @@ export default function DashboardPage() {
 
     const dayDate = new Date(year, m - 1, d);
     const dayOfWeek = dayDate.getDay();
-    // 0 = nd, 1 = pon, 2 = wt, 3 = sr, 4 = czw, 5 = pt, 6 = sob
     const dayKeys = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sob'];
     const dayKey = dayKeys[dayOfWeek] || 'pon';
     const displayDateStr = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
@@ -802,7 +814,7 @@ export default function DashboardPage() {
               if (participantIds.length > 0) {
                 await sendPushNotification(participantIds, {
                   title: `Odwołano trening: ${cls.title}`,
-                  body: `Trening ${cls.title} w dniu ${col.date} o godz. ${cls.start} został odwołany z powodu zbyt małej liczby uczestników. Zwrócono wejście.`,
+                  body: `Trening ${cls.title} w dniu ${col.date} o godz. ${cls.start} został odwołany z powodu zbyt małej liczby uczestników (${activeSignups.length}/${minRequired}). Zwrócono wejście.`,
                   url: '/'
                 });
               }
@@ -910,7 +922,7 @@ export default function DashboardPage() {
           if (participantIds.length > 0) {
             await sendPushNotification(participantIds, {
               title: `Odwołano trening: ${classItem.title}`,
-              body: `Trening ${classItem.title} w dniu ${displayDate} o godz. ${classItem.start} został automatycznie odwołany z powodu zbyt małej liczby osób. Zwrócono wejście.`,
+              body: `Trening ${classItem.title} w dniu ${displayDate} o godz. ${classItem.start} został automatycznie odwołany z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono wejście.`,
               url: '/'
             });
           }
@@ -934,7 +946,7 @@ export default function DashboardPage() {
 
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
-    if (classItem.isOdwołane) return { isAutoCancelled: true, reason: 'ODWOŁANE' };
+    if (classItem.isOdwołane) return { isAutoCancelled: true, reason: 'ODWOŁANE PRZEZ KLUB' };
     
     const trainingName = classItem.title || '';
     const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
@@ -946,10 +958,17 @@ export default function DashboardPage() {
       : bookingRules.auto_cancel_deadline_minutes;
 
     if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
-      const [dStr, mStr] = displayDate.split('/');
+      let d = 1, m = 1;
+      if (displayDate.includes('/')) {
+        [d, m] = displayDate.split('/').map(Number);
+      } else if (displayDate.includes('-')) {
+        const p = displayDate.split('-').map(Number);
+        m = p[1];
+        d = p[2];
+      }
       const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
       const [sh = '00', sm = '00'] = (classItem.start || '00:00').split(':');
-      const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+      const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
@@ -958,7 +977,7 @@ export default function DashboardPage() {
         if (activeCount < minRequired) {
           return {
             isAutoCancelled: true,
-            reason: `ODWOŁANE (Brak min. ${minRequired} os. na ${deadlineMins} min przed)`
+            reason: `ODWOŁANE (Brak min. liczby osób: ${activeCount}/${minRequired})`
           };
         }
       }
@@ -1085,7 +1104,6 @@ export default function DashboardPage() {
       label: `${rabatProcent}% (Ciągłość: ${liczbaKarnetow} ${liczbaKarnetow === 1 ? 'karnet' : 'karnety'})`
     };
   };
-
   const getEffectiveDiscount = (client: any) => {
     if (!client) return { percent: 0, label: '', type: 'none' };
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
@@ -1337,7 +1355,8 @@ export default function DashboardPage() {
         }
       }
 
- const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
+      // 2. Ogłoszenia spersonalizowane w loadData
+      const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
       if (ogloszeniaData) {
         const activeUserId = matchedCurrentClient ? String(matchedCurrentClient.id) : null;
         const activeUserEmail = (userEmail || '').toLowerCase().trim();
@@ -1392,13 +1411,14 @@ export default function DashboardPage() {
             if (activeUserEmail && allTargets.some(t => t === activeUserEmail)) return true;
             if (activeUserName && allTargets.some(t => t.includes(activeUserName) || activeUserName.includes(t))) return true;
 
-           if (userPasses.some((p: any) => allTargets.includes(p))) return true;
+            if (userPasses.some((p: any) => allTargets.includes(p))) return true;
 
             return false;
           });
 
         setOgloszeniaList(parsedOgloszenia);
       }
+
       // 3. Grafik stały (szablony)
       const szablonyData = await fetchAllFromSupabase('grafik_zajec', 'id', true, 2);
       let mappedSzablony: any[] = [];
@@ -1508,26 +1528,13 @@ export default function DashboardPage() {
 
           if (z.class_key && z.class_key.includes('_')) {
             const [classId, datePart] = z.class_key.split('_');
-            if (datePart && datePart.includes('-')) {
-              const parts = datePart.split('-');
-              if (parts.length === 3) {
-                const altKey = `${classId}_${parts[2]}/${parts[1]}`;
-                if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
-                if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
-                  groupedZapisy[altKey].push(entry);
-                }
+            const allVariants = getKeysVariants(classId, datePart);
+            allVariants.forEach(vKey => {
+              if (!groupedZapisy[vKey]) groupedZapisy[vKey] = [];
+              if (!groupedZapisy[vKey].some((item: any) => item.id === z.klient_id)) {
+                groupedZapisy[vKey].push(entry);
               }
-            } else if (datePart && datePart.includes('/')) {
-              const parts = datePart.split('/');
-              if (parts.length === 2) {
-                const year = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-                const altKey = `${classId}_${year}-${parts[1]}-${parts[0]}`;
-                if (!groupedZapisy[altKey]) groupedZapisy[altKey] = [];
-                if (!groupedZapisy[altKey].some((item: any) => item.id === z.klient_id)) {
-                  groupedZapisy[altKey].push(entry);
-                }
-              }
-            }
+            });
           }
         });
         setZapisyNaZajecia(groupedZapisy);
@@ -1843,7 +1850,7 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ
+  // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (W TYM JEDNORAZOWYCH I SZABLONÓW)
   const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const keysToDelete = getKeysVariants(item.id, displayDate);
@@ -1888,7 +1895,7 @@ export default function DashboardPage() {
       if (participantIds.length > 0) {
         await sendPushNotification(participantIds, {
           title: `Odwołano trening: ${item.title}`,
-          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany. Zwrócono wejście na karnet.`,
+          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany przez klub. Zwrócono wejście na karnet.`,
           url: '/'
         });
       }
@@ -1914,7 +1921,7 @@ export default function DashboardPage() {
       opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
     }]);
 
-    loadData();
+    await loadData();
     showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały przywrócone.");
   };
 
@@ -1989,7 +1996,7 @@ export default function DashboardPage() {
       opis: nextUsunięteState ? 'Usunięto zajęcia z poziomu grafiku' : 'Przywrócono usunięte zajęcia'
     }]);
 
-    loadData();
+    await loadData();
     showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały przywrócone.");
   };
 
@@ -2082,7 +2089,6 @@ export default function DashboardPage() {
       }]);
     }
   };
-
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -2738,7 +2744,7 @@ export default function DashboardPage() {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
-// PRECYZYJNE ZLICZANIE WSZYSTKICH AKTYWNYCH ZAPISÓW W PRZÓD (NA CAŁY ROK)
+  // PRECYZYJNE ZLICZANIE WSZYSTKICH AKTYWNYCH ZAPISÓW W PRZÓD (NA CAŁY ROK 2026 I 2027)
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -3177,7 +3183,6 @@ export default function DashboardPage() {
     loadData();
     setSelectedClass(null);
   };
-
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
@@ -3196,7 +3201,7 @@ export default function DashboardPage() {
     showToast(`Zaktualizowano czas wypisu z listy rezerwowej na: ${cutoffLabel} przed startem.`);
     setIsEditWaitlistModalOpen(false);
     setEditWaitlistTarget(null);
-    loadData();
+    await loadData();
   };
 
   const handleKlubowiczWypiszSie = async () => {
@@ -3335,7 +3340,7 @@ export default function DashboardPage() {
       ? "Wypisano z zajęć. Trening został automatycznie odwołany z powodu zbyt małej liczby osób (zwrócono wejścia)." 
       : "Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście."
     );
-    loadData();
+    await loadData();
     setSelectedClass(null);
   };
 
@@ -3480,7 +3485,7 @@ export default function DashboardPage() {
       ? "Wypisano z zajęć. Trening został automatycznie odwołany z powodu zbyt małej liczby osób (zwrócono wejścia)." 
       : "Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście."
     );
-    loadData();
+    await loadData();
   };
 
   const handleZapiszKlientaDoZajec = async (klient: any) => {
@@ -3606,7 +3611,7 @@ export default function DashboardPage() {
     const oblozenieStr = `${glownaCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
     const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
     await supabase.from('transakcje').insert([{ klient_id: klient.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
-    setIsSearchingClient(false); setSearchClientQuery(''); loadData();
+    setIsSearchingClient(false); setSearchClientQuery(''); await loadData();
     showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}!`);
   };
 
@@ -3740,12 +3745,13 @@ export default function DashboardPage() {
       
       await handleAutoWypiszPoZablokowaniu(clientToUnregister.id, clientToUnregister, powod, classKey);
     }
-    setClientToUnregister(null); setBlokadaZapisow(false); loadData();
+    setClientToUnregister(null); setBlokadaZapisow(false); await loadData();
     showToast(autoCancelled 
       ? "Wypisano klienta. Trening został automatycznie odwołany ze względu na brak minimalnej liczby uczestników." 
       : "Wypisano klienta z zajęć."
     );
   };
+
   const handlePotwierdzNieobecnosc = async () => {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -3782,7 +3788,7 @@ export default function DashboardPage() {
       
       await handleAutoWypiszPoZablokowaniu(clientToMarkAbsent.id, clientToMarkAbsent, powod, classKey);
     }
-    setClientToMarkAbsent(null); setBlokadaZapisow(false); loadData();
+    setClientToMarkAbsent(null); setBlokadaZapisow(false); await loadData();
     showToast(`Oznaczono nieobecność dla ${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName}.`);
   };
 
@@ -3867,7 +3873,7 @@ export default function DashboardPage() {
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
 
-  // POPRAWIONE I PRECYZYJNE MAPOWANIE AKTYWNYCH ZAPISÓW KLUBOWICZA
+  // MAPOWANIE AKTYWNYCH ZAPISÓW KLUBOWICZA NA CAŁY ROK (2026/2027)
   if (['klubowicz', 'trener'].includes(appRole) && currentUser) {
     const karnety = currentUser.karnetyKlubowicza || [];
     if (karnety.length === 0) { needsNewPass = true; } else {
@@ -3888,7 +3894,7 @@ export default function DashboardPage() {
       if (!hasAnyValid) { needsNewPass = true; }
     }
 
-   prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
+    prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
     const now = new Date();
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
       const mojZapis = Array.isArray(uczestnicy) ? uczestnicy.find((u: any) => String(u.id) === String(currentUser.id)) : null;
@@ -3917,7 +3923,6 @@ export default function DashboardPage() {
                 const progWorkout = getProgrammedWorkout(classInfo, classInfo.isoDateStr, classInfo.displayDateStr);
                 const cancelInfo = getCancelDeadlineInfo(classInfo, classInfo.displayDateStr);
 
-                // DEDUPLIKACJA PO PEŁNEJ DACIE ISO (ROK-MIESIĄC-DZIEŃ) DZIĘKI CZEMU WIDOCZNE SĄ ZAPISY NA CAŁY ROK (2026/2027)
                 if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.isoDateStr === classInfo.isoDateStr)) {
                   myUpcomingClasses.push({
                     ...classInfo,
@@ -4266,7 +4271,6 @@ export default function DashboardPage() {
               )}
             </div>
           </section>
-
           {/* SEKCJA: TWOJE KARNETY */}
           {appRole === 'klubowicz' && (
             <section className="space-y-4">
@@ -4397,6 +4401,11 @@ export default function DashboardPage() {
 
             const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
               .filter((item: any) => item.displayDate === col.date)
+              .map((item: any) => {
+                const classKey = `${item.id}_${col.date}`;
+                const override = nadpisaneZajeciaDni[classKey];
+                return override ? { ...item, ...override } : item;
+              })
               .filter((item: any) => {
                 if (appRole === 'klubowicz' && item.isUsunięte) return false;
                 return true;
@@ -4441,6 +4450,7 @@ export default function DashboardPage() {
                     zajeciaDnia.map((item: any, classIdx: number) => {
                       const durationText = calculateDuration(item.start, item.end);
                       const classKey = `${item.id}_${col.date}`;
+                      const classKeyUnique = `${item.id}_${col.date}_${classIdx}`;
                       const zapisani = zapisyNaZajecia[classKey] || [];
                       const limitZajec = item.limit || 12;
                       const zapisaniGlowna = zapisani.filter((s: any) => s.status === 'zapisany');
@@ -4465,7 +4475,7 @@ export default function DashboardPage() {
                       const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
 
                       const cancelDeadlineInfo = getCancelDeadlineInfo(item, col.date);
-                      const isMenuOpen = activeMenuClassId === classKey;
+                      const isMenuOpen = activeMenuClassId === classKeyUnique;
 
                       return (
                         <div
@@ -4491,6 +4501,8 @@ export default function DashboardPage() {
                           }}
                           style={{ borderTopWidth: '3.5px', borderTopStyle: 'solid', borderTopColor: topColor }}
                           className={`bg-white border rounded-xl p-2.5 space-y-1.5 shadow-sm transition-all relative ${
+                            isMenuOpen ? 'z-[60]' : 'z-10'
+                          } ${
                             isClassCancelled || item.isUsunięte
                               ? 'border-rose-200 opacity-80 cursor-default bg-rose-50/20'
                               : isLockedForClient
@@ -4537,7 +4549,7 @@ export default function DashboardPage() {
                               {appRole === 'admin' && (
                                 <div className="relative" onClick={(e) => e.stopPropagation()}>
                                   <button 
-                                    onClick={() => setActiveMenuClassId(isMenuOpen ? null : classKey)}
+                                    onClick={() => setActiveMenuClassId(isMenuOpen ? null : classKeyUnique)}
                                     className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer text-xs"
                                     title="Ustawienia zajęć"
                                   >
@@ -4545,7 +4557,7 @@ export default function DashboardPage() {
                                   </button>
 
                                   {isMenuOpen && (
-                                    <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50 text-xs">
+                                    <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[100] text-xs">
                                       <button onClick={() => { openHistoryModal(item, col.date); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
                                         🕒 Historia zajęć
                                       </button>
@@ -4641,7 +4653,7 @@ export default function DashboardPage() {
                             </div>
                           ) : isClassCancelled ? (
                             <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200 leading-tight">
-                              {autoCancelStatus.reason || 'ODWOŁANE'}
+                              {autoCancelStatus.reason || 'ODWOŁANE PRZEZ KLUB'}
                             </div>
                           ) : (
                             <div className="flex items-center justify-between gap-1 text-[10px]">
@@ -5329,84 +5341,83 @@ export default function DashboardPage() {
                                       {osoba.pass || 'OPEN'}
                                     </span>
                                   </div>
-                                <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-bold text-slate-700">LIMIT WYPISU:</span> 
-                                  <strong className="text-blue-900">{cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin} min`} przed startem</strong>
-                                  {isThisUserMe && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setEditWaitlistTarget(osoba);
-                                        setEditWaitlistCutoff(cutoffMin);
-                                        setIsEditWaitlistModalOpen(true);
-                                      }}
-                                      className="text-[10px] bg-blue-200 hover:bg-blue-300 text-blue-950 font-bold px-1.5 py-0.2 rounded cursor-pointer transition-colors"
-                                      title="Zmień czas gotowości bez utraty kolejki"
-                                    >
-                                      Zmień ✏️
-                                    </button>
-                                  )}
+                                  <div><span className="font-bold text-slate-700">WAŻNOŚĆ:</span> {osoba.expiresDate || '2026-09-01'}</div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-slate-700">LIMIT WYPISU:</span> 
+                                    <strong className="text-blue-900">{cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin} min`} przed startem</strong>
+                                    {isThisUserMe && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditWaitlistTarget(osoba);
+                                          setEditWaitlistCutoff(cutoffMin);
+                                          setIsEditWaitlistModalOpen(true);
+                                        }}
+                                        className="text-[10px] bg-blue-200 hover:bg-blue-300 text-blue-950 font-bold px-1.5 py-0.2 rounded cursor-pointer transition-colors"
+                                        title="Zmień czas gotowości bez utraty kolejki"
+                                      >
+                                        Zmień ✏️
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
+                                  <div>
+                                    <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
+                                    <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
+                                  </div>
                                 </div>
-                                <div>aktywne zapisy: <strong className="text-sky-900">{prawdziweZapisy}</strong></div>
-                                <div>
-                                  <span className="font-bold text-slate-700">PORTFEL:</span>{' '}
-                                  <span className={portfelColorClass}>{osoba.wallet || '0.00 PLN'}</span>
-                                </div>
-                              </div>
-                            )}
+                              )}
+                            </div>
+                            <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden flex items-center justify-center font-bold text-5xl shrink-0 shadow-sm ${
+                              isMedicover ? 'bg-emerald-100 border-4 border-emerald-500 text-emerald-900' : 'bg-blue-100 border-2 border-blue-500 text-blue-900'
+                            }`}>
+                              {osoba.avatarUrl ? (
+                                <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                              ) : (
+                                '🪑'
+                              )}
+                            </div>
                           </div>
-                          <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden flex items-center justify-center font-bold text-5xl shrink-0 shadow-sm ${
-                            isMedicover ? 'bg-emerald-100 border-4 border-emerald-500 text-emerald-900' : 'bg-blue-100 border-2 border-blue-500 text-blue-900'
-                          }`}>
-                            {osoba.avatarUrl ? (
-                              <img src={osoba.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                            ) : (
-                              '🪑'
-                            )}
-                          </div>
-                        </div>
-                        {canManageClass && (
-                          <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditWaitlistTarget(osoba);
-                                setEditWaitlistCutoff(cutoffMin);
-                                setIsEditWaitlistModalOpen(true);
-                              }}
-                              className="font-bold text-blue-800 hover:text-blue-950 text-[11px] underline cursor-pointer"
-                            >
-                              Wypis: {cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin}m`} przed (Edytuj ✏️)
-                            </button>
-                            <button
-                              onClick={() => setClientToUnregister(osoba)}
-                              className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
-                            >
-                              WYPISZ
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {['klubowicz', 'trener'].includes(appRole) ? (
-              <div className="pt-2">
-                {!isUserSignedUp ? (
-                  (() => {
-                    const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-                    if (wVal < 0) {
-                      return (
-                        <div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
-                          💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
+                          {canManageClass && (
+                            <div className="flex items-center justify-between border-t border-blue-100 pt-3 text-xs">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditWaitlistTarget(osoba);
+                                  setEditWaitlistCutoff(cutoffMin);
+                                  setIsEditWaitlistModalOpen(true);
+                                }}
+                                className="font-bold text-blue-800 hover:text-blue-950 text-[11px] underline cursor-pointer"
+                              >
+                                Wypis: {cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin}m`} przed (Edytuj ✏️)
+                              </button>
+                              <button
+                                onClick={() => setClientToUnregister(osoba)}
+                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
+                              >
+                                WYPISZ
+                              </button>
+                            </div>
+                          )}
                         </div>
                       );
-                    }
-                    
-                    const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
+                    })}
+                  </div>
+                </div>
+              )}
+              {['klubowicz', 'trener'].includes(appRole) ? (
+                <div className="pt-2">
+                  {!isUserSignedUp ? (
+                    (() => {
+                      const wVal = parseFloat(String(currentUser?.wallet || currentUser?.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+                      if (wVal < 0) {
+                        return (
+                          <div className="w-full bg-rose-50 border border-rose-200 text-rose-800 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm">
+                            💸 Zablokowane: Ureguluj portfel ({currentUser.wallet || currentUser.Portfel})
+                          </div>
+                        );
+                      }
+                      const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
                     const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
                     
                     if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
