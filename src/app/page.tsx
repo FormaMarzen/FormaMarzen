@@ -2646,11 +2646,13 @@ export default function DashboardPage() {
     }
   };
 
-  const handleCancelBlock = async (karnetTarget: any) => {
-    if (!profileClient) return;
+const handleCancelBlock = async (karnetTarget: any) => {
+    if (!profileClient || !karnetTarget) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === targetPassId) { return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; }
+      if (k.id === karnetTarget.id) { 
+        return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; 
+      }
       return k;
     });
     const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: null, powodBlokady: null };
