@@ -3,12 +3,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+// Inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Bezpieczny parser danych JSON / JSONB z Supabase
+// Bezpieczny parser JSON / JSONB
 const safeJsonParse = (val: any, fallback: any = []) => {
   if (!val) return fallback;
   if (Array.isArray(val)) return val;
@@ -35,6 +35,137 @@ const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | 
   return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+// Parser dat z obsługą formatów DD.MM.YYYY, YYYY-MM-DD i godzin
+const parseClassDate = (dateStr: string): number => {
+  if (!dateStr) return 0;
+  let d = String(dateStr).trim();
+  
+  const regexFull = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
+  const matchFull = d.match(regexFull);
+  if (matchFull) {
+    const year = matchFull[3];
+    const month = matchFull[2].padStart(2, '0');
+    const day = matchFull[1].padStart(2, '0');
+    const hour = matchFull[4] ? matchFull[4].padStart(2, '0') : '23';
+    const min = matchFull[5] ? matchFull[5].padStart(2, '0') : '59';
+    const parsed = new Date(`${year}-${month}-${day}T${hour}:${min}:00`).getTime();
+    if (!isNaN(parsed)) return parsed;
+  }
+
+  const regexIso = /(\d{4})[\.\-\/](\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
+  const matchIso = d.match(regexIso);
+  if (matchIso) {
+    const year = matchIso[1];
+    const month = matchIso[2].padStart(2, '0');
+    const day = matchIso[3].padStart(2, '0');
+    const hour = matchIso[4] ? matchIso[4].padStart(2, '0') : '23';
+    const min = matchIso[5] ? matchIso[5].padStart(2, '0') : '59';
+    const parsed = new Date(`${year}-${month}-${day}T${hour}:${min}:00`).getTime();
+    if (!isNaN(parsed)) return parsed;
+  }
+
+  const regexShort = /(\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
+  const matchShort = d.match(regexShort);
+  if (matchShort) {
+    const currentYear = new Date().getFullYear();
+    const month = matchShort[2].padStart(2, '0');
+    const day = matchShort[1].padStart(2, '0');
+    const hour = matchShort[3] ? matchShort[3].padStart(2, '0') : '23';
+    const min = matchShort[4] ? matchShort[4].padStart(2, '0') : '59';
+    const parsed = new Date(`${currentYear}-${month}-${day}T${hour}:${min}:00`).getTime();
+    if (!isNaN(parsed)) return parsed;
+  }
+
+  const fallback = new Date(d).getTime();
+  return isNaN(fallback) ? 0 : fallback;
+};
+
+const normalizeDateToIsoDay = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const ms = parseClassDate(dateStr);
+  if (ms > 0) {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  const isoMatch = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  return String(dateStr).trim();
+};
+
+const normalizeClassSignature = (dateStr: string, titleStr: string): string => {
+  const day = normalizeDateToIsoDay(dateStr);
+  const cleanTitle = (titleStr || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${day}_${cleanTitle}`;
+};
+
+// Weryfikacja czy data odpowiada dniom tygodnia przypisanym do szablonu grafiku
+const isDateMatchingScheduleDays = (dateObj: Date, scheduleClass: any): boolean => {
+  if (!scheduleClass) return true;
+  const daysMap: { [key: number]: string[] } = {
+    0: ['niedziela', 'nie', 'sun', 'sunday', '0', '7'],
+    1: ['poniedziałek', 'poniedzialek', 'pon', 'mon', 'monday', '1'],
+    2: ['wtorek', 'wto', 'tue', 'tuesday', '2'],
+    3: ['środa', 'sroda', 'śro', 'sro', 'wed', 'wednesday', '3'],
+    4: ['czwartek', 'czw', 'thu', 'thursday', '4'],
+    5: ['piątek', 'piatek', 'pią', 'pia', 'fri', 'friday', '5'],
+    6: ['sobota', 'sob', 'sat', 'saturday', '6'],
+  };
+  const dayIndex = dateObj.getDay();
+  const validNames = daysMap[dayIndex] || [];
+  
+  const rawDays = scheduleClass.days || scheduleClass.dzien_tygodnia || scheduleClass.dni;
+  if (!rawDays) return true;
+  
+  const parsedDays = safeJsonParse(rawDays, rawDays);
+  if (Array.isArray(parsedDays)) {
+    return parsedDays.some((d: any) => {
+      const str = String(d).trim().toLowerCase();
+      return validNames.includes(str);
+    });
+  }
+  if (typeof parsedDays === 'string') {
+    const str = parsedDays.trim().toLowerCase();
+    return validNames.some(vn => str.includes(vn));
+  }
+  return true;
+};
+
+// Formatowanie daty i czasu treningu
+const formatDisplayClassDate = (dateRaw: string, timeRaw: string = '') => {
+  if (!dateRaw) return { display: '-', sortTime: 0 };
+  const rawCombined = `${dateRaw} ${timeRaw}`.trim();
+  const ms = parseClassDate(rawCombined);
+  if (ms > 0) {
+    const d = new Date(ms);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const hasTime = timeRaw || rawCombined.includes(':');
+    const display = hasTime ? `${yyyy}-${mm}-${dd} ${hh}:${min}` : `${yyyy}-${mm}-${dd}`;
+    return { display, sortTime: ms };
+  }
+  return { display: rawCombined, sortTime: 0 };
+};
+
+// Precyzyjne ustalenie źródła zapisu
+const resolveZapisujacy = (item: any, isAuto: boolean) => {
+  if (isAuto) {
+    return { label: '🛡️ Zapis automatyczny (Klub)', isClient: false };
+  }
+  const author = String(item?.zapisujacy || '').trim();
+  const authorLow = author.toLowerCase();
+  
+  if (authorLow === 'klubowicz' || authorLow === 'użytkownik' || authorLow === 'sam' || authorLow.includes('klubowicz (aplikacja)')) {
+    return { label: '📱 Klubowicz', isClient: true };
+  }
+  if (authorLow.includes('admin') || authorLow.includes('trener') || authorLow.includes('zarządca') || authorLow.includes('klub') || authorLow.includes('panel')) {
+    return { label: '🛡️ Panel Administratora', isClient: false };
+  }
+  return { label: author ? `🛡️ ${author}` : '🛡️ Panel Administratora', isClient: false };
+};
+
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -43,7 +174,7 @@ export default function KlienciPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
   
-  // Dane grafiku i zapisów do pełnej synchronizacji
+  // Dane grafiku i zapisów
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
   const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
   const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
@@ -70,7 +201,7 @@ export default function KlienciPage() {
   const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 4 ZAKŁADKI W SEKCJI AKTYWNOŚĆ KLUBOWICZA
+  // 4 Zakładki Aktywności Klubowicza
   const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'historia_zajec' | 'ruchy' | 'zawieszenia'>('nadchodzace');
 
   const [isWalletHistoryOpen, setIsWalletHistoryOpen] = useState(false);
@@ -78,7 +209,7 @@ export default function KlienciPage() {
   const [walletAmountInput, setWalletAmountInput] = useState('');
   const [walletReasonInput, setWalletReasonInput] = useState('');
 
-  // STANY DLA ZAWIESZEŃ I BLOKAD
+  // Stany dla zawieszeń i blokad
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
   const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
@@ -101,14 +232,13 @@ export default function KlienciPage() {
   const [newPassCustomSuspensionDays, setNewPassCustomSuspensionDays] = useState('30');
   const [newPassCustomPrice, setNewPassCustomPrice] = useState('');
 
-  // STANY RABATÓW
+  // Stany rabatów
   const [isEditingDiscount, setIsEditingDiscount] = useState(false);
   const [discountInput, setDiscountInput] = useState('');
-
   const [isEditingSystemDiscount, setIsEditingSystemDiscount] = useState(false);
   const [systemDiscountInput, setSystemDiscountInput] = useState('');
 
-  // STAN DLA HISTORII ZAKUPIONYCH KARNETÓW W PROFILU
+  // Historia kupionych karnetów
   const [isPassHistoryOpen, setIsPassHistoryOpen] = useState(false);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -127,110 +257,6 @@ export default function KlienciPage() {
     customContractPrice: ''
   });
 
-  // KULOODPORNY PARSER DAT
-  const parseClassDate = (dateStr: string): number => {
-    if (!dateStr) return 0;
-    let d = String(dateStr).trim();
-    
-    // DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY z opcjonalną godziną
-    const regexFull = /(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/;
-    const matchFull = d.match(regexFull);
-    if (matchFull) {
-      const year = matchFull[3];
-      const month = matchFull[2].padStart(2, '0');
-      const day = matchFull[1].padStart(2, '0');
-      const hour = matchFull[4] ? matchFull[4].padStart(2, '0') : '23';
-      const min = matchFull[5] ? matchFull[5].padStart(2, '0') : '59';
-      const parsed = new Date(`${year}-${month}-${day}T${hour}:${min}:00`).getTime();
-      if (!isNaN(parsed)) return parsed;
-    }
-
-    // Format YYYY-MM-DD
-    const regexIso = /(\d{4})[\.\-\/](\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
-    const matchIso = d.match(regexIso);
-    if (matchIso) {
-      const year = matchIso[1];
-      const month = matchIso[2].padStart(2, '0');
-      const day = matchIso[3].padStart(2, '0');
-      const hour = matchIso[4] ? matchIso[4].padStart(2, '0') : '23';
-      const min = matchIso[5] ? matchIso[5].padStart(2, '0') : '59';
-      const parsed = new Date(`${year}-${month}-${day}T${hour}:${min}:00`).getTime();
-      if (!isNaN(parsed)) return parsed;
-    }
-
-    // Format DD/MM lub DD.MM
-    const regexShort = /(\d{1,2})[\.\-\/](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/;
-    const matchShort = d.match(regexShort);
-    if (matchShort) {
-      const currentYear = new Date().getFullYear();
-      const month = matchShort[2].padStart(2, '0');
-      const day = matchShort[1].padStart(2, '0');
-      const hour = matchShort[3] ? matchShort[3].padStart(2, '0') : '23';
-      const min = matchShort[4] ? matchShort[4].padStart(2, '0') : '59';
-      const parsed = new Date(`${currentYear}-${month}-${day}T${hour}:${min}:00`).getTime();
-      if (!isNaN(parsed)) return parsed;
-    }
-
-    const fallback = new Date(d).getTime();
-    return isNaN(fallback) ? 0 : fallback;
-  };
-
-  // HELPER UNIFIKACJI DATY I SYGNATURY DEDUKUJĄCEJ DUPLIKATY
-  const normalizeDateToIsoDay = (dateStr: string): string => {
-    if (!dateStr) return '';
-    const ms = parseClassDate(dateStr);
-    if (ms > 0) {
-      const d = new Date(ms);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }
-    const isoMatch = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-    return String(dateStr).trim();
-  };
-
-  const normalizeClassSignature = (dateStr: string, titleStr: string): string => {
-    const day = normalizeDateToIsoDay(dateStr);
-    const cleanTitle = (titleStr || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    return `${day}_${cleanTitle}`;
-  };
-
-  // FORMATOWANIE DATY TRENINGU WIDOCZNEJ DLA UŻYTKOWNIKA
-  const formatDisplayClassDate = (dateRaw: string, timeRaw: string = '') => {
-    if (!dateRaw) return { display: '-', sortTime: 0 };
-    const rawCombined = `${dateRaw} ${timeRaw}`.trim();
-    const ms = parseClassDate(rawCombined);
-    if (ms > 0) {
-      const d = new Date(ms);
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      const hh = String(d.getHours()).padStart(2, '0');
-      const min = String(d.getMinutes()).padStart(2, '0');
-      const hasTime = timeRaw || rawCombined.includes(':');
-      const display = hasTime ? `${yyyy}-${mm}-${dd} ${hh}:${min}` : `${yyyy}-${mm}-${dd}`;
-      return { display, sortTime: ms };
-    }
-    return { display: rawCombined, sortTime: 0 };
-  };
-
-  // PRECYZYJNE USTALENIE AUTORA ZAPISU (KLUBOWICZ VS PANEL KLUBU)
-  const resolveZapisujacy = (item: any, isAuto: boolean) => {
-    if (isAuto) {
-      return { label: '🛡️ Zapis automatyczny (Klub)', isClient: false };
-    }
-    const author = String(item?.zapisujacy || '').trim();
-    const authorLow = author.toLowerCase();
-    
-    if (authorLow === 'klubowicz' || authorLow === 'użytkownik' || authorLow === 'sam' || authorLow.includes('klubowicz (aplikacja)')) {
-      return { label: '📱 Klubowicz', isClient: true };
-    }
-    if (authorLow.includes('admin') || authorLow.includes('trener') || authorLow.includes('zarządca') || authorLow.includes('klub') || authorLow.includes('panel')) {
-      return { label: '🛡️ Panel Administratora', isClient: false };
-    }
-    return { label: author ? `🛡️ ${author}` : '🛡️ Panel Administratora', isClient: false };
-  };
-
-  // HELPERY SYNCHRONIZACJI DATY WAŻNOŚCI I CENY DO SUPABASE
   const getLatestPassExpiry = (passes: any[]): string | null => {
     if (!passes || passes.length === 0) return null;
     const validDates = passes
@@ -248,7 +274,6 @@ export default function KlienciPage() {
     return latest?.cena || '0.00 PLN';
   };
 
-  // FUNKCJE POMOCNICZE I RABATOWE
   const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
 
   const calculateStandardSystemDiscount = (client: any) => {
@@ -297,7 +322,6 @@ export default function KlienciPage() {
     return calculateSystemDiscount(client);
   };
 
-  // AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ
   const promoteWaitlistForClass = async (classKey: string) => {
     const { data: participants } = await supabase
       .from('zapisy_zajec')
@@ -347,18 +371,9 @@ export default function KlienciPage() {
         class_key: classKey,
         opis: `Automatyczny awans: ${name} przepisany z listy rezerwowej (krzesełka) na listę główną.`
       }]);
-
-      await supabase.from('booking_logs').insert([{
-        action_type: 'WAITLIST_PROMOTED',
-        status: 'SUCCESS',
-        reason: `${name} awansował na listę główną w ${classKey}`,
-        rule_applied: 'waitlist_auto_promote',
-        payload: { klient_id: firstWaitlist.klient_id, class_key: classKey }
-      }]);
     }
   };
 
-  // AUTOMATYCZNE WYPISYWANIE PO BLOKADZIE
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -409,7 +424,6 @@ export default function KlienciPage() {
     }
   };
 
-  // AUTOMATYCZNE WYPISYWANIE PO ZAWIESZENIU
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -471,7 +485,6 @@ export default function KlienciPage() {
     }
   };
 
-  // WYPISANIE POJEDYNCZE Z ZAJĘĆ (W TYM ZAPISÓW AUTOMATYCZNYCH)
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
 
@@ -542,7 +555,6 @@ export default function KlienciPage() {
     loadData();
   };
 
-  // MASOWE WYPISANIE ZE WSZYSTKICH NADCHODZĄCYCH ZAJĘĆ
   const handleWypiszWszystkieNadchodzace = async (upcomingItems: any[]) => {
     if (!profileClient || !upcomingItems || upcomingItems.length === 0) return;
 
@@ -1669,7 +1681,6 @@ export default function KlienciPage() {
     (c.phone || '').includes(searchQuery)
   );
 
-  // LOGIKA SORTOWANIA GŁÓWNEJ TABELI KLIENTÓW
   const sortedClients = [...filteredClients].sort((a, b) => {
     if (!sortField) {
       const expA = a.expiresDate || a.Wygasa || a.karnetyKlubowicza?.[0]?.waznyDo || '';
@@ -2452,16 +2463,28 @@ export default function KlienciPage() {
                           const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
                           const override = nadpisaneZajeciaDni[z.class_key];
                           const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+                          
+                          // Pomijaj zajęcia oznaczone jako odwołane lub usunięte
+                          if (classInfo?.is_odwolane || classInfo?.is_usuniete) return;
+
                           const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
                           const timeStr = timePart || classInfo?.start_time || classInfo?.start || '';
 
                           const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(datePart, timeStr);
                           
+                          // WERYFIKACJA DNI TYGODNIA: Filtrujemy tylko rzeczywiste dni wg szablonu grafiku
+                          if (classStartMs > 0 && stdClass && !jednorazClass) {
+                            const classDateObj = new Date(classStartMs);
+                            if (!isDateMatchingScheduleDays(classDateObj, stdClass)) {
+                              return; // Odrzucamy dni poza harmonogramem
+                            }
+                          }
+
                           if (classStartMs >= nowTime) {
                             const uniqueKey = z.class_key || `${z.id}`;
                             const sig = normalizeClassSignature(displayDate, title);
                             
-                            // Weryfikacja zapisu automatycznego
+                            // Weryfikacja reguły zapisu automatycznego
                             const isAutoEnrolled = clientAutoEnrollments.some((az: any) => {
                               const matchId = String(az.grafik_id) === String(classId);
                               const matchTitle = az.class_title && title && az.class_title.trim().toLowerCase() === title.trim().toLowerCase();
@@ -2526,7 +2549,7 @@ export default function KlienciPage() {
                         }
                       });
 
-                      // C. Fallback dla szablonu z automatycznych zapisów (gdy baza nie ma wygenerowanych instancji)
+                      // C. Fallback dla szablonu z automatycznych zapisów
                       if (upcomingMap.size === 0) {
                         clientAutoEnrollments.forEach((az: any) => {
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
@@ -3757,49 +3780,46 @@ export default function KlienciPage() {
                 </select>
               </div>
 
-              {newClient.isContractMigration && (() => {
-                const addModalTargetDef = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
-                return (
-                  <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
-                    <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
-                      Parametry umowy 12M (indywidualna oferta):
-                    </div>
+              {newClient.isContractMigration && (
+                <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                  <div className="font-black text-amber-900 uppercase tracking-wider text-[10px]">
+                    Parametry umowy 12M (indywidualna oferta):
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block text-[10px]">Indywidualna kwota raty (PLN / m-c)</label>
+                    <input 
+                      type="number"
+                      step="0.01"
+                      placeholder="np. 119.00"
+                      value={newClient.customContractPrice}
+                      onChange={(e) => setNewClient({...newClient, customContractPrice: e.target.value})}
+                      className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
-                      <label className="font-bold text-slate-700 block text-[10px]">Indywidualna kwota raty (PLN / m-c)</label>
+                      <label className="font-bold text-slate-700 block text-[10px]">Numer raty (np. 4 / 12)</label>
                       <input 
-                        type="number"
-                        step="0.01"
-                        placeholder={addModalTargetDef ? addModalTargetDef.cena : "np. 119.00"}
-                        value={newClient.customContractPrice}
-                        onChange={(e) => setNewClient({...newClient, customContractPrice: e.target.value})}
-                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                        type="text" 
+                        value={newClient.customRata} 
+                        onChange={(e) => setNewClient({...newClient, customRata: e.target.value})} 
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="font-bold text-slate-700 block text-[10px]">Numer raty (np. 4 / 12)</label>
-                        <input 
-                          type="text" 
-                          value={newClient.customRata} 
-                          onChange={(e) => setNewClient({...newClient, customRata: e.target.value})} 
-                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="font-bold text-slate-700 block text-[10px]">Pozostałe dni zawieszenia</label>
-                        <input 
-                          type="number" 
-                          min="0" 
-                          max="30"
-                          value={newClient.customSuspensionDays} 
-                          onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})} 
-                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
-                        />
-                      </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block text-[10px]">Pozostałe dni zawieszenia</label>
+                      <input 
+                        type="number" 
+                        min="0" 
+                        max="30"
+                        value={newClient.customSuspensionDays} 
+                        onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})} 
+                        className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
+                      />
                     </div>
                   </div>
-                );
-              })()}
+                </div>
+              )}
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsAddModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors whitespace-nowrap">Anuluj</button>
