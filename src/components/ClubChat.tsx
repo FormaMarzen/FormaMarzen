@@ -387,7 +387,7 @@ export default function ClubChat() {
     initUser();
   }, []);
 
-  // Pobieranie grup
+  // Pobieranie grup (bezpieczne bez auto-nadpisywania selectedGroup)
   const fetchGroups = async () => {
     if (!currentUserId) return;
     try {
@@ -398,10 +398,6 @@ export default function ClubChat() {
 
       if (!error && data) {
         setGroups(data);
-        if (selectedGroup) {
-          const updated = data.find((g: any) => g.id === selectedGroup.id);
-          if (updated) setSelectedGroup(updated);
-        }
       }
     } catch (err) {
       console.error("Błąd pobierania grup:", err);
@@ -1044,11 +1040,11 @@ export default function ClubChat() {
           } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
         >
           {/* NAGŁÓWEK CZATU */}
-          <div className="bg-slate-900 text-white px-4 py-3.5 flex items-center justify-between shadow-sm select-none">
-            <div className="flex items-center gap-2.5 overflow-hidden">
+          <div className="bg-slate-900 text-white px-3.5 py-3 flex items-center justify-between shadow-sm select-none">
+            <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0 mr-2">
               {selectedUser || selectedGroup ? (
                 <>
-                  {/* WYRAŹNY PRZYCISK POWROTU Z STOP PROPAGATION */}
+                  {/* PRZYCISK POWROTU */}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1058,7 +1054,7 @@ export default function ClubChat() {
                       setSelectedGroup(null);
                       setChatInsideTab("messages");
                     }}
-                    className="bg-amber-400 hover:bg-amber-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 transition-all cursor-pointer shadow-md shrink-0 border border-amber-300"
+                    className="bg-amber-400 hover:bg-amber-500 text-slate-950 px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 transition-all cursor-pointer shadow-md shrink-0 border border-amber-300"
                     title="Wróć do listy"
                   >
                     <span>◀</span> Wróć
@@ -1069,13 +1065,11 @@ export default function ClubChat() {
                       <div className="w-7 h-7 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0 overflow-hidden">
                         {renderGroupIcon(selectedGroup.ikona, selectedGroup.typ)}
                       </div>
-                      <div className="overflow-hidden flex items-center gap-1">
-                        <div>
-                          <div className="font-bold text-xs truncate max-w-[110px]">{selectedGroup.nazwa}</div>
-                          <div className="text-[9px] text-amber-400 font-medium flex items-center gap-1">
-                            <span>{selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"}</span>
-                            <span>•</span>
-                            <span>{Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} os.</span>
+                      <div className="overflow-hidden flex items-center gap-1 min-w-0 flex-1">
+                        <div className="truncate min-w-0 flex-1">
+                          <div className="font-bold text-xs truncate">{selectedGroup.nazwa}</div>
+                          <div className="text-[9px] text-amber-400 font-medium truncate">
+                            {selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"} • {Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} os.
                           </div>
                         </div>
                         {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
@@ -1087,7 +1081,7 @@ export default function ClubChat() {
                               setEditGroupIcon(selectedGroup.ikona || "🏋️‍♂️");
                               setShowEditGroupModal(true);
                             }}
-                            className="text-slate-400 hover:text-amber-400 p-1 text-xs cursor-pointer"
+                            className="text-slate-400 hover:text-amber-400 p-1 text-xs cursor-pointer shrink-0"
                             title="Edytuj nazwę lub ikonę grupy"
                           >
                             ✏️
@@ -1106,14 +1100,14 @@ export default function ClubChat() {
                           <span>👤</span>
                         )}
                       </div>
-                      <div className="overflow-hidden">
-                        <div className="font-bold text-xs truncate max-w-[140px]">{selectedUser.name}</div>
-                        <div className="text-[9px] font-medium flex items-center gap-1">
+                      <div className="overflow-hidden min-w-0 flex-1">
+                        <div className="font-bold text-xs truncate">{selectedUser.name}</div>
+                        <div className="text-[9px] font-medium truncate">
                           {Number(selectedUser.id) === SYSTEM_ID ? (
                             <span className="text-amber-400 font-bold">System</span>
                           ) : (
                             <span className="text-emerald-400 flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {formatLastSeen(selectedUser.last_seen)}
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span> {formatLastSeen(selectedUser.last_seen)}
                             </span>
                           )}
                         </div>
@@ -1132,7 +1126,7 @@ export default function ClubChat() {
               )}
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1 shrink-0">
               {selectedGroup && (
                 <button
                   type="button"
@@ -1140,14 +1134,14 @@ export default function ClubChat() {
                     e.stopPropagation();
                     handleToggleMuteGroup();
                   }}
-                  className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                  className={`text-xs px-2 py-1.5 rounded-lg border transition-colors ${
                     isCurrentGroupMuted
-                      ? "bg-rose-950/60 text-rose-300 border-rose-800"
+                      ? "bg-rose-950/80 text-rose-300 border-rose-800"
                       : "bg-slate-800 text-slate-300 border-slate-700"
                   }`}
-                  title={isCurrentGroupMuted ? "Włącz powiadomienia Push" : "Wycisz powiadomienia Push"}
+                  title={isCurrentGroupMuted ? "Włącz powiadomienia" : "Wycisz powiadomienia"}
                 >
-                  {isCurrentGroupMuted ? "🔕 Wyciszone" : "🔔 Powiadomienia"}
+                  {isCurrentGroupMuted ? "🔕" : "🔔"}
                 </button>
               )}
               {selectedGroup && selectedGroup.typ === "publiczna" && !isAdmin && (
@@ -1157,7 +1151,7 @@ export default function ClubChat() {
                     e.stopPropagation();
                     handleToggleGroupMembership(selectedGroup, false);
                   }}
-                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-1 rounded-lg border border-rose-800 transition-colors"
+                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-800 transition-colors"
                   title="Opuść tę grupę"
                 >
                   Opuść
