@@ -392,7 +392,7 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // PRECYZYJNY HELPER ROZWIĄZYWANIA SZCZEGÓŁÓW ZAJĘĆ Z DOPASOWANIEM DNIA TYGODNIA I DATY
+// PRECYZYJNY HELPER ROZWIĄZYWANIA SZCZEGÓŁÓW ZAJĘĆ (ŚCISŁE DOPASOWANIE DNIA TYGODNIA)
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
     let d = 1, m = 1;
@@ -413,27 +413,25 @@ export default function DashboardPage() {
 
     const dayDate = new Date(year, m - 1, d);
     const dayOfWeek = dayDate.getDay();
+    // 0 = nd, 1 = pon, 2 = wt, 3 = sr, 4 = czw, 5 = pt, 6 = sob
     const dayKeys = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sob'];
     const dayKey = dayKeys[dayOfWeek] || 'pon';
     const displayDateStr = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
     const isoDateStr = `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-    // 1. Sprawdzamy najpierw zajęcia jednorazowe przypisane dokładnie do tej daty
+    // 1. Sprawdzamy zajęcia jednorazowe przypisane dokładnie do tej daty
     const jednorazClass = jednorazoweZajecia.find(j => 
       String(j.id) === String(classId) && 
       (j.displayDate === displayDateStr || j.displayDate === dateStr || j.fullDateStr === isoDateStr || j.fullDateStr === dateStr)
     );
 
-    // 2. Sprawdzamy szablon grafiku stałego, który faktycznie odbywa się w ten dzień tygodnia
+    // 2. Sprawdzamy szablon grafiku stałego TYLKO jeśli ma aktywny ten konkretny dzień tygodnia
     const stdClass = zapisaneZajecia.find(z => 
       String(z.id) === String(classId) && z.days && z.days[dayKey] === true
     );
 
-    // 3. Fallback jeśli nie dopasowano po dacie/dniu
-    const fallbackJednoraz = jednorazoweZajecia.find(j => String(j.id) === String(classId));
-    const fallbackStd = zapisaneZajecia.find(z => String(z.id) === String(classId));
-
-    let baseClass = jednorazClass || stdClass || fallbackJednoraz || fallbackStd;
+    const baseClass = jednorazClass || stdClass;
+    // Jeśli zajęcia nie odbywają się w ten dzień tygodnia – odrzucamy (brak błędnego fallbacku)
     if (!baseClass) return null;
 
     const classKey = `${classId}_${dateStr}`;
@@ -442,7 +440,15 @@ export default function DashboardPage() {
       nadpisaneZajeciaDni[`${classId}_${isoDateStr}`];
 
     if (override) {
-      baseClass = { ...baseClass, ...override };
+      if (override.isUsunięte) return null;
+      return {
+        ...baseClass,
+        ...override,
+        targetDayDate: dayDate,
+        displayDateStr,
+        isoDateStr,
+        dayKey
+      };
     }
 
     return {
