@@ -17,6 +17,7 @@ interface Klient {
   wzrost?: number | null;
   avatarUrl?: string;
   AvatarUrl?: string;
+  portfel?: number | null;
 }
 
 interface AnalizaFormyWpis {
@@ -25,6 +26,7 @@ interface AnalizaFormyWpis {
   klient_id: number;
   email_klienta: string;
   data_pomiaru: string;
+  miejsce_pomiaru?: string | null;
   wzrost?: number | null;
   obwod_pasa?: number | null;
   klatka?: number | null;
@@ -54,8 +56,9 @@ interface RedukcjaEdycja {
   data_start: string;
   data_koniec: string;
   wpisowe_kwota: number;
+  min_uczestnikow?: number;
   opis: string;
-  status: 'zapisy' | 'aktywne' | 'zakonczone';
+  status: 'zapisy' | 'aktywne' | 'zakonczone' | 'anulowane';
 }
 
 interface RedukcjaUczestnik {
@@ -90,7 +93,6 @@ interface RedukcjaNagroda {
   opis?: string;
 }
 
-// Funkcja pomocnicza do bezpiecznego wyliczania wieku na podstawie daty urodzenia
 const calculateAge = (birthDateString?: string | null): number | null => {
   if (!birthDateString) return null;
   const birth = new Date(birthDateString);
@@ -188,8 +190,9 @@ export default function AnalizaFormyPage() {
     data_start: new Date().toISOString().split('T')[0],
     data_koniec: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     wpisowe_kwota: "30.00",
+    min_uczestnikow: "5",
     opis: "Wspólne wyzwanie utraty tkanki tłuszczowej. Pomiary na analizatorze na początku i końcu wyzwania.",
-    status: 'aktywne'
+    status: 'aktywne' as 'aktywne' | 'zapisy' | 'zakonczone' | 'anulowane'
   });
 
   const [redukcjaPomiarForm, setRedukcjaPomiarForm] = useState({
@@ -202,6 +205,8 @@ export default function AnalizaFormyPage() {
 
   const [formData, setFormData] = useState({
     data_pomiaru: new Date().toISOString().split('T')[0],
+    miejsce_typ: 'STUDIO' as 'STUDIO' | 'INNE',
+    miejsce_inne_opis: '',
     wzrost: '',
     waga: '',
     obwod_pasa: '',
@@ -325,7 +330,7 @@ export default function AnalizaFormyPage() {
         );
         setEdycjeRedukcji(sorted);
         if (!selectedEdycjaId) {
-          const active = sorted.find((e: any) => e.status !== 'zakonczone') || sorted[0];
+          const active = sorted.find((e: any) => e.status !== 'zakonczone' && e.status !== 'anulowane') || sorted[0];
           setSelectedEdycjaId(active.id);
           await loadEdycjaDetails(active.id);
         } else {
@@ -418,10 +423,15 @@ export default function AnalizaFormyPage() {
 
     setIsSubmitting(true);
 
+    const computedMiejsce = formData.miejsce_typ === 'STUDIO' 
+      ? 'STUDIO' 
+      : (formData.miejsce_inne_opis.trim() || 'Inne');
+
     const payload = {
       klient_id: targetKlientId,
       email_klienta: targetEmail,
       data_pomiaru: formData.data_pomiaru,
+      miejsce_pomiaru: computedMiejsce,
       wzrost: formData.wzrost ? parseFloat(formData.wzrost) : null,
       waga: parseFloat(formData.waga),
       obwod_pasa: formData.obwod_pasa ? parseFloat(formData.obwod_pasa) : null,
@@ -496,6 +506,7 @@ export default function AnalizaFormyPage() {
       data_start: edycjaFormData.data_start,
       data_koniec: edycjaFormData.data_koniec,
       wpisowe_kwota: parseFloat(edycjaFormData.wpisowe_kwota) || 30.00,
+      min_uczestnikow: parseInt(edycjaFormData.min_uczestnikow) || 5,
       opis: edycjaFormData.opis.trim(),
       status: edycjaFormData.status
     }]).select();
@@ -521,8 +532,62 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // Automatyczny zwrot wpisowego do portfela klubowicza przy niespełnionym limicie
+  const handleCancelAndRefundEdycja = async (edycja: RedukcjaEdycja) => {
+    const oplaceniUczestnicy = (uczestnicyRedukcji || []).filter(u => u.oplacone);
+    const kwotaZwrotu = Number(edycja.wpisowe_kwota) || 30.00;
+
+    const potw = confirm(
+      `Minimalna liczba osób (${edycja.min_uczestnikow || 0}) nie została osiągnięta.\n\nCzy chcesz odwołać to wyzwanie i automatycznie zwrócić wpisowe (${kwotaZwrotu} zł) do portfela każdego z ${oplaceniUczestnicy.length} opłaconych uczestników?`
+    );
+    if (!potw) return;
+
+    setIsLoading(true);
+    try {
+      for (const u of oplaceniUczestnicy) {
+        // 1. Zwiększenie salda portfela klubowicza
+        const { data: klientData } = await supabase
+          .from('klienci')
+          .select('id, portfel, "E-mail"')
+          .eq('id', u.klient_id)
+          .maybeSingle();
+
+        if (klientData) {
+          const currentWallet = Number(klientData.portfel) || 0;
+          await supabase
+            .from('klienci')
+            .update({ portfel: currentWallet + kwotaZwrotu })
+            .eq('id', u.klient_id);
+
+          // 2. Dodanie powiadomienia wewnętrznego dla klubowicza
+          await supabase.from('powiadomienia').insert([{
+            klient_id: u.klient_id,
+            email: klientData['E-mail'] || '',
+            tytul: `Zwrot wpisowego: ${edycja.nazwa}`,
+            tresc: `Wyzwanie "${edycja.nazwa}" nie osiągnęło minimalnej liczby uczestników (${edycja.min_uczestnikow || 0} osób). Kwota wpisowego (${kwotaZwrotu} zł) została zwrócona do Twojego portfela klubowicza.`,
+            przeczytane: false
+          }]);
+        }
+      }
+
+      // 3. Zmiana statusu wyzwania na 'anulowane'
+      await supabase
+        .from('klub_redukcja_edycje')
+        .update({ status: 'anulowane' })
+        .eq('id', edycja.id);
+
+      alert(`Wyzwanie zostało odwołane. Zwrócono środki do portfeli ${oplaceniUczestnicy.length} klubowiczów oraz wysłano powiadomienia.`);
+      await fetchRedukcjaData();
+    } catch (err: any) {
+      console.error("Błąd podczas procedury zwrotu:", err);
+      alert("Wystąpił błąd podczas zwrotu środków: " + err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleDeleteEdycja = async (id: number) => {
-    if (!confirm("Czy na pewno chcesz CAŁOWICIE USUNĄĆ to wyzwanie oraz wszystkich jego uczestników i pomiary? Operacji tej nie można cofnąć!")) return;
+    if (!confirm("Czy na pewno chcesz CAŁKOWICIE USUNĄĆ to wyzwanie oraz wszystkich jego uczestników i pomiary? Operacji tej nie można cofnąć!")) return;
     const { error } = await supabase
       .from('klub_redukcja_edycje')
       .delete()
@@ -569,7 +634,7 @@ export default function AnalizaFormyPage() {
     }]);
 
     if (!error) {
-      alert("Klubowicz został pomyślnie dodany do wyzwania!");
+      alert("Klubowicz został pomyślnie dodany do wyzwania! (Kwota wpisowego trafia do kasy klubu)");
       setIsManualAddModalOpen(false);
       setManualAddKlientId('');
       await loadEdycjaDetails(selectedEdycjaId);
@@ -623,7 +688,7 @@ export default function AnalizaFormyPage() {
           userId: selectedKlient?.id || currentUserId,
           description: description,
           email: selectedKlient ? selectedKlient['E-mail'] : currentUserEmail,
-          type: type,
+          type: type, // 'redukcja_fee' – nie doładowuje portfela, zasila kasę klubu
           edycja_id: selectedEdycjaId
         })
       });
@@ -692,7 +757,7 @@ export default function AnalizaFormyPage() {
       }], { onConflict: 'edycja_id,klient_id' });
 
       if (!error) {
-        alert("Zostałeś zarejestrowany! Wybrałeś płatność gotówką na recepcji — poproś trenera o potwierdzenie wpłaty.");
+        alert("Zostałeś zarejestrowany! Wybrałeś płatność gotówką na recepcji — wpłata trafia do kasy klubu po zatwierdzeniu przez trenera.");
         setIsJoinModalOpen(false);
         await loadEdycjaDetails(selectedEdycjaId);
       } else {
@@ -784,14 +849,6 @@ export default function AnalizaFormyPage() {
   const activeUserKlientId = selectedKlient?.id || currentUserId;
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
   const activeUserParticipant = (uczestnicyRedukcji || []).find(u => String(u.klient_id) === String(activeUserKlientId));
-
-  const wszystkyEdycjeDoWyboru = useMemo(() => {
-    return (edycjeRedukcji || []).sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
-  }, [edycjeRedukcji]);
-
-  const archiwalneEdycje = useMemo(() => {
-    return (edycjeRedukcji || []).filter(e => e.status === 'zakonczone');
-  }, [edycjeRedukcji]);
 
   const formatParticipantDisplayName = (fullName: string) => {
     if (appRole === 'admin' || isCurrentUserJoined) {
@@ -912,7 +969,6 @@ export default function AnalizaFormyPage() {
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
-  // Rozszerzony kalkulator zapotrzebowania Katch-McArdle + Wiek/Wzrost (Mifflin) + Woda
   const calculateKatchMcArdle = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
     const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
@@ -933,7 +989,6 @@ export default function AnalizaFormyPage() {
       bmr *= 0.96;
     }
 
-    // Dodatkowy wskaźnik referencyjny Mifflin-St Jeor (jeśli podano wzrost i wiek)
     let bmrMifflin: number | null = null;
     if (h > 0 && a > 0) {
       if (calcGender === 'kobieta') {
@@ -952,8 +1007,6 @@ export default function AnalizaFormyPage() {
     const fatKcal = fatG * 9;
     const remainingKcal = Math.max(0, targetKcal - proteinKcal - fatKcal);
     const carbsG = Math.round(remainingKcal / 4);
-
-    // Zapotrzebowanie na wodę (35 ml / kg mc)
     const waterMl = Math.round(w * 35);
 
     setCalcResult({
@@ -1102,6 +1155,8 @@ export default function AnalizaFormyPage() {
                 setEditingMeasurementId(null);
                 setFormData({
                   data_pomiaru: new Date().toISOString().split('T')[0],
+                  miejsce_typ: 'STUDIO',
+                  miejsce_inne_opis: '',
                   wzrost: selectedKlient?.wzrost ? String(selectedKlient.wzrost) : (measurements[0]?.wzrost ? String(measurements[0].wzrost) : ''),
                   waga: '',
                   obwod_pasa: '',
@@ -1406,16 +1461,16 @@ export default function AnalizaFormyPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse min-w-[1000px]">
+              <table className="w-full text-xs text-left border-collapse min-w-[1100px]">
                 <thead>
                   <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
-                    <th className="p-3 border-r border-sky-900 sticky left-0 bg-sky-950 z-10">Data</th>
+                    <th className="p-3 border-r border-sky-900 sticky left-0 bg-sky-950 z-10">Data i Miejsce</th>
                     <th className="p-3 border-r border-sky-900 bg-sky-900/40 text-center" colSpan={7}>Obwody Centymetrem (cm)</th>
                     <th className="p-3 border-r border-sky-900 bg-slate-800/60 text-center" colSpan={7}>Analiza Składu Ciała</th>
                     <th className="p-3 text-center">Akcje / Edycja</th>
                   </tr>
                   <tr className="bg-sky-50 text-slate-700 font-bold border-b border-sky-200 text-[11px]">
-                    <th className="p-2.5 border-r border-sky-200 sticky left-0 bg-sky-50 z-10">Data pomiaru</th>
+                    <th className="p-2.5 border-r border-sky-200 sticky left-0 bg-sky-50 z-10">Data / Lokalizacja</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Obw. pasa</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Klatka</th>
                     <th className="p-2.5 border-r border-sky-100 text-center">Ramię</th>
@@ -1435,72 +1490,90 @@ export default function AnalizaFormyPage() {
                 </thead>
                 <tbody className="divide-y divide-sky-100">
                   {measurements.length > 0 ? (
-                    measurements.map((m) => (
-                      <tr key={m.id} className="hover:bg-sky-50/50 transition-colors">
-                        <td className="p-3 font-black text-sky-950 border-r border-sky-100 sticky left-0 bg-white z-10 whitespace-nowrap">
-                          {m.data_pomiaru}
-                        </td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.obwod_pasa || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.klatka || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.ramie || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.talia || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.biodra || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.udo || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.lydka || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100 font-black text-sky-950">{m.waga}</td>
-                        <td className="p-3 text-center border-r border-sky-100 font-semibold">{m.tkanka_tluszczowa ? `${m.tkanka_tluszczowa}%` : '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.miesnie || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.kosci || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
-                        <td className="p-3 text-center border-r border-sky-200">{m.tluszcz_wisceralny || '-'}</td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => {
-                                setEditingMeasurementId(m.id);
-                                setFormData({
-                                  data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
-                                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : ''),
-                                  waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
-                                  obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
-                                  klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
-                                  ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
-                                  talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
-                                  biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
-                                  udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
-                                  lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
-                                  tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
-                                  miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
-                                  kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
-                                  wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
-                                  woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
-                                  tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
-                                  kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
-                                  bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
-                                  tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
-                                  weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
-                                  uwagi_trenera: m.uwagi_trenera || '',
-                                  notatki_klubowicza: m.notatki_klubowicza || ''
-                                });
-                                setIsAddModalOpen(true);
-                              }}
-                              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                              title="Edytuj ten wpis"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              onClick={() => handleDeleteMeasurement(m.id)}
-                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                              title="Usuń wpis"
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                    measurements.map((m) => {
+                      const isStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
+
+                      return (
+                        <tr key={m.id} className="hover:bg-sky-50/50 transition-colors">
+                          <td className="p-3 font-black text-sky-950 border-r border-sky-100 sticky left-0 bg-white z-10 whitespace-nowrap">
+                            <div>{m.data_pomiaru}</div>
+                            <div className="mt-1">
+                              {isStudio ? (
+                                <span className="inline-flex items-center gap-1 bg-amber-500 text-slate-950 text-[9px] font-black px-2 py-0.5 rounded shadow-xs uppercase tracking-wider">
+                                  🏢 STUDIO
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-[9px] font-bold px-2 py-0.5 rounded border border-slate-300" title={m.miejsce_pomiaru || ''}>
+                                  📍 {m.miejsce_pomiaru || 'Inne'}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.obwod_pasa || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.klatka || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.ramie || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.talia || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.biodra || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.udo || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.lydka || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100 font-black text-sky-950">{m.waga}</td>
+                          <td className="p-3 text-center border-r border-sky-100 font-semibold">{m.tkanka_tluszczowa ? `${m.tkanka_tluszczowa}%` : '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.miesnie || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.kosci || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-200">{m.tluszcz_wisceralny || '-'}</td>
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setEditingMeasurementId(m.id);
+                                  const isMStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
+                                  setFormData({
+                                    data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
+                                    miejsce_typ: isMStudio ? 'STUDIO' : 'INNE',
+                                    miejsce_inne_opis: isMStudio ? '' : (m.miejsce_pomiaru || ''),
+                                    wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : ''),
+                                    waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
+                                    obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
+                                    klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
+                                    ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
+                                    talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
+                                    biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
+                                    udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
+                                    lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
+                                    tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
+                                    miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
+                                    kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
+                                    wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
+                                    woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
+                                    tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
+                                    kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
+                                    bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
+                                    tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
+                                    weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
+                                    uwagi_trenera: m.uwagi_trenera || '',
+                                    notatki_klubowicza: m.notatki_klubowicza || ''
+                                  });
+                                  setIsAddModalOpen(true);
+                                }}
+                                className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                                title="Edytuj ten wpis"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => handleDeleteMeasurement(m.id)}
+                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+                                title="Usuń wpis"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan={16} className="p-6 text-center text-slate-400 font-bold">
@@ -1827,8 +1900,14 @@ export default function AnalizaFormyPage() {
                       <h2 className="text-lg font-black uppercase tracking-wider text-amber-400">
                         {activeEdycjaObj.nazwa}
                       </h2>
-                      <span className={`text-[9px] font-bold px-2.5 py-0.5 rounded-full uppercase border ${activeEdycjaObj.status === 'zakonczone' ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'}`}>
-                        {activeEdycjaObj.status === 'zakonczone' ? 'Archiwum / Zakończona' : activeEdycjaObj.status}
+                      <span className={`text-[9px] font-bold px-2.5 py-0.5 rounded-full uppercase border ${
+                        activeEdycjaObj.status === 'zakonczone' 
+                          ? 'bg-slate-800 text-slate-300 border-slate-700' 
+                          : activeEdycjaObj.status === 'anulowane'
+                            ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
+                      }`}>
+                        {activeEdycjaObj.status === 'zakonczone' ? 'Archiwum / Zakończona' : activeEdycjaObj.status === 'anulowane' ? 'Odwołane (Zwrócono wpisowe)' : activeEdycjaObj.status}
                       </span>
                     </div>
                     <p className="text-xs text-sky-200/90 mt-0.5">{activeEdycjaObj.opis}</p>
@@ -1836,7 +1915,7 @@ export default function AnalizaFormyPage() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && (
+                  {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' && (
                     <>
                       <button
                         onClick={() => setIsManualAddModalOpen(true)}
@@ -1849,6 +1928,13 @@ export default function AnalizaFormyPage() {
                         className="bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
                       >
                         Zamknij wyzwanie ➔
+                      </button>
+                      <button
+                        onClick={() => handleCancelAndRefundEdycja(activeEdycjaObj)}
+                        className="bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 border border-amber-500/50 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        title="Zwróć wpisowe do portfeli klubowiczów i odwołaj wyzwanie"
+                      >
+                        Anuluj i zwróć środki ↩️
                       </button>
                       <button
                         onClick={() => handleDeleteEdycja(activeEdycjaObj.id)}
@@ -1870,7 +1956,7 @@ export default function AnalizaFormyPage() {
                       <option value="" disabled>Wybierz edycję wyzwania</option>
                       {edycjeRedukcji.map(ed => (
                         <option key={ed.id} value={ed.id}>
-                          {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec}) {ed.status === 'zakonczone' ? '[ARCHIWUM]' : ''}
+                          {ed.nazwa} ({ed.data_start} ➔ {ed.data_koniec}) {ed.status === 'zakonczone' ? '[ARCHIWUM]' : ed.status === 'anulowane' ? '[ODWOŁANE]' : ''}
                         </option>
                       ))}
                     </select>
@@ -1888,9 +1974,12 @@ export default function AnalizaFormyPage() {
                 </div>
 
                 <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
-                  <span className="text-[10px] text-sky-300 uppercase font-bold block">Wpisowe</span>
+                  <span className="text-[10px] text-sky-300 uppercase font-bold block">Wpisowe (Kasa Klubu)</span>
                   <span className="text-lg font-black text-amber-400 mt-0.5 block">
                     {activeEdycjaObj.wpisowe_kwota || 30} zł
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-medium">
+                    Min. osób do startu: <b className="text-amber-300">{activeEdycjaObj.min_uczestnikow || 5}</b>
                   </span>
                 </div>
 
@@ -1901,7 +1990,9 @@ export default function AnalizaFormyPage() {
                       <span className="text-lg font-black text-emerald-400 mt-0.5 block">
                         {((uczestnicyRedukcji || []).filter(u => u.oplacone).length * (activeEdycjaObj.wpisowe_kwota || 30)).toFixed(0)} zł
                       </span>
-                      <span className="text-[9px] text-slate-400 font-medium">({(uczestnicyRedukcji || []).filter(u => u.oplacone).length} opłaconych)</span>
+                      <span className="text-[9px] text-slate-400 font-medium">
+                        ({(uczestnicyRedukcji || []).filter(u => u.oplacone).length} z min. {activeEdycjaObj.min_uczestnikow || 5} opłaconych)
+                      </span>
                     </>
                   ) : (
                     <>
@@ -1909,7 +2000,11 @@ export default function AnalizaFormyPage() {
                       <span className="text-lg font-black text-emerald-400 mt-0.5 block">
                         {(uczestnicyRedukcji || []).length} osób
                       </span>
-                      <span className="text-[9px] text-slate-400 font-medium">w grze o trofea</span>
+                      <span className="text-[9px] text-slate-400 font-medium">
+                        {(uczestnicyRedukcji || []).filter(u => u.oplacone).length >= (activeEdycjaObj.min_uczestnikow || 5) 
+                          ? '✓ Warunek startu spełniony' 
+                          : `Wymagane min. ${activeEdycjaObj.min_uczestnikow || 5} osób`}
+                      </span>
                     </>
                   )}
                 </div>
@@ -1925,7 +2020,7 @@ export default function AnalizaFormyPage() {
                         {activeUserParticipant?.oplacone ? 'Opłacone' : 'Oczekuje na wpłatę'}
                       </span>
                     </div>
-                  ) : activeEdycjaObj.status !== 'zakonczone' ? (
+                  ) : activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' ? (
                     <button
                       onClick={() => setIsJoinModalOpen(true)}
                       className="mt-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow transition-all cursor-pointer uppercase tracking-wider"
@@ -1933,7 +2028,9 @@ export default function AnalizaFormyPage() {
                       Dołącz do gry ➔
                     </button>
                   ) : (
-                    <span className="text-xs text-slate-400 font-bold mt-1">Edycja Zakończona</span>
+                    <span className="text-xs text-slate-400 font-bold mt-1">
+                      {activeEdycjaObj.status === 'anulowane' ? 'Wyzwanie Odwołane' : 'Edycja Zakończona'}
+                    </span>
                   )}
                 </div>
               </div>
@@ -1956,7 +2053,7 @@ export default function AnalizaFormyPage() {
                     Nagrody w tej Edycji ({activeEdycjaObj.nazwa})
                   </h3>
                 </div>
-                {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && (
+                {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' && (
                   <button
                     onClick={() => setIsAddNagrodaModalOpen(true)}
                     className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] px-3 py-1.5 rounded-xl cursor-pointer"
@@ -2015,7 +2112,7 @@ export default function AnalizaFormyPage() {
                   </p>
                 </div>
 
-                {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && (
+                {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' && (
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleOpenRedukcjaPomiarModal('start', selectedKlient ? selectedKlient.id : currentUserId!)}
@@ -2308,7 +2405,7 @@ export default function AnalizaFormyPage() {
           )}
 
           {/* SEKCJA ARCHIWUM POPRZEDNICH EDYCJI */}
-          {archiwalneEdycje.length > 0 && (
+          {edycjeRedukcji.filter(e => e.status === 'zakonczone' || e.status === 'anulowane').length > 0 && (
             <div className="pt-6 border-t border-sky-200 space-y-4">
               <div className="flex items-center gap-2">
                 <span className="text-xl">📁</span>
@@ -2318,7 +2415,7 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {archiwalneEdycje.map(ed => (
+                {edycjeRedukcji.filter(e => e.status === 'zakonczone' || e.status === 'anulowane').map(ed => (
                   <div
                     key={ed.id}
                     onClick={() => setSelectedEdycjaId(ed.id)}
@@ -2341,7 +2438,7 @@ export default function AnalizaFormyPage() {
                         )}
                       </div>
                       <div className="text-[10px] text-slate-500 mt-1">
-                        Zakończone: {ed.data_koniec} (Start: {ed.data_start})
+                        Status: <b className="uppercase">{ed.status}</b> • Termin: {ed.data_start} ➔ {ed.data_koniec}
                       </div>
                     </div>
                     <span className="text-[10px] font-bold text-amber-700 mt-3 block">
@@ -2387,13 +2484,13 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div>
-                <label className="font-bold text-slate-700 block mb-1">Metoda Płatności</label>
+                <label className="font-bold text-slate-700 block mb-1">Metoda Płatności (Wpłata do Kasy Klubu)</label>
                 <select
                   value={manualAddMetoda}
                   onChange={(e) => setManualAddMetoda(e.target.value as any)}
                   className="w-full p-3 border rounded-xl font-bold bg-white"
                 >
-                  <option value="gotowka">💵 Gotówka na recepcji</option>
+                  <option value="gotowka">💵 Gotówka na recepcji (Kasa Klubu)</option>
                   <option value="autopay">⚡ Autopay / Przelew</option>
                   <option value="inna">Inna forma</option>
                 </select>
@@ -2505,7 +2602,7 @@ export default function AnalizaFormyPage() {
                   <span className="text-2xl">⚡</span>
                   <div>
                     <div className="font-black text-xs text-slate-900">Płatność Online (Autopay / BLIK)</div>
-                    <div className="text-[10px] text-slate-500">Szybki przelew, BLIK lub karta – natychmiastowe potwierdzenie</div>
+                    <div className="text-[10px] text-slate-500">Szybki przelew, BLIK lub karta – wpisowe zasila pulę wyzwania</div>
                   </div>
                 </div>
                 <input type="radio" checked={selectedPaymentMethod === 'autopay'} onChange={() => setSelectedPaymentMethod('autopay')} className="text-amber-500" />
@@ -2519,15 +2616,16 @@ export default function AnalizaFormyPage() {
                   <span className="text-2xl">💵</span>
                   <div>
                     <div className="font-black text-xs text-slate-900">Gotówka w klubie (Recepcja)</div>
-                    <div className="text-[10px] text-slate-500">Wpłać 30 zł u trenera na sali, a trener potwierdzi wpłatę</div>
+                    <div className="text-[10px] text-slate-500">Wpłać 30 zł u trenera na sali, a trener potwierdzi wpłatę w kasie klubu</div>
                   </div>
                 </div>
                 <input type="radio" checked={selectedPaymentMethod === 'gotowka'} onChange={() => setSelectedPaymentMethod('gotowka')} className="text-amber-500" />
               </div>
             </div>
 
-            <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-[11px] text-sky-900">
-              ℹ️ Pamiętaj, aby po zapisaniu umówić się z trenerem na wykonanie <b>początkowej analizy składu ciała</b> na analizatorze.
+            <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-[11px] text-sky-900 space-y-1">
+              <div>ℹ️ Pamiętaj, aby po zapisaniu umówić się z trenerem na wykonanie <b>początkowej analizy składu ciała</b> na analizatorze.</div>
+              <div className="text-slate-500 text-[10px]">W przypadku nieosiągnięcia minimalnej liczby uczestników ({activeEdycjaObj.min_uczestnikow || 5} osób), wpisowe zostanie w całości zwrócone do Twojego portfela w aplikacji.</div>
             </div>
 
             <div className="flex gap-2 pt-2">
@@ -2551,7 +2649,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) */}
+      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) Z MINIMALNĄ LICZBĄ OSÓB */}
       {isNewEdycjaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -2597,15 +2695,26 @@ export default function AnalizaFormyPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Kwota Wpisowego (zł)</label>
+                  <label className="font-bold text-slate-700 block mb-1">Wpisowe (zł)</label>
                   <input
                     type="number"
                     step="5"
                     required
                     value={edycjaFormData.wpisowe_kwota}
                     onChange={(e) => setEdycjaFormData({...edycjaFormData, wpisowe_kwota: e.target.value})}
+                    className="w-full p-3 border rounded-xl font-bold bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Min. osób do startu *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={edycjaFormData.min_uczestnikow}
+                    onChange={(e) => setEdycjaFormData({...edycjaFormData, min_uczestnikow: e.target.value})}
                     className="w-full p-3 border rounded-xl font-bold bg-white"
                   />
                 </div>
@@ -2642,7 +2751,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: POMIAR ANALIZY SKŁADU CIAŁA (ADMIN) - ZE WZROSTEM I WIEKIEM */}
+      {/* MODAL: POMIAR ANALIZY SKŁADU CIAŁA (ADMIN) */}
       {isRedukcjaPomiarModalOpen && (() => {
         const targetClient = (klienci || []).find(k => String(k.id) === String(targetPomiarKlientId));
         const targetAge = targetClient ? calculateAge(targetClient.Urodziny || targetClient.urodziny) : null;
@@ -2757,7 +2866,7 @@ export default function AnalizaFormyPage() {
         );
       })()}
 
-      {/* MODAL: POMIAR OGÓLNY (ZAKŁADKA 1) */}
+      {/* MODAL: POMIAR OGÓLNY Z WYBOREM MIEJSCA (STUDIO VS INNE) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 max-h-[90vh] overflow-y-auto">
@@ -2782,6 +2891,52 @@ export default function AnalizaFormyPage() {
             </div>
 
             <form onSubmit={handleSubmitMeasurement} className="space-y-6 text-xs">
+              
+              {/* WYBÓR MIEJSCA POMIARU */}
+              <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200 space-y-3">
+                <label className="font-black text-amber-950 uppercase tracking-wider block text-[11px]">
+                  📍 Gdzie został wykonany pomiar?
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({...formData, miejsce_typ: 'STUDIO'})}
+                    className={`p-3 rounded-xl border-2 font-black flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                      formData.miejsce_typ === 'STUDIO'
+                        ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-amber-300'
+                    }`}
+                  >
+                    <span>🏢</span> STUDIO FORMA MARZEŃ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({...formData, miejsce_typ: 'INNE'})}
+                    className={`p-3 rounded-xl border-2 font-black flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                      formData.miejsce_typ === 'INNE'
+                        ? 'bg-slate-900 text-white border-slate-950 shadow-sm'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
+                    }`}
+                  >
+                    <span>📍</span> INNE MIEJSCE
+                  </button>
+                </div>
+
+                {formData.miejsce_typ === 'INNE' && (
+                  <div className="pt-2">
+                    <label className="font-bold text-slate-700 block mb-1">Opis miejsca (np. Waga domowa, Klub zewnętrzny):</label>
+                    <input
+                      type="text"
+                      required={formData.miejsce_typ === 'INNE'}
+                      placeholder="Wpisz gdzie wykonano pomiar..."
+                      value={formData.miejsce_inne_opis}
+                      onChange={(e) => setFormData({...formData, miejsce_inne_opis: e.target.value})}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-800 font-bold focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-sky-50/50 p-3.5 rounded-xl border border-sky-100">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 block">Data pomiaru *</label>
