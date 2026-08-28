@@ -7,6 +7,42 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Typy zasad zapisów spójne z club_booking_rules
+interface BookingRules {
+  id?: string;
+  cancel_deadline_minutes: number;
+  booking_cutoff_minutes: number | null;
+  booking_window_days: number;
+  expired_pass_grace_days: number;
+  max_daily_bookings: number | null;
+  max_daily_same_type_bookings: number;
+  min_participants: number | null;
+  auto_cancel_deadline_minutes: number | null;
+  cancel_deadline_per_class: Record<string, number>;
+  booking_cutoff_per_class: Record<string, number | null>;
+  booking_window_per_pass: Record<string, number>;
+  expired_pass_grace_per_pass: Record<string, number>;
+  min_participants_per_class: Record<string, number | null>;
+  auto_cancel_deadline_per_class: Record<string, number | null>;
+}
+
+const DEFAULT_RULES: BookingRules = {
+  cancel_deadline_minutes: 90,
+  booking_cutoff_minutes: null,
+  booking_window_days: 14,
+  expired_pass_grace_days: 15,
+  max_daily_bookings: null,
+  max_daily_same_type_bookings: 1,
+  min_participants: null,
+  auto_cancel_deadline_minutes: null,
+  cancel_deadline_per_class: {},
+  booking_cutoff_per_class: {},
+  booking_window_per_pass: {},
+  expired_pass_grace_per_pass: {},
+  min_participants_per_class: {},
+  auto_cancel_deadline_per_class: {},
+};
+
 // ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
 const fetchAllFromSupabase = async (
   table: string, 
@@ -43,6 +79,7 @@ export default function AutomatyczneZapisyPage() {
   const [grafikItems, setGrafikItems] = useState<any[]>([]);
   const [autoBookingsList, setAutoBookingsList] = useState<any[]>([]);
   const [zapisyList, setZapisyList] = useState<any[]>([]);
+  const [clubRules, setClubRules] = useState<BookingRules>(DEFAULT_RULES);
   
   // Stan wyboru
   const [selectedClientId, setSelectedClientId] = useState<string>('');
@@ -76,9 +113,9 @@ export default function AutomatyczneZapisyPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Funkcja wyliczająca rzeczywistą datę ważności karnetu z tablicy karnetyKlubowicza lub kolumny Wygasa
-  const getClientPassExpiry = (client: any): string | null => {
-    if (!client) return null;
+  // Funkcja wyliczająca aktywny karnet i rzeczywistą datę ważności karnetu
+  const getClientPassDetails = (client: any): { passExpiry: string | null; passName: string | null } => {
+    if (!client) return { passExpiry: null, passName: null };
     let parsedKarnety: any[] = [];
     if (Array.isArray(client.karnetyKlubowicza)) {
       parsedKarnety = client.karnetyKlubowicza;
@@ -94,15 +131,53 @@ export default function AutomatyczneZapisyPage() {
       const validPasses = parsedKarnety.filter((k: any) => k && k.waznyDo);
       if (validPasses.length > 0) {
         validPasses.sort((a: any, b: any) => (b.waznyDo || '').localeCompare(a.waznyDo || ''));
-        return validPasses[0].waznyDo;
+        const activePass = validPasses[0];
+        return {
+          passExpiry: activePass.waznyDo,
+          passName: activePass.nazwa || activePass.rodzaj || activePass.typ || null
+        };
       }
     }
 
     if (client.Wygasa && client.Wygasa !== 'Brak' && client.Wygasa !== 'null') {
-      return client.Wygasa;
+      return { passExpiry: client.Wygasa, passName: null };
     }
 
-    return null;
+    return { passExpiry: null, passName: null };
+  };
+
+  // Wyliczenie efektywnej daty granicznej z uwzględnieniem tabeli club_booking_rules (expired_pass_grace_days / per_pass)
+  const getEffectivePassExpiry = (
+    client: any, 
+    rules: BookingRules
+  ): { 
+    effectiveDate: Date | null; 
+    rawExpiry: string | null; 
+    passName: string | null; 
+    graceDays: number;
+    hasActiveOrGracePass: boolean;
+  } => {
+    const { passExpiry: rawExpiry, passName } = getClientPassDetails(client);
+    if (!rawExpiry || rawExpiry === 'Brak') {
+      return { effectiveDate: null, rawExpiry: null, passName: null, graceDays: 0, hasActiveOrGracePass: false };
+    }
+
+    // Odczytanie dni karencji z zasad: indywidualnie wg nazwy karnetu lub globalnie
+    let graceDays = rules.expired_pass_grace_days ?? 15;
+    if (passName && rules.expired_pass_grace_per_pass && rules.expired_pass_grace_per_pass[passName] !== undefined) {
+      graceDays = rules.expired_pass_grace_per_pass[passName];
+    }
+
+    const baseDate = new Date(rawExpiry);
+    if (isNaN(baseDate.getTime())) {
+      return { effectiveDate: null, rawExpiry, passName, graceDays: 0, hasActiveOrGracePass: false };
+    }
+
+    const effectiveDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + graceDays, 23, 59, 59);
+    const now = new Date();
+    const hasActiveOrGracePass = effectiveDate >= now;
+
+    return { effectiveDate, rawExpiry, passName, graceDays, hasActiveOrGracePass };
   };
 
   // Kalkulacja liczby wyłącznie przyszłych treningów dla danej reguły
@@ -149,10 +224,33 @@ export default function AutomatyczneZapisyPage() {
     try {
       setLoading(true);
 
-      // 1. Pobierz klientów z bazy z ominięciem limitu 1000
+      // 1. Pobierz zasady zapisów z właściwej tabeli club_booking_rules
+      let activeRules = DEFAULT_RULES;
+      const { data: rulesData, error: rulesErr } = await supabase
+        .from('club_booking_rules')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!rulesErr && rulesData) {
+        activeRules = {
+          ...DEFAULT_RULES,
+          ...rulesData,
+          cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
+          booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
+          booking_window_per_pass: rulesData.booking_window_per_pass || {},
+          expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
+          min_participants_per_class: rulesData.min_participants_per_class || {},
+          auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
+        };
+      }
+      setClubRules(activeRules);
+
+      // 2. Pobierz klientów z bazy z ominięciem limitu 1000
       const klienciData = await fetchAllFromSupabase(
         'klienci', 
-        'id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza', 
+        'id, Imię, Nazwisko, E-mail, Wygasa, zapisyNadchodzace, karnetyKlubowicza, Status', 
         'id', 
         true, 
         10
@@ -161,17 +259,21 @@ export default function AutomatyczneZapisyPage() {
       let enrichedClients: any[] = [];
       if (klienciData && klienciData.length > 0) {
         enrichedClients = klienciData.map((c: any) => {
-          const passExp = getClientPassExpiry(c);
+          const passDetails = getEffectivePassExpiry(c, activeRules);
           return {
             ...c,
-            calculatedPassExpiry: passExp,
-            displayPassExpiry: passExp || 'Brak'
+            calculatedPassExpiry: passDetails.rawExpiry,
+            displayPassExpiry: passDetails.rawExpiry || 'Brak',
+            passName: passDetails.passName,
+            effectiveEndDate: passDetails.effectiveDate,
+            graceDays: passDetails.graceDays,
+            hasActiveOrGracePass: passDetails.hasActiveOrGracePass
           };
         });
         setKlienciList(enrichedClients);
       }
 
-      // 2. Pobierz grafik cykliczny
+      // 3. Pobierz grafik cykliczny
       const cykliczne = await fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 2);
 
       const combinedGrafik = (cykliczne || []).map(c => ({
@@ -182,15 +284,15 @@ export default function AutomatyczneZapisyPage() {
       }));
       setGrafikItems(combinedGrafik);
 
-      // 3. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika
+      // 4. Pobierz wszystkie wpisy z zapisy_zajec do precyzyjnego licznika
       const zapisyData = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
       if (zapisyData) setZapisyList(zapisyData);
 
-      // 4. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
+      // 5. Pobierz aktywne automatyczne zapisy i dokonaj pełnej synchronizacji
       const autoData = await fetchAllFromSupabase('automatyczne_zapisy', '*', 'id', false, 5);
       if (autoData) {
         setAutoBookingsList(autoData);
-        await syncAutoBookings(autoData, enrichedClients, combinedGrafik);
+        await syncAutoBookings(autoData, enrichedClients, combinedGrafik, activeRules);
         
         // Odświeżenie zapisów po synchronizacji
         const refreshedZapisy = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
@@ -205,8 +307,8 @@ export default function AutomatyczneZapisyPage() {
     }
   };
 
-  // Automatyczna aktualizacja reguł i dopisywanie/odpisywanie terminów na podstawie bieżącej ważności karnetu
-  const syncAutoBookings = async (rules: any[], clients: any[], grafik: any[]) => {
+  // Automatyczna aktualizacja reguł i dopisywanie/odpisywanie terminów na podstawie bieżącej ważności karnetu oraz zasad karencji
+  const syncAutoBookings = async (rules: any[], clients: any[], grafik: any[], clubRuleObj: BookingRules) => {
     const now = new Date();
     const currentYear = now.getFullYear();
 
@@ -248,15 +350,12 @@ export default function AutomatyczneZapisyPage() {
         .filter(idx => idx !== undefined);
 
       const startDate = new Date();
-      let endDate: Date | null = null;
+      
+      // Wyliczenie granicy zapisu z uwzględnieniem dni karencji z club_booking_rules
+      const { effectiveDate } = getEffectivePassExpiry(clientObj, clubRuleObj);
+      const endDate = effectiveDate;
 
-      if (livePassExpiry && livePassExpiry !== 'Brak') {
-        const parsedExpiry = new Date(livePassExpiry);
-        if (!isNaN(parsedExpiry.getTime())) {
-          endDate = new Date(parsedExpiry.getFullYear(), parsedExpiry.getMonth(), parsedExpiry.getDate(), 23, 59, 59);
-        }
-      }
-
+      // Jeśli karnet + karencja wygasły w przeszłości, zwalniamy przyszłe rezerwacje
       if (!endDate || endDate < startDate) {
         const keysToRemove: string[] = [];
         (existingBookings || []).forEach((b: any) => {
@@ -316,7 +415,7 @@ export default function AutomatyczneZapisyPage() {
               }
             ]);
 
-            // Zabezpieczenie przed duplikatem w tej samej sesji synchronizacji
+            // Zabezpieczenie przed zdublowaniem w tej samej pętli
             bookedKeys.add(classKeyDisplay);
             bookedKeys.add(classKeyIso);
 
@@ -331,7 +430,7 @@ export default function AutomatyczneZapisyPage() {
                 id: Date.now() + Math.random(),
                 data: dateStr,
                 zajecia: zajeciaTitle,
-                karnet: 'Automatyczny zapis',
+                karnet: clientObj.passName ? `Automatyczny zapis (${clientObj.passName})` : 'Automatyczny zapis',
                 zapisujacy: 'Panel Administratora'
               });
             }
@@ -360,6 +459,7 @@ export default function AutomatyczneZapisyPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'club_booking_rules' }, () => loadData())
       .subscribe();
 
     return () => {
@@ -383,9 +483,10 @@ export default function AutomatyczneZapisyPage() {
         return;
       }
 
-      const passExpiry = clientObj.calculatedPassExpiry;
-      if (!passExpiry) {
-        showToast('Wybrany klubowicz nie posiada aktywnego karnetu! Przypisz karnet przed ustawieniem reguły.', 'error');
+      const { effectiveDate, rawExpiry, graceDays, hasActiveOrGracePass } = getEffectivePassExpiry(clientObj, clubRules);
+
+      if (!hasActiveOrGracePass || !effectiveDate) {
+        showToast(`Klubowicz nie posiada aktywnego karnetu ani ważnego okresu karencji (${graceDays} dni po wygaśnięciu).`, 'error');
         return;
       }
 
@@ -398,7 +499,7 @@ export default function AutomatyczneZapisyPage() {
           client_name: clientName,
           grafik_id: Number(selectedClassId),
           class_title: classTitle,
-          pass_expiry: passExpiry,
+          pass_expiry: rawExpiry || 'Brak',
           created_at: new Date().toISOString()
         }
       ]);
@@ -596,7 +697,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System na bieżąco weryfikuje ważność karnetów. Przedłużenie karnetu automatycznie wydłuża stałe zapisy, a usunięcie reguły zwalnia przyszłe miejsca.
+            System integruje reguły z tabeli <strong>club_booking_rules</strong> (karencja po wygaśnięciu karnetu/umowy: {clubRules.expired_pass_grace_days} dni).
           </p>
         </div>
       </div>
@@ -660,12 +761,17 @@ export default function AutomatyczneZapisyPage() {
                         <div className="font-bold text-slate-900">{klient.Imię} {klient.Nazwisko}</div>
                         <div className="text-[10px] text-slate-400">{klient['E-mail'] || 'Brak e-maila'}</div>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right flex flex-col items-end gap-1">
                         <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold ${
-                          klient.calculatedPassExpiry ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800'
+                          klient.hasActiveOrGracePass ? 'bg-sky-100 text-sky-800' : 'bg-rose-100 text-rose-800'
                         }`}>
                           Karnet: {klient.displayPassExpiry}
                         </span>
+                        {klient.graceDays > 0 && (
+                          <span className="text-[9px] px-2 py-0.5 rounded-md font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                            Karencja: +{klient.graceDays} dni
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))
@@ -750,7 +856,8 @@ export default function AutomatyczneZapisyPage() {
             filteredAutoBookings.map((item) => {
               const matchedClient = klienciList.find(k => String(k.id) === String(item.klient_id));
               const livePassExpiry = matchedClient ? matchedClient.displayPassExpiry : (item.pass_expiry || 'Brak');
-              const hasActivePass = matchedClient ? !!matchedClient.calculatedPassExpiry : (item.pass_expiry && item.pass_expiry !== 'Brak');
+              const hasActiveOrGrace = matchedClient ? matchedClient.hasActiveOrGracePass : (item.pass_expiry && item.pass_expiry !== 'Brak');
+              const graceDays = matchedClient?.graceDays ?? clubRules.expired_pass_grace_days ?? 15;
               const futureBookingsCount = getFutureBookingsCount(item, zapisyList, grafikItems);
 
               return (
@@ -764,10 +871,15 @@ export default function AutomatyczneZapisyPage() {
                         Stała Rezerwacja
                       </span>
                       <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
-                        hasActivePass ? 'bg-sky-50 text-sky-900 border-sky-200' : 'bg-rose-50 text-rose-800 border-rose-200'
+                        hasActiveOrGrace ? 'bg-sky-50 text-sky-900 border-sky-200' : 'bg-rose-50 text-rose-800 border-rose-200'
                       }`}>
                         Ważność karnetu: {livePassExpiry}
                       </span>
+                      {graceDays > 0 && (
+                        <span className="bg-indigo-50 text-indigo-900 text-[10px] font-bold px-2 py-0.5 rounded-md border border-indigo-200">
+                          Karencja: +{graceDays} dni
+                        </span>
+                      )}
                       <span className="bg-amber-100 text-amber-900 text-[11px] font-black px-2.5 py-0.5 rounded-md border border-amber-300 flex items-center gap-1 shadow-xs">
                         <span>🎯 Przyszłe treningi:</span>
                         <span className="text-amber-950 font-black underline">{futureBookingsCount}</span>
