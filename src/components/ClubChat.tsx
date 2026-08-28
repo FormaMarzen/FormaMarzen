@@ -16,15 +16,37 @@ export default function ClubChat() {
   const [secondaryUserId, setSecondaryUserId] = useState<number | string | null>(null);
   const [currentUserName, setCurrentUserName] = useState<string>("");
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  const [activeTab, setActiveTab] = useState<"direct" | "groups">("direct");
 
   const [klienci, setKlienci] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<any | null>(null);
+  
   const [messages, setMessages] = useState<any[]>([]);
+  const [groupMessages, setGroupMessages] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Stany i referencje dla przeciągania dymka
+  // Obsługa załączników
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Modale Administratora
+  const [showBroadcastModal, setShowBroadcastModal] = useState(false);
+  const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
+
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<(number | string)[]>([]);
+
+  // Przeciąganie dymka
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -40,9 +62,18 @@ export default function ClubChat() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, groupMessages, selectedUser, selectedGroup]);
 
-  // Inicjalizacja pozycji dymka z localStorage lub domyślnie prawy dolny róg
+  // Reset okna po zamknięciu
+  const handleCloseChat = () => {
+    setIsOpen(false);
+    setSelectedUser(null);
+    setSelectedGroup(null);
+    setSelectedFile(null);
+    setFilePreview(null);
+  };
+
+  // Inicjalizacja pozycji dymka
   useEffect(() => {
     if (typeof window !== "undefined") {
       const savedPos = localStorage.getItem("chat_bubble_pos");
@@ -67,7 +98,7 @@ export default function ClubChat() {
     }
   }, []);
 
-  // Obsługa przeciągania (mysz i dotyk)
+  // Obsługa przeciągania
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     const target = e.target as HTMLElement;
     if (target.closest(".no-drag")) return;
@@ -115,7 +146,7 @@ export default function ClubChat() {
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
-      // Ignoruj jeśli wskaźnik został już zwolniony
+      // Ignoruj zwolnienie
     }
 
     if (position) {
@@ -123,11 +154,16 @@ export default function ClubChat() {
     }
 
     if (!hasMovedRef.current) {
-      setIsOpen((prev) => !prev);
+      if (isOpen) {
+        handleCloseChat();
+      } else {
+        setSelectedUser(null);
+        setSelectedGroup(null);
+        setIsOpen(true);
+      }
     }
   };
 
-  // Funkcja aktualizująca znacznik last_seen dla zalogowanego użytkownika
   const updateLastSeen = async (userId: number | string) => {
     if (!userId || Number(userId) === SYSTEM_ID || Number(userId) === 999999999) return;
     try {
@@ -140,7 +176,6 @@ export default function ClubChat() {
     }
   };
 
-  // Cykliczne odświeżanie last_seen co 60 sekund
   useEffect(() => {
     if (!currentUserId) return;
     const actualId = secondaryUserId || currentUserId;
@@ -153,7 +188,6 @@ export default function ClubChat() {
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
 
-  // Funkcja wysyłająca powiadomienie Push do odbiorcy wiadomości
   const sendChatPushNotification = async (recipientId: number | string, senderName: string, messageText: string) => {
     try {
       if (Number(recipientId) === SYSTEM_ID) return;
@@ -166,10 +200,7 @@ export default function ClubChat() {
       }
 
       const { data: clients, error: clientErr } = await query;
-      if (clientErr || !clients || clients.length === 0) {
-        console.warn("Brak danych klienta lub błąd pobierania subskrypcji:", clientErr);
-        return;
-      }
+      if (clientErr || !clients || clients.length === 0) return;
 
       const subscriptions = clients
         .map((c: any) => {
@@ -184,14 +215,11 @@ export default function ClubChat() {
         })
         .filter(Boolean);
 
-      if (subscriptions.length === 0) {
-        console.warn("Użytkownik docelowy nie posiada zapisanej subskrypcji Push w kolumnie push_subscription.");
-        return;
-      }
+      if (subscriptions.length === 0) return;
 
       const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
 
-      const res = await fetch("/api/push/send", {
+      await fetch("/api/push/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -203,13 +231,8 @@ export default function ClubChat() {
           },
         }),
       });
-
-      const resJson = await res.json();
-      if (!res.ok || !resJson.success) {
-        console.error("Błąd odpowiedzi serwera przy wysyłce Push:", resJson);
-      }
     } catch (err) {
-      console.error("Błąd podczas wysyłania powiadomienia Push z czatu:", err);
+      console.error("Błąd podczas wysyłania powiadomienia Push:", err);
     }
   };
 
@@ -222,6 +245,9 @@ export default function ClubChat() {
       const userEmail = (session?.user?.email || "").toLowerCase().trim();
 
       if (!userEmail) return;
+
+      const adminLogged = ADMIN_EMAILS.includes(userEmail);
+      setIsAdmin(adminLogged);
 
       const { data: klienciData } = await supabase.from("klienci").select("*");
       if (klienciData) {
@@ -257,7 +283,7 @@ export default function ClubChat() {
 
         const myProfile = enriched.find((c: any) => c.email === userEmail);
 
-        if (ADMIN_EMAILS.includes(userEmail)) {
+        if (adminLogged) {
           setCurrentUserId(999999999);
           setCurrentUserName("Maciej Kłaput (Admin)");
           setCurrentUserAvatar(null);
@@ -283,11 +309,47 @@ export default function ClubChat() {
     initUser();
   }, []);
 
-  // 2. Pobieranie wiadomości
+  // 2. Pobieranie grup i wiadomości grupowych
+  const fetchGroups = async () => {
+    if (!currentUserId) return;
+    try {
+      const { data, error } = await supabase.from("czat_grupy").select("*").order("created_at", { ascending: false });
+      if (!error && data) {
+        const effective = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+        const myGroups = data.filter((g: any) => {
+          if (isAdmin) return true;
+          const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
+          return members.some((m: string) => effective.includes(m)) || effective.includes(String(g.tworca_id));
+        });
+        setGroups(myGroups);
+      }
+    } catch (err) {
+      console.error("Błąd pobierania grup:", err);
+    }
+  };
+
+  const fetchGroupMessages = async () => {
+    if (!selectedGroup) return;
+    try {
+      const { data, error } = await supabase
+        .from("czat_wiadomosci")
+        .select("*")
+        .eq("grupa_id", selectedGroup.id)
+        .order("created_at", { ascending: true });
+
+      if (!error && data) {
+        setGroupMessages(data);
+      }
+    } catch (err) {
+      console.error("Błąd pobierania wiadomości grupy:", err);
+    }
+  };
+
+  // 3. Pobieranie wiadomości bezpośrednich
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
-    let query = supabase.from("czat_wiadomosci").select("*");
+    let query = supabase.from("czat_wiadomosci").select("*").is("grupa_id", null);
 
     if (secondaryUserId) {
       query = query.or(
@@ -317,24 +379,31 @@ export default function ClubChat() {
     if (!currentUserId) return;
 
     fetchMessages();
+    fetchGroups();
 
     const channel = supabase
-      .channel("realtime-czat")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "czat_wiadomosci" },
-        () => {
-          fetchMessages();
-        }
-      )
+      .channel("realtime-czat-all")
+      .on("postgres_changes", { event: "*", schema: "public", table: "czat_wiadomosci" }, () => {
+        fetchMessages();
+        if (selectedGroup) fetchGroupMessages();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "czat_grupy" }, () => {
+        fetchGroups();
+      })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUserId, secondaryUserId]);
+  }, [currentUserId, secondaryUserId, selectedGroup]);
 
-  // 3. Oznaczanie wiadomości jako przeczytane wraz z zapisem daty i godziny
+  useEffect(() => {
+    if (selectedGroup) {
+      fetchGroupMessages();
+    }
+  }, [selectedGroup]);
+
+  // 4. Oznaczanie jako przeczytane
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -355,31 +424,176 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
-  // 4. Wysyłanie nowej wiadomości
+  // Obsługa wyboru pliku
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 15 * 1024 * 1024) {
+      alert("Maksymalny rozmiar pliku to 15MB");
+      return;
+    }
+
+    setSelectedFile(file);
+    if (file.type.startsWith("image/")) {
+      setFilePreview(URL.createObjectURL(file));
+    } else {
+      setFilePreview(null);
+    }
+  };
+
+  const uploadFileToSupabase = async (file: File): Promise<{ url: string; type: string; name: string } | null> => {
+    try {
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+      const filePath = `attachments/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage.from("chat-attachments").upload(filePath, file);
+      if (uploadError) {
+        console.error("Błąd przesyłania załącznika:", uploadError);
+        return null;
+      }
+
+      const { data } = supabase.storage.from("chat-attachments").getPublicUrl(filePath);
+      return {
+        url: data.publicUrl,
+        type: file.type.startsWith("image/") ? "image" : file.type === "application/pdf" ? "pdf" : "file",
+        name: file.name,
+      };
+    } catch (err) {
+      console.error("Upload error:", err);
+      return null;
+    }
+  };
+
+  // 5. Wysyłanie wiadomości (Direct / Group)
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedUser || !currentUserId) return;
+    if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
 
+    setIsUploading(true);
     const senderId = secondaryUserId || currentUserId;
-    const messageText = newMessage.trim();
+    let attachmentData: { url: string; type: string; name: string } | null = null;
 
-    const payload = {
+    if (selectedFile) {
+      attachmentData = await uploadFileToSupabase(selectedFile);
+    }
+
+    const payload: any = {
       nadawca_id: senderId,
       nadawca_nazwa: currentUserName,
       nadawca_avatar: currentUserAvatar,
-      odbiorca_id: selectedUser.id,
-      tresc: messageText,
+      tresc: newMessage.trim(),
+      attachment_url: attachmentData?.url || null,
+      attachment_type: attachmentData?.type || null,
+      attachment_name: attachmentData?.name || null,
       przeczytana: false,
       przeczytana_at: null,
     };
 
-    const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
+    if (selectedGroup) {
+      payload.grupa_id = selectedGroup.id;
+      payload.odbiorca_id = null;
 
-    if (!error) {
-      setNewMessage("");
-      fetchMessages();
-      updateLastSeen(senderId);
-      sendChatPushNotification(selectedUser.id, currentUserName, messageText);
+      const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
+      if (!error) {
+        setNewMessage("");
+        setSelectedFile(null);
+        setFilePreview(null);
+        fetchGroupMessages();
+        updateLastSeen(senderId);
+      }
+    } else if (selectedUser) {
+      payload.odbiorca_id = selectedUser.id;
+      payload.grupa_id = null;
+
+      const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
+      if (!error) {
+        setNewMessage("");
+        setSelectedFile(null);
+        setFilePreview(null);
+        fetchMessages();
+        updateLastSeen(senderId);
+        sendChatPushNotification(selectedUser.id, currentUserName, newMessage.trim() || "📎 Wysłano załącznik");
+      }
+    }
+
+    setIsUploading(false);
+  };
+
+  // 6. Wysyłka masowa do wszystkich (Broadcast dla Admina)
+  const handleSendBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastMessage.trim() && !selectedFile) return;
+
+    setIsSendingBroadcast(true);
+    const senderId = secondaryUserId || currentUserId;
+
+    let attachmentData: { url: string; type: string; name: string } | null = null;
+    if (selectedFile) {
+      attachmentData = await uploadFileToSupabase(selectedFile);
+    }
+
+    const eligibleUsers = klienci.filter(
+      (k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId) && String(k.id) !== String(secondaryUserId)
+    );
+
+    const payloads = eligibleUsers.map((user) => ({
+      nadawca_id: senderId,
+      nadawca_nazwa: currentUserName,
+      nadawca_avatar: currentUserAvatar,
+      odbiorca_id: user.id,
+      grupa_id: null,
+      tresc: broadcastMessage.trim(),
+      attachment_url: attachmentData?.url || null,
+      attachment_type: attachmentData?.type || null,
+      attachment_name: attachmentData?.name || null,
+      przeczytana: false,
+      przeczytana_at: null,
+    }));
+
+    if (payloads.length > 0) {
+      const { error } = await supabase.from("czat_wiadomosci").insert(payloads);
+      if (!error) {
+        eligibleUsers.forEach((user) => {
+          sendChatPushNotification(user.id, currentUserName, broadcastMessage.trim() || "📎 Wysłano załącznik do wszystkich");
+        });
+        setBroadcastMessage("");
+        setSelectedFile(null);
+        setFilePreview(null);
+        setShowBroadcastModal(false);
+        fetchMessages();
+      }
+    }
+
+    setIsSendingBroadcast(false);
+  };
+
+  // 7. Tworzenie nowej grupy (dla Admina)
+  const handleCreateGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newGroupName.trim() || selectedGroupMembers.length === 0) return;
+
+    const senderId = secondaryUserId || currentUserId;
+    const allMembers = Array.from(new Set([...selectedGroupMembers, senderId]));
+
+    const { data, error } = await supabase
+      .from("czat_grupy")
+      .insert([
+        {
+          nazwa: newGroupName.trim(),
+          tworca_id: senderId,
+          czlonkowie_ids: allMembers,
+        },
+      ])
+      .select();
+
+    if (!error && data && data.length > 0) {
+      setNewGroupName("");
+      setSelectedGroupMembers([]);
+      setShowCreateGroupModal(false);
+      fetchGroups();
+      setSelectedGroup(data[0]);
     }
   };
 
@@ -409,7 +623,7 @@ export default function ClubChat() {
     const msgTime = new Date(m.created_at).getTime();
     if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
       latestMessageMap.set(otherId, msgTime);
-      latestMessageTextMap.set(otherId, m.tresc || "");
+      latestMessageTextMap.set(otherId, m.tresc || (m.attachment_url ? "📎 Załącznik" : ""));
     }
   });
 
@@ -435,9 +649,7 @@ export default function ClubChat() {
       const fName = (k.firstName || "").toLowerCase();
       const lName = (k.lastName || "").toLowerCase();
 
-      if (lName.startsWith(q)) {
-        return true;
-      }
+      if (lName.startsWith(q)) return true;
 
       const parts = q.split(/\s+/);
       if (parts.length >= 2) {
@@ -475,6 +687,31 @@ export default function ClubChat() {
     return `Aktywny ${diffDays} dni temu`;
   };
 
+  const renderAttachment = (msg: any) => {
+    if (!msg.attachment_url) return null;
+
+    if (msg.attachment_type === "image") {
+      return (
+        <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="block mt-2 rounded-xl overflow-hidden border border-slate-700/30">
+          <img src={msg.attachment_url} alt="Załącznik" className="max-h-48 w-full object-cover hover:scale-105 transition-transform" />
+        </a>
+      );
+    }
+
+    return (
+      <a
+        href={msg.attachment_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        download
+        className="mt-2 flex items-center gap-2 p-2 rounded-xl bg-slate-800/20 hover:bg-slate-800/40 border border-slate-300/30 transition-colors text-xs font-semibold"
+      >
+        <span className="text-base">{msg.attachment_type === "pdf" ? "📄" : "📎"}</span>
+        <span className="truncate max-w-[200px]">{msg.attachment_name || "Pobierz załącznik"}</span>
+      </a>
+    );
+  };
+
   const renderMessageContent = (msg: any, isMe: boolean) => {
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
     const isBirthdayNotification = isSystemSender && (msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin"));
@@ -496,6 +733,7 @@ export default function ClubChat() {
             </span>
           </div>
           <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+          {renderAttachment(msg)}
         </div>
       );
     }
@@ -515,6 +753,7 @@ export default function ClubChat() {
             </span>
           </div>
           <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+          {renderAttachment(msg)}
         </div>
       );
     }
@@ -534,6 +773,7 @@ export default function ClubChat() {
             </span>
           </div>
           <p className="text-xs leading-relaxed text-slate-200">{msg.tresc}</p>
+          {renderAttachment(msg)}
         </div>
       );
     }
@@ -546,7 +786,11 @@ export default function ClubChat() {
             : "bg-white text-slate-800 border border-slate-200 rounded-bl-none"
         }`}
       >
-        {msg.tresc}
+        {selectedGroup && !isMe && (
+          <div className="text-[10px] font-bold text-amber-500 mb-1">{msg.nadawca_nazwa}</div>
+        )}
+        {msg.tresc && <div>{msg.tresc}</div>}
+        {renderAttachment(msg)}
       </div>
     );
   };
@@ -574,151 +818,246 @@ export default function ClubChat() {
     >
       {isOpen && (
         <div
-          className={`absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[390px] h-[520px] flex flex-col overflow-hidden animate-in fade-in ${
+          className={`absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[410px] h-[550px] flex flex-col overflow-hidden animate-in fade-in ${
             isLeftSide ? "left-0" : "right-0"
           } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
         >
           {/* NAGŁÓWEK CZATU */}
           <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shadow-sm select-none">
             <div className="flex items-center gap-3">
-              {selectedUser ? (
+              {selectedUser || selectedGroup ? (
                 <>
                   <button
-                    onClick={() => setSelectedUser(null)}
+                    onClick={() => {
+                      setSelectedUser(null);
+                      setSelectedGroup(null);
+                    }}
                     className="text-slate-300 hover:text-white p-1 cursor-pointer transition-colors"
                     title="Wróć do listy"
                   >
                     ←
                   </button>
-                  <div className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${Number(selectedUser.id) === SYSTEM_ID ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
-                    {selectedUser.avatar ? (
-                      <img src={selectedUser.avatar} alt={selectedUser.name} className="w-full h-full object-cover" />
-                    ) : Number(selectedUser.id) === SYSTEM_ID ? (
-                      <span>👑</span>
-                    ) : (
-                      <span>👤</span>
-                    )}
-                  </div>
-                  <div className="overflow-hidden">
-                    <div className="font-bold text-xs truncate max-w-[170px]">{selectedUser.name}</div>
-                    <div className="text-[10px] font-medium flex items-center gap-1">
-                      {Number(selectedUser.id) === SYSTEM_ID ? (
-                        <span className="text-amber-400 font-bold">Konto Systemowe</span>
-                      ) : (
-                        <span className="text-emerald-400 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {formatLastSeen(selectedUser.last_seen)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  {selectedGroup ? (
+                    <>
+                      <div className="w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0">
+                        👥
+                      </div>
+                      <div className="overflow-hidden">
+                        <div className="font-bold text-xs truncate max-w-[170px]">{selectedGroup.nazwa}</div>
+                        <div className="text-[10px] text-amber-400 font-medium">Czat grupowy</div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${Number(selectedUser.id) === SYSTEM_ID ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
+                        {selectedUser.avatar ? (
+                          <img src={selectedUser.avatar} alt={selectedUser.name} className="w-full h-full object-cover" />
+                        ) : Number(selectedUser.id) === SYSTEM_ID ? (
+                          <span>👑</span>
+                        ) : (
+                          <span>👤</span>
+                        )}
+                      </div>
+                      <div className="overflow-hidden">
+                        <div className="font-bold text-xs truncate max-w-[170px]">{selectedUser.name}</div>
+                        <div className="text-[10px] font-medium flex items-center gap-1">
+                          {Number(selectedUser.id) === SYSTEM_ID ? (
+                            <span className="text-amber-400 font-bold">Konto Systemowe</span>
+                          ) : (
+                            <span className="text-emerald-400 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {formatLastSeen(selectedUser.last_seen)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </>
               ) : (
                 <div className="flex items-center gap-2">
                   <span className="text-lg">💬</span>
                   <div>
                     <h3 className="font-black text-xs uppercase tracking-wider">Czat Klubowiczów</h3>
-                    <p className="text-[10px] text-slate-400">Wybierz osobę lub komunikaty systemowe</p>
+                    <p className="text-[10px] text-slate-400">Forma Marzeń Communication</p>
                   </div>
                 </div>
               )}
             </div>
 
             <button
-              onClick={() => setIsOpen(false)}
+              onClick={handleCloseChat}
               className="text-slate-400 hover:text-white w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs cursor-pointer transition-colors"
             >
               ✕
             </button>
           </div>
 
-          {/* WIDOK LISTY UŻYTKOWNIKÓW */}
-          {!selectedUser ? (
-            <div className="flex-1 flex flex-col overflow-hidden p-4 space-y-3 bg-slate-50/50">
-              <div className="relative">
-                <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs">🔍</span>
-                <input
-                  type="text"
-                  placeholder="Szukaj: imię, nazwisko..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
-                />
-              </div>
+          {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP) */}
+          {!selectedUser && !selectedGroup ? (
+            <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
+              
+              {/* ZAKŁADKI I PRZYCISKI ADMINISTRATORA */}
+              <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-2">
+                <div className="flex gap-1 bg-slate-200 p-1 rounded-xl">
+                  <button
+                    onClick={() => setActiveTab("direct")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                  >
+                    Prywatne
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("groups")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                  >
+                    Grupy ({groups.length})
+                  </button>
+                </div>
 
-              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                {displayedUsers.map((user: any) => {
-                  const isSys = Number(user.id) === SYSTEM_ID;
-                  const userUnread = messages.filter(
-                    (m: any) =>
-                      String(m.nadawca_id) === String(user.id) &&
-                      effectiveIds.includes(String(m.odbiorca_id)) &&
-                      !m.przeczytana
-                  ).length;
-
-                  const lastMessageText = latestMessageTextMap.get(user.id);
-
-                  return (
+                {isAdmin && (
+                  <div className="flex items-center gap-1">
                     <button
-                      key={user.id}
-                      onClick={() => setSelectedUser(user)}
-                      className={`w-full p-3 rounded-2xl border flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group ${
-                        isSys
-                          ? "bg-gradient-to-r from-amber-50 to-white border-amber-300 hover:border-amber-400"
-                          : "bg-white hover:bg-sky-50 border-slate-200/80"
-                      }`}
+                      onClick={() => setShowBroadcastModal(true)}
+                      className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[10px] px-2.5 py-1.5 rounded-xl shadow-sm transition-all flex items-center gap-1"
+                      title="Wyślij wiadomość do wszystkich klubowiczów"
                     >
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div
-                          className={`w-10 h-10 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${
-                            isSys
-                              ? "bg-amber-400 text-slate-950 border-amber-300 shadow-sm"
-                              : "bg-sky-100 text-sky-950 border-amber-400"
-                          }`}
-                        >
-                          {user.avatar ? (
-                            <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-                          ) : isSys ? (
-                            <span>👑</span>
-                          ) : (
-                            <span>👤</span>
-                          )}
-                        </div>
-                        <div className="overflow-hidden">
-                          <div className={`font-bold text-xs truncate ${isSys ? "text-amber-950 font-black" : "text-slate-900 group-hover:text-sky-950"}`}>
-                            {user.name}
-                          </div>
-                          <div className="text-[10px] text-slate-500 truncate mt-0.5">
-                            {lastMessageText ? (
-                              <span className="italic">{lastMessageText}</span>
-                            ) : (
-                              <span>{isSys ? "Oficjalne powiadomienia" : formatLastSeen(user.last_seen)}</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {userUnread > 0 && (
-                        <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0 ml-2">
-                          {userUnread}
-                        </span>
-                      )}
+                      📢 Wszyscy
                     </button>
-                  );
-                })}
-
-                {displayedUsers.length === 0 && (
-                  <div className="py-12 text-center text-slate-400 text-xs space-y-1">
-                    <div>Brak wyników wyszukiwania.</div>
-                    <p className="text-[10px]">Wpisz nazwisko lub imię w wyszukiwarce powyżej.</p>
+                    {activeTab === "groups" && (
+                      <button
+                        onClick={() => setShowCreateGroupModal(true)}
+                        className="bg-slate-900 hover:bg-slate-800 text-white font-black text-[10px] px-2.5 py-1.5 rounded-xl shadow-sm transition-all"
+                        title="Utwórz nowy czat grupowy"
+                      >
+                        + Nowa
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
+
+              {/* LISTA PRYWATNYCH */}
+              {activeTab === "direct" && (
+                <>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs">🔍</span>
+                    <input
+                      type="text"
+                      placeholder="Szukaj: imię, nazwisko..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
+                    />
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                    {displayedUsers.map((user: any) => {
+                      const isSys = Number(user.id) === SYSTEM_ID;
+                      const userUnread = messages.filter(
+                        (m: any) =>
+                          String(m.nadawca_id) === String(user.id) &&
+                          effectiveIds.includes(String(m.odbiorca_id)) &&
+                          !m.przeczytana
+                      ).length;
+
+                      const lastMessageText = latestMessageTextMap.get(user.id);
+
+                      return (
+                        <button
+                          key={user.id}
+                          onClick={() => setSelectedUser(user)}
+                          className={`w-full p-2.5 rounded-2xl border flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group ${
+                            isSys
+                              ? "bg-gradient-to-r from-amber-50 to-white border-amber-300 hover:border-amber-400"
+                              : "bg-white hover:bg-sky-50 border-slate-200/80"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div
+                              className={`w-9 h-9 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${
+                                isSys
+                                  ? "bg-amber-400 text-slate-950 border-amber-300 shadow-sm"
+                                  : "bg-sky-100 text-sky-950 border-amber-400"
+                              }`}
+                            >
+                              {user.avatar ? (
+                                <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                              ) : isSys ? (
+                                <span>👑</span>
+                              ) : (
+                                <span>👤</span>
+                              )}
+                            </div>
+                            <div className="overflow-hidden">
+                              <div className={`font-bold text-xs truncate ${isSys ? "text-amber-950 font-black" : "text-slate-900 group-hover:text-sky-950"}`}>
+                                {user.name}
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                                {lastMessageText ? (
+                                  <span className="italic">{lastMessageText}</span>
+                                ) : (
+                                  <span>{isSys ? "Oficjalne powiadomienia" : formatLastSeen(user.last_seen)}</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {userUnread > 0 && (
+                            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0 ml-2">
+                              {userUnread}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+
+                    {displayedUsers.length === 0 && (
+                      <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+                        <div>Brak wyników wyszukiwania.</div>
+                        <p className="text-[10px]">Wpisz nazwisko lub imię w wyszukiwarce powyżej.</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* LISTA GRUP */}
+              {activeTab === "groups" && (
+                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                  {groups.map((group: any) => (
+                    <button
+                      key={group.id}
+                      onClick={() => setSelectedGroup(group)}
+                      className="w-full p-3 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-amber-400/20 text-amber-950 border border-amber-400 flex items-center justify-center font-bold text-base">
+                          👥
+                        </div>
+                        <div>
+                          <div className="font-bold text-xs text-slate-900">{group.nazwa}</div>
+                          <div className="text-[10px] text-slate-500">
+                            Członków: {Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-slate-400 text-xs font-bold">→</span>
+                    </button>
+                  ))}
+
+                  {groups.length === 0 && (
+                    <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+                      <div>Brak dostępnych czatów grupowych.</div>
+                      {isAdmin && <p className="text-[10px]">Kliknij "+ Nowa", aby utworzyć pierwszą grupę.</p>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             /* WIDOK AKTYWNEJ ROZMOWY */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {activeChatMessages.map((msg: any) => {
+                {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
                   const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂");
                   
@@ -747,7 +1086,7 @@ export default function ClubChat() {
 
                       <div className="flex items-center gap-2 mt-1 px-1">
                         <span className="text-[9px] text-slate-400 font-mono">{time}</span>
-                        {isMe && (
+                        {isMe && !selectedGroup && (
                           <span className="text-[9px] text-slate-400 font-medium">
                             {msg.przeczytana && readTime
                               ? `✓✓ Przeczytano: ${readTime}`
@@ -759,11 +1098,13 @@ export default function ClubChat() {
                   );
                 })}
 
-                {activeChatMessages.length === 0 && (
+                {(selectedGroup ? groupMessages : activeChatMessages).length === 0 && (
                   <div className="py-12 text-center text-slate-400 text-xs space-y-1">
                     <div>👋 Rozpocznij rozmowę!</div>
                     <p className="text-[10px]">
-                      {Number(selectedUser.id) === SYSTEM_ID
+                      {selectedGroup
+                        ? "Napisz pierwszą wiadomość do wszystkich w tej grupie."
+                        : Number(selectedUser?.id) === SYSTEM_ID
                         ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, urodzinach i wydarzeniach."
                         : "Napisz pierwszą wiadomość do tego klubowicza."}
                     </p>
@@ -773,32 +1114,215 @@ export default function ClubChat() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* PODGLĄD ZAŁĄCZNIKA PRZED WYŚLANIEM */}
+              {selectedFile && (
+                <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2 truncate max-w-[260px]">
+                    {filePreview ? (
+                      <img src={filePreview} alt="Podgląd" className="w-8 h-8 rounded object-cover border" />
+                    ) : (
+                      <span className="text-lg">📄</span>
+                    )}
+                    <span className="font-semibold text-slate-800 truncate">{selectedFile.name}</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setFilePreview(null);
+                    }}
+                    className="text-rose-600 hover:text-rose-800 font-bold p-1 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
               {/* FORMULARZ WYSYŁANIA */}
               <form
                 onSubmit={handleSendMessage}
                 className="p-3 bg-white border-t border-slate-200 flex items-center gap-2"
               >
                 <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  className="hidden"
+                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-lg transition-colors cursor-pointer shrink-0"
+                  title="Dodaj załącznik"
+                >
+                  📎
+                </button>
+
+                <input
                   type="text"
-                  placeholder={Number(selectedUser.id) === SYSTEM_ID ? "Napisz do administracji..." : "Napisz wiadomość..."}
+                  placeholder={
+                    selectedGroup
+                      ? "Napisz na czacie grupowym..."
+                      : Number(selectedUser?.id) === SYSTEM_ID
+                      ? "Napisz do administracji..."
+                      : "Napisz wiadomość..."
+                  }
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   className="flex-1 bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500"
                 />
+
                 <button
                   type="submit"
-                  disabled={!newMessage.trim()}
-                  className="bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl font-bold text-xs transition-colors shadow-sm cursor-pointer"
+                  disabled={isUploading || (!newMessage.trim() && !selectedFile)}
+                  className="bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl font-bold text-xs transition-colors shadow-sm cursor-pointer shrink-0 flex items-center gap-1"
                 >
-                  Wyślij
+                  {isUploading ? "..." : "Wyślij"}
                 </button>
               </form>
             </div>
           )}
+
+          {/* MODAL BROADCAST (DO WSZYSTKICH) */}
+          {showBroadcastModal && (
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-4">
+                <div className="flex items-center justify-between border-b pb-3">
+                  <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                    <span>📢</span> Wiadomość do Wszystkich
+                  </div>
+                  <button onClick={() => setShowBroadcastModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleSendBroadcast} className="space-y-3">
+                  <textarea
+                    rows={4}
+                    placeholder="Wpisz treść komunikatu dla każdego klubowicza..."
+                    value={broadcastMessage}
+                    onChange={(e) => setBroadcastMessage(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                    required={!selectedFile}
+                  />
+
+                  {/* Załącznik w broadcast */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      id="broadcastFile"
+                      onChange={handleFileChange}
+                      className="hidden"
+                      accept="image/*,.pdf,.doc,.docx"
+                    />
+                    <label
+                      htmlFor="broadcastFile"
+                      className="cursor-pointer px-3 py-1.5 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-700 flex items-center gap-1"
+                    >
+                      📎 Dodaj plik / zdjęcie
+                    </label>
+                    {selectedFile && <span className="text-[10px] text-slate-600 truncate max-w-[150px]">{selectedFile.name}</span>}
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowBroadcastModal(false)}
+                      className="flex-1 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200"
+                    >
+                      Anuluj
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSendingBroadcast}
+                      className="flex-1 py-2 rounded-xl text-xs font-black text-slate-950 bg-amber-400 hover:bg-amber-500 shadow-md disabled:opacity-50"
+                    >
+                      {isSendingBroadcast ? "Wysyłanie..." : "Wyślij wszystkim"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL TWORZENIA GRUPY */}
+          {showCreateGroupModal && (
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                    <span>👥</span> Nowy Czat Grupowy
+                  </div>
+                  <button onClick={() => setShowCreateGroupModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateGroup} className="space-y-3">
+                  <input
+                    type="text"
+                    placeholder="Nazwa grupy (np. Obóz Wałcz 2026)..."
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                    required
+                  />
+
+                  <div>
+                    <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
+                    <div className="max-h-40 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                      {klienci
+                        .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
+                        .map((user) => {
+                          const isSelected = selectedGroupMembers.includes(user.id);
+                          return (
+                            <label
+                              key={user.id}
+                              className="flex items-center gap-2 p-1.5 hover:bg-white rounded-lg cursor-pointer text-xs select-none"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setSelectedGroupMembers((prev) =>
+                                    isSelected ? prev.filter((id) => id !== user.id) : [...prev, user.id]
+                                  );
+                                }}
+                                className="rounded text-amber-500 focus:ring-0"
+                              />
+                              <span className="font-medium text-slate-800">{user.name}</span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateGroupModal(false)}
+                      className="flex-1 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200"
+                    >
+                      Anuluj
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!newGroupName.trim() || selectedGroupMembers.length === 0}
+                      className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-slate-900 hover:bg-slate-800 shadow-md disabled:opacity-50"
+                    >
+                      Stwórz grupę
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
         </div>
       )}
 
-      {/* PRZYCISK OTWARCIA CZATU (Z PRZECIĄGANIEM) */}
+      {/* PRZYCISK OTWARCIA CZATU (DYMEK) */}
       <button
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
