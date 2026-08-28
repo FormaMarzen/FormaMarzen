@@ -18,20 +18,26 @@ export default function ClubChat() {
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // Główne zakładki widoku listy
   const [activeTab, setActiveTab] = useState<"direct" | "groups">("direct");
+  const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public">("my");
+
+  // Zakładka wewnątrz aktywnej rozmowy / grupy: Czat vs Galeria zdjęć
+  const [chatInsideTab, setChatInsideTab] = useState<"messages" | "media">("messages");
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
   const [klienci, setKlienci] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<any | null>(null);
-  
+
   const [messages, setMessages] = useState<any[]>([]);
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Obsługa załączników
+  // Załączniki
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -44,6 +50,7 @@ export default function ClubChat() {
 
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupType, setNewGroupType] = useState<"publiczna" | "zamknieta">("zamknieta");
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<(number | string)[]>([]);
 
   // Przeciąganie dymka
@@ -57,20 +64,24 @@ export default function ClubChat() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (chatInsideTab === "messages") {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, groupMessages, selectedUser, selectedGroup]);
+  }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab]);
 
-  // Reset okna po zamknięciu
+  // Reset stanu po zamknięciu czatu
   const handleCloseChat = () => {
     setIsOpen(false);
     setSelectedUser(null);
     setSelectedGroup(null);
     setSelectedFile(null);
     setFilePreview(null);
+    setChatInsideTab("messages");
+    setFullscreenImage(null);
   };
 
   // Inicjalizacja pozycji dymka
@@ -98,7 +109,7 @@ export default function ClubChat() {
     }
   }, []);
 
-  // Obsługa przeciągania
+  // Przeciąganie dymka
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     const target = e.target as HTMLElement;
     if (target.closest(".no-drag")) return;
@@ -159,11 +170,13 @@ export default function ClubChat() {
       } else {
         setSelectedUser(null);
         setSelectedGroup(null);
+        setChatInsideTab("messages");
         setIsOpen(true);
       }
     }
   };
 
+  // Aktualizacja znacznika aktywności
   const updateLastSeen = async (userId: number | string) => {
     if (!userId || Number(userId) === SYSTEM_ID || Number(userId) === 999999999) return;
     try {
@@ -188,6 +201,7 @@ export default function ClubChat() {
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
 
+  // Powiadomienia Push
   const sendChatPushNotification = async (recipientId: number | string, senderName: string, messageText: string) => {
     try {
       if (Number(recipientId) === SYSTEM_ID) return;
@@ -236,7 +250,7 @@ export default function ClubChat() {
     }
   };
 
-  // 1. Identyfikacja użytkownika
+  // Identyfikacja użytkownika
   useEffect(() => {
     const initUser = async () => {
       const {
@@ -309,25 +323,24 @@ export default function ClubChat() {
     initUser();
   }, []);
 
-  // 2. Pobieranie grup i wiadomości grupowych
+  // Pobieranie grup
   const fetchGroups = async () => {
     if (!currentUserId) return;
     try {
-      const { data, error } = await supabase.from("czat_grupy").select("*").order("created_at", { ascending: false });
+      const { data, error } = await supabase
+        .from("czat_grupy")
+        .select("*")
+        .order("created_at", { ascending: false });
+
       if (!error && data) {
-        const effective = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
-        const myGroups = data.filter((g: any) => {
-          if (isAdmin) return true;
-          const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
-          return members.some((m: string) => effective.includes(m)) || effective.includes(String(g.tworca_id));
-        });
-        setGroups(myGroups);
+        setGroups(data);
       }
     } catch (err) {
       console.error("Błąd pobierania grup:", err);
     }
   };
 
+  // Pobieranie wiadomości z wybranej grupy
   const fetchGroupMessages = async () => {
     if (!selectedGroup) return;
     try {
@@ -345,7 +358,7 @@ export default function ClubChat() {
     }
   };
 
-  // 3. Pobieranie wiadomości bezpośrednich
+  // Pobieranie wiadomości 1-na-1
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
@@ -375,6 +388,7 @@ export default function ClubChat() {
     }
   };
 
+  // Subskrypcje Realtime
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -403,7 +417,7 @@ export default function ClubChat() {
     }
   }, [selectedGroup]);
 
-  // 4. Oznaczanie jako przeczytane
+  // Oznaczanie jako przeczytane dla czatów 1-na-1
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -424,7 +438,7 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
-  // Obsługa wyboru pliku
+  // Obsługa plików
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -466,7 +480,7 @@ export default function ClubChat() {
     }
   };
 
-  // 5. Wysyłanie wiadomości (Direct / Group)
+  // Wysyłanie wiadomości (Direct / Grupa)
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -521,7 +535,39 @@ export default function ClubChat() {
     setIsUploading(false);
   };
 
-  // 6. Wysyłka masowa do wszystkich (Broadcast dla Admina)
+  // Dołączanie / Opuszczanie grupy publicznej przez klubowicza
+  const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
+    const myId = secondaryUserId || currentUserId;
+    if (!myId) return;
+
+    let currentMembers: any[] = Array.isArray(group.czlonkowie_ids) ? [...group.czlonkowie_ids] : [];
+    
+    if (shouldJoin) {
+      if (!currentMembers.map(String).includes(String(myId))) {
+        currentMembers.push(myId);
+      }
+    } else {
+      currentMembers = currentMembers.filter((m) => String(m) !== String(myId));
+    }
+
+    const { error } = await supabase
+      .from("czat_grupy")
+      .update({ czlonkowie_ids: currentMembers })
+      .eq("id", group.id);
+
+    if (!error) {
+      fetchGroups();
+      if (selectedGroup && selectedGroup.id === group.id) {
+        if (!shouldJoin && !isAdmin) {
+          setSelectedGroup(null);
+        } else {
+          setSelectedGroup({ ...selectedGroup, czlonkowie_ids: currentMembers });
+        }
+      }
+    }
+  };
+
+  // Broadcast do wszystkich
   const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!broadcastMessage.trim() && !selectedFile) return;
@@ -569,13 +615,15 @@ export default function ClubChat() {
     setIsSendingBroadcast(false);
   };
 
-  // 7. Tworzenie nowej grupy (dla Admina)
+  // Tworzenie nowej grupy przez Admina
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newGroupName.trim() || selectedGroupMembers.length === 0) return;
+    if (!newGroupName.trim()) return;
 
     const senderId = secondaryUserId || currentUserId;
-    const allMembers = Array.from(new Set([...selectedGroupMembers, senderId]));
+    const allMembers = newGroupType === "publiczna"
+      ? [senderId]
+      : Array.from(new Set([...selectedGroupMembers, senderId]));
 
     const { data, error } = await supabase
       .from("czat_grupy")
@@ -584,12 +632,14 @@ export default function ClubChat() {
           nazwa: newGroupName.trim(),
           tworca_id: senderId,
           czlonkowie_ids: allMembers,
+          typ: newGroupType,
         },
       ])
       .select();
 
     if (!error && data && data.length > 0) {
       setNewGroupName("");
+      setNewGroupType("zamknieta");
       setSelectedGroupMembers([]);
       setShowCreateGroupModal(false);
       fetchGroups();
@@ -614,6 +664,12 @@ export default function ClubChat() {
 
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
+
+  // Lista wszystkich zdjęć w aktywnej konwersacji (1-na-1 lub grupa)
+  const currentConversationMessages = selectedGroup ? groupMessages : activeChatMessages;
+  const conversationImages = currentConversationMessages.filter(
+    (m: any) => m.attachment_url && m.attachment_type === "image"
+  );
 
   const latestMessageMap = new Map();
   const latestMessageTextMap = new Map();
@@ -692,9 +748,17 @@ export default function ClubChat() {
 
     if (msg.attachment_type === "image") {
       return (
-        <a href={msg.attachment_url} target="_blank" rel="noopener noreferrer" className="block mt-2 rounded-xl overflow-hidden border border-slate-700/30">
-          <img src={msg.attachment_url} alt="Załącznik" className="max-h-48 w-full object-cover hover:scale-105 transition-transform" />
-        </a>
+        <button
+          type="button"
+          onClick={() => setFullscreenImage(msg.attachment_url)}
+          className="block mt-2 rounded-xl overflow-hidden border border-slate-700/30 text-left cursor-pointer group"
+        >
+          <img
+            src={msg.attachment_url}
+            alt="Załącznik"
+            className="max-h-48 w-full object-cover group-hover:scale-105 transition-transform"
+          />
+        </button>
       );
     }
 
@@ -799,6 +863,20 @@ export default function ClubChat() {
   const isLeftSide = isPositioned ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 200) : false;
   const isTopSide = isPositioned ? position.y < 540 : false;
 
+  // Filtrowanie grup: Moje grupy vs Odkrywaj publiczne
+  const myGroupsList = groups.filter((g: any) => {
+    if (isAdmin) return true;
+    const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
+    return members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
+  });
+
+  const publicDiscoverGroups = groups.filter((g: any) => {
+    const isPublic = g.typ === "publiczna";
+    const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
+    const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
+    return isPublic && !isAlreadyMember;
+  });
+
   return (
     <div
       ref={containerRef}
@@ -818,7 +896,7 @@ export default function ClubChat() {
     >
       {isOpen && (
         <div
-          className={`absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[410px] h-[550px] flex flex-col overflow-hidden animate-in fade-in ${
+          className={`absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-[360px] sm:w-[410px] h-[560px] flex flex-col overflow-hidden animate-in fade-in ${
             isLeftSide ? "left-0" : "right-0"
           } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
         >
@@ -831,6 +909,7 @@ export default function ClubChat() {
                     onClick={() => {
                       setSelectedUser(null);
                       setSelectedGroup(null);
+                      setChatInsideTab("messages");
                     }}
                     className="text-slate-300 hover:text-white p-1 cursor-pointer transition-colors"
                     title="Wróć do listy"
@@ -840,11 +919,15 @@ export default function ClubChat() {
                   {selectedGroup ? (
                     <>
                       <div className="w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0">
-                        👥
+                        {selectedGroup.typ === "publiczna" ? "🌐" : "🔒"}
                       </div>
                       <div className="overflow-hidden">
-                        <div className="font-bold text-xs truncate max-w-[170px]">{selectedGroup.nazwa}</div>
-                        <div className="text-[10px] text-amber-400 font-medium">Czat grupowy</div>
+                        <div className="font-bold text-xs truncate max-w-[150px]">{selectedGroup.nazwa}</div>
+                        <div className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
+                          <span>{selectedGroup.typ === "publiczna" ? "Grupa Publiczna" : "Grupa Zamknięta"}</span>
+                          <span>•</span>
+                          <span>{Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} osób</span>
+                        </div>
                       </div>
                     </>
                   ) : (
@@ -878,25 +961,65 @@ export default function ClubChat() {
                   <span className="text-lg">💬</span>
                   <div>
                     <h3 className="font-black text-xs uppercase tracking-wider">Czat Klubowiczów</h3>
-                    <p className="text-[10px] text-slate-400">Forma Marzeń Communication</p>
+                    <p className="text-[10px] text-slate-400">Forma Marzeń</p>
                   </div>
                 </div>
               )}
             </div>
 
-            <button
-              onClick={handleCloseChat}
-              className="text-slate-400 hover:text-white w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs cursor-pointer transition-colors"
-            >
-              ✕
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedGroup && selectedGroup.typ === "publiczna" && !isAdmin && (
+                <button
+                  onClick={() => handleToggleGroupMembership(selectedGroup, false)}
+                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-1 rounded-lg border border-rose-800 transition-colors"
+                  title="Opuść tę grupę"
+                >
+                  Opuść
+                </button>
+              )}
+              <button
+                onClick={handleCloseChat}
+                className="text-slate-400 hover:text-white w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
           </div>
+
+          {/* PRZEŁĄCZNIK WIADOMOŚCI / ZDJĘCIA W AKTYWNEJ ROZMOWIE */}
+          {(selectedUser || selectedGroup) && (
+            <div className="bg-slate-900 border-t border-slate-800 px-4 py-1.5 flex items-center justify-center gap-2 text-xs">
+              <button
+                onClick={() => setChatInsideTab("messages")}
+                className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                  chatInsideTab === "messages"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                💬 Wiadomości
+              </button>
+              <button
+                onClick={() => setChatInsideTab("media")}
+                className={`px-3 py-1 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                  chatInsideTab === "media"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>🖼️ Zdjęcia</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "media" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
+                  {conversationImages.length}
+                </span>
+              </button>
+            </div>
+          )}
 
           {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP) */}
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
-              {/* ZAKŁADKI I PRZYCISKI ADMINISTRATORA */}
+              {/* GŁÓWNE ZAKŁADKI I PRZYCISKI ADMINISTRATORA */}
               <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-2">
                 <div className="flex gap-1 bg-slate-200 p-1 rounded-xl">
                   <button
@@ -909,7 +1032,7 @@ export default function ClubChat() {
                     onClick={() => setActiveTab("groups")}
                     className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    Grupy ({groups.length})
+                    Grupy ({myGroupsList.length})
                   </button>
                 </div>
 
@@ -935,7 +1058,7 @@ export default function ClubChat() {
                 )}
               </div>
 
-              {/* LISTA PRYWATNYCH */}
+              {/* LISTA ROZMÓW 1-NA-1 */}
               {activeTab === "direct" && (
                 <>
                   <div className="relative">
@@ -964,7 +1087,10 @@ export default function ClubChat() {
                       return (
                         <button
                           key={user.id}
-                          onClick={() => setSelectedUser(user)}
+                          onClick={() => {
+                            setSelectedUser(user);
+                            setChatInsideTab("messages");
+                          }}
                           className={`w-full p-2.5 rounded-2xl border flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group ${
                             isSys
                               ? "bg-gradient-to-r from-amber-50 to-white border-amber-300 hover:border-amber-400"
@@ -1020,41 +1146,156 @@ export default function ClubChat() {
                 </>
               )}
 
-              {/* LISTA GRUP */}
+              {/* LISTA GRUP (MOJE vs ODKRYWAJ PUBLICZNE) */}
               {activeTab === "groups" && (
-                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                  {groups.map((group: any) => (
+                <div className="flex-1 flex flex-col overflow-hidden space-y-2">
+                  <div className="flex gap-2 border-b border-slate-200 pb-1.5 text-xs font-bold">
                     <button
-                      key={group.id}
-                      onClick={() => setSelectedGroup(group)}
-                      className="w-full p-3 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left"
+                      onClick={() => setGroupFilterTab("my")}
+                      className={`pb-1 px-1 transition-colors ${groupFilterTab === "my" ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-400 hover:text-slate-600"}`}
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-amber-400/20 text-amber-950 border border-amber-400 flex items-center justify-center font-bold text-base">
-                          👥
-                        </div>
-                        <div>
-                          <div className="font-bold text-xs text-slate-900">{group.nazwa}</div>
-                          <div className="text-[10px] text-slate-500">
-                            Członków: {Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-slate-400 text-xs font-bold">→</span>
+                      Moje grupy ({myGroupsList.length})
                     </button>
-                  ))}
+                    <button
+                      onClick={() => setGroupFilterTab("public")}
+                      className={`pb-1 px-1 transition-colors ${groupFilterTab === "public" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-400 hover:text-slate-600"}`}
+                    >
+                      Odkrywaj otwarte ({publicDiscoverGroups.length})
+                    </button>
+                  </div>
 
-                  {groups.length === 0 && (
-                    <div className="py-12 text-center text-slate-400 text-xs space-y-1">
-                      <div>Brak dostępnych czatów grupowych.</div>
-                      {isAdmin && <p className="text-[10px]">Kliknij "+ Nowa", aby utworzyć pierwszą grupę.</p>}
-                    </div>
-                  )}
+                  <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                    {groupFilterTab === "my" ? (
+                      <>
+                        {myGroupsList.map((group: any) => {
+                          const isPublic = group.typ === "publiczna";
+                          return (
+                            <button
+                              key={group.id}
+                              onClick={() => {
+                                setSelectedGroup(group);
+                                setChatInsideTab("messages");
+                              }}
+                              className="w-full p-2.5 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group"
+                            >
+                              <div className="flex items-center gap-3 overflow-hidden">
+                                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border ${isPublic ? "bg-amber-100 text-amber-900 border-amber-300" : "bg-slate-100 text-slate-900 border-slate-300"}`}>
+                                  {isPublic ? "🌐" : "🔒"}
+                                </div>
+                                <div className="overflow-hidden">
+                                  <div className="font-bold text-xs text-slate-900 truncate">{group.nazwa}</div>
+                                  <div className="text-[10px] text-slate-500 flex items-center gap-1.5">
+                                    <span className={isPublic ? "text-amber-600 font-semibold" : "text-slate-500"}>
+                                      {isPublic ? "Publiczna" : "Zamknięta (Obóz / Team)"}
+                                    </span>
+                                    <span>•</span>
+                                    <span>{Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0} osób</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <span className="text-slate-400 text-xs font-bold group-hover:text-slate-900 transition-colors">→</span>
+                            </button>
+                          );
+                        })}
+
+                        {myGroupsList.length === 0 && (
+                          <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+                            <div>Nie należysz jeszcze do żadnej grupy.</div>
+                            <p className="text-[10px]">Sprawdź zakładkę "Odkrywaj otwarte" lub poczekaj na dodanie przez Trenera.</p>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {publicDiscoverGroups.map((group: any) => (
+                          <div
+                            key={group.id}
+                            className="w-full p-2.5 rounded-2xl border bg-white border-amber-200 flex items-center justify-between shadow-sm"
+                          >
+                            <div className="flex items-center gap-3 overflow-hidden">
+                              <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center font-bold text-sm shrink-0">
+                                🌐
+                              </div>
+                              <div className="overflow-hidden">
+                                <div className="font-bold text-xs text-slate-900 truncate">{group.nazwa}</div>
+                                <div className="text-[10px] text-amber-700">
+                                  {Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0} uczestników
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => handleToggleGroupMembership(group, true)}
+                              className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[10px] px-3 py-1.5 rounded-xl shadow-sm transition-all shrink-0 cursor-pointer"
+                            >
+                              + Dołącz
+                            </button>
+                          </div>
+                        ))}
+
+                        {publicDiscoverGroups.length === 0 && (
+                          <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+                            <div>Brak nowych grup publicznych.</div>
+                            <p className="text-[10px]">Należysz już do wszystkich otwartych dyskusji!</p>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
+          ) : chatInsideTab === "media" ? (
+            /* WIDOK GALERII ZDJĘĆ DLA DANEJ ROZMOWY / GRUPY */
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
+                <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                  Udostępnione Zdjęcia ({conversationImages.length})
+                </span>
+                <span className="text-[10px] text-slate-500">Kliknij zdjęcie, aby powiększyć</span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-1">
+                {conversationImages.length > 0 ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    {conversationImages.map((imgMsg: any) => {
+                      const msgDate = imgMsg.created_at
+                        ? new Date(imgMsg.created_at).toLocaleDateString("pl-PL", {
+                            day: "2-digit",
+                            month: "2-digit",
+                          })
+                        : "";
+
+                      return (
+                        <div
+                          key={imgMsg.id}
+                          onClick={() => setFullscreenImage(imgMsg.attachment_url)}
+                          className="relative group aspect-square rounded-xl overflow-hidden border border-slate-300 bg-slate-200 cursor-pointer shadow-sm hover:border-amber-400 transition-all"
+                        >
+                          <img
+                            src={imgMsg.attachment_url}
+                            alt={imgMsg.attachment_name || "Zdjęcie"}
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
+                          />
+                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1 text-[9px] text-white flex justify-between items-end opacity-90">
+                            <span className="truncate max-w-[60px] font-medium">{imgMsg.nadawca_nazwa?.split(" ")[0]}</span>
+                            <span className="text-[8px] opacity-75 font-mono">{msgDate}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-20 text-center text-slate-400 text-xs space-y-2">
+                    <span className="text-3xl block">🖼️</span>
+                    <div>Brak zdjęć w tej rozmowie.</div>
+                    <p className="text-[10px]">Zdjęcia przesłane przez uczestników pojawią się tutaj automatycznie.</p>
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
-            /* WIDOK AKTYWNEJ ROZMOWY */
+            /* WIDOK AKTYWNEJ ROZMOWY (WIADOMOŚCI) */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
@@ -1184,6 +1425,40 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* LIGHTBOX / PEŁNOEKRANOWY PODGLĄD ZDJĘCIA */}
+          {fullscreenImage && (
+            <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md z-[60] flex flex-col items-center justify-between p-4 animate-in fade-in">
+              <div className="w-full flex justify-between items-center text-white pb-2 border-b border-slate-800">
+                <span className="text-xs font-bold text-slate-300">Podgląd zdjęcia</span>
+                <div className="flex items-center gap-3">
+                  <a
+                    href={fullscreenImage}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download
+                    className="text-xs font-bold text-amber-400 hover:text-amber-300 bg-slate-800 px-3 py-1 rounded-lg border border-slate-700 flex items-center gap-1"
+                  >
+                    ⬇️ Pobierz
+                  </a>
+                  <button
+                    onClick={() => setFullscreenImage(null)}
+                    className="text-slate-400 hover:text-white font-black text-sm bg-slate-800 w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 flex items-center justify-center p-2 max-h-[420px] w-full">
+                <img
+                  src={fullscreenImage}
+                  alt="Pełny podgląd"
+                  className="max-h-full max-w-full object-contain rounded-xl shadow-2xl"
+                />
+              </div>
+            </div>
+          )}
+
           {/* MODAL BROADCAST (DO WSZYSTKICH) */}
           {showBroadcastModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
@@ -1207,7 +1482,6 @@ export default function ClubChat() {
                     required={!selectedFile}
                   />
 
-                  {/* Załącznik w broadcast */}
                   <div className="flex items-center gap-2">
                     <input
                       type="file"
@@ -1262,41 +1536,66 @@ export default function ClubChat() {
                 <form onSubmit={handleCreateGroup} className="space-y-3">
                   <input
                     type="text"
-                    placeholder="Nazwa grupy (np. Obóz Wałcz 2026)..."
+                    placeholder="Nazwa grupy (np. Obóz Wałcz 2026, Hyrox Squad)..."
                     value={newGroupName}
                     onChange={(e) => setNewGroupName(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
                     required
                   />
 
-                  <div>
-                    <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
-                    <div className="max-h-40 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                      {klienci
-                        .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
-                        .map((user) => {
-                          const isSelected = selectedGroupMembers.includes(user.id);
-                          return (
-                            <label
-                              key={user.id}
-                              className="flex items-center gap-2 p-1.5 hover:bg-white rounded-lg cursor-pointer text-xs select-none"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => {
-                                  setSelectedGroupMembers((prev) =>
-                                    isSelected ? prev.filter((id) => id !== user.id) : [...prev, user.id]
-                                  );
-                                }}
-                                className="rounded text-amber-500 focus:ring-0"
-                              />
-                              <span className="font-medium text-slate-800">{user.name}</span>
-                            </label>
-                          );
-                        })}
-                    </div>
+                  {/* WYBÓR TYPU GRUPY */}
+                  <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setNewGroupType("zamknieta")}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${newGroupType === "zamknieta" ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                    >
+                      🔒 Zamknięta (Obóz / Team)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewGroupType("publiczna")}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${newGroupType === "publiczna" ? "bg-amber-400 text-slate-950 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                    >
+                      🌐 Publiczna (Otwarta)
+                    </button>
                   </div>
+
+                  {/* LISTA KLUBOWICZÓW DLA GRUPY ZAMKNIĘTEJ */}
+                  {newGroupType === "zamknieta" ? (
+                    <div>
+                      <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
+                      <div className="max-h-36 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                        {klienci
+                          .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
+                          .map((user) => {
+                            const isSelected = selectedGroupMembers.includes(user.id);
+                            return (
+                              <label
+                                key={user.id}
+                                className="flex items-center gap-2 p-1.5 hover:bg-white rounded-lg cursor-pointer text-xs select-none"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {
+                                    setSelectedGroupMembers((prev) =>
+                                      isSelected ? prev.filter((id) => id !== user.id) : [...prev, user.id]
+                                    );
+                                  }}
+                                  className="rounded text-amber-500 focus:ring-0"
+                                />
+                                <span className="font-medium text-slate-800">{user.name}</span>
+                              </label>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900">
+                      ℹ️ Grupa publiczna będzie widoczna dla wszystkich klubowiczów w zakładce <strong>"Odkrywaj otwarte"</strong> i każdy będzie mógł do niej samodzielnie dołączyć.
+                    </div>
+                  )}
 
                   <div className="flex gap-2 pt-2">
                     <button
@@ -1308,7 +1607,7 @@ export default function ClubChat() {
                     </button>
                     <button
                       type="submit"
-                      disabled={!newGroupName.trim() || selectedGroupMembers.length === 0}
+                      disabled={!newGroupName.trim() || (newGroupType === "zamknieta" && selectedGroupMembers.length === 0)}
                       className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-slate-900 hover:bg-slate-800 shadow-md disabled:opacity-50"
                     >
                       Stwórz grupę
