@@ -107,7 +107,7 @@ export default function PublicSchedulePage() {
     try {
       setIsLoading(true);
 
-      // 1. Nadrzędne reguły
+      // 1. Nadrzędne reguły autoodwoływania
       const { data: rulesData } = await supabase
         .from('club_booking_rules')
         .select('*')
@@ -124,7 +124,7 @@ export default function PublicSchedulePage() {
         });
       }
 
-      // 2. Szablony grafiku
+      // 2. Szablony grafiku stałego
       const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
       if (szablonyData) {
         setZapisaneZajecia(szablonyData.map((s: any) => ({
@@ -135,12 +135,13 @@ export default function PublicSchedulePage() {
           trainer: s.trainer || s.prowadzacy,
           limit: s.limit || s.limit_miejsc,
           days: s.days || {},
-          isOdwołane: false,
-          isUsunięte: false
+          isOdwołane: !!(s.is_odwolane || s.is_odwołane || s.odwolane),
+          isUsunięte: !!(s.is_usuniete || s.is_usunięte || s.usuniete),
+          powodOdwolania: s.powod_odwolania || s.powod || ''
         })));
       }
 
-      // 3. Zajęcia jednorazowe
+      // 3. Zajęcia jednorazowe z uwzględnieniem statusów odwołania / usunięcia
       const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
       if (jednorazoweData) {
         setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
@@ -150,15 +151,16 @@ export default function PublicSchedulePage() {
           end: j.end_time || j.end,
           trainer: j.trainer,
           limit: j.limit_miejsc || j.limit,
-          displayDate: j.display_date,
-          fullDateStr: j.full_date_str,
+          displayDate: j.display_date || j.displayDate,
+          fullDateStr: j.full_date_str || j.fullDateStr || j.date,
           isJednorazowe: true,
-          isOdwołane: false,
-          isUsunięte: false
+          isOdwołane: Boolean(j.is_odwolane || j.is_odwołane || j.odwolane || j.odwołane || j.status === 'odwołane' || j.status === 'odwolane'),
+          isUsunięte: Boolean(j.is_usuniete || j.is_usunięte || j.usuniete || j.usunięte || j.status === 'usunięte' || j.status === 'usuniete'),
+          powodOdwolania: j.powod_odwolania || j.powod || ''
         })));
       }
 
-      // 4. Nadpisania dni (edycje/odwołania)
+      // 4. Nadpisania dni (edycje/odwołania z grafiku)
       const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
       if (nadpisaniaData) {
         const nadpisaniaMap: { [key: string]: any } = {};
@@ -168,14 +170,15 @@ export default function PublicSchedulePage() {
             end: n.end,
             trainer: n.trainer,
             limit: n.limit,
-            isOdwołane: n.is_odwolane,
-            isUsunięte: n.is_usuniete
+            isOdwołane: Boolean(n.is_odwolane || n.is_odwołane || n.odwolane),
+            isUsunięte: Boolean(n.is_usuniete || n.is_usunięte || n.usuniete),
+            powodOdwolania: n.powod_odwolania || n.powod || 'ODWOŁANE'
           };
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
-      // 5. Zapisy (dla liczników wolnych miejsc)
+      // 5. Zapisy na zajęcia (liczniki wolnych miejsc)
       const { data: zapisyData } = await supabase.from('zapisy_zajec').select('class_key, status');
       if (zapisyData) {
         const grouped: { [key: string]: any[] } = {};
@@ -197,7 +200,7 @@ export default function PublicSchedulePage() {
         })));
       }
 
-      // 7. Rodzaje zajęć (kolory)
+      // 7. Rodzaje zajęć (kolorystyka)
       const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
       if (rodzajeData) {
         setRodzajeZajec(rodzajeData);
@@ -551,18 +554,27 @@ export default function PublicSchedulePage() {
                 const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
                 const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
 
+                // 1. ZAJĘCIA STAŁE Z GRAFIKU
                 const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
                   .filter((item: any) => item.days && item.days[col.key])
                   .map((item: any) => {
                     const classKey = `${item.id}_${col.date}`;
-                    const override = nadpisaneZajeciaDni[classKey];
+                    const override = nadpisaneZajeciaDni[classKey] || nadpisaneZajeciaDni[String(item.id)];
                     return override ? { ...item, ...override } : item;
                   })
-                  .filter((item: any) => !item.isUsunięte);
+                  .filter((item: any) => !item.isUsunięte && !item.is_usuniete);
 
+                // 2. ZAJĘCIA JEDNORAZOWE (Z POPRAWIONĄ OBSŁUGĄ NADPISAŃ I ODWOŁAŃ)
                 const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
-                  .filter((item: any) => item.displayDate === col.date)
-                  .filter((item: any) => !item.isUsunięte);
+                  .filter((item: any) => item.displayDate === col.date || item.fullDateStr === col.isoDate)
+                  .map((item: any) => {
+                    const classKey1 = `${item.id}_${col.date}`;
+                    const classKey2 = `jednorazowe_${item.id}_${col.date}`;
+                    const classKey3 = String(item.id);
+                    const override = nadpisaneZajeciaDni[classKey1] || nadpisaneZajeciaDni[classKey2] || nadpisaneZajeciaDni[classKey3];
+                    return override ? { ...item, ...override } : item;
+                  })
+                  .filter((item: any) => !item.isUsunięte && !item.is_usuniete);
 
                 const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
                 const isPastDay = col.isoDate < todayStr;
@@ -600,7 +612,7 @@ export default function PublicSchedulePage() {
                       zajeciaDnia.map((item: any, classIdx: number) => {
                         const durationText = calculateDuration(item.start, item.end);
                         const classKey = `${item.id}_${col.date}`;
-                        const zapisani = zapisyNaZajecia[classKey] || [];
+                        const zapisani = zapisyNaZajecia[classKey] || zapisyNaZajecia[String(item.id)] || [];
                         const limitZajec = item.limit || 12;
 
                         const liczbaGlowna = Math.min(zapisani.length, limitZajec);
@@ -610,8 +622,8 @@ export default function PublicSchedulePage() {
                         const isPastEvent = isPastDay || isPastTime;
 
                         const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
-                        const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
-                        const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
+                        const isClassCancelled = Boolean(item.isOdwołane || item.is_odwolane || autoCancelStatus.isAutoCancelled);
+                        const topColor = getTopBorderColor(item.title, isClassCancelled, Boolean(item.isUsunięte || item.is_usuniete));
 
                         return (
                           <div
@@ -641,7 +653,9 @@ export default function PublicSchedulePage() {
 
                             {isClassCancelled ? (
                               <div className="py-1 px-2 bg-rose-100 text-rose-800 font-black text-center rounded-lg text-[10px] uppercase tracking-wider border border-rose-200">
-                                {autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : 'ODWOŁANE'}
+                                {autoCancelStatus.isAutoCancelled
+                                  ? autoCancelStatus.reason
+                                  : (item.powodOdwolania || 'ODWOŁANE')}
                               </div>
                             ) : (
                               <div className="flex items-center justify-between gap-1 text-[10px]">
