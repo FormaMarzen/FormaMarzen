@@ -266,12 +266,12 @@ export default function ClubChat() {
   };
 
   // Powiadomienia Push (Grupowe / Treningowe)
-  const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string, trainingId?: any) => {
+  const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string, trainingObj?: any) => {
     try {
       let recipientIds: string[] = [];
 
-      if (trainingId) {
-        const signups = getSignupsForTraining(trainingId);
+      if (trainingObj) {
+        const signups = getSignupsForTraining(trainingObj);
         recipientIds = signups.map((z: any) => String(z.klient_id));
       } else {
         const { data: groupData } = await supabase
@@ -644,17 +644,18 @@ export default function ClubChat() {
     });
   };
 
-  // Precyzyjne, elastyczne wyszukiwanie aktywnych zapisów na dany trening
-  const getSignupsForTraining = (trainingId: any, trainingObj?: any) => {
-    if (!trainingId && !trainingObj) return [];
-    const tId = String(trainingId || trainingObj?.id || "");
+  // Precyzyjne dopasowanie aktywnych zapisów dla konkretnego treningu (ID, Godzina i Data)
+  const getSignupsForTraining = (training: any) => {
+    if (!training) return [];
+    const tId = String(training.id || "").trim();
+    const tTitle = String(training.title || "").toLowerCase().trim();
+    const tStart = String(training.start || "").trim(); // np. "19:35"
     const todayIso = new Date().toISOString().split("T")[0]; // "2026-08-28"
     const now = new Date();
     const day = String(now.getDate()).padStart(2, "0");
     const month = String(now.getMonth() + 1).padStart(2, "0");
     const year = String(now.getFullYear());
     const todayPl = `${day}.${month}.${year}`;
-    const todayPlShort = `${now.getDate()}.${now.getMonth() + 1}.${year}`;
     const todayDash = `${day}-${month}-${year}`;
 
     return zapisyZajec.filter((z: any) => {
@@ -667,28 +668,40 @@ export default function ClubChat() {
       const ck = String(z.class_key || "").trim();
       if (!ck) return false;
 
+      // 1. Dokładne dopasowanie ID
       if (ck === tId) return true;
-      if (ck.startsWith(`${tId}_`) || ck.startsWith(`${tId}-`) || ck.startsWith(`${tId}:`)) return true;
 
-      const parts = ck.split(/[_:-]/);
-      if (parts.includes(tId)) return true;
-
-      if (trainingObj?.title && ck.toLowerCase().includes(String(trainingObj.title).toLowerCase())) {
-        if (ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayPlShort) || ck.includes(todayDash)) {
-          return true;
+      // 2. Tokeny ID rozdzielone podkreśleniem lub myślnikiem (np. "12_2026-08-28", "12_2026-08-28_19:35")
+      const tokens = ck.split(/[_:-]/);
+      if (tokens.includes(tId)) {
+        const hasTodayDate = ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayDash);
+        const hasAnyDate = /\d{4}-\d{2}-\d{2}/.test(ck) || /\d{2}\.\d{2}\.\d{4}/.test(ck);
+        if (hasAnyDate) {
+          return hasTodayDate;
         }
+        return true;
+      }
+
+      // 3. Dopasowanie po Nazwie + Godzinie + Dzisiejszej Dacie
+      const ckLower = ck.toLowerCase();
+      const matchesTitle = tTitle && ckLower.includes(tTitle);
+      const matchesStart = tStart && (ck.includes(tStart) || ck.includes(tStart.replace(":", "-")));
+      const matchesDate = ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayDash);
+
+      if (matchesTitle && matchesStart && matchesDate) {
+        return true;
       }
 
       return false;
     });
   };
 
-  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu + dynamiczna synchronizacja
+  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu
   const getOrCreateTrainingGroup = async (training: any) => {
     const todayStr = new Date().toLocaleDateString("pl-PL");
     const groupName = `Trening: ${training.title} (${todayStr} ${training.start})`;
     
-    const signups = getSignupsForTraining(training.id, training);
+    const signups = getSignupsForTraining(training);
     const signedClientIds = signups.map((z: any) => String(z.klient_id));
 
     const myClientId = String(secondaryUserId || currentUserId);
@@ -698,7 +711,7 @@ export default function ClubChat() {
 
     const allMembers = Array.from(new Set([...signedClientIds, myClientId, ...adminIds, "999999999", String(SYSTEM_ID)]));
 
-    const existing = groups.find((g: any) => g.nazwa === groupName || (g.typ === "trening" && g.nazwa?.includes(training.title)));
+    const existing = groups.find((g: any) => g.nazwa === groupName || (g.typ === "trening" && g.nazwa?.includes(training.title) && g.nazwa?.includes(training.start)));
     if (existing) {
       const currentStored = Array.isArray(existing.czlonkowie_ids) ? existing.czlonkowie_ids.map(String) : [];
       const newCalculated = allMembers.map(String);
@@ -778,13 +791,12 @@ export default function ClubChat() {
         updateLastSeen(senderId);
 
         const isTrainingChat = selectedGroup.typ === "trening" || selectedGroup.nazwa?.startsWith("Trening:");
-        let trainingRefId = null;
+        let matchedTraining = null;
         if (isTrainingChat) {
-          const matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
-          if (matchedTraining) trainingRefId = matchedTraining.id;
+          matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title) && selectedGroup.nazwa.includes(t.start)) || grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
         }
 
-        sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik", trainingRefId);
+        sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik", matchedTraining);
       }
     } else if (selectedUser) {
       payload.odbiorca_id = selectedUser.id;
@@ -1055,14 +1067,18 @@ export default function ClubChat() {
   );
   const pinnedMessage = currentConversationMessages.find((m: any) => m.przypinana);
 
-  // Dynamiczne pobieranie listy osób w wybranej grupie lub treningu na podstawie aktualnych zapisów
+  // Dynamiczne pobieranie listy osób w wybranej grupie lub treningu
   let groupMemberIds: string[] = [];
   if (selectedGroup) {
     const isTraining = selectedGroup.typ === "trening" || selectedGroup.nazwa?.startsWith("Trening:");
     if (isTraining) {
-      const matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
+      const matchedTraining = grafikZajec.find((t: any) => 
+        selectedGroup.nazwa.includes(t.title) && 
+        (selectedGroup.nazwa.includes(t.start) || !selectedGroup.nazwa.includes(":"))
+      ) || grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
+
       if (matchedTraining) {
-        const signups = getSignupsForTraining(matchedTraining.id, matchedTraining);
+        const signups = getSignupsForTraining(matchedTraining);
         const signedClientIds = signups.map((z: any) => String(z.klient_id));
         const adminIds = klienci
           .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
@@ -1366,7 +1382,7 @@ export default function ClubChat() {
     if (isAdmin) return true;
 
     const myClientId = String(secondaryUserId || currentUserId);
-    const signups = getSignupsForTraining(training.id, training);
+    const signups = getSignupsForTraining(training);
     return signups.some((z: any) => String(z.klient_id) === myClientId);
   });
 
@@ -1900,7 +1916,7 @@ export default function ClubChat() {
               {activeTab === "trainings" && (
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
                   {todayTrainingsList.map((training: any) => {
-                    const matchedGroup = groups.find((g: any) => g.nazwa?.includes(training.title));
+                    const matchedGroup = groups.find((g: any) => g.nazwa?.includes(training.title) && g.nazwa?.includes(training.start));
                     const trainingUnread = matchedGroup
                       ? messages.filter((m: any) => String(m.grupa_id) === String(matchedGroup.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length
                       : 0;
