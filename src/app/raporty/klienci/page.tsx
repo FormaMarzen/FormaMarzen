@@ -435,7 +435,7 @@ export default function KlienciPage() {
     }
   };
 
-  // WYPISANIE POJEDYNCZE Z ZAJĘĆ (W TYM ZAPISÓW AUTOMATYCZNYCH)
+  // WYPISANIE POJEDYNCZE Z ZAJĘĆ
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
 
@@ -454,7 +454,6 @@ export default function KlienciPage() {
       }
     }
 
-    // Obsługa usunięcia zapisu automatycznego z bazy automatyczne_zapisy
     if (String(zajecieItem.classKey || '').startsWith('auto_')) {
       const grafikId = String(zajecieItem.classKey).replace('auto_', '');
       await supabase
@@ -1636,7 +1635,6 @@ export default function KlienciPage() {
 
   // LOGIKA SORTOWANIA GŁÓWNEJ TABELI KLIENTÓW
   const sortedClients = [...filteredClients].sort((a, b) => {
-    // Domyślne sortowanie: najszybciej wygasające karnety na samej górze, brak karnetów na samym dole
     if (!sortField) {
       const expA = a.expiresDate || a.Wygasa || a.karnetyKlubowicza?.[0]?.waznyDo || '';
       const expB = b.expiresDate || b.Wygasa || b.karnetyKlubowicza?.[0]?.waznyDo || '';
@@ -2400,6 +2398,11 @@ export default function KlienciPage() {
                       const upcomingMap = new Map<string, any>();
                       const seenSignatures = new Set<string>();
 
+                      // Lista automatycznych zapisów tego klienta
+                      const clientAutoEnrollments = (automatyczneZapisy || []).filter(
+                        (az: any) => String(az.klient_id) === String(profileClient.id)
+                      );
+
                       // A. Zapisy z globalnej tabeli 'zapisy_zajec'
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
@@ -2421,10 +2424,12 @@ export default function KlienciPage() {
                             const uniqueKey = z.class_key || `${z.id}`;
                             const sig = normalizeClassSignature(`${dateStr} ${timeStr}`, title);
                             
-                            // Weryfikacja czy zapis nie powstał z reguły automatycznych zapisów
-                            const isAutoEnrolled = (automatyczneZapisy || []).some(
-                              (az: any) => String(az.klient_id) === String(profileClient.id) && String(az.grafik_id) === String(classId)
-                            );
+                            // Uniwersalna weryfikacja automatycznego zapisu po ID grafiku, tytule zajęć lub autorze
+                            const isAutoEnrolled = clientAutoEnrollments.some((az: any) => {
+                              const matchId = String(az.grafik_id) === String(classId);
+                              const matchTitle = az.class_title && title && az.class_title.trim().toLowerCase() === title.trim().toLowerCase();
+                              return matchId || matchTitle;
+                            }) || (z.zapisujacy && String(z.zapisujacy).toLowerCase().includes('automatycz'));
 
                             let author = 'Klubowicz';
                             if (isAutoEnrolled) {
@@ -2459,36 +2464,7 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // B. Zapisy z tabeli 'automatyczne_zapisy'
-                      (automatyczneZapisy || [])
-                        .filter((az: any) => String(az.klient_id) === String(profileClient.id))
-                        .forEach((az: any) => {
-                          const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
-                          if (stdClass) {
-                            const uniqueKey = `auto_${az.id}_${az.grafik_id}`;
-                            const hourStr = stdClass.start || stdClass.start_time || '';
-                            const fullDateStr = `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${hourStr}`.trim();
-                            const title = az.class_title || stdClass.title || stdClass.nazwa || 'Trening cykliczny';
-                            const sig = normalizeClassSignature(fullDateStr, title);
-
-                            if (!upcomingMap.has(uniqueKey) && !seenSignatures.has(sig)) {
-                              seenSignatures.add(sig);
-                              seenSignatures.add(uniqueKey);
-                              upcomingMap.set(uniqueKey, {
-                                id: uniqueKey,
-                                classKey: `auto_${az.grafik_id}`,
-                                data: fullDateStr,
-                                zajecia: title,
-                                status: 'ZAPIS AUTOMATYCZNY',
-                                zapisujacy: 'Zapis automatyczny (Klub)',
-                                created_at: az.created_at || null,
-                                sortTime: nowTime + 1000
-                              });
-                            }
-                          }
-                        });
-
-                      // C. Dodatkowe nadchodzące zapisy z profilu klienta
+                      // B. Dodatkowe nadchodzące zapisy z profilu klienta
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         const classStartMs = parseClassDate(item.data);
                         if (classStartMs >= nowTime) {
@@ -2498,19 +2474,46 @@ export default function KlienciPage() {
                           if (!upcomingMap.has(uniqueKey) && !seenSignatures.has(sig) && !(item.classKey && seenSignatures.has(item.classKey))) {
                             seenSignatures.add(sig);
                             seenSignatures.add(uniqueKey);
+
+                            const isAutoEnrolled = clientAutoEnrollments.some((az: any) => {
+                              return az.class_title && item.zajecia && az.class_title.trim().toLowerCase() === String(item.zajecia).trim().toLowerCase();
+                            });
+
                             upcomingMap.set(uniqueKey, {
                               id: item.id || uniqueKey,
                               classKey: item.classKey,
                               data: item.data,
                               zajecia: item.zajecia || 'Trening',
-                              status: item.status || 'ZAPISANY',
-                              zapisujacy: item.zapisujacy || 'Klub (Panel Administratora)',
+                              status: isAutoEnrolled ? 'ZAPIS AUTOMATYCZNY' : (item.status || 'ZAPISANY'),
+                              zapisujacy: isAutoEnrolled ? 'Zapis automatyczny (Klub)' : (item.zapisujacy || 'Klub (Panel Administratora)'),
                               created_at: item.created_at || null,
                               sortTime: classStartMs
                             });
                           }
                         }
                       });
+
+                      // C. Jeżeli w tabeli nie ma jeszcze konkretnych instancji z datami, dodajemy szablon z automatycznych zapisów
+                      if (upcomingMap.size === 0) {
+                        clientAutoEnrollments.forEach((az: any) => {
+                          const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
+                          const uniqueKey = `auto_${az.id}_${az.grafik_id}`;
+                          const hourStr = stdClass ? (stdClass.start || stdClass.start_time || '') : '';
+                          const fullDateStr = stdClass ? `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${hourStr}`.trim() : 'Zapis automatyczny';
+                          const title = az.class_title || (stdClass ? (stdClass.title || stdClass.nazwa) : 'Trening cykliczny');
+
+                          upcomingMap.set(uniqueKey, {
+                            id: uniqueKey,
+                            classKey: `auto_${az.grafik_id}`,
+                            data: fullDateStr,
+                            zajecia: title,
+                            status: 'ZAPIS AUTOMATYCZNY',
+                            zapisujacy: 'Zapis automatyczny (Klub)',
+                            created_at: az.created_at || null,
+                            sortTime: nowTime + 1000
+                          });
+                        });
+                      }
 
                       const upcomingList = Array.from(upcomingMap.values()).sort((a, b) => a.sortTime - b.sortTime);
 
