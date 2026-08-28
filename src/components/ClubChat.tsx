@@ -19,7 +19,7 @@ export default function ClubChat() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Główne zakładki widoku listy: Prywatne | Grupy | Treningi
-  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
+  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("direct");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public">("my");
 
   // Zakładka wewnątrz aktywnej rozmowy / grupy: Czat | Zdjęcia | Uczestnicy
@@ -457,33 +457,15 @@ export default function ClubChat() {
     }
   };
 
-  // Pobieranie wiadomości 1-na-1
+  // Pobieranie wszystkich wiadomości
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
-    let query = supabase.from("czat_wiadomosci").select("*").is("grupa_id", null);
-
-    if (secondaryUserId) {
-      query = query.or(
-        `nadawca_id.eq.${currentUserId},odbiorca_id.eq.${currentUserId},nadawca_id.eq.${secondaryUserId},odbiorca_id.eq.${secondaryUserId}`
-      );
-    } else {
-      query = query.or(`nadawca_id.eq.${currentUserId},odbiorca_id.eq.${currentUserId}`);
-    }
-
+    let query = supabase.from("czat_wiadomosci").select("*");
     const { data, error } = await query.order("created_at", { ascending: true });
 
     if (!error && data) {
       setMessages(data);
-      const effectiveIds = [
-        String(currentUserId),
-        secondaryUserId ? String(secondaryUserId) : null,
-      ].filter(Boolean);
-
-      const unread = data.filter(
-        (m: any) => effectiveIds.includes(String(m.odbiorca_id)) && !m.przeczytana
-      ).length;
-      setUnreadCount(unread);
     }
   };
 
@@ -531,7 +513,7 @@ export default function ClubChat() {
     }
   }, [selectedGroup]);
 
-  // Oznaczanie jako przeczytane dla czatów 1-na-1
+  // Oznaczanie wiadomości 1-na-1 jako przeczytane
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -552,7 +534,29 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
-  // Obsługa plików (wiadomości)
+  // Oznaczanie wiadomości w grupie/treningu jako przeczytane po otwarciu
+  useEffect(() => {
+    if (isOpen && selectedGroup && currentUserId) {
+      const markGroupAsRead = async () => {
+        const myEffective = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+        await supabase
+          .from("czat_wiadomosci")
+          .update({
+            przeczytana: true,
+            przeczytana_at: new Date().toISOString(),
+          })
+          .eq("grupa_id", selectedGroup.id)
+          .not("nadawca_id", "in", `(${myEffective.join(",")})`)
+          .eq("przeczytana", false);
+
+        fetchGroupMessages();
+        fetchMessages();
+      };
+      markGroupAsRead();
+    }
+  }, [isOpen, selectedGroup, currentUserId, secondaryUserId]);
+
+  // Obsługa plików
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -668,7 +672,7 @@ export default function ClubChat() {
           nazwa: groupName,
           tworca_id: myClientId,
           czlonkowie_ids: allMembers,
-          typ: "zamknieta",
+          typ: "trening", // Jawny typ treningowy
           ikona: "🏋️‍♂️",
         },
       ])
@@ -725,7 +729,7 @@ export default function ClubChat() {
         fetchGroupMessages();
         updateLastSeen(senderId);
 
-        const isTrainingChat = selectedGroup.nazwa?.startsWith("Trening:");
+        const isTrainingChat = selectedGroup.typ === "trening" || selectedGroup.nazwa?.startsWith("Trening:");
         let trainingRefId = null;
         if (isTrainingChat) {
           const matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
@@ -1189,7 +1193,7 @@ export default function ClubChat() {
 
     return (
       <div className="relative group flex flex-col">
-        {/* DYMEK WIADOMOŚCI - kliknięcie otwiera menu reakcji i przypinania */}
+        {/* DYMEK WIADOMOŚCI */}
         <div
           onClick={() => setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id)}
           className={`max-w-[85%] p-3.5 rounded-2xl text-xs leading-relaxed shadow-sm cursor-pointer select-none ${
@@ -1205,7 +1209,7 @@ export default function ClubChat() {
           {renderAttachment(msg)}
         </div>
 
-        {/* POPUP MENU REAKCJI I PRZYPIĘCIA PO KLIKNIĘCIU W WIADOMOŚĆ */}
+        {/* POPUP MENU REAKCJI I PRZYPIĘCIA */}
         {activeMessageMenuId === msg.id && (
           <div className={`absolute z-30 bottom-full mb-1 bg-white border border-slate-200 shadow-xl rounded-2xl p-2 flex flex-col gap-2 ${isMe ? "right-0" : "left-0"}`}>
             <div className="flex items-center gap-1.5 text-base px-1">
@@ -1266,20 +1270,27 @@ export default function ClubChat() {
   const isLeftSide = isPositioned ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 200) : false;
   const isTopSide = isPositioned ? position.y < 540 : false;
 
+  // FILTROWANIE ZWYKŁYCH GRUP – czaty treningowe są całkowicie wykluczone z tej listy!
   const myGroupsList = groups.filter((g: any) => {
+    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
+    if (isTraining) return false;
+
     if (isAdmin) return true;
     const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
     return members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
   });
 
   const publicDiscoverGroups = groups.filter((g: any) => {
+    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
+    if (isTraining) return false;
+
     const isPublic = g.typ === "publiczna";
     const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
     const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
     return isPublic && !isAlreadyMember;
   });
 
-  // Dzisiejsze treningi – TYLKO te, które mają w `days` dzisiejszy dzień tygodnia
+  // DZISIEJSZE TRENINGI – dokładnie te, które odbywają się dzisiaj
   const todayTrainingsList = grafikZajec.filter((training: any) => {
     const isToday = isTrainingToday(training);
     if (!isToday) return false;
@@ -1292,6 +1303,28 @@ export default function ClubChat() {
     );
     return isSignedUp;
   });
+
+  // Obliczanie nieprzeczytanych wiadomości dla każdej zakładki (Badge)
+  const myGroupIds = new Set(myGroupsList.map((g: any) => String(g.id)));
+  const trainingGroupIds = new Set(
+    groups
+      .filter((g: any) => g.typ === "trening" || g.nazwa?.startsWith("Trening:"))
+      .map((g: any) => String(g.id))
+  );
+
+  const unreadDirectCount = messages.filter(
+    (m: any) => effectiveIds.includes(String(m.odbiorca_id)) && !m.grupa_id && !m.przeczytana
+  ).length;
+
+  const unreadGroupsCount = messages.filter(
+    (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
+  ).length;
+
+  const unreadTrainingsCount = messages.filter(
+    (m: any) => m.grupa_id && trainingGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
+  ).length;
+
+  const totalUnreadCount = unreadDirectCount + unreadGroupsCount + unreadTrainingsCount;
 
   const renderGroupIcon = (iconValue: string, type: string) => {
     if (!iconValue) return type === "publiczna" ? "🌐" : "👥";
@@ -1357,7 +1390,7 @@ export default function ClubChat() {
                         <div className="truncate min-w-0 flex-1">
                           <div className="font-bold text-xs truncate">{selectedGroup.nazwa}</div>
                           <div className="text-[9px] text-amber-400 font-medium truncate">
-                            {selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"} • {Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} os.
+                            {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} os.
                           </div>
                         </div>
                         {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
@@ -1533,26 +1566,46 @@ export default function ClubChat() {
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
-              {/* ZAKŁADKI GŁÓWNE: Prywatne | Grupy | Treningi */}
+              {/* ZAKŁADKI GŁÓWNE Z LICZNIKAMI NIEPRZECZYTANYCH (BADGE) */}
               <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-2">
                 <div className="flex gap-1 bg-slate-200 p-1 rounded-xl">
+                  {/* Zakładka Prywatne */}
                   <button
                     onClick={() => setActiveTab("direct")}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all relative flex items-center gap-1 ${activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    Prywatne
+                    <span>Prywatne</span>
+                    {unreadDirectCount > 0 && (
+                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
+                        {unreadDirectCount}
+                      </span>
+                    )}
                   </button>
+
+                  {/* Zakładka Grupy */}
                   <button
                     onClick={() => setActiveTab("groups")}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all relative flex items-center gap-1 ${activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    Grupy ({myGroupsList.length})
+                    <span>Grupy ({myGroupsList.length})</span>
+                    {unreadGroupsCount > 0 && (
+                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
+                        {unreadGroupsCount}
+                      </span>
+                    )}
                   </button>
+
+                  {/* Zakładka Treningi */}
                   <button
                     onClick={() => setActiveTab("trainings")}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all relative flex items-center gap-1 ${activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    Treningi ({todayTrainingsList.length})
+                    <span>Treningi ({todayTrainingsList.length})</span>
+                    {unreadTrainingsCount > 0 && (
+                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
+                        {unreadTrainingsCount}
+                      </span>
+                    )}
                   </button>
                 </div>
 
@@ -1689,6 +1742,10 @@ export default function ClubChat() {
                       <>
                         {myGroupsList.map((group: any) => {
                           const isPublic = group.typ === "publiczna";
+                          const groupUnread = messages.filter(
+                            (m: any) => String(m.grupa_id) === String(group.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
+                          ).length;
+
                           return (
                             <button
                               key={group.id}
@@ -1713,7 +1770,15 @@ export default function ClubChat() {
                                   </div>
                                 </div>
                               </div>
-                              <span className="text-slate-400 text-xs font-bold group-hover:text-slate-900 transition-colors">→</span>
+
+                              <div className="flex items-center gap-2">
+                                {groupUnread > 0 && (
+                                  <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0">
+                                    {groupUnread}
+                                  </span>
+                                )}
+                                <span className="text-slate-400 text-xs font-bold group-hover:text-slate-900 transition-colors">→</span>
+                              </div>
                             </button>
                           );
                         })}
@@ -1768,32 +1833,48 @@ export default function ClubChat() {
               {/* LISTA DZISIEJSZYCH TRENINGÓW */}
               {activeTab === "trainings" && (
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                  {todayTrainingsList.map((training: any) => (
-                    <button
-                      key={training.id}
-                      onClick={async () => {
-                        const trainingGroup = await getOrCreateTrainingGroup(training);
-                        if (trainingGroup) {
-                          setSelectedGroup(trainingGroup);
-                          setChatInsideTab("messages");
-                        }
-                      }}
-                      className="w-full p-3 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group"
-                    >
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="w-9 h-9 rounded-full bg-amber-400/20 text-amber-950 border border-amber-400 flex items-center justify-center font-bold text-sm shrink-0">
-                          🏋️‍♂️
-                        </div>
-                        <div className="overflow-hidden">
-                          <div className="font-bold text-xs text-slate-900 truncate">{training.title}</div>
-                          <div className="text-[10px] text-slate-500">
-                            Godz: {training.start} {training.trainer ? `• Trener: ${training.trainer}` : ""}
+                  {todayTrainingsList.map((training: any) => {
+                    // Sprawdź czy dany trening ma nieprzeczytane wiadomości
+                    const matchedGroup = groups.find((g: any) => g.nazwa?.includes(training.title));
+                    const trainingUnread = matchedGroup
+                      ? messages.filter((m: any) => String(m.grupa_id) === String(matchedGroup.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length
+                      : 0;
+
+                    return (
+                      <button
+                        key={training.id}
+                        onClick={async () => {
+                          const trainingGroup = await getOrCreateTrainingGroup(training);
+                          if (trainingGroup) {
+                            setSelectedGroup(trainingGroup);
+                            setChatInsideTab("messages");
+                          }
+                        }}
+                        className="w-full p-3 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group"
+                      >
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className="w-9 h-9 rounded-full bg-amber-400/20 text-amber-950 border border-amber-400 flex items-center justify-center font-bold text-sm shrink-0">
+                            🏋️‍♂️
+                          </div>
+                          <div className="overflow-hidden">
+                            <div className="font-bold text-xs text-slate-900 truncate">{training.title}</div>
+                            <div className="text-[10px] text-slate-500">
+                              Godz: {training.start} {training.trainer ? `• Trener: ${training.trainer}` : ""}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <span className="text-slate-400 text-xs font-bold group-hover:text-slate-900 transition-colors">→</span>
-                    </button>
-                  ))}
+
+                        <div className="flex items-center gap-2">
+                          {trainingUnread > 0 && (
+                            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0">
+                              {trainingUnread}
+                            </span>
+                          )}
+                          <span className="text-slate-400 text-xs font-bold group-hover:text-slate-900 transition-colors">→</span>
+                        </div>
+                      </button>
+                    );
+                  })}
 
                   {todayTrainingsList.length === 0 && (
                     <div className="py-12 text-center text-slate-400 text-xs space-y-1">
@@ -2321,7 +2402,7 @@ export default function ClubChat() {
 
                   {newGroupType === "zamknieta" ? (
                     <div>
-                      <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
+                      <div className="text-[11px] font-bold text-slate-700 mb-1 block">Wybierz członków grupy:</div>
                       <div className="max-h-28 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                         {klienci
                           .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
@@ -2390,9 +2471,9 @@ export default function ClubChat() {
       >
         <span className="pointer-events-none">💬</span>
 
-        {unreadCount > 0 && !isOpen && (
+        {totalUnreadCount > 0 && !isOpen && (
           <span className="pointer-events-none absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-md border-2 border-white animate-pulse">
-            {unreadCount}
+            {totalUnreadCount}
           </span>
         )}
       </button>
