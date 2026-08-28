@@ -271,14 +271,8 @@ export default function ClubChat() {
       let recipientIds: string[] = [];
 
       if (trainingId) {
-        const { data: signedUp } = await supabase
-          .from("zapisy_zajec")
-          .select("klient_id")
-          .eq("class_key", trainingId);
-
-        if (signedUp) {
-          recipientIds = signedUp.map((z: any) => String(z.klient_id));
-        }
+        const signups = getSignupsForTraining(trainingId);
+        recipientIds = signups.map((z: any) => String(z.klient_id));
       } else {
         const { data: groupData } = await supabase
           .from("czat_grupy")
@@ -650,26 +644,65 @@ export default function ClubChat() {
     });
   };
 
-  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu + dynamiczna synchronizacja zapisanych osób
+  // Precyzyjne, elastyczne wyszukiwanie aktywnych zapisów na dany trening
+  const getSignupsForTraining = (trainingId: any, trainingObj?: any) => {
+    if (!trainingId && !trainingObj) return [];
+    const tId = String(trainingId || trainingObj?.id || "");
+    const todayIso = new Date().toISOString().split("T")[0]; // "2026-08-28"
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, "0");
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const year = String(now.getFullYear());
+    const todayPl = `${day}.${month}.${year}`;
+    const todayPlShort = `${now.getDate()}.${now.getMonth() + 1}.${year}`;
+    const todayDash = `${day}-${month}-${year}`;
+
+    return zapisyZajec.filter((z: any) => {
+      if (!z) return false;
+      const st = String(z.status || "").toLowerCase();
+      if (st === "odwolany" || st === "odwołany" || st === "anulowany" || st === "cancelled") {
+        return false;
+      }
+
+      const ck = String(z.class_key || "").trim();
+      if (!ck) return false;
+
+      if (ck === tId) return true;
+      if (ck.startsWith(`${tId}_`) || ck.startsWith(`${tId}-`) || ck.startsWith(`${tId}:`)) return true;
+
+      const parts = ck.split(/[_:-]/);
+      if (parts.includes(tId)) return true;
+
+      if (trainingObj?.title && ck.toLowerCase().includes(String(trainingObj.title).toLowerCase())) {
+        if (ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayPlShort) || ck.includes(todayDash)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  };
+
+  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu + dynamiczna synchronizacja
   const getOrCreateTrainingGroup = async (training: any) => {
     const todayStr = new Date().toLocaleDateString("pl-PL");
     const groupName = `Trening: ${training.title} (${todayStr} ${training.start})`;
     
-    // Pobierz z bazy lub stanu aktualne zapisy na ten trening
-    const activeSignups = zapisyZajec.filter((z: any) => 
-      String(z.class_key) === String(training.id) && z.status !== "odwolany" && z.status !== "anulowany"
-    );
-    const signedUpClients = activeSignups.map((z: any) => z.klient_id);
+    const signups = getSignupsForTraining(training.id, training);
+    const signedClientIds = signups.map((z: any) => String(z.klient_id));
 
-    const myClientId = secondaryUserId || currentUserId;
-    const allMembers = Array.from(new Set([...signedUpClients, myClientId, 999999999]));
+    const myClientId = String(secondaryUserId || currentUserId);
+    const adminIds = klienci
+      .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
+      .map((k: any) => String(k.id));
 
-    const existing = groups.find((g: any) => g.nazwa === groupName);
+    const allMembers = Array.from(new Set([...signedClientIds, myClientId, ...adminIds, "999999999", String(SYSTEM_ID)]));
+
+    const existing = groups.find((g: any) => g.nazwa === groupName || (g.typ === "trening" && g.nazwa?.includes(training.title)));
     if (existing) {
-      // Synchronizacja listy osób w istniejącej grupie treningowej
       const currentStored = Array.isArray(existing.czlonkowie_ids) ? existing.czlonkowie_ids.map(String) : [];
       const newCalculated = allMembers.map(String);
-      
+
       if (currentStored.length !== newCalculated.length || !newCalculated.every((id) => currentStored.includes(id))) {
         await supabase
           .from("czat_grupy")
@@ -685,7 +718,7 @@ export default function ClubChat() {
       .insert([
         {
           nazwa: groupName,
-          tworca_id: myClientId,
+          tworca_id: secondaryUserId || currentUserId,
           czlonkowie_ids: allMembers,
           typ: "trening",
           ikona: "🏋️‍♂️",
@@ -1029,12 +1062,13 @@ export default function ClubChat() {
     if (isTraining) {
       const matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
       if (matchedTraining) {
-        const activeSignups = zapisyZajec.filter((z: any) => 
-          String(z.class_key) === String(matchedTraining.id) && z.status !== "odwolany" && z.status !== "anulowany"
-        );
-        const signedClientIds = activeSignups.map((z: any) => String(z.klient_id));
-        const adminsAndCreator = [String(selectedGroup.tworca_id), String(secondaryUserId || currentUserId), "999999999", String(SYSTEM_ID)];
-        groupMemberIds = Array.from(new Set([...signedClientIds, ...adminsAndCreator]));
+        const signups = getSignupsForTraining(matchedTraining.id, matchedTraining);
+        const signedClientIds = signups.map((z: any) => String(z.klient_id));
+        const adminIds = klienci
+          .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
+          .map((k: any) => String(k.id));
+        const creatorAndMe = [String(selectedGroup.tworca_id), String(secondaryUserId || currentUserId), "999999999", String(SYSTEM_ID)];
+        groupMemberIds = Array.from(new Set([...signedClientIds, ...adminIds, ...creatorAndMe]));
       } else {
         groupMemberIds = Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.map(String) : [];
       }
@@ -1331,11 +1365,9 @@ export default function ClubChat() {
 
     if (isAdmin) return true;
 
-    const myClientId = secondaryUserId || currentUserId;
-    const isSignedUp = zapisyZajec.some(
-      (z: any) => String(z.class_key) === String(training.id) && String(z.klient_id) === String(myClientId) && z.status !== "odwolany" && z.status !== "anulowany"
-    );
-    return isSignedUp;
+    const myClientId = String(secondaryUserId || currentUserId);
+    const signups = getSignupsForTraining(training.id, training);
+    return signups.some((z: any) => String(z.klient_id) === myClientId);
   });
 
   // Obliczanie nieprzeczytanych wiadomości dla każdej zakładki (Badge)
