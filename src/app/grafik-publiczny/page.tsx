@@ -103,6 +103,38 @@ export default function PublicSchedulePage() {
     return { isAutoCancelled: false, reason: '' };
   };
 
+  // Precyzyjne dopasowanie nadpisań i odwołań z panelu trenera
+  const findOverride = (item: any, col: any) => {
+    const keysToCheck = [
+      `${item.id}_${col.date}`,
+      `${item.id}_${col.isoDate}`,
+      `${item.id}_${col.date?.replace('/', '.')}`,
+      `jednorazowe_${item.id}_${col.date}`,
+      `jednorazowe_${item.id}_${col.isoDate}`,
+      String(item.id)
+    ];
+    for (const k of keysToCheck) {
+      if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
+    }
+    return null;
+  };
+
+  // Pobieranie zapisów klubowiczów
+  const getSignups = (item: any, col: any) => {
+    const keysToCheck = [
+      `${item.id}_${col.date}`,
+      `${item.id}_${col.isoDate}`,
+      `${item.id}_${col.date?.replace('/', '.')}`,
+      `jednorazowe_${item.id}_${col.date}`,
+      `jednorazowe_${item.id}_${col.isoDate}`,
+      String(item.id)
+    ];
+    for (const k of keysToCheck) {
+      if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
+    }
+    return [];
+  };
+
   const loadPublicData = async () => {
     try {
       setIsLoading(true);
@@ -135,13 +167,13 @@ export default function PublicSchedulePage() {
           trainer: s.trainer || s.prowadzacy,
           limit: s.limit || s.limit_miejsc,
           days: s.days || {},
-          isOdwołane: !!(s.is_odwolane || s.is_odwołane || s.odwolane),
-          isUsunięte: !!(s.is_usuniete || s.is_usunięte || s.usuniete),
+          isOdwołane: Boolean(s.is_odwolane || s.is_odwołane || s.odwolane || s.status === 'odwołane' || s.status === 'odwolane'),
+          isUsunięte: Boolean(s.is_usuniete || s.is_usunięte || s.usuniete || s.status === 'usunięte' || s.status === 'usuniete'),
           powodOdwolania: s.powod_odwolania || s.powod || ''
         })));
       }
 
-      // 3. Zajęcia jednorazowe z uwzględnieniem statusów odwołania / usunięcia
+      // 3. Zajęcia jednorazowe
       const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
       if (jednorazoweData) {
         setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
@@ -170,9 +202,9 @@ export default function PublicSchedulePage() {
             end: n.end,
             trainer: n.trainer,
             limit: n.limit,
-            isOdwołane: Boolean(n.is_odwolane || n.is_odwołane || n.odwolane),
-            isUsunięte: Boolean(n.is_usuniete || n.is_usunięte || n.usuniete),
-            powodOdwolania: n.powod_odwolania || n.powod || 'ODWOŁANE'
+            isOdwołane: Boolean(n.is_odwolane || n.is_odwołane || n.odwolane || n.odwołane || n.status === 'odwołane' || n.status === 'odwolane'),
+            isUsunięte: Boolean(n.is_usuniete || n.is_usunięte || n.usuniete || n.usunięte || n.status === 'usunięte' || n.status === 'usuniete'),
+            powodOdwolania: n.powod_odwolania || n.powod || 'ODWOŁANE PRZEZ KLUB'
           };
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
@@ -558,25 +590,56 @@ export default function PublicSchedulePage() {
                 const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
                   .filter((item: any) => item.days && item.days[col.key])
                   .map((item: any) => {
-                    const classKey = `${item.id}_${col.date}`;
-                    const override = nadpisaneZajeciaDni[classKey] || nadpisaneZajeciaDni[String(item.id)];
-                    return override ? { ...item, ...override } : item;
+                    const override = findOverride(item, col);
+                    const merged = override ? { ...item, ...override } : item;
+                    return {
+                      ...merged,
+                      isUsunięte: Boolean(merged.isUsunięte || merged.is_usuniete || merged.status === 'usunięte' || merged.status === 'usuniete'),
+                      isOdwołane: Boolean(merged.isOdwołane || merged.is_odwolane || merged.status === 'odwołane' || merged.status === 'odwolane')
+                    };
                   })
-                  .filter((item: any) => !item.isUsunięte && !item.is_usuniete);
+                  .filter((item: any) => !item.isUsunięte);
 
-                // 2. ZAJĘCIA JEDNORAZOWE (Z POPRAWIONĄ OBSŁUGĄ NADPISAŃ I ODWOŁAŃ)
+                // 2. ZAJĘCIA JEDNORAZOWE
                 const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
-                  .filter((item: any) => item.displayDate === col.date || item.fullDateStr === col.isoDate)
+                  .filter((item: any) => item.displayDate === col.date || item.fullDateStr === col.isoDate || item.displayDate === col.isoDate)
                   .map((item: any) => {
-                    const classKey1 = `${item.id}_${col.date}`;
-                    const classKey2 = `jednorazowe_${item.id}_${col.date}`;
-                    const classKey3 = String(item.id);
-                    const override = nadpisaneZajeciaDni[classKey1] || nadpisaneZajeciaDni[classKey2] || nadpisaneZajeciaDni[classKey3];
-                    return override ? { ...item, ...override } : item;
+                    const override = findOverride(item, col);
+                    const merged = override ? { ...item, ...override } : item;
+                    return {
+                      ...merged,
+                      isUsunięte: Boolean(merged.isUsunięte || merged.is_usuniete || merged.status === 'usunięte' || merged.status === 'usuniete'),
+                      isOdwołane: Boolean(merged.isOdwołane || merged.is_odwolane || merged.status === 'odwołane' || merged.status === 'odwolane')
+                    };
                   })
-                  .filter((item: any) => !item.isUsunięte && !item.is_usuniete);
+                  .filter((item: any) => !item.isUsunięte);
 
-                const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+                // 3. INTELIGENTNA DEDUPLIKACJA ZAJĘĆ
+                const uniqueZajeciaMap = new Map<string, any>();
+
+                [...standardoweDnia, ...jednorazoweDnia].forEach((item: any) => {
+                  if (item.isUsunięte) return;
+
+                  // Unikalny klucz sygnatury w danym dniu
+                  const sigKey = `${(item.start || '').trim()}_${(item.end || '').trim()}_${(item.title || '').trim().toLowerCase()}`;
+
+                  if (!uniqueZajeciaMap.has(sigKey)) {
+                    uniqueZajeciaMap.set(sigKey, item);
+                  } else {
+                    const existing = uniqueZajeciaMap.get(sigKey);
+                    const isCancelled = Boolean(existing.isOdwołane || item.isOdwołane);
+                    const powod = item.powodOdwolania || existing.powodOdwolania || 'ODWOŁANE PRZEZ KLUB';
+                    
+                    uniqueZajeciaMap.set(sigKey, {
+                      ...existing,
+                      ...item,
+                      isOdwołane: isCancelled,
+                      powodOdwolania: powod
+                    });
+                  }
+                });
+
+                const zajeciaDnia = Array.from(uniqueZajeciaMap.values()).sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
                 const isPastDay = col.isoDate < todayStr;
 
                 return (
@@ -611,8 +674,7 @@ export default function PublicSchedulePage() {
                     {zajeciaDnia.length > 0 ? (
                       zajeciaDnia.map((item: any, classIdx: number) => {
                         const durationText = calculateDuration(item.start, item.end);
-                        const classKey = `${item.id}_${col.date}`;
-                        const zapisani = zapisyNaZajecia[classKey] || zapisyNaZajecia[String(item.id)] || [];
+                        const zapisani = getSignups(item, col);
                         const limitZajec = item.limit || 12;
 
                         const liczbaGlowna = Math.min(zapisani.length, limitZajec);
@@ -622,8 +684,8 @@ export default function PublicSchedulePage() {
                         const isPastEvent = isPastDay || isPastTime;
 
                         const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
-                        const isClassCancelled = Boolean(item.isOdwołane || item.is_odwolane || autoCancelStatus.isAutoCancelled);
-                        const topColor = getTopBorderColor(item.title, isClassCancelled, Boolean(item.isUsunięte || item.is_usuniete));
+                        const isClassCancelled = Boolean(item.isOdwołane || autoCancelStatus.isAutoCancelled);
+                        const topColor = getTopBorderColor(item.title, isClassCancelled, Boolean(item.isUsunięte));
 
                         return (
                           <div
