@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -390,6 +391,68 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
+
+  // PRECYZYJNY HELPER ROZWIĄZYWANIA SZCZEGÓŁÓW ZAJĘĆ Z DOPASOWANIEM DNIA TYGODNIA I DATY
+  const findClassDetails = (classId: string | number, dateStr: string) => {
+    if (!dateStr) return null;
+    let d = 1, m = 1;
+    let year = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+
+    if (dateStr.includes('/')) {
+      const parts = dateStr.split('/').map(Number);
+      d = parts[0];
+      m = parts[1];
+    } else if (dateStr.includes('-')) {
+      const parts = dateStr.split('-').map(Number);
+      if (parts.length === 3) {
+        year = parts[0];
+        m = parts[1];
+        d = parts[2];
+      }
+    }
+
+    const dayDate = new Date(year, m - 1, d);
+    const dayOfWeek = dayDate.getDay();
+    const dayKeys = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sob'];
+    const dayKey = dayKeys[dayOfWeek] || 'pon';
+    const displayDateStr = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
+    const isoDateStr = `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+    // 1. Sprawdzamy najpierw zajęcia jednorazowe przypisane dokładnie do tej daty
+    const jednorazClass = jednorazoweZajecia.find(j => 
+      String(j.id) === String(classId) && 
+      (j.displayDate === displayDateStr || j.displayDate === dateStr || j.fullDateStr === isoDateStr || j.fullDateStr === dateStr)
+    );
+
+    // 2. Sprawdzamy szablon grafiku stałego, który faktycznie odbywa się w ten dzień tygodnia
+    const stdClass = zapisaneZajecia.find(z => 
+      String(z.id) === String(classId) && z.days && z.days[dayKey] === true
+    );
+
+    // 3. Fallback jeśli nie dopasowano po dacie/dniu
+    const fallbackJednoraz = jednorazoweZajecia.find(j => String(j.id) === String(classId));
+    const fallbackStd = zapisaneZajecia.find(z => String(z.id) === String(classId));
+
+    let baseClass = jednorazClass || stdClass || fallbackJednoraz || fallbackStd;
+    if (!baseClass) return null;
+
+    const classKey = `${classId}_${dateStr}`;
+    const override = nadpisaneZajeciaDni[classKey] || 
+      nadpisaneZajeciaDni[`${classId}_${displayDateStr}`] || 
+      nadpisaneZajeciaDni[`${classId}_${isoDateStr}`];
+
+    if (override) {
+      baseClass = { ...baseClass, ...override };
+    }
+
+    return {
+      ...baseClass,
+      targetDayDate: dayDate,
+      displayDateStr,
+      isoDateStr,
+      dayKey
+    };
+  };
 
   // PRECYZYJNA KALKULACJA ODLICZANIA DO KOŃCA MOŻLIWOŚCI WYPISANIA
   const getCancelDeadlineInfo = (classItem: any, displayDate: string) => {
@@ -1048,8 +1111,8 @@ export default function DashboardPage() {
     return new Date(dCopy.setDate(diff));
   };
 
-  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
-    if (isOdwolane || isUsuniete) return '#fda4af';
+  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsunięte: boolean) => {
+    if (isOdwolane || isUsunięte) return '#fda4af';
     if (!title) return '#0284c7';
     const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
     if (found && found.kolor) {
@@ -1095,7 +1158,6 @@ export default function DashboardPage() {
     isFetchingRef.current = true;
 
     try {
-      // Okno czasowe optymalizacji: 2 tygodnie wstecz, 1 rok w przód
       const twoWeeksAgo = new Date();
       twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
       const twoWeeksAgoStr = `${twoWeeksAgo.getFullYear()}-${String(twoWeeksAgo.getMonth() + 1).padStart(2, '0')}-${String(twoWeeksAgo.getDate()).padStart(2, '0')}`;
@@ -1160,7 +1222,6 @@ export default function DashboardPage() {
         setWszystkieTransakcje(tData);
       }
 
-      // 1. Klienci (z mapowaniem uprawnień karnetów)
       const karnetyDefData = await fetchAllFromSupabase('karnety', 'id', true, 2);
       let ustrukturyzowaneKarnetyDef: any[] = [];
       if (karnetyDefData) {
@@ -1261,7 +1322,6 @@ export default function DashboardPage() {
         }
       }
 
-      // 2. Ogłoszenia spersonalizowane (filtrowanie po roli oraz konkretnym użytkowniku)
       const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
       if (ogloszeniaData) {
         const activeUserId = matchedCurrentClient ? matchedCurrentClient.id : null;
@@ -1295,7 +1355,6 @@ export default function DashboardPage() {
             if (determinedRole === 'admin') return true;
             if (!o.isVisible) return false;
 
-            // Ogłoszenie do konkretnego użytkownika
             if (o.targetUserId && activeUserId) {
               if (String(o.targetUserId) === String(activeUserId)) return true;
             }
@@ -1562,7 +1621,6 @@ export default function DashboardPage() {
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
     setModalHistoryData([]); 
-    const classKey = `${item.id}_${displayDate}`;
     const keys = getKeysVariants(item.id, displayDate);
     
     const { data } = await supabase
@@ -1954,34 +2012,27 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          let m: number = 0;
-          let d: number = 0;
-          if (dateStr.includes('/')) {
-            const p = dateStr.split('/').map(Number);
-            d = p[0];
-            m = p[1];
-          } else if (dateStr.includes('-')) {
-            const p = dateStr.split('-').map(Number);
-            m = p[1];
-            d = p[2];
-          }
-
-          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-          const override = nadpisaneZajeciaDni[signup.class_key];
-          const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
-          
-          const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-          const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
-          
-          if (classStartDateTime > now) {
-            const keysToDelete = getKeysVariants(classId, dateStr);
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .in('class_key', keysToDelete)
-              .eq('klient_id', Number(klientId));
-            cancelledCount++;
+          const classDetails = findClassDetails(classId, dateStr);
+          if (classDetails) {
+            const [sh = '00', sm = '00'] = (classDetails.start || '00:00').split(':');
+            const classStartDateTime = new Date(
+              classDetails.targetDayDate.getFullYear(),
+              classDetails.targetDayDate.getMonth(),
+              classDetails.targetDayDate.getDate(),
+              parseInt(sh),
+              parseInt(sm),
+              0
+            );
+            
+            if (classStartDateTime > now) {
+              const keysToDelete = getKeysVariants(classId, dateStr);
+              await supabase
+                .from('zapisy_zajec')
+                .delete()
+                .in('class_key', keysToDelete)
+                .eq('klient_id', Number(klientId));
+              cancelledCount++;
+            }
           }
         }
       }
@@ -2024,33 +2075,23 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          let m: number = 0;
-          let d: number = 0;
-          if (dateStr.includes('/')) {
-            const p = dateStr.split('/').map(Number);
-            d = p[0];
-            m = p[1];
-          } else if (dateStr.includes('-')) {
-            const p = dateStr.split('-').map(Number);
-            m = p[1];
-            d = p[2];
-          }
+          const classDetails = findClassDetails(classId, dateStr);
+          if (classDetails) {
+            const classDateStr = classDetails.isoDateStr;
+            const classDate = new Date(classDetails.targetDayDate.getFullYear(), classDetails.targetDayDate.getMonth(), classDetails.targetDayDate.getDate(), 23, 59, 59);
+            
+            const isAfterStart = classDateStr >= zawieszonyOd;
+            const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
 
-          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
-          const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
-          const classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
-          
-          const isAfterStart = classDateStr >= zawieszonyOd;
-          const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
-
-          if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
-            const keysToDelete = getKeysVariants(classId, dateStr);
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .in('class_key', keysToDelete)
-              .eq('klient_id', Number(klientId));
-            cancelledCount++;
+            if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+              const keysToDelete = getKeysVariants(classId, dateStr);
+              await supabase
+                .from('zapisy_zajec')
+                .delete()
+                .in('class_key', keysToDelete)
+                .eq('klient_id', Number(klientId));
+              cancelledCount++;
+            }
           }
         }
       }
@@ -2377,35 +2418,27 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          let m: number = 0;
-          let d: number = 0;
-          if (dateStr.includes('/')) {
-            const p = dateStr.split('/').map(Number);
-            d = p[0];
-            m = p[1];
-          } else if (dateStr.includes('-')) {
-            const p = dateStr.split('-').map(Number);
-            m = p[1];
-            d = p[2];
-          }
+          const classDetails = findClassDetails(classId, dateStr);
+          if (classDetails) {
+            const [sh = '00', sm = '00'] = (classDetails.start || '00:00').split(':');
+            const classStartDateTime = new Date(
+              classDetails.targetDayDate.getFullYear(),
+              classDetails.targetDayDate.getMonth(),
+              classDetails.targetDayDate.getDate(),
+              parseInt(sh),
+              parseInt(sm),
+              0
+            );
 
-          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-          const override = nadpisaneZajeciaDni[signup.class_key];
-          const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
-
-          const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-          const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
-          const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
-
-          if (classStartDateTime > now) {
-            const keysToDelete = getKeysVariants(classId, dateStr);
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .in('class_key', keysToDelete)
-              .eq('klient_id', profileClient.id);
-            cancelledCount++;
+            if (classStartDateTime > now) {
+              const keysToDelete = getKeysVariants(classId, dateStr);
+              await supabase
+                .from('zapisy_zajec')
+                .delete()
+                .in('class_key', keysToDelete)
+                .eq('klient_id', profileClient.id);
+              cancelledCount++;
+            }
           }
         }
       }
@@ -2576,34 +2609,27 @@ export default function DashboardPage() {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          let m: number = 0;
-          let d: number = 0;
-          if (dateStr.includes('/')) {
-            const p = dateStr.split('/').map(Number);
-            d = p[0];
-            m = p[1];
-          } else if (dateStr.includes('-')) {
-            const p = dateStr.split('-').map(Number);
-            m = p[1];
-            d = p[2];
-          }
-
-          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-          const override = nadpisaneZajeciaDni[signup.class_key];
-          const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
-          
-          const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-          const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
-          
-          if (classStartDateTime > now) {
-            const keysToDelete = getKeysVariants(classId, dateStr);
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .in('class_key', keysToDelete)
-              .eq('klient_id', profileClient.id);
-            cancelledCount++;
+          const classDetails = findClassDetails(classId, dateStr);
+          if (classDetails) {
+            const [sh = '00', sm = '00'] = (classDetails.start || '00:00').split(':');
+            const classStartDateTime = new Date(
+              classDetails.targetDayDate.getFullYear(),
+              classDetails.targetDayDate.getMonth(),
+              classDetails.targetDayDate.getDate(),
+              parseInt(sh),
+              parseInt(sm),
+              0
+            );
+            
+            if (classStartDateTime > now) {
+              const keysToDelete = getKeysVariants(classId, dateStr);
+              await supabase
+                .from('zapisy_zajec')
+                .delete()
+                .in('class_key', keysToDelete)
+                .eq('klient_id', profileClient.id);
+              cancelledCount++;
+            }
           }
         }
       }
@@ -2646,7 +2672,7 @@ export default function DashboardPage() {
     }
   };
 
-const handleCancelBlock = async (karnetTarget: any) => {
+  const handleCancelBlock = async (karnetTarget: any) => {
     if (!profileClient || !karnetTarget) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
@@ -2688,6 +2714,7 @@ const handleCancelBlock = async (karnetTarget: any) => {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
+  // PRECYZYJNE ZLICZANIE AKTYWNYCH ZAPISÓW
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -2698,33 +2725,26 @@ const handleCancelBlock = async (karnetTarget: any) => {
       const classId = parts[0];
       const dateStr = parts[1];
       if (dateStr) {
-        let m: number = 0;
-        let d: number = 0;
-        if (dateStr.includes('/')) {
-          const p = dateStr.split('/').map(Number);
-          d = p[0];
-          m = p[1];
-        } else if (dateStr.includes('-')) {
-          const p = dateStr.split('-').map(Number);
-          m = p[1];
-          d = p[2];
-        }
+        const classDetails = findClassDetails(classId, dateStr);
+        if (classDetails) {
+          const normalizedKey = `${classDetails.id}_${classDetails.displayDateStr}`;
+          if (countedNormalizedKeys.has(normalizedKey)) return;
 
-        const normalizedKey = `${classId}_${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
-        if (countedNormalizedKeys.has(normalizedKey)) return;
+          const [sh = '00', sm = '00'] = (classDetails.start || '00:00').split(':');
+          const classStartDateTime = new Date(
+            classDetails.targetDayDate.getFullYear(),
+            classDetails.targetDayDate.getMonth(),
+            classDetails.targetDayDate.getDate(),
+            parseInt(sh),
+            parseInt(sm),
+            0
+          );
 
-        const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-        const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-        const override = nadpisaneZajeciaDni[classKey];
-        const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
-
-        const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-        const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
-
-        if (classStartDateTime >= now) {
-          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) {
-            count++;
-            countedNormalizedKeys.add(normalizedKey);
+          if (classStartDateTime >= now) {
+            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) {
+              count++;
+              countedNormalizedKeys.add(normalizedKey);
+            }
           }
         }
       }
@@ -3242,7 +3262,6 @@ const handleCancelBlock = async (karnetTarget: any) => {
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    // SILNIK NATYCHMIASTOWEGO ODWOŁYWANIA GDY POZOSTAŁO ZBYT MAŁO OSÓB
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       selectedClass,
       selectedClass.displayDate,
@@ -3380,10 +3399,7 @@ const handleCancelBlock = async (karnetTarget: any) => {
       }
     ]);
     
-    const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-    const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-    const override = nadpisaneZajeciaDni[classKey];
-    const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
+    const classInfo = findClassDetails(classId, dateStr);
     const limitZajec = classInfo?.limit || 12;
 
     const aktualni = zapisyNaZajecia[classKey] || [];
@@ -3827,6 +3843,7 @@ const handleCancelBlock = async (karnetTarget: any) => {
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
 
+  // POPRAWIONE I PRECYZYJNE MAPOWANIE AKTYWNYCH ZAPISÓW KLUBOWICZA
   if (['klubowicz', 'trener'].includes(appRole) && currentUser) {
     const karnety = currentUser.karnetyKlubowicza || [];
     if (karnety.length === 0) { needsNewPass = true; } else {
@@ -3856,40 +3873,32 @@ const handleCancelBlock = async (karnetTarget: any) => {
         const classId = parts[0];
         const dateStr = parts[1];
         if (dateStr) {
-          let d = 1, m = 1;
-          if (dateStr.includes('/')) {
-            [d, m] = dateStr.split('/').map(Number);
-          } else if (dateStr.includes('-')) {
-            const p = dateStr.split('-').map(Number);
-            m = p[1];
-            d = p[2];
-          }
-
-          const stdClass = zapisaneZajecia.find(z => String(z.id) === classId);
-          const jednorazClass = jednorazoweZajecia.find(z => String(z.id) === classId);
-          let classInfo = stdClass || jednorazClass;
-          const override = nadpisaneZajeciaDni[classKey];
-          if (override) classInfo = { ...classInfo, ...override };
+          const classInfo = findClassDetails(classId, dateStr);
 
           if (classInfo) {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-              // pomijamy
+              // pomijamy usunięte
             } else {
-              const [sh = '00', sm = '00'] = (classInfo?.start || '00:00').split(':');
-              const classStartDateTime = new Date(now.getFullYear(), m - 1, d, parseInt(sh), parseInt(sm), 0);
+              const [sh = '00', sm = '00'] = (classInfo.start || '00:00').split(':');
+              const classStartDateTime = new Date(
+                classInfo.targetDayDate.getFullYear(),
+                classInfo.targetDayDate.getMonth(),
+                classInfo.targetDayDate.getDate(),
+                parseInt(sh),
+                parseInt(sm),
+                0
+              );
 
               if (classStartDateTime >= now) {
-                const targetIso = `${now.getFullYear()}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                const displayFormatted = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
-                const progWorkout = getProgrammedWorkout(classInfo, targetIso, displayFormatted);
-                const cancelInfo = getCancelDeadlineInfo(classInfo, displayFormatted);
+                const progWorkout = getProgrammedWorkout(classInfo, classInfo.isoDateStr, classInfo.displayDateStr);
+                const cancelInfo = getCancelDeadlineInfo(classInfo, classInfo.displayDateStr);
 
-                if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === displayFormatted)) {
+                if (!myUpcomingClasses.some((existing: any) => String(existing.id) === String(classInfo.id) && existing.displayDate === classInfo.displayDateStr)) {
                   myUpcomingClasses.push({
                     ...classInfo,
                     classKey,
-                    displayDate: displayFormatted,
-                    fullDateObj: new Date(now.getFullYear(), m - 1, d),
+                    displayDate: classInfo.displayDateStr,
+                    fullDateObj: classInfo.targetDayDate,
                     signupStatus: mojZapis.status || 'zapisany',
                     isKrzeselko: mojZapis.status === 'krzesełko',
                     waitlistCutoffMinutes: mojZapis.waitlist_cutoff_minutes || 30,
@@ -4680,6 +4689,7 @@ const handleCancelBlock = async (karnetTarget: any) => {
           })}
         </div>
       </section>
+
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
