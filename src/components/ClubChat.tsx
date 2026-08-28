@@ -548,7 +548,7 @@ export default function ClubChat() {
     }
   };
 
-  // Wgrywanie własnego obrazka ikony grupy
+  // Wгрыwanie własnego obrazka ikony grupy
   const handleGroupIconImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, isEditing: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1044,33 +1044,35 @@ export default function ClubChat() {
           } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
         >
           {/* NAGŁÓWEK CZATU */}
-          <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shadow-sm select-none">
-            <div className="flex items-center gap-3">
+          <div className="bg-slate-900 text-white px-4 py-3.5 flex items-center justify-between shadow-sm select-none">
+            <div className="flex items-center gap-2.5 overflow-hidden">
               {selectedUser || selectedGroup ? (
                 <>
+                  {/* WYRAŹNY PRZYCISK POWROTU */}
                   <button
                     onClick={() => {
                       setSelectedUser(null);
                       setSelectedGroup(null);
                       setChatInsideTab("messages");
                     }}
-                    className="text-slate-300 hover:text-white p-1 cursor-pointer transition-colors"
+                    className="bg-amber-400 hover:bg-amber-500 text-slate-950 px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 transition-all cursor-pointer shadow-md shrink-0 border border-amber-300"
                     title="Wróć do listy"
                   >
-                    ←
+                    <span>◀</span> Wróć
                   </button>
+
                   {selectedGroup ? (
                     <>
-                      <div className="w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-sm border border-amber-300 shrink-0 overflow-hidden">
+                      <div className="w-7 h-7 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0 overflow-hidden">
                         {renderGroupIcon(selectedGroup.ikona, selectedGroup.typ)}
                       </div>
-                      <div className="overflow-hidden flex items-center gap-1.5">
+                      <div className="overflow-hidden flex items-center gap-1">
                         <div>
-                          <div className="font-bold text-xs truncate max-w-[120px]">{selectedGroup.nazwa}</div>
-                          <div className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
+                          <div className="font-bold text-xs truncate max-w-[110px]">{selectedGroup.nazwa}</div>
+                          <div className="text-[9px] text-amber-400 font-medium flex items-center gap-1">
                             <span>{selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"}</span>
                             <span>•</span>
-                            <span>{Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} osób</span>
+                            <span>{Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} os.</span>
                           </div>
                         </div>
                         {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
@@ -1090,7 +1092,7 @@ export default function ClubChat() {
                     </>
                   ) : (
                     <>
-                      <div className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${Number(selectedUser.id) === SYSTEM_ID ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
+                      <div className={`w-7 h-7 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${Number(selectedUser.id) === SYSTEM_ID ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
                         {selectedUser.avatar ? (
                           <img src={selectedUser.avatar} alt={selectedUser.name} className="w-full h-full object-cover" />
                         ) : Number(selectedUser.id) === SYSTEM_ID ? (
@@ -1100,10 +1102,10 @@ export default function ClubChat() {
                         )}
                       </div>
                       <div className="overflow-hidden">
-                        <div className="font-bold text-xs truncate max-w-[170px]">{selectedUser.name}</div>
-                        <div className="text-[10px] font-medium flex items-center gap-1">
+                        <div className="font-bold text-xs truncate max-w-[140px]">{selectedUser.name}</div>
+                        <div className="text-[9px] font-medium flex items-center gap-1">
                           {Number(selectedUser.id) === SYSTEM_ID ? (
-                            <span className="text-amber-400 font-bold">Konto Systemowe</span>
+                            <span className="text-amber-400 font-bold">System</span>
                           ) : (
                             <span className="text-emerald-400 flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {formatLastSeen(selectedUser.last_seen)}
@@ -1125,7 +1127,7 @@ export default function ClubChat() {
               )}
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 shrink-0">
               {selectedGroup && (
                 <button
                   onClick={handleToggleMuteGroup}
