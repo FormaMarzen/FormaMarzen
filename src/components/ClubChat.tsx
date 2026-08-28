@@ -589,11 +589,12 @@ export default function ClubChat() {
       attachment_name: attachmentData?.name || null,
       przeczytana: false,
       przeczytana_at: null,
+      przypinana: false,
     };
 
     if (selectedGroup) {
       payload.grupa_id = selectedGroup.id;
-      payload.odbiorca_id = null; // Jawnie null dla grupy
+      payload.odbiorca_id = null;
 
       const { error } = await supabase.from("czat_wiadomosci").insert([payload]);
       if (error) {
@@ -626,6 +627,39 @@ export default function ClubChat() {
     }
 
     setIsUploading(false);
+  };
+
+  // Przypinanie / Odepinanie wiadomości przez Admina
+  const handlePinMessage = async (msg: any) => {
+    if (!isAdmin) return;
+    const newStatus = !msg.przypinana;
+
+    // Jeśli przypinamy nową wiadomość, najpierw odpinamy inne w tym samym czacie/grupie
+    if (newStatus) {
+      if (selectedGroup) {
+        await supabase
+          .from("czat_wiadomosci")
+          .update({ przypinana: false })
+          .eq("grupa_id", selectedGroup.id);
+      } else if (selectedUser) {
+        const targetId = selectedUser.id;
+        const effectiveIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+        await supabase
+          .from("czat_wiadomosci")
+          .update({ przypinana: false })
+          .or(`and(nadawca_id.eq.${effectiveIds[0]},odbiorca_id.eq.${targetId}),and(nadawca_id.eq.${targetId},odbiorca_id.eq.${effectiveIds[0]})`);
+      }
+    }
+
+    const { error } = await supabase
+      .from("czat_wiadomosci")
+      .update({ przypinana: newStatus })
+      .eq("id", msg.id);
+
+    if (!error) {
+      fetchMessages();
+      if (selectedGroup) fetchGroupMessages();
+    }
   };
 
   // Dołączanie / Opuszczanie grupy publicznej przez klubowicza
@@ -712,6 +746,7 @@ export default function ClubChat() {
       attachment_name: attachmentData?.name || null,
       przeczytana: false,
       przeczytana_at: null,
+      przypinana: false,
     }));
 
     if (payloads.length > 0) {
@@ -806,6 +841,7 @@ export default function ClubChat() {
   const conversationImages = currentConversationMessages.filter(
     (m: any) => m.attachment_url && m.attachment_type === "image"
   );
+  const pinnedMessage = currentConversationMessages.find((m: any) => m.przypinana);
 
   const latestMessageMap = new Map();
   const latestMessageTextMap = new Map();
@@ -980,7 +1016,7 @@ export default function ClubChat() {
 
     return (
       <div
-        className={`max-w-[85%] p-3.5 rounded-2xl text-xs leading-relaxed shadow-sm ${
+        className={`max-w-[85%] p-3.5 rounded-2xl text-xs leading-relaxed shadow-sm relative group ${
           isMe
             ? "bg-slate-900 text-white rounded-br-none"
             : "bg-white text-slate-800 border border-slate-200 rounded-bl-none"
@@ -991,6 +1027,23 @@ export default function ClubChat() {
         )}
         {msg.tresc && <div>{msg.tresc}</div>}
         {renderAttachment(msg)}
+
+        {/* PRZYCISK PRZYPIĘCIA DLA ADMINA */}
+        {isAdmin && (
+          <div className="mt-1.5 pt-1 border-t border-slate-200/20 flex justify-end">
+            <button
+              type="button"
+              onClick={() => handlePinMessage(msg)}
+              className={`text-[9px] font-bold px-2 py-0.5 rounded-md transition-all ${
+                msg.przypinana
+                  ? "bg-amber-400 text-slate-950 shadow-sm"
+                  : "bg-slate-800/20 hover:bg-amber-400 hover:text-slate-950 text-slate-600"
+              }`}
+            >
+              {msg.przypinana ? "📌 Przypięta" : "📌 Przypnij"}
+            </button>
+          </div>
+        )}
       </div>
     );
   };
@@ -1486,6 +1539,30 @@ export default function ClubChat() {
           ) : (
             /* WIDOK AKTYWNEJ ROZMOWY (WIADOMOŚCI) */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
+              
+              {/* BANER PRZYPIĘTEJ WIADOMOŚCI */}
+              {pinnedMessage && (
+                <div className="bg-amber-50 border-b border-amber-200 px-3 py-2 flex items-center justify-between text-xs shadow-inner">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <span className="text-amber-600 font-bold text-sm shrink-0">📌</span>
+                    <div className="truncate">
+                      <span className="font-bold text-slate-900 mr-1">Przypięta:</span>
+                      <span className="text-slate-700 truncate">{pinnedMessage.tresc || (pinnedMessage.attachment_url ? "📎 Załącznik" : "")}</span>
+                    </div>
+                  </div>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => handlePinMessage(pinnedMessage)}
+                      className="text-[10px] font-bold text-rose-600 hover:text-rose-800 shrink-0 ml-2 cursor-pointer bg-white px-2 py-0.5 rounded border border-rose-200"
+                      title="Odepnij wiadomość"
+                    >
+                      Odepnij
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
