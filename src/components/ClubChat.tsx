@@ -26,6 +26,9 @@ export default function ClubChat() {
   const [chatInsideTab, setChatInsideTab] = useState<"messages" | "media">("messages");
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
+  // Stan dla menu reakcji / akcji dla konkretnej wiadomości (po kliknięciu w dymek)
+  const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
+
   const [klienci, setKlienci] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
@@ -35,7 +38,7 @@ export default function ClubChat() {
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   
-  // Stany dla treningów i zapisów z Supabase
+  // Stany dla grafiku zajęć i zapisów
   const [grafikZajec, setGrafikZajec] = useState<any[]>([]);
   const [zapisyZajec, setZapisyZajec] = useState<any[]>([]);
 
@@ -93,6 +96,7 @@ export default function ClubChat() {
     setFilePreview(null);
     setChatInsideTab("messages");
     setFullscreenImage(null);
+    setActiveMessageMenuId(null);
   };
 
   // Inicjalizacja pozycji dymka
@@ -261,21 +265,35 @@ export default function ClubChat() {
     }
   };
 
-  // Powiadomienia Push (Grupowe / Treningowe z uwzględnieniem wyciszenia)
-  const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string) => {
+  // Powiadomienia Push (Grupowe / Treningowe)
+  const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string, trainingId?: any) => {
     try {
-      const { data: groupData } = await supabase
-        .from("czat_grupy")
-        .select("czlonkowie_ids, wyciszeni_ids")
-        .eq("id", groupId)
-        .single();
+      let recipientIds: string[] = [];
 
-      if (!groupData) return;
+      if (trainingId) {
+        const { data: signedUp } = await supabase
+          .from("zapisy_zajec")
+          .select("klient_id")
+          .eq("class_key", trainingId);
 
-      const members = Array.isArray(groupData.czlonkowie_ids) ? groupData.czlonkowie_ids.map(String) : [];
-      const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
+        if (signedUp) {
+          recipientIds = signedUp.map((z: any) => String(z.klient_id));
+        }
+      } else {
+        const { data: groupData } = await supabase
+          .from("czat_grupy")
+          .select("czlonkowie_ids, wyciszeni_ids")
+          .eq("id", groupId)
+          .single();
 
-      const recipientIds = members.filter((id) => id !== String(senderId) && !muted.includes(id));
+        if (groupData) {
+          const members = Array.isArray(groupData.czlonkowie_ids) ? groupData.czlonkowie_ids.map(String) : [];
+          const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
+          recipientIds = members.filter((id) => !muted.includes(id));
+        }
+      }
+
+      recipientIds = recipientIds.filter((id) => id !== String(senderId));
       if (recipientIds.length === 0) return;
 
       const { data: clients } = await supabase
@@ -396,7 +414,6 @@ export default function ClubChat() {
   const fetchGroupsAndTrainings = async () => {
     if (!currentUserId) return;
     try {
-      // 1. Pobierz grupy zwykłe
       const { data: groupsData } = await supabase
         .from("czat_grupy")
         .select("*")
@@ -404,7 +421,6 @@ export default function ClubChat() {
 
       if (groupsData) setGroups(groupsData);
 
-      // 2. Pobierz grafik zajęć z tabeli grafik_zajec
       const { data: grafikData } = await supabase
         .from("grafik_zajec")
         .select("*")
@@ -414,7 +430,6 @@ export default function ClubChat() {
 
       if (grafikData) setGrafikZajec(grafikData);
 
-      // 3. Pobierz zapisy z tabeli zapisy_zajec
       const { data: zapisyData } = await supabase
         .from("zapisy_zajec")
         .select("*");
@@ -474,7 +489,7 @@ export default function ClubChat() {
     }
   };
 
-  // Subskrypcje Realtime
+  // Subskrypcje Realtime oraz cykliczne odświeżanie
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -498,8 +513,17 @@ export default function ClubChat() {
       })
       .subscribe();
 
+    const checkDailyUpdate = () => {
+      const now = new Date();
+      if (now.getHours() === 1 && now.getMinutes() === 0) {
+        fetchGroupsAndTrainings();
+      }
+    };
+    const dailyInterval = setInterval(checkDailyUpdate, 60000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(dailyInterval);
     };
   }, [currentUserId, secondaryUserId, selectedGroup]);
 
@@ -592,21 +616,28 @@ export default function ClubChat() {
     }
   };
 
-  // Funkcja pomocnicza: pobiera lub automatycznie tworzy rekord w `czat_grupy` dla danego treningu
+  // Sprawdzanie czy trening odbywa się dzisiaj
+  const isTrainingToday = (training: any) => {
+    if (!training.days) return true;
+    const jsDay = new Date().getDay();
+    if (Array.isArray(training.days)) {
+      return training.days.includes(jsDay) || training.days.includes(jsDay === 0 ? 7 : jsDay);
+    }
+    return true;
+  };
+
+  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu
   const getOrCreateTrainingGroup = async (training: any) => {
-    const groupName = `Trening: ${training.title} (${training.start})`;
+    const todayStr = new Date().toLocaleDateString("pl-PL");
+    const groupName = `Trening: ${training.title} (${todayStr} ${training.start})`;
     
-    // Sprawdź czy grupa treningowa już istnieje w czat_grupy
     const existing = groups.find((g: any) => g.nazwa === groupName);
     if (existing) return existing;
 
-    // Pobierz wszystkich zapisanych na te zajęcia z `zapisy_zajec`
-    // Sprawdzamy po class_key równym ID zajęć lub kluczu
     const signedUpClients = zapisyZajec
       .filter((z: any) => String(z.class_key) === String(training.id))
       .map((z: any) => z.klient_id);
 
-    // Dodaj również twórcę / administratorów
     const myClientId = secondaryUserId || currentUserId;
     const allMembers = Array.from(new Set([...signedUpClients, myClientId, 999999999]));
 
@@ -618,7 +649,7 @@ export default function ClubChat() {
           tworca_id: myClientId,
           czlonkowie_ids: allMembers,
           typ: "zamknieta",
-          ikona: "📅",
+          ikona: "🏋️‍♂️",
         },
       ])
       .select();
@@ -630,7 +661,7 @@ export default function ClubChat() {
     return null;
   };
 
-  // Wysyłanie wiadomości (Direct / Grupa / Trening) z obsługą błędów DB
+  // Wysyłanie wiadomości
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -656,6 +687,7 @@ export default function ClubChat() {
       przeczytana: false,
       przeczytana_at: null,
       przypinana: false,
+      reakcje: {},
     };
 
     if (selectedGroup) {
@@ -672,7 +704,15 @@ export default function ClubChat() {
         setFilePreview(null);
         fetchGroupMessages();
         updateLastSeen(senderId);
-        sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik");
+
+        const isTrainingChat = selectedGroup.nazwa?.startsWith("Trening:");
+        let trainingRefId = null;
+        if (isTrainingChat) {
+          const matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
+          if (matchedTraining) trainingRefId = matchedTraining.id;
+        }
+
+        sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik", trainingRefId);
       }
     } else if (selectedUser) {
       payload.odbiorca_id = selectedUser.id;
@@ -695,7 +735,7 @@ export default function ClubChat() {
     setIsUploading(false);
   };
 
-  // Przypinanie / Odepinanie wiadomości przez Admina
+  // Przypinanie wiadomości
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
     const newStatus = !msg.przypinana;
@@ -725,9 +765,43 @@ export default function ClubChat() {
       fetchMessages();
       if (selectedGroup) fetchGroupMessages();
     }
+    setActiveMessageMenuId(null);
   };
 
-  // Dołączanie / Opuszczanie grupy publicznej przez klubowicza
+  // Reagowanie emotkami na wiadomość
+  const handleToggleReaction = async (msg: any, emoji: string) => {
+    const myId = String(secondaryUserId || currentUserId);
+    let currentReactions = msg.reakcje || {};
+    if (typeof currentReactions === "string") {
+      try { currentReactions = JSON.parse(currentReactions); } catch { currentReactions = {}; }
+    }
+
+    let usersForEmoji = currentReactions[emoji] || [];
+    if (usersForEmoji.map(String).includes(myId)) {
+      usersForEmoji = usersForEmoji.filter((id: any) => String(id) !== myId);
+      if (usersForEmoji.length === 0) {
+        delete currentReactions[emoji];
+      } else {
+        currentReactions[emoji] = usersForEmoji;
+      }
+    } else {
+      usersForEmoji.push(myId);
+      currentReactions[emoji] = usersForEmoji;
+    }
+
+    const { error } = await supabase
+      .from("czat_wiadomosci")
+      .update({ reakcje: currentReactions })
+      .eq("id", msg.id);
+
+    if (!error) {
+      fetchMessages();
+      if (selectedGroup) fetchGroupMessages();
+    }
+    setActiveMessageMenuId(null);
+  };
+
+  // Dołączanie / Opuszczanie grupy publicznej
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
     const myId = secondaryUserId || currentUserId;
     if (!myId) return;
@@ -759,7 +833,7 @@ export default function ClubChat() {
     }
   };
 
-  // Wyciszenie / Włączenie powiadomień dla danej grupy
+  // Wyciszenie powiadomień grupy
   const handleToggleMuteGroup = async () => {
     if (!selectedGroup) return;
     const myId = secondaryUserId || currentUserId;
@@ -812,6 +886,7 @@ export default function ClubChat() {
       przeczytana: false,
       przeczytana_at: null,
       przypinana: false,
+      reakcje: {},
     }));
 
     if (payloads.length > 0) {
@@ -865,7 +940,7 @@ export default function ClubChat() {
     }
   };
 
-  // Aktualizacja danych grupy (nazwa + ikona)
+  // Aktualizacja danych grupy
   const handleUpdateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroup || !editGroupName.trim()) return;
@@ -1019,6 +1094,8 @@ export default function ClubChat() {
     const isBadgeNotification = isSystemSender && (msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową"));
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
 
+    const reactionsObj = msg.reakcje || {};
+
     if (isBirthdayNotification) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
@@ -1079,34 +1156,77 @@ export default function ClubChat() {
       );
     }
 
-    return (
-      <div
-        className={`max-w-[85%] p-3.5 rounded-2xl text-xs leading-relaxed shadow-sm relative group ${
-          isMe
-            ? "bg-slate-900 text-white rounded-br-none"
-            : "bg-white text-slate-800 border border-slate-200 rounded-bl-none"
-        }`}
-      >
-        {selectedGroup && !isMe && (
-          <div className="text-[10px] font-bold text-amber-500 mb-1">{msg.nadawca_nazwa}</div>
-        )}
-        {msg.tresc && <div>{msg.tresc}</div>}
-        {renderAttachment(msg)}
+    const myIdStr = String(secondaryUserId || currentUserId);
 
-        {/* PRZYCISK PRZYPIĘCIA DLA ADMINA */}
-        {isAdmin && (
-          <div className="mt-1.5 pt-1 border-t border-slate-200/20 flex justify-end">
-            <button
-              type="button"
-              onClick={() => handlePinMessage(msg)}
-              className={`text-[9px] font-bold px-2 py-0.5 rounded-md transition-all ${
-                msg.przypinana
-                  ? "bg-amber-400 text-slate-950 shadow-sm"
-                  : "bg-slate-800/20 hover:bg-amber-400 hover:text-slate-950 text-slate-600"
-              }`}
-            >
-              {msg.przypinana ? "📌 Przypięta" : "📌 Przypnij"}
-            </button>
+    return (
+      <div className="relative group flex flex-col">
+        {/* DYMEK WIADOMOŚCI - kliknięcie otwiera menu reakcji i przypinania */}
+        <div
+          onClick={() => setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id)}
+          className={`max-w-[85%] p-3.5 rounded-2xl text-xs leading-relaxed shadow-sm cursor-pointer select-none ${
+            isMe
+              ? "bg-slate-900 text-white rounded-br-none ml-auto"
+              : "bg-white text-slate-800 border border-slate-200 rounded-bl-none mr-auto"
+          }`}
+        >
+          {selectedGroup && !isMe && (
+            <div className="text-[10px] font-bold text-amber-500 mb-1">{msg.nadawca_nazwa}</div>
+          )}
+          {msg.tresc && <div>{msg.tresc}</div>}
+          {renderAttachment(msg)}
+        </div>
+
+        {/* POPUP MENU REAKCJI I PRZYPIĘCIA PO KLIKNIĘCIU W WIADOMOŚĆ */}
+        {activeMessageMenuId === msg.id && (
+          <div className={`absolute z-30 bottom-full mb-1 bg-white border border-slate-200 shadow-xl rounded-2xl p-2 flex flex-col gap-2 ${isMe ? "right-0" : "left-0"}`}>
+            <div className="flex items-center gap-1.5 text-base px-1">
+              {["👍", "❤️", "🔥", "😂", "💪"].map((emo) => (
+                <button
+                  key={emo}
+                  type="button"
+                  onClick={() => handleToggleReaction(msg, emo)}
+                  className="w-7 h-7 rounded-xl bg-slate-100 hover:bg-amber-100 flex items-center justify-center transition-colors cursor-pointer"
+                >
+                  {emo}
+                </button>
+              ))}
+            </div>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => handlePinMessage(msg)}
+                className="w-full text-left text-[11px] font-bold text-slate-800 hover:bg-amber-50 px-2 py-1 rounded-lg transition-colors border-t border-slate-100 flex items-center gap-1.5"
+              >
+                <span>📌</span> {msg.przypinana ? "Odepnij wiadomość" : "Przypnij wiadomość"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* WYŚWIETLANIE REAKCJI POD DYMIKIEM */}
+        {Object.keys(reactionsObj).length > 0 && (
+          <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? "justify-end" : "justify-start"}`}>
+            {Object.entries(reactionsObj).map(([emoji, userList]: [string, any]) => {
+              const count = Array.isArray(userList) ? userList.length : 0;
+              if (count === 0) return null;
+              const hasReacted = Array.isArray(userList) && userList.map(String).includes(myId);
+
+              return (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => handleToggleReaction(msg, emoji)}
+                  className={`text-[10px] px-2 py-0.5 rounded-full border flex items-center gap-1 transition-all cursor-pointer ${
+                    hasReacted
+                      ? "bg-amber-100 border-amber-400 text-amber-950 font-bold shadow-xs"
+                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <span>{emoji}</span>
+                  <span>{count}</span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1130,9 +1250,13 @@ export default function ClubChat() {
     return isPublic && !isAlreadyMember;
   });
 
-  // Filtrowanie treningów dla użytkownika (dla admina wszystkie, dla klubowicza tylko te na które jest zapisany w zapisy_zajec)
-  const myTrainingsList = grafikZajec.filter((training: any) => {
+  // Dzisiejsze treningi
+  const todayTrainingsList = grafikZajec.filter((training: any) => {
+    const isToday = isTrainingToday(training);
+    if (!isToday) return false;
+
     if (isAdmin) return true;
+
     const myClientId = secondaryUserId || currentUserId;
     const isSignedUp = zapisyZajec.some(
       (z: any) => String(z.class_key) === String(training.id) && String(z.klient_id) === String(myClientId)
@@ -1187,6 +1311,7 @@ export default function ClubChat() {
                       setSelectedUser(null);
                       setSelectedGroup(null);
                       setChatInsideTab("messages");
+                      setActiveMessageMenuId(null);
                     }}
                     className="bg-amber-400 hover:bg-amber-500 text-slate-950 px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 transition-all cursor-pointer shadow-md shrink-0 border border-amber-300"
                     title="Wróć do listy"
@@ -1333,7 +1458,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP / TRENINGÓW) */}
+          {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP / TRENINGI) */}
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
@@ -1356,7 +1481,7 @@ export default function ClubChat() {
                     onClick={() => setActiveTab("trainings")}
                     className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
                   >
-                    Treningi ({myTrainingsList.length})
+                    Treningi ({todayTrainingsList.length})
                   </button>
                 </div>
 
@@ -1569,10 +1694,10 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* LISTA TRENINGÓW (ZAPISANYCH W GRAFIKU) */}
+              {/* LISTA DZISIEJSZYCH TRENINGÓW */}
               {activeTab === "trainings" && (
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                  {myTrainingsList.map((training: any) => (
+                  {todayTrainingsList.map((training: any) => (
                     <button
                       key={training.id}
                       onClick={async () => {
@@ -1591,7 +1716,7 @@ export default function ClubChat() {
                         <div className="overflow-hidden">
                           <div className="font-bold text-xs text-slate-900 truncate">{training.title}</div>
                           <div className="text-[10px] text-slate-500">
-                            {training.start} {training.trainer ? `• Trener: ${training.trainer}` : ""}
+                            Godz: {training.start} {training.trainer ? `• Trener: ${training.trainer}` : ""}
                           </div>
                         </div>
                       </div>
@@ -1599,10 +1724,10 @@ export default function ClubChat() {
                     </button>
                   ))}
 
-                  {myTrainingsList.length === 0 && (
+                  {todayTrainingsList.length === 0 && (
                     <div className="py-12 text-center text-slate-400 text-xs space-y-1">
-                      <div>Brak zapisanych treningów.</div>
-                      <p className="text-[10px]">Zapisz się na zajęcia w grafiku, aby uzyskać dostęp do czatu treningowego.</p>
+                      <div>Brak zapisanych treningów na dzisiaj.</div>
+                      <p className="text-[10px]">Zapisz się na dzisiejsze zajęcia w grafiku, aby uzyskać dostęp do czatu treningowego.</p>
                     </div>
                   )}
                 </div>
@@ -1732,7 +1857,7 @@ export default function ClubChat() {
                     <div>👋 Rozpocznij rozmowę!</div>
                     <p className="text-[10px]">
                       {selectedGroup
-                        ? "Napisz pierwszą wiadomość do wszystkich na tym treningu."
+                        ? "Napisz pierwszą wiadomość do wszystkich uczestników tego treningu."
                         : Number(selectedUser?.id) === SYSTEM_ID
                         ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, urodzinach i wydarzeniach."
                         : "Napisz pierwszą wiadomość do tego klubowicza."}
