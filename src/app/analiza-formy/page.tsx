@@ -192,7 +192,7 @@ export default function AnalizaFormyPage() {
     wpisowe_kwota: "30.00",
     min_uczestnikow: "5",
     opis: "Wspólne wyzwanie utraty tkanki tłuszczowej. Pomiary na analizatorze na początku i końcu wyzwania.",
-    status: 'aktywne' as 'aktywne' | 'zapisy' | 'zakonczone' | 'anulowane'
+    status: 'zapisy' as 'aktywne' | 'zapisy' | 'zakonczone' | 'anulowane'
   });
 
   const [redukcjaPomiarForm, setRedukcjaPomiarForm] = useState({
@@ -248,6 +248,31 @@ export default function AnalizaFormyPage() {
     carbs: number;
     water: number;
   } | null>(null);
+
+  // Funkcja automatycznie weryfikująca minimum osób i aktywująca edycję
+  const verifyAndAutoActivateChallenge = async (
+    edycjaId: number, 
+    uczestnicyList: RedukcjaUczestnik[], 
+    edycjeList?: RedukcjaEdycja[]
+  ) => {
+    const listToSearch = edycjeList || edycjeRedukcji;
+    const currentEdycja = listToSearch.find(e => e.id === edycjaId);
+    if (!currentEdycja) return;
+
+    if (currentEdycja.status === 'zapisy') {
+      const minRequired = currentEdycja.min_uczestnikow || 5;
+      const paidCount = uczestnicyList.filter(u => u.oplacone).length;
+
+      if (paidCount >= minRequired) {
+        await supabase
+          .from('klub_redukcja_edycje')
+          .update({ status: 'aktywne' })
+          .eq('id', edycjaId);
+
+        setEdycjeRedukcji(prev => prev.map(e => e.id === edycjaId ? { ...e, status: 'aktywne' } : e));
+      }
+    }
+  };
 
   useEffect(() => {
     const initAuth = async () => {
@@ -332,9 +357,9 @@ export default function AnalizaFormyPage() {
         if (!selectedEdycjaId) {
           const active = sorted.find((e: any) => e.status !== 'zakonczone' && e.status !== 'anulowane') || sorted[0];
           setSelectedEdycjaId(active.id);
-          await loadEdycjaDetails(active.id);
+          await loadEdycjaDetails(active.id, sorted);
         } else {
-          await loadEdycjaDetails(selectedEdycjaId);
+          await loadEdycjaDetails(selectedEdycjaId, sorted);
         }
       }
     } catch (err) {
@@ -342,7 +367,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  const loadEdycjaDetails = async (edycjaId: number) => {
+  const loadEdycjaDetails = async (edycjaId: number, optionalEdycjeList?: RedukcjaEdycja[]) => {
     try {
       const [uczestnicyRes, pomiaryRes, nagrodyRes] = await Promise.all([
         supabase.from('klub_redukcja_uczestnicy').select('*').eq('edycja_id', edycjaId),
@@ -350,14 +375,21 @@ export default function AnalizaFormyPage() {
         supabase.from('klub_redukcja_nagrody').select('*').eq('edycja_id', edycjaId).order('miejsce', { ascending: true })
       ]);
 
+      let loadedParticipants: RedukcjaUczestnik[] = [];
       if (uczestnicyRes?.data) {
-        setUczestnicyRedukcji(uczestnicyRes.data as RedukcjaUczestnik[]);
+        loadedParticipants = uczestnicyRes.data as RedukcjaUczestnik[];
+        setUczestnicyRedukcji(loadedParticipants);
       }
       if (pomiaryRes?.data) {
         setPomiaryRedukcji(pomiaryRes.data as RedukcjaPomiar[]);
       }
       if (nagrodyRes?.data) {
         setNagrodyRedukcji(nagrodyRes.data as RedukcjaNagroda[]);
+      }
+
+      // Automatyczne sprawdzenie minimum osób przy załadowaniu danych
+      if (loadedParticipants.length > 0) {
+        await verifyAndAutoActivateChallenge(edycjaId, loadedParticipants, optionalEdycjeList);
       }
     } catch (err) {
       console.error("Błąd ładowania szczegółów edycji:", err);
@@ -532,7 +564,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Automatyczny zwrot wpisowego do portfela klubowicza przy niespełnionym limicie
   const handleCancelAndRefundEdycja = async (edycja: RedukcjaEdycja) => {
     const oplaceniUczestnicy = (uczestnicyRedukcji || []).filter(u => u.oplacone);
     const kwotaZwrotu = Number(edycja.wpisowe_kwota) || 30.00;
@@ -545,7 +576,6 @@ export default function AnalizaFormyPage() {
     setIsLoading(true);
     try {
       for (const u of oplaceniUczestnicy) {
-        // 1. Zwiększenie salda portfela klubowicza
         const { data: klientData } = await supabase
           .from('klienci')
           .select('id, portfel, "E-mail"')
@@ -559,7 +589,6 @@ export default function AnalizaFormyPage() {
             .update({ portfel: currentWallet + kwotaZwrotu })
             .eq('id', u.klient_id);
 
-          // 2. Dodanie powiadomienia wewnętrznego dla klubowicza
           await supabase.from('powiadomienia').insert([{
             klient_id: u.klient_id,
             email: klientData['E-mail'] || '',
@@ -570,7 +599,6 @@ export default function AnalizaFormyPage() {
         }
       }
 
-      // 3. Zmiana statusu wyzwania na 'anulowane'
       await supabase
         .from('klub_redukcja_edycje')
         .update({ status: 'anulowane' })
@@ -688,7 +716,7 @@ export default function AnalizaFormyPage() {
           userId: selectedKlient?.id || currentUserId,
           description: description,
           email: selectedKlient ? selectedKlient['E-mail'] : currentUserEmail,
-          type: type, // 'redukcja_fee' – nie doładowuje portfela, zasila kasę klubu
+          type: type,
           edycja_id: selectedEdycjaId
         })
       });
@@ -767,7 +795,8 @@ export default function AnalizaFormyPage() {
   };
 
   const handleCheckboxPaymentToggle = async (uczestnikId: number, newStatus: boolean) => {
-    setUczestnicyRedukcji(prev => prev.map(u => u.id === uczestnikId ? { ...u, oplacone: newStatus } : u));
+    const updatedParticipants = uczestnicyRedukcji.map(u => u.id === uczestnikId ? { ...u, oplacone: newStatus } : u);
+    setUczestnicyRedukcji(updatedParticipants);
 
     const { error } = await supabase
       .from('klub_redukcja_uczestnicy')
@@ -777,6 +806,9 @@ export default function AnalizaFormyPage() {
     if (error) {
       alert("Błąd aktualizacji statusu płatności: " + error.message);
       if (selectedEdycjaId) await loadEdycjaDetails(selectedEdycjaId);
+    } else if (selectedEdycjaId) {
+      // Automatyczna weryfikacja czy osiągnięto minimum po zatwierdzeniu wpłaty
+      await verifyAndAutoActivateChallenge(selectedEdycjaId, updatedParticipants);
     }
   };
 
@@ -1905,9 +1937,17 @@ export default function AnalizaFormyPage() {
                           ? 'bg-slate-800 text-slate-300 border-slate-700' 
                           : activeEdycjaObj.status === 'anulowane'
                             ? 'bg-rose-950/80 text-rose-300 border-rose-800'
-                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
+                            : activeEdycjaObj.status === 'zapisy'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                              : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
                       }`}>
-                        {activeEdycjaObj.status === 'zakonczone' ? 'Archiwum / Zakończona' : activeEdycjaObj.status === 'anulowane' ? 'Odwołane (Zwrócono wpisowe)' : activeEdycjaObj.status}
+                        {activeEdycjaObj.status === 'zakonczone' 
+                          ? 'Archiwum / Zakończona' 
+                          : activeEdycjaObj.status === 'anulowane' 
+                            ? 'Odwołane (Zwrócono wpisowe)' 
+                            : activeEdycjaObj.status === 'zapisy'
+                              ? 'Otwarte Zapisy'
+                              : 'Wyzwanie Aktywne'}
                       </span>
                     </div>
                     <p className="text-xs text-sky-200/90 mt-0.5">{activeEdycjaObj.opis}</p>
@@ -2649,7 +2689,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) Z MINIMALNĄ LICZBĄ OSÓB */}
+      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) Z DOMYŚLNYM STATUSEM 'zapisy' */}
       {isNewEdycjaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -2719,14 +2759,14 @@ export default function AnalizaFormyPage() {
                   />
                 </div>
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Status Edycji</label>
+                  <label className="font-bold text-slate-700 block mb-1">Status Początkowy</label>
                   <select
                     value={edycjaFormData.status}
                     onChange={(e) => setEdycjaFormData({...edycjaFormData, status: e.target.value as any})}
                     className="w-full p-3 border rounded-xl font-bold bg-white"
                   >
-                    <option value="aktywne">Aktywne</option>
-                    <option value="zapisy">Otwarte Zapisy</option>
+                    <option value="zapisy">Otwarte Zapisy (Auto-aktywacja)</option>
+                    <option value="aktywne">Od razu Aktywne</option>
                     <option value="zakonczone">Zakończone</option>
                   </select>
                 </div>
@@ -2773,7 +2813,6 @@ export default function AnalizaFormyPage() {
                 <button onClick={() => setIsRedukcjaPomiarModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
               </div>
 
-              {/* BELKA DANYCH PODOPIECZNEGO W MODALU POMIARU */}
               <div className="bg-sky-50 border border-sky-200 p-3 rounded-2xl flex items-center justify-between text-xs text-sky-950">
                 <div>
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Płeć</span>
