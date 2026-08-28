@@ -661,7 +661,7 @@ export default function ClubChat() {
     return null;
   };
 
-  // Wysyłanie wiadomości
+  // Wysyłanie wiadomości (Direct / Grupa / Trening) z obsługą błędów DB
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -735,7 +735,7 @@ export default function ClubChat() {
     setIsUploading(false);
   };
 
-  // Przypinanie wiadomości
+  // Przypinanie / Odepinanie wiadomości przez Admina
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
     const newStatus = !msg.przypinana;
@@ -770,22 +770,22 @@ export default function ClubChat() {
 
   // Reagowanie emotkami na wiadomość
   const handleToggleReaction = async (msg: any, emoji: string) => {
-    const myId = String(secondaryUserId || currentUserId);
+    const myIdStr = String(secondaryUserId || currentUserId);
     let currentReactions = msg.reakcje || {};
     if (typeof currentReactions === "string") {
       try { currentReactions = JSON.parse(currentReactions); } catch { currentReactions = {}; }
     }
 
     let usersForEmoji = currentReactions[emoji] || [];
-    if (usersForEmoji.map(String).includes(myId)) {
-      usersForEmoji = usersForEmoji.filter((id: any) => String(id) !== myId);
+    if (usersForEmoji.map(String).includes(myIdStr)) {
+      usersForEmoji = usersForEmoji.filter((id: any) => String(id) !== myIdStr);
       if (usersForEmoji.length === 0) {
         delete currentReactions[emoji];
       } else {
         currentReactions[emoji] = usersForEmoji;
       }
     } else {
-      usersForEmoji.push(myId);
+      usersForEmoji.push(myIdStr);
       currentReactions[emoji] = usersForEmoji;
     }
 
@@ -801,7 +801,7 @@ export default function ClubChat() {
     setActiveMessageMenuId(null);
   };
 
-  // Dołączanie / Opuszczanie grupy publicznej
+  // Dołączanie / Opuszczanie grupy publicznej przez klubowicza
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
     const myId = secondaryUserId || currentUserId;
     if (!myId) return;
@@ -833,7 +833,7 @@ export default function ClubChat() {
     }
   };
 
-  // Wyciszenie powiadomień grupy
+  // Wyciszenie / Włączenie powiadomień dla danej grupy
   const handleToggleMuteGroup = async () => {
     if (!selectedGroup) return;
     const myId = secondaryUserId || currentUserId;
@@ -940,7 +940,7 @@ export default function ClubChat() {
     }
   };
 
-  // Aktualizacja danych grupy
+  // Aktualizacja danych grupy (nazwa + ikona)
   const handleUpdateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroup || !editGroupName.trim()) return;
@@ -1209,7 +1209,7 @@ export default function ClubChat() {
             {Object.entries(reactionsObj).map(([emoji, userList]: [string, any]) => {
               const count = Array.isArray(userList) ? userList.length : 0;
               if (count === 0) return null;
-              const hasReacted = Array.isArray(userList) && userList.map(String).includes(myId);
+              const hasReacted = Array.isArray(userList) && userList.map(String).includes(myIdStr);
 
               return (
                 <button
