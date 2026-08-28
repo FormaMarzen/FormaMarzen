@@ -270,7 +270,6 @@ export default function ClubChat() {
       const members = Array.isArray(groupData.czlonkowie_ids) ? groupData.czlonkowie_ids.map(String) : [];
       const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
 
-      // Odbiorcy: członkowie grupy oprócz nadawcy i osób które wyciszyły powiadomienia
       const recipientIds = members.filter((id) => id !== String(senderId) && !muted.includes(id));
       if (recipientIds.length === 0) return;
 
@@ -607,7 +606,7 @@ export default function ClubChat() {
         setFilePreview(null);
         fetchGroupMessages();
         updateLastSeen(senderId);
-        sendGroupPushNotification(selectedGroup.id, senderId, currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik");
+        sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik");
       }
     } else if (selectedUser) {
       payload.odbiorca_id = selectedUser.id;
@@ -801,7 +800,6 @@ export default function ClubChat() {
     return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
   });
 
-  // Lista wszystkich zdjęć w aktywnej konwersacji (1-na-1 lub grupa)
   const currentConversationMessages = selectedGroup ? groupMessages : activeChatMessages;
   const conversationImages = currentConversationMessages.filter(
     (m: any) => m.attachment_url && m.attachment_type === "image"
@@ -999,7 +997,6 @@ export default function ClubChat() {
   const isLeftSide = isPositioned ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 200) : false;
   const isTopSide = isPositioned ? position.y < 540 : false;
 
-  // Filtrowanie grup: Moje grupy vs Odkrywaj publiczne
   const myGroupsList = groups.filter((g: any) => {
     if (isAdmin) return true;
     const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
@@ -1193,7 +1190,6 @@ export default function ClubChat() {
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
-              {/* GŁÓWNE ZAKŁADKI I PRZYCISKI ADMINISTRATORA */}
               <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-2">
                 <div className="flex gap-1 bg-slate-200 p-1 rounded-xl">
                   <button
@@ -1320,7 +1316,7 @@ export default function ClubChat() {
                 </>
               )}
 
-              {/* LISTA GRUP (MOJE vs ODKRYWAJ PUBLICZNE) */}
+              {/* LISTA GRUP */}
               {activeTab === "groups" && (
                 <div className="flex-1 flex flex-col overflow-hidden space-y-2">
                   <div className="flex gap-2 border-b border-slate-200 pb-1.5 text-xs font-bold">
@@ -1420,7 +1416,7 @@ export default function ClubChat() {
               )}
             </div>
           ) : chatInsideTab === "media" ? (
-            /* WIDOK GALERII ZDJĘĆ DLA DANEJ ROZMOWY / GRUPY */
+            /* WIDOK GALERII ZDJĘĆ */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3">
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
                 <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
@@ -1633,7 +1629,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* MODAL EDYCJI GRUPY (NAZWA + IKONA / WŁASNY OBRAZ / EMOJI) */}
+          {/* MODAL EDYCJI GRUPY */}
           {showEditGroupModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
               <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
@@ -1717,7 +1713,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* MODAL BROADCAST (DO WSZYSTKICH) */}
+          {/* MODAL BROADCAST */}
           {showBroadcastModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
               <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-4">
@@ -1801,7 +1797,6 @@ export default function ClubChat() {
                     required
                   />
 
-                  {/* WYBÓR IKONY GRUPY (EMOJI LUB WŁASNY OBRAZ) */}
                   <div>
                     <label className="text-[11px] font-bold text-slate-700 mb-1 block">Ikona grupy (Emoji lub własny obrazek):</label>
                     <div className="flex items-center gap-2">
@@ -1839,7 +1834,6 @@ export default function ClubChat() {
                     </div>
                   </div>
 
-                  {/* WYBÓR TYPU GRUPY */}
                   <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
                     <button
                       type="button"
@@ -1857,7 +1851,6 @@ export default function ClubChat() {
                     </button>
                   </div>
 
-                  {/* LISTA KLUBOWICZÓW DLA GRUPY ZAMKNIĘTEJ */}
                   {newGroupType === "zamknieta" ? (
                     <div>
                       <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
