@@ -548,7 +548,7 @@ export default function ClubChat() {
     }
   };
 
-  // Wгрыwanie własnego obrazka ikony grupy
+  // Wgrywanie własnego obrazka ikony grupy
   const handleGroupIconImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, isEditing: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1048,9 +1048,12 @@ export default function ClubChat() {
             <div className="flex items-center gap-2.5 overflow-hidden">
               {selectedUser || selectedGroup ? (
                 <>
-                  {/* WYRAŹNY PRZYCISK POWROTU */}
+                  {/* WYRAŹNY PRZYCISK POWROTU Z STOP PROPAGATION */}
                   <button
-                    onClick={() => {
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
                       setSelectedUser(null);
                       setSelectedGroup(null);
                       setChatInsideTab("messages");
@@ -1077,7 +1080,9 @@ export default function ClubChat() {
                         </div>
                         {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
                           <button
-                            onClick={() => {
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setEditGroupName(selectedGroup.nazwa);
                               setEditGroupIcon(selectedGroup.ikona || "🏋️‍♂️");
                               setShowEditGroupModal(true);
@@ -1130,7 +1135,11 @@ export default function ClubChat() {
             <div className="flex items-center gap-1.5 shrink-0">
               {selectedGroup && (
                 <button
-                  onClick={handleToggleMuteGroup}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleMuteGroup();
+                  }}
                   className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
                     isCurrentGroupMuted
                       ? "bg-rose-950/60 text-rose-300 border-rose-800"
@@ -1143,7 +1152,11 @@ export default function ClubChat() {
               )}
               {selectedGroup && selectedGroup.typ === "publiczna" && !isAdmin && (
                 <button
-                  onClick={() => handleToggleGroupMembership(selectedGroup, false)}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleGroupMembership(selectedGroup, false);
+                  }}
                   className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-1 rounded-lg border border-rose-800 transition-colors"
                   title="Opuść tę grupę"
                 >
@@ -1151,7 +1164,11 @@ export default function ClubChat() {
                 </button>
               )}
               <button
-                onClick={handleCloseChat}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCloseChat();
+                }}
                 className="text-slate-400 hover:text-white w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs cursor-pointer transition-colors"
               >
                 ✕
