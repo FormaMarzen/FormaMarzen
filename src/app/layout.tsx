@@ -47,12 +47,11 @@ export default function RootLayout({
   const [profileBirth, setProfileBirth] = useState('');
   const [profileGender, setProfileGender] = useState('');
   const [profileHeight, setProfileHeight] = useState('');
-  const [profileLang, setProfileLang] = useState('Polski');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
-  // Stany dla mechanizmu Pull-to-Refresh (zwiększona czułość/próg)
+  // Stany dla mechanizmu Pull-to-Refresh
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const touchStartY = useRef(0);
@@ -73,7 +72,7 @@ export default function RootLayout({
     );
   })();
 
-  // Natychmiastowe i niezawodne pobieranie ID klienta (wyszukiwanie w JS odporne na wielkość liter)
+  // Pobieranie ID klienta
   useEffect(() => {
     if (showCalendarSettings && !currentClientId) {
       const fetchClientIdInstantly = async () => {
@@ -94,7 +93,6 @@ export default function RootLayout({
           }
 
           if (!matched) {
-            // Fallback dla admina lub braku dopasowania
             matched = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput')) || clients[0];
           }
 
@@ -114,7 +112,7 @@ export default function RootLayout({
     }
   }, [showCalendarSettings, currentClientId, profileEmail]);
 
-  // Funkcja aktywująca i prosząca o uprawnienia Web Push w przeglądarce
+  // Funkcja Web Push
   const subscribeToPushNotifications = async (clientId: string | number) => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
@@ -145,7 +143,7 @@ export default function RootLayout({
     }
   };
 
-  // Obsługa włączania/wyłączania synchronizacji kalendarza w bazie
+  // Synchronizacja kalendarza
   const handleToggleCalendarSync = async (enabled: boolean) => {
     setCalendarAutoSync(enabled);
     if (!currentClientId) return;
@@ -156,7 +154,7 @@ export default function RootLayout({
       .eq('id', currentClientId);
   };
 
-  // Obsługa gestu Pull-to-Refresh z podniesionym progiem aktywacji
+  // Obsługa Pull-to-Refresh
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1 && window.scrollY <= 0) {
@@ -201,7 +199,7 @@ export default function RootLayout({
     };
   }, [pullDistance, isRefreshing]);
 
-  // Blokada skalowania i pinch-to-zoom na urządzeniach mobilnych
+  // Blokada skalowania i pinch-to-zoom
   useEffect(() => {
     const handleGesture = (e: Event) => e.preventDefault();
     const handleTouchStart = (e: TouchEvent) => { if (e.touches.length > 1) e.preventDefault(); };
@@ -386,7 +384,6 @@ export default function RootLayout({
       title: "Główne",
       items: [
         { href: '/', label: 'Panel główny', icon: '📊' },
-        { href: '/grafik', label: 'Grafik', icon: '📅' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
         { href: '/moje-zapisy?ranking=true', label: 'Ranking Klubowiczów', icon: '👑' },
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
@@ -1054,28 +1051,14 @@ export default function RootLayout({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block">Urodziny</label>
-                    <input 
-                      type="date" 
-                      value={profileBirth}
-                      onChange={(e) => setProfileBirth(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block">Język</label>
-                    <select 
-                      value={profileLang}
-                      onChange={(e) => setProfileLang(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                    >
-                      <option value="Polski">Polski</option>
-                      <option value="English">English</option>
-                    </select>
-                  </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Urodziny</label>
+                  <input 
+                    type="date" 
+                    value={profileBirth}
+                    onChange={(e) => setProfileBirth(e.target.value)}
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                  />
                 </div>
               </div>
 
