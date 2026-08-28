@@ -19,14 +19,14 @@ export default function ClubChat() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Główne zakładki widoku listy: Prywatne | Grupy | Treningi
-  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("direct");
+  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public">("my");
 
   // Zakładka wewnątrz aktywnej rozmowy / grupy: Czat vs Galeria zdjęć
   const [chatInsideTab, setChatInsideTab] = useState<"messages" | "media">("messages");
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
-  // Stan dla menu reakcji / akcji dla konkretnej wiadomości (po kliknięciu w dymek)
+  // Stan dla menu reakcji / akcji dla konkretnej wiadomości
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
 
   const [klienci, setKlienci] = useState<any[]>([]);
@@ -421,11 +421,10 @@ export default function ClubChat() {
 
       if (groupsData) setGroups(groupsData);
 
+      // Pobierz grafik zajęć bez sztywnego filtrowania po is_odwolane, aby nic nie zniknęło przez przypadek
       const { data: grafikData } = await supabase
         .from("grafik_zajec")
         .select("*")
-        .eq("is_odwolane", false)
-        .eq("is_usuniete", false)
         .order("start", { ascending: true });
 
       if (grafikData) setGrafikZajec(grafikData);
@@ -616,12 +615,24 @@ export default function ClubChat() {
     }
   };
 
-  // Sprawdzanie czy trening odbywa się dzisiaj
+  // Bardzo elastyczne sprawdzenie czy trening odbywa się dzisiaj (uwzględnia tablice, obiekty lub brak restrykcji dni)
   const isTrainingToday = (training: any) => {
-    if (!training.days) return true;
-    const jsDay = new Date().getDay();
+    if (training.is_odwolane || training.is_usuniete) return false;
+    if (!training.days) return true; // Jeśli brak dni, traktujemy jako aktualne
+    const jsDay = new Date().getDay(); // 0 = Niedziela, 1 = Poniedziałek, ... 6 = Sobota
+    const dayIso = jsDay === 0 ? 7 : jsDay;
+
     if (Array.isArray(training.days)) {
-      return training.days.includes(jsDay) || training.days.includes(jsDay === 0 ? 7 : jsDay);
+      return (
+        training.days.includes(jsDay) ||
+        training.days.includes(dayIso) ||
+        training.days.includes(String(jsDay)) ||
+        training.days.includes(String(dayIso))
+      );
+    }
+    if (typeof training.days === "object" && training.days !== null) {
+      // Jeśli days to obiekt jsonb
+      return training.days[String(jsDay)] || training.days[String(dayIso)] || Object.values(training.days).some(Boolean);
     }
     return true;
   };
@@ -661,7 +672,7 @@ export default function ClubChat() {
     return null;
   };
 
-  // Wysyłanie wiadomości (Direct / Grupa / Trening) z obsługą błędów DB
+  // Wysyłanie wiadomości
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -735,7 +746,7 @@ export default function ClubChat() {
     setIsUploading(false);
   };
 
-  // Przypinanie / Odepinanie wiadomości przez Admina
+  // Przypinanie wiadomości
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
     const newStatus = !msg.przypinana;
@@ -801,7 +812,7 @@ export default function ClubChat() {
     setActiveMessageMenuId(null);
   };
 
-  // Dołączanie / Opuszczanie grupy publicznej przez klubowicza
+  // Dołączanie / Opuszczanie grupy publicznej
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
     const myId = secondaryUserId || currentUserId;
     if (!myId) return;
@@ -833,7 +844,7 @@ export default function ClubChat() {
     }
   };
 
-  // Wyciszenie / Włączenie powiadomień dla danej grupy
+  // Wyciszenie powiadomień grupy
   const handleToggleMuteGroup = async () => {
     if (!selectedGroup) return;
     const myId = secondaryUserId || currentUserId;
@@ -940,7 +951,7 @@ export default function ClubChat() {
     }
   };
 
-  // Aktualizacja danych grupy (nazwa + ikona)
+  // Aktualizacja danych grupy
   const handleUpdateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroup || !editGroupName.trim()) return;
@@ -1250,7 +1261,7 @@ export default function ClubChat() {
     return isPublic && !isAlreadyMember;
   });
 
-  // Dzisiejsze treningi
+  // Dzisiejsze treningi – dla admina wszystkie z grafiku, dla klubowicza tylko te na które jest zapisany w zapisy_zajec
   const todayTrainingsList = grafikZajec.filter((training: any) => {
     const isToday = isTrainingToday(training);
     if (!isToday) return false;
