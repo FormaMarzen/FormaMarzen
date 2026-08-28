@@ -303,7 +303,6 @@ export default function PublicSchedulePage() {
   const totalDays = new Date(year, month + 1, 0).getDate();
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"];
 
-  // Pomocnik do formatowania dostępu do zajęć
   const parseDostepZajecia = (dostep: any): string[] => {
     if (!dostep) return [];
     if (Array.isArray(dostep)) return dostep;
@@ -311,9 +310,7 @@ export default function PublicSchedulePage() {
       try {
         const parsed = JSON.parse(dostep);
         if (Array.isArray(parsed)) return parsed;
-      } catch (e) {
-        // format CSV lub zwykły tekst
-      }
+      } catch (e) {}
       return dostep.includes(',') ? dostep.split(',').map((s: string) => s.trim()) : [dostep];
     }
     return [];
@@ -383,7 +380,7 @@ export default function PublicSchedulePage() {
           </div>
         </header>
 
-        {/* OKNO MODALNE (POPUP) PO KLIKNIĘCIU "ZAPISZ NA TRENING" */}
+        {/* OKNO MODALNE PO KLIKNIĘCIU "ZAPISZ NA TRENING" */}
         {isSignupModalOpen && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
             <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-6 relative">
@@ -687,7 +684,7 @@ export default function PublicSchedulePage() {
           </>
         )}
 
-        {/* WIDOK 2: OBOWIĄZUJĄCE KARNETY (KATALOG KARNETÓW - IDENTYCZNY JAK U KLUBOWICZÓW) */}
+        {/* WIDOK 2: OBOWIĄZUJĄCE KARNETY (KATALOG KARNETÓW) */}
         {activeTab === 'karnety' && (
           <section className="space-y-8 animate-in fade-in duration-200">
             
@@ -703,13 +700,11 @@ export default function PublicSchedulePage() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
                 {katalogKarnetow.map((karnet: any) => {
                   const dostepList = parseDostepZajecia(karnet.dostep_zajecia);
-                  const isPolecany = karnet.wyrozniony || (karnet.tag_wyroznienia && karnet.tag_wyroznienia.trim().length > 0);
                   const tagText = karnet.tag_wyroznienia || (karnet.wyrozniony ? 'POLECANY' : null);
 
                   const typKarnetu = karnet.typ_karnetu || 'UMOWA CYKLICZNA';
                   const isPakiet = typKarnetu.toLowerCase().includes('pakiet') || typKarnetu.toLowerCase().includes('wejść');
 
-                  // Rozbicie opisu na linie/punkty
                   const opisLinie = karnet.opis
                     ? karnet.opis.split('\n').filter((l: string) => l.trim().length > 0)
                     : [];
@@ -735,7 +730,7 @@ export default function PublicSchedulePage() {
                             </div>
                           )}
 
-                          {/* BADGE WYRÓŻNIENIA (np. ★ POLECANY / ★ BESTSELLER) */}
+                          {/* BADGE WYRÓŻNIENIA */}
                           {tagText && (
                             <div className="absolute top-3 left-3 bg-amber-500 text-slate-950 text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-xl shadow-md flex items-center gap-1.5 border border-amber-300">
                               <span>★</span>
@@ -766,7 +761,6 @@ export default function PublicSchedulePage() {
                       <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
                         
                         <div className="space-y-3">
-                          {/* BADGE TYPU (np. UMOWA CYKLICZNA / PAKIET WEJŚĆ) */}
                           <div>
                             <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${
                               isPakiet
@@ -777,12 +771,10 @@ export default function PublicSchedulePage() {
                             </span>
                           </div>
 
-                          {/* TYTUŁ KARNETU */}
                           <h3 className="text-base sm:text-lg font-black text-slate-900 leading-snug uppercase">
                             {karnet.nazwa}
                           </h3>
 
-                          {/* LISTA OPISU PUNKT PO PUNKCIE */}
                           {opisLinie.length > 0 ? (
                             <div className="space-y-1.5 text-xs text-slate-600 font-medium">
                               {opisLinie.map((linia: string, lIdx: number) => (
@@ -799,7 +791,6 @@ export default function PublicSchedulePage() {
                             )
                           )}
 
-                          {/* PILLS DOSTĘPNOŚCI ZAJĘĆ */}
                           {dostepList.length > 0 && (
                             <div className="pt-2 flex flex-wrap gap-1.5">
                               {dostepList.map((zajecie: string, zIdx: number) => (
@@ -815,7 +806,7 @@ export default function PublicSchedulePage() {
                           )}
                         </div>
 
-                        {/* STOPKA KARTY Z CENĄ I PRZYCISKIEM KUPNA */}
+                        {/* CENA I PRZYCISK KUPNA */}
                         <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3 mt-auto">
                           <div>
                             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -848,30 +839,6 @@ export default function PublicSchedulePage() {
 
           </section>
         )}
-
-        {/* DOLNA STOPKA INFORMACYJNA */}
-        <footer className="bg-white border border-sky-200 rounded-3xl p-6 text-center text-xs text-slate-500 space-y-3 shadow-sm">
-          <p className="font-bold text-slate-800 uppercase tracking-wide text-sm">
-            Chcesz zapisać się na zajęcia lub dołączyć do klubu?
-          </p>
-          <p className="max-w-md mx-auto">
-            Zaloguj się do swojego profilu klubowicza lub zarejestruj się online.
-          </p>
-          <div className="pt-2 flex justify-center gap-3 flex-wrap">
-            <button
-              onClick={() => setIsSignupModalOpen(true)}
-              className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all cursor-pointer"
-            >
-              Dołącz teraz ↗
-            </button>
-            <Link
-              href="/login"
-              className="inline-flex items-center gap-2 bg-sky-950 hover:bg-sky-900 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all"
-            >
-              Panel logowania ↗
-            </Link>
-          </div>
-        </footer>
 
       </div>
     </div>
