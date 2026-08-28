@@ -435,7 +435,7 @@ export default function KlienciPage() {
     }
   };
 
-  // WYPISANIE POJEDYNCZE Z ZAJĘĆ
+  // WYPISANIE POJEDYNCZE Z ZAJĘĆ (W TYM ZAPISÓW AUTOMATYCZNYCH)
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
 
@@ -454,7 +454,17 @@ export default function KlienciPage() {
       }
     }
 
-    if (zajecieItem.classKey) {
+    // Obsługa usunięcia zapisu automatycznego z bazy automatyczne_zapisy
+    if (String(zajecieItem.classKey || '').startsWith('auto_')) {
+      const grafikId = String(zajecieItem.classKey).replace('auto_', '');
+      await supabase
+        .from('automatyczne_zapisy')
+        .delete()
+        .eq('grafik_id', grafikId)
+        .eq('klient_id', profileClient.id);
+    }
+
+    if (zajecieItem.classKey && !String(zajecieItem.classKey).startsWith('auto_')) {
       await supabase
         .from('zapisy_zajec')
         .delete()
@@ -523,7 +533,14 @@ export default function KlienciPage() {
     const noweWypisy: any[] = [];
 
     for (const item of upcomingItems) {
-      if (item.classKey) {
+      if (String(item.classKey || '').startsWith('auto_')) {
+        const grafikId = String(item.classKey).replace('auto_', '');
+        await supabase
+          .from('automatyczne_zapisy')
+          .delete()
+          .eq('grafik_id', grafikId)
+          .eq('klient_id', profileClient.id);
+      } else if (item.classKey) {
         await supabase
           .from('zapisy_zajec')
           .delete()
@@ -2404,12 +2421,26 @@ export default function KlienciPage() {
                             const uniqueKey = z.class_key || `${z.id}`;
                             const sig = normalizeClassSignature(`${dateStr} ${timeStr}`, title);
                             
+                            // Weryfikacja czy zapis nie powstał z reguły automatycznych zapisów
+                            const isAutoEnrolled = (automatyczneZapisy || []).some(
+                              (az: any) => String(az.klient_id) === String(profileClient.id) && String(az.grafik_id) === String(classId)
+                            );
+
                             let author = 'Klubowicz';
-                            if (z.zapisujacy) {
+                            if (isAutoEnrolled) {
+                              author = 'Zapis automatyczny (Klub)';
+                            } else if (z.zapisujacy) {
                               const zLow = String(z.zapisujacy).toLowerCase();
                               if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
                                 author = z.zapisujacy;
                               }
+                            }
+
+                            let statusDisplay = 'ZAPISANY';
+                            if (z.status === 'krzesełko') {
+                              statusDisplay = 'LISTA REZERWOWA (KRZESEŁKO)';
+                            } else if (isAutoEnrolled) {
+                              statusDisplay = 'ZAPIS AUTOMATYCZNY';
                             }
 
                             seenSignatures.add(sig);
@@ -2420,7 +2451,7 @@ export default function KlienciPage() {
                               classKey: z.class_key,
                               data: `${dateStr} ${timeStr}`.trim(),
                               zajecia: title,
-                              status: z.status === 'krzesełko' ? 'LISTA REZERWOWA (KRZESEŁKO)' : 'ZAPISANY',
+                              status: statusDisplay,
                               zapisujacy: author,
                               created_at: z.created_at || z.data_zapisu || null,
                               sortTime: classStartMs
@@ -2435,8 +2466,9 @@ export default function KlienciPage() {
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
                           if (stdClass) {
                             const uniqueKey = `auto_${az.id}_${az.grafik_id}`;
-                            const fullDateStr = `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${stdClass.start || stdClass.start_time || ''}`.trim();
-                            const title = az.class_title || stdClass.title || stdClass.nazwa || 'Zajęcia stałe';
+                            const hourStr = stdClass.start || stdClass.start_time || '';
+                            const fullDateStr = `${stdClass.dzien_tygodnia || 'Zajęcia stałe'} ${hourStr}`.trim();
+                            const title = az.class_title || stdClass.title || stdClass.nazwa || 'Trening cykliczny';
                             const sig = normalizeClassSignature(fullDateStr, title);
 
                             if (!upcomingMap.has(uniqueKey) && !seenSignatures.has(sig)) {
@@ -2447,8 +2479,8 @@ export default function KlienciPage() {
                                 classKey: `auto_${az.grafik_id}`,
                                 data: fullDateStr,
                                 zajecia: title,
-                                status: 'ZAPIS STAŁY (KLUB)',
-                                zapisujacy: 'Klub (Administrator)',
+                                status: 'ZAPIS AUTOMATYCZNY',
+                                zapisujacy: 'Zapis automatyczny (Klub)',
                                 created_at: az.created_at || null,
                                 sortTime: nowTime + 1000
                               });
@@ -2520,9 +2552,11 @@ export default function KlienciPage() {
                                     <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.data}</td>
                                     <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
                                     <td className="py-3 px-4 font-semibold whitespace-nowrap">
-                                      <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${
+                                      <span className={`px-2.5 py-0.5 rounded text-[10px] font-black border ${
                                         item.status?.includes('REZERWOWA') || item.status?.includes('KRZESEŁKO')
                                           ? 'bg-blue-100 text-blue-900 border-blue-200'
+                                          : item.status?.includes('AUTOMATYCZNY')
+                                          ? 'bg-purple-100 text-purple-900 border-purple-300'
                                           : 'bg-emerald-100 text-emerald-800 border-emerald-200'
                                       }`}>
                                         {item.status || 'ZAPISANY'}
@@ -3092,7 +3126,7 @@ export default function KlienciPage() {
       {/* MODAL: EDYCJA DANYCH KONTA */}
       {isEditProfileInfoOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider whitespace-nowrap">✏️ Edytuj dane konta</h3>
               <button onClick={() => setIsEditProfileInfoOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
