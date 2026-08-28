@@ -22,8 +22,8 @@ export default function ClubChat() {
   const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public">("my");
 
-  // Zakładka wewnątrz aktywnej rozmowy / grupy: Czat vs Galeria zdjęć
-  const [chatInsideTab, setChatInsideTab] = useState<"messages" | "media">("messages");
+  // Zakładka wewnątrz aktywnej rozmowy / grupy: Czat | Zdjęcia | Uczestnicy
+  const [chatInsideTab, setChatInsideTab] = useState<"messages" | "media" | "members">("messages");
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
   // Stan dla menu reakcji / akcji dla konkretnej wiadomości
@@ -614,15 +614,12 @@ export default function ClubChat() {
     }
   };
 
-  // Precyzyjne sprawdzenie czy trening odbywa się DZIŚ (na podstawie dni tygodnia zapisanych w `days`)
+  // Sprawdzanie czy trening odbywa się dzisiaj
   const isTrainingToday = (training: any) => {
     if (training.is_odwolane || training.is_usuniete) return false;
-    
-    // Jeśli brak zdefiniowanych dni w grafiku, nie traktujemy tego w ciemno jako dzisiejsze
     if (!training.days) return false;
-
     const jsDay = new Date().getDay(); // 0 = Niedziela, 1 = Poniedziałek, ... 6 = Sobota
-    const isoDay = jsDay === 0 ? 7 : jsDay; // 1 = Poniedziałek, ... 7 = Niedziela
+    const isoDay = jsDay === 0 ? 7 : jsDay;
     const dayNames = ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"];
     const dayShortNames = ["nie", "pon", "wt", "śr", "czw", "pt", "sob"];
     const currentDayName = dayNames[jsDay];
@@ -1006,6 +1003,15 @@ export default function ClubChat() {
   );
   const pinnedMessage = currentConversationMessages.find((m: any) => m.przypinana);
 
+  // Pobieranie listy osób w wybranej grupie lub treningu
+  const groupMemberIds = selectedGroup && Array.isArray(selectedGroup.czlonkowie_ids) 
+    ? selectedGroup.czlonkowie_ids.map(String) 
+    : [];
+
+  const groupMembersList = klienci.filter((k: any) => 
+    groupMemberIds.includes(String(k.id)) || Number(k.id) === SYSTEM_ID
+  );
+
   const latestMessageMap = new Map();
   const latestMessageTextMap = new Map();
 
@@ -1273,7 +1279,7 @@ export default function ClubChat() {
     return isPublic && !isAlreadyMember;
   });
 
-  // DZISIEJSZE TRENINGI – TYLKO TE, KTÓRE RZECZYWIŚCIE ODBYWAJĄ SIĘ DZIŚ W GRAFIKU
+  // Dzisiejsze treningi – TYLKO te, które mają w `days` dzisiejszy dzień tygodnia
   const todayTrainingsList = grafikZajec.filter((training: any) => {
     const isToday = isTrainingToday(training);
     if (!isToday) return false;
@@ -1452,8 +1458,50 @@ export default function ClubChat() {
             </div>
           </div>
 
-          {/* PRZEŁĄCZNIK WIADOMOŚCI / ZDJĘCIA W AKTYWNEJ ROZMOWIE */}
-          {(selectedUser || selectedGroup) && (
+          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE: Wiadomości | Zdjęcia | Uczestnicy */}
+          {selectedGroup && (
+            <div className="bg-slate-900 border-t border-slate-800 px-3 py-1.5 flex items-center justify-center gap-1.5 text-xs">
+              <button
+                onClick={() => setChatInsideTab("messages")}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  chatInsideTab === "messages"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                💬 Wiadomości
+              </button>
+              <button
+                onClick={() => setChatInsideTab("media")}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all flex items-center gap-1 ${
+                  chatInsideTab === "media"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>🖼️ Zdjęcia</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "media" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
+                  {conversationImages.length}
+                </span>
+              </button>
+              <button
+                onClick={() => setChatInsideTab("members")}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-all flex items-center gap-1 ${
+                  chatInsideTab === "members"
+                    ? "bg-amber-400 text-slate-950 shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>👥 Uczestnicy</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "members" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
+                  {groupMembersList.length}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1: Wiadomości | Zdjęcia */}
+          {selectedUser && (
             <div className="bg-slate-900 border-t border-slate-800 px-4 py-1.5 flex items-center justify-center gap-2 text-xs">
               <button
                 onClick={() => setChatInsideTab("messages")}
@@ -1802,6 +1850,60 @@ export default function ClubChat() {
                     <span className="text-3xl block">🖼️</span>
                     <div>Brak zdjęć w tej rozmowie.</div>
                     <p className="text-[10px]">Zdjęcia przesłane przez uczestników pojawią się tutaj automatycznie.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : chatInsideTab === "members" ? (
+            /* WIDOK LISTY UCZESTNIKÓW W GRUPIE / TRENINGU */
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
+                <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                  Uczestnicy grupy ({groupMembersList.length})
+                </span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                {groupMembersList.map((member: any) => {
+                  const isSys = Number(member.id) === SYSTEM_ID;
+                  const isMbrAdmin = ADMIN_EMAILS.includes(member.email) || Number(member.id) === 999999999;
+
+                  return (
+                    <div
+                      key={member.id}
+                      className="w-full p-2.5 rounded-2xl border bg-white border-slate-200 flex items-center justify-between shadow-sm"
+                    >
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <div className={`w-9 h-9 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${isSys ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
+                          {member.avatar ? (
+                            <img src={member.avatar} alt={member.name} className="w-full h-full object-cover" />
+                          ) : isSys ? (
+                            <span>👑</span>
+                          ) : (
+                            <span>👤</span>
+                          )}
+                        </div>
+                        <div className="overflow-hidden">
+                          <div className="font-bold text-xs text-slate-900 truncate">{member.name}</div>
+                          <div className="text-[10px] font-medium text-slate-500 truncate mt-0.5">
+                            {isSys ? (
+                              <span className="text-amber-600 font-bold">System</span>
+                            ) : isMbrAdmin ? (
+                              <span className="text-amber-700 font-bold">Trener / Admin</span>
+                            ) : (
+                              <span>Klubowicz</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {groupMembersList.length === 0 && (
+                  <div className="py-20 text-center text-slate-400 text-xs space-y-2">
+                    <span className="text-3xl block">👥</span>
+                    <div>Brak uczestników w tej grupie.</div>
                   </div>
                 )}
               </div>
