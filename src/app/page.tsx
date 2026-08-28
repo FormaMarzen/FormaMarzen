@@ -50,7 +50,7 @@ export default function DashboardPage() {
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
   const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
   
-  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST Z DOŁU EKRANU
+  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -85,16 +85,17 @@ export default function DashboardPage() {
     return Array.from(keys);
   };
 
- // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH I ZAPISU DO HISTORII POWIADOMIEŃ
-  const sendPushNotification = async (clientIds: number | number[], payload: { title: string; body: string; url?: string }) => {
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH
+  const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
-      const ids = Array.isArray(clientIds) ? clientIds : [clientIds];
-      if (ids.length === 0) return;
+      const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
+      const validIds = rawIds.map(Number).filter(id => id > 0 && id !== 5000 && id !== 999999999);
+      if (validIds.length === 0) return;
 
       const { data: clients, error: clientsErr } = await supabase
         .from('klienci')
         .select('id, push_subscription, "Imię", "Nazwisko", firstName, lastName, "E-mail", email')
-        .in('id', ids);
+        .in('id', validIds);
 
       if (clientsErr || !clients || clients.length === 0) return;
 
@@ -115,7 +116,11 @@ export default function DashboardPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             subscriptions,
-            payload
+            payload: {
+              title: payload.title || 'FORMA MARZEŃ',
+              body: payload.body || '',
+              url: payload.url || '/'
+            }
           })
         });
       }
@@ -147,7 +152,7 @@ export default function DashboardPage() {
     }
   };
   
-  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W BAZIE SUPABASE
+  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W SUPABASE
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return;
@@ -183,7 +188,7 @@ export default function DashboardPage() {
     }
   };
 
-  // PRECYZYJNA NORMALIZACJA I DOPASOWYWANIE NAZW ZAJĘĆ (BEZ FAŁSZYWYCH DOPASOWAŃ CZĘŚCIOWYCH)
+  // NORMALIZACJA I DOPASOWYWANIE NAZW ZAJĘĆ
   const normalizeText = (text: string): string => {
     if (!text) return '';
     return text
@@ -206,7 +211,7 @@ export default function DashboardPage() {
     return false;
   };
 
-  // UNIWERSALNA I DOKŁADNA WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ
+  // WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ
   const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
     if (!passItem || !classTitle) return false;
     const passName = (passItem.nazwa || passItem.pass || '').trim();
@@ -270,6 +275,7 @@ export default function DashboardPage() {
     return false;
   };
 
+  // STANY DANYCH I WIDOKU
   const [salesPeriod, setSalesPeriod] = useState('Dziś');
   const [clientSearch, setClientSearch] = useState('');
   const [klienciList, setKlienciList] = useState<any[]>([]);
@@ -333,6 +339,37 @@ export default function DashboardPage() {
   const [isEditWaitlistModalOpen, setIsEditWaitlistModalOpen] = useState(false);
   const [editWaitlistTarget, setEditWaitlistTarget] = useState<any | null>(null);
   const [editWaitlistCutoff, setEditWaitlistCutoff] = useState<number>(30);
+
+  // STANY ZINTEGROWANE Z GRAFIKU
+  const [activeMenuClassId, setActiveMenuClassId] = useState<string | null>(null);
+  const [historyModalClass, setHistoryModalClass] = useState<any | null>(null);
+  const [modalHistoryData, setModalHistoryData] = useState<any[]>([]);
+
+  const [editClassModalData, setEditClassModalData] = useState<any | null>(null);
+  const [editStartHour, setEditStartHour] = useState('08');
+  const [editStartMin, setEditStartMin] = useState('00');
+  const [editEndHour, setEditEndHour] = useState('09');
+  const [editEndMin, setEditEndMin] = useState('00');
+  const [editTrainer, setEditTrainer] = useState('');
+  const [editLimit, setEditLimit] = useState('12');
+
+  const [duplicateModalData, setDuplicateModalData] = useState<any | null>(null);
+  const [dupDate, setDupDate] = useState('2026-08-07');
+  const [dupStartHour, setDupStartHour] = useState('14');
+  const [dupStartMin, setDupStartMin] = useState('15');
+  const [dupEndHour, setDupEndHour] = useState('15');
+  const [dupEndMin, setDupEndMin] = useState('15');
+  const [dupPlan, setDupPlan] = useState('');
+  const [dupTrainer, setDupTrainer] = useState('');
+  const [dupLimit, setDupLimit] = useState('12');
+
+  const [isMultiDayModalOpen, setIsMultiDayModalOpen] = useState(false);
+  const [multiDayTitle, setMultiDayTitle] = useState('OBÓZ W WAŁCZU');
+  const [multiDayFrom, setMultiDayFrom] = useState('2026-08-04');
+  const [multiDayTo, setMultiDayTo] = useState('2026-08-06');
+
+  const [calendarViewDate, setCalendarViewDate] = useState<Date | null>(new Date());
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   const [showAllMyClasses, setShowAllMyClasses] = useState(false);
   const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
@@ -559,7 +596,7 @@ export default function DashboardPage() {
                 klient_id: wMember.id,
                 typ_operacji: 'zajecia_wypis',
                 class_key: cls.classKey,
-                opis: `Automatyczne zwolnienie z krzesełka "${cls.title}" (${col.date} ${cls.start}) - minął Twój wybrany czas gotowości (${cutoffMin} min przed startem). Zwrócono 1 wejście.`
+                opis: `Automatyczne zwolnienie z krzesełka "${cls.title}" (${col.date} ${cls.start}) - upłynął wybrany czas gotowości (${cutoffMin} min przed startem). Zwrócono 1 wejście.`
               }]);
             }
 
@@ -709,6 +746,112 @@ export default function DashboardPage() {
     }
 
     return hasChanges;
+  };
+
+  // SILNIK NATYCHMIASTOWEGO ODWOŁYWANIA PO WYPISANIU UCZESTNIKA
+  const checkAndTriggerImmediateAutoCancel = async (
+    classItem: any,
+    displayDate: string,
+    currentRemainingSignups: any[]
+  ) => {
+    if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return false;
+    
+    const trainingName = classItem.title || '';
+    const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
+      ? bookingRules.min_participants_per_class[trainingName]
+      : bookingRules.min_participants;
+    
+    const deadlineMins = bookingRules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
+      ? bookingRules.auto_cancel_deadline_per_class[trainingName]
+      : bookingRules.auto_cancel_deadline_minutes;
+
+    if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
+      let d = 1, m = 1;
+      if (displayDate.includes('/')) {
+        [d, m] = displayDate.split('/').map(Number);
+      } else if (displayDate.includes('-')) {
+        const p = displayDate.split('-').map(Number);
+        m = p[1];
+        d = p[2];
+      }
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const [sh = '00', sm = '00'] = (classItem.start || '00:00').split(':');
+      const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+      const now = new Date();
+      const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+      if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+        const activeSignups = currentRemainingSignups.filter((s: any) => s.status === 'zapisany');
+        if (activeSignups.length < minRequired) {
+          const classKey = `${classItem.id}_${displayDate}`;
+          const allVariantKeys = getKeysVariants(classItem.id, displayDate);
+
+          for (const vKey of allVariantKeys) {
+            await supabase.from('nadpisania_zajec').upsert({
+              class_key: vKey,
+              start: classItem.start,
+              end: classItem.end,
+              trainer: classItem.trainer,
+              limit: classItem.limit || 12,
+              is_odwolane: true,
+              is_usuniete: false
+            });
+          }
+
+          const participantIds: number[] = [];
+          for (const participant of currentRemainingSignups) {
+            participantIds.push(participant.id);
+            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
+            if (clientData) {
+              let parsedKarnety = [];
+              if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+              else if (typeof clientData.karnetyKlubowicza === 'string') {
+                try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+              }
+
+              const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+              if (passIndex !== -1) {
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                parsedKarnety[passIndex] = {
+                  ...parsedKarnety[passIndex],
+                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                };
+                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
+              }
+
+              await supabase.from('transakcje').insert([{
+                klient_id: participant.id,
+                typ_operacji: 'zajecia_wypis',
+                class_key: classKey,
+                opis: `Automatyczne odwołanie zajęć "${classItem.title}" (${displayDate} ${classItem.start}) po wypisaniu uczestnika (pozostało: ${activeSignups.length}/${minRequired} os.). Zwrócono 1 wejście.`
+              }]);
+            }
+          }
+
+          if (participantIds.length > 0) {
+            await sendPushNotification(participantIds, {
+              title: `Odwołano trening: ${classItem.title}`,
+              body: `Trening ${classItem.title} w dniu ${displayDate} o godz. ${classItem.start} został automatycznie odwołany z powodu zbyt małej liczby osób. Zwrócono wejście.`,
+              url: '/'
+            });
+          }
+
+          await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
+
+          await supabase.from('booking_logs').insert([{
+            action_type: 'CLASS_AUTO_CANCELLED_ON_UNENROLL',
+            status: 'SUCCESS',
+            reason: `Zajęcia ${classItem.title} (${classKey}) odwołane natychmiast po wypisaniu uczestnika (${activeSignups.length}/${minRequired} os.). Wypisano ${currentRemainingSignups.length} osób i zwrócono wejścia.`,
+            rule_applied: 'min_participants_auto_cancel_immediate',
+            payload: { class_key: classKey, participants_count: activeSignups.length, min_required: minRequired }
+          }]);
+
+          return true;
+        }
+      }
+    }
+    return false;
   };
 
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
@@ -905,14 +1048,62 @@ export default function DashboardPage() {
     return new Date(dCopy.setDate(diff));
   };
 
+  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
+    if (isOdwolane || isUsuniete) return '#fda4af';
+    if (!title) return '#0284c7';
+    const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
+    if (found && found.kolor) {
+      return found.kolor;
+    }
+    const colorPalette = ['#2563eb', '#9333ea', '#16a34a', '#dc2626', '#d97706', '#0d9488', '#c026d3'];
+    let hash = 0;
+    for (let i = 0; i < title.length; i++) {
+      hash = title.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colorPalette[Math.abs(hash) % colorPalette.length];
+  };
+
+  const calculateDuration = (start: string, end: string) => {
+    if (!start || !end) return "60 min";
+    try {
+      const [sh, sm] = start.split(":").map(Number);
+      const [eh, em] = end.split(":").map(Number);
+      const diffMins = (eh * 60 + em) - (sh * 60 + sm);
+      if (diffMins > 0) return `${diffMins} min`;
+    } catch (e) {}
+    return "60 min";
+  };
+
+  const nextMonth = () => {
+    if (!calendarViewDate) return;
+    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
+  };
+
+  const prevMonth = () => {
+    if (!calendarViewDate) return;
+    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1));
+  };
+
+  const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"];
+
   // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA
   const isFetchingRef = useRef(false);
 
+  // ZOPTYMALIZOWANE POBIERANIE DANYCH (-2 TYGODNIE DO +1 ROK)
   const loadData = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
     try {
+      // Okno czasowe optymalizacji: 2 tygodnie wstecz, 1 rok w przód
+      const twoWeeksAgo = new Date();
+      twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+      const twoWeeksAgoStr = `${twoWeeksAgo.getFullYear()}-${String(twoWeeksAgo.getMonth() + 1).padStart(2, '0')}-${String(twoWeeksAgo.getDate()).padStart(2, '0')}`;
+
+      const oneYearForward = new Date();
+      oneYearForward.setDate(oneYearForward.getDate() + 365);
+      const oneYearForwardStr = `${oneYearForward.getFullYear()}-${String(oneYearForward.getMonth() + 1).padStart(2, '0')}-${String(oneYearForward.getDate()).padStart(2, '0')}`;
+
       let parsedRules = { ...bookingRules };
       const { data: rulesData } = await supabase
         .from('club_booking_rules')
@@ -948,14 +1139,18 @@ export default function DashboardPage() {
       const trenerzyData = await fetchAllFromSupabase('trenerzy');
       if (trenerzyData) setZespolTrenerzy(trenerzyData);
       
+      let determinedRole: 'admin' | 'trener' | 'klubowicz' = 'klubowicz';
       if (userEmail === 'maciejklaput@gmail.com') {
+        determinedRole = 'admin';
         setAppRole('admin');
       } else {
         const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
         if (trenerObj) {
+          determinedRole = 'trener';
           setAppRole('trener');
           setCurrentTrenerProfile(trenerObj);
         } else {
+          determinedRole = 'klubowicz';
           setAppRole('klubowicz');
         }
       }
@@ -965,32 +1160,7 @@ export default function DashboardPage() {
         setWszystkieTransakcje(tData);
       }
 
-      const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
-      if (ogloszeniaData) {
-        const parsedOgloszenia = ogloszeniaData.map((o: any) => {
-          let tArray = ['Wszystkich'];
-          if (Array.isArray(o.target_array)) {
-            tArray = o.target_array;
-          } else if (typeof o.target_array === 'string') {
-            try { tArray = JSON.parse(o.target_array); } catch (e) { tArray = [o.target_array]; }
-          } else if (o.targetArray) {
-            tArray = Array.isArray(o.targetArray) ? o.targetArray : [o.targetArray];
-          }
-
-          return {
-            id: o.id,
-            dateFrom: o.date_from || o.dateFrom || '',
-            dateTo: o.date_to || o.dateTo || '',
-            target: o.target || 'Wszystkich',
-            targetArray: tArray,
-            content: o.content || o.tresc || '',
-            isVisible: o.is_visible !== undefined ? o.is_visible : (o.isVisible !== undefined ? o.isVisible : true),
-            createdAt: o.created_at || o.createdAt || ''
-          };
-        });
-        setOgloszeniaList(parsedOgloszenia);
-      }
-
+      // 1. Klienci (z mapowaniem uprawnień karnetów)
       const karnetyDefData = await fetchAllFromSupabase('karnety', 'id', true, 2);
       let ustrukturyzowaneKarnetyDef: any[] = [];
       if (karnetyDefData) {
@@ -1008,6 +1178,145 @@ export default function DashboardPage() {
         setDostepneKarnety(ustrukturyzowaneKarnetyDef);
       }
 
+      const klienciData = await fetchAllFromSupabase('klienci', 'id', true, 10);
+      let matchedCurrentClient: any = null;
+
+      if (klienciData) {
+        const enriched = klienciData.map((c: any) => {
+          let parsedKarnety = [];
+          if (Array.isArray(c.karnetyKlubowicza)) {
+            parsedKarnety = c.karnetyKlubowicza;
+          } else if (typeof c.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
+          }
+
+          parsedKarnety = parsedKarnety.map((k: any) => {
+            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
+            const isTime = isTimePass(k) || (pasujacyDef && isTimePass(pasujacyDef));
+
+            if (isTime) {
+              k.pozostaloWejsc = null;
+              k.poczatkoweWejsc = null;
+            } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
+              if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
+                const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
+                k.pozostaloWejsc = isNaN(valWejsc) ? null : valWejsc;
+                k.poczatkoweWejsc = isNaN(valWejsc) ? null : valWejsc;
+              }
+            }
+
+            k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
+            k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || pasujacyDef?.zaznaczoneZajecia || [];
+
+            return k;
+          });
+
+          const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
+          const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
+
+          return {
+            ...c,
+            _rawKarnety: c.karnetyKlubowicza,
+            id: c.id,
+            firstName: c.Imię || c.firstName || '',
+            lastName: c.Nazwisko || c.lastName || '',
+            registered: c.Zarejestrowany || c.registered || '2026-08-07',
+            status: c.status || 'Aktywny',
+            expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
+            pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
+            price: c.Cena || c.cena || c.price || '0.00 PLN',
+            discount: c.discount || '',
+            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+            avatarUrl: c.avatarUrl || c.avatar || null,
+            gender: c.płeć || c.gender || '',
+            phone: c['Numer tel.'] || c.telefon || c.phone || '',
+            email: c['E-mail'] || c.email || '',
+            birthDate: c.Urodziny || c.birthDate || '',
+            blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
+            powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
+            karnetyKlubowicza: parsedKarnety,
+            walletHistory: c.walletHistory || [],
+            transakcje: clientTransakcje,
+            isTrainer: !!powiazanyTrener,
+            zapisyNadchodzace: c.zapisyNadchodzace || [],
+            zapisyPrzeszle: c.zapisyPrzeszle || [],
+            zapisyWypisy: c.zapisyWypisy || []
+          };
+        });
+        setKlienciList(enriched);
+        
+        if (userEmail) {
+          matchedCurrentClient = enriched.find((c: any) => c.email === userEmail);
+          if (matchedCurrentClient) {
+            setCurrentUser(matchedCurrentClient);
+            subscribeToPushNotifications(matchedCurrentClient.id);
+          }
+        }
+
+        if (profileClient) {
+          const currentActive = enriched.find((c: any) => c.id === profileClient.id);
+          if (currentActive) {
+            setProfileClient(currentActive);
+          }
+        }
+      }
+
+      // 2. Ogłoszenia spersonalizowane (filtrowanie po roli oraz konkretnym użytkowniku)
+      const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
+      if (ogloszeniaData) {
+        const activeUserId = matchedCurrentClient ? matchedCurrentClient.id : null;
+        const activeUserEmail = userEmail || '';
+        const activeUserName = matchedCurrentClient ? `${matchedCurrentClient.firstName} ${matchedCurrentClient.lastName}`.trim().toLowerCase() : '';
+
+        const parsedOgloszenia = ogloszeniaData
+          .map((o: any) => {
+            let tArray: string[] = ['Wszystkich'];
+            if (Array.isArray(o.target_array)) {
+              tArray = o.target_array;
+            } else if (typeof o.target_array === 'string') {
+              try { tArray = JSON.parse(o.target_array); } catch (e) { tArray = [o.target_array]; }
+            } else if (o.targetArray) {
+              tArray = Array.isArray(o.targetArray) ? o.targetArray : [o.targetArray];
+            }
+
+            return {
+              id: o.id,
+              dateFrom: o.date_from || o.dateFrom || '',
+              dateTo: o.date_to || o.dateTo || '',
+              target: o.target || 'Wszystkich',
+              targetArray: tArray,
+              targetUserId: o.target_user_id || o.user_id || o.klient_id || o.targetUserId || null,
+              content: o.content || o.tresc || '',
+              isVisible: o.is_visible !== undefined ? o.is_visible : (o.isVisible !== undefined ? o.isVisible : true),
+              createdAt: o.created_at || o.createdAt || ''
+            };
+          })
+          .filter((o: any) => {
+            if (determinedRole === 'admin') return true;
+            if (!o.isVisible) return false;
+
+            // Ogłoszenie do konkretnego użytkownika
+            if (o.targetUserId && activeUserId) {
+              if (String(o.targetUserId) === String(activeUserId)) return true;
+            }
+
+            const targetStr = (o.target || '').trim();
+            const lowerTargets = (o.targetArray || []).map((t: string) => String(t).trim().toLowerCase());
+
+            if (targetStr === 'Wszystkich' || lowerTargets.includes('wszystkich')) return true;
+            if (determinedRole === 'trener' && (targetStr === 'Trener' || lowerTargets.includes('trener') || lowerTargets.includes('trenerzy'))) return true;
+            if (determinedRole === 'klubowicz' && (targetStr === 'Klubowicz' || lowerTargets.includes('klubowicz') || lowerTargets.includes('klubowicze'))) return true;
+
+            if (activeUserId && (lowerTargets.includes(String(activeUserId)) || lowerTargets.includes(`id:${activeUserId}`))) return true;
+            if (activeUserEmail && lowerTargets.includes(activeUserEmail.toLowerCase())) return true;
+            if (activeUserName && lowerTargets.includes(activeUserName)) return true;
+
+            return false;
+          });
+
+        setOgloszeniaList(parsedOgloszenia);
+      }
+      // 3. Grafik stały (szablony)
       const szablonyData = await fetchAllFromSupabase('grafik_zajec', 'id', true, 2);
       let mappedSzablony: any[] = [];
       if (szablonyData) {
@@ -1018,15 +1327,24 @@ export default function DashboardPage() {
           end: s.end || s.end_time,
           limit: s.limit || s.limit_miejsc,
           trainer: s.trainer || s.prowadzacy,
-          days: s.days || {}
+          days: s.days || {},
+          isOdwołane: false,
+          isUsunięte: false
         }));
         setZapisaneZajecia(mappedSzablony);
       }
 
-      const jednorazoweData = await fetchAllFromSupabase('zajecia_jednorazowe', 'id', false, 5);
+      // 4. Zajęcia jednorazowe zoptymalizowane pod okno czasowe (-2 tyg do +1 rok)
+      const { data: rawJednorazowe } = await supabase
+        .from('zajecia_jednorazowe')
+        .select('*')
+        .gte('full_date_str', twoWeeksAgoStr)
+        .lte('full_date_str', oneYearForwardStr)
+        .order('full_date_str', { ascending: true });
+
       let mappedJednorazowe: any[] = [];
-      if (jednorazoweData) {
-        mappedJednorazowe = jednorazoweData.map((j: any) => ({
+      if (rawJednorazowe && rawJednorazowe.length > 0) {
+        mappedJednorazowe = rawJednorazowe.map((j: any) => ({
           ...j,
           title: j.title || j.nazwa,
           start: j.start_time || j.start,
@@ -1034,16 +1352,44 @@ export default function DashboardPage() {
           limit: j.limit_miejsc || j.limit,
           trainer: j.trainer || j.prowadzacy,
           displayDate: j.display_date,
-          fullDateStr: j.full_date_str
+          fullDateStr: j.full_date_str,
+          isJednorazowe: true,
+          isOdwołane: false,
+          isUsunięte: false
         }));
-        setJednorazoweZajecia(mappedJednorazowe);
+      } else {
+        const fallbackJednorazowe = await fetchAllFromSupabase('zajecia_jednorazowe', 'id', false, 3);
+        if (fallbackJednorazowe) {
+          mappedJednorazowe = fallbackJednorazowe.map((j: any) => ({
+            ...j,
+            title: j.title || j.nazwa,
+            start: j.start_time || j.start,
+            end: j.end_time || j.end,
+            limit: j.limit_miejsc || j.limit,
+            trainer: j.trainer || j.prowadzacy,
+            displayDate: j.display_date,
+            fullDateStr: j.full_date_str,
+            isJednorazowe: true,
+            isOdwołane: false,
+            isUsunięte: false
+          }));
+        }
       }
+      setJednorazoweZajecia(mappedJednorazowe);
 
+      // 5. Nadpisania zajęć (odwołania, usunięcia, zmiany godzin)
       const nadpisaniaData = await fetchAllFromSupabase('nadpisania_zajec', 'id', false, 5);
       const nadpisaniaMap: { [key: string]: any } = {};
       if (nadpisaniaData) {
         nadpisaniaData.forEach((n: any) => {
-          const itemVal = { start: n.start, end: n.end, trainer: n.trainer, limit: n.limit, isOdwołane: n.is_odwolane, isUsunięte: n.is_usuniete };
+          const itemVal = { 
+            start: n.start, 
+            end: n.end, 
+            trainer: n.trainer, 
+            limit: n.limit, 
+            isOdwołane: n.is_odwolane, 
+            isUsunięte: n.is_usuniete 
+          };
           nadpisaniaMap[n.class_key] = itemVal;
           if (n.class_key && n.class_key.includes('_')) {
             const [cId, dPart] = n.class_key.split('_');
@@ -1054,6 +1400,7 @@ export default function DashboardPage() {
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
+      // 6. Zapisy na zajęcia (główna lista + krzesełko)
       const zapisyData = await fetchAllFromSupabase('zapisy_zajec', 'id', false, 10);
       const groupedZapisy: { [key: string]: any[] } = {};
       if (zapisyData) {
@@ -1103,6 +1450,7 @@ export default function DashboardPage() {
         setZapisyNaZajecia(groupedZapisy);
       }
 
+      // 7. Generowanie bieżącego tygodnia grafiku i weryfikacja automatyzacji
       const currentMon = getMonday(selectedWeekDate);
       const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
         const dayDate = new Date(currentMon);
@@ -1111,7 +1459,13 @@ export default function DashboardPage() {
         const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
         const dayStr = String(dayDate.getDate()).padStart(2, '0');
         const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-        return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
+        return { 
+          day: dayNames[index], 
+          key: keys[index], 
+          date: `${dayStr}/${monthStr}`, 
+          isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, 
+          fullDate: dayDate 
+        };
       });
 
       await processWaitlistCutoffs(
@@ -1131,88 +1485,7 @@ export default function DashboardPage() {
         activeDashboardDays
       );
 
-      const klienciData = await fetchAllFromSupabase('klienci', 'id', true, 10);
-      if (klienciData) {
-        const enriched = klienciData.map((c: any) => {
-          let parsedKarnety = [];
-          if (Array.isArray(c.karnetyKlubowicza)) {
-            parsedKarnety = c.karnetyKlubowicza;
-          } else if (typeof c.karnetyKlubowicza === 'string') {
-            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
-          }
-
-          parsedKarnety = parsedKarnety.map((k: any) => {
-            const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
-            const isTime = isTimePass(k) || (pasujacyDef && isTimePass(pasujacyDef));
-
-            if (isTime) {
-              k.pozostaloWejsc = null;
-              k.poczatkoweWejsc = null;
-            } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
-              if (pasujacyDef && pasujacyDef.ilosc_wejsc !== null) {
-                const valWejsc = parseInt(pasujacyDef.ilosc_wejsc, 10);
-                k.pozostaloWejsc = isNaN(valWejsc) ? null : valWejsc;
-                k.poczatkoweWejsc = isNaN(valWejsc) ? null : valWejsc;
-              }
-            }
-
-            // KRYTYCZNA SYNCHRONIZACJA UPRAWNIEŃ DLA ZAJĘĆ
-            k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
-            k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || pasujacyDef?.zaznaczoneZajecia || [];
-
-            return k;
-          });
-
-          const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
-          const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
-
-          return {
-            ...c,
-            _rawKarnety: c.karnetyKlubowicza,
-            id: c.id,
-            firstName: c.Imię || c.firstName || '',
-            lastName: c.Nazwisko || c.lastName || '',
-            registered: c.Zarejestrowany || c.registered || '2026-08-07',
-            status: c.status || 'Aktywny',
-            expiresDate: c.expiresDate || (parsedKarnety.length > 0 ? parsedKarnety[0].waznyDo : ''),
-            pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
-            price: c.Cena || c.cena || c.price || '0.00 PLN',
-            discount: c.discount || '',
-            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
-            avatarUrl: c.avatarUrl || c.avatar || null,
-            gender: c.płeć || c.gender || '',
-            phone: c['Numer tel.'] || c.telefon || c.phone || '',
-            email: c['E-mail'] || c.email || '',
-            birthDate: c.Urodziny || c.birthDate || '',
-            blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
-            powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
-            karnetyKlubowicza: parsedKarnety,
-            walletHistory: c.walletHistory || [],
-            transakcje: clientTransakcje,
-            isTrainer: !!powiazanyTrener,
-            zapisyNadchodzace: c.zapisyNadchodzace || [],
-            zapisyPrzeszle: c.zapisyPrzeszle || [],
-            zapisyWypisy: c.zapisyWypisy || []
-          };
-        });
-        setKlienciList(enriched);
-        
-        if (userEmail) {
-          const myUser = enriched.find((c: any) => c.email === userEmail);
-          if (myUser) {
-            setCurrentUser(myUser);
-            subscribeToPushNotifications(myUser.id);
-          }
-        }
-
-        if (profileClient) {
-          const currentActive = enriched.find((c: any) => c.id === profileClient.id);
-          if (currentActive) {
-            setProfileClient(currentActive);
-          }
-        }
-      }
-
+      // 8. Rodzaje zajęć
       const rodzajeData = await fetchAllFromSupabase('rodzaje_zajec');
       if (rodzajeData) {
         const parsedRodzaje = rodzajeData.map((item: any) => {
@@ -1232,9 +1505,31 @@ export default function DashboardPage() {
         setRodzajeZajec(parsedRodzaje);
       }
       
-      const wydarzeniaData = await fetchAllFromSupabase('wydarzenia_kilkudniowe');
-      if (wydarzeniaData) {
-        setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({ id: w.id, title: w.title, dateFrom: w.date_from, dateTo: w.date_to })));
+      // 9. Wydarzenia kilkudniowe zoptymalizowane pod okno czasowe
+      const { data: rawWydarzenia } = await supabase
+        .from('wydarzenia_kilkudniowe')
+        .select('*')
+        .gte('date_to', twoWeeksAgoStr)
+        .lte('date_from', oneYearForwardStr)
+        .order('date_from', { ascending: true });
+
+      if (rawWydarzenia && rawWydarzenia.length > 0) {
+        setWydarzeniaKilkudniowe(rawWydarzenia.map((w: any) => ({ 
+          id: w.id, 
+          title: w.title, 
+          dateFrom: w.date_from, 
+          dateTo: w.date_to 
+        })));
+      } else {
+        const fallbackWydarzenia = await fetchAllFromSupabase('wydarzenia_kilkudniowe');
+        if (fallbackWydarzenia) {
+          setWydarzeniaKilkudniowe(fallbackWydarzenia.map((w: any) => ({ 
+            id: w.id, 
+            title: w.title, 
+            dateFrom: w.date_from, 
+            dateTo: w.date_to 
+          })));
+        }
       }
 
     } catch (err) {
@@ -1253,6 +1548,7 @@ export default function DashboardPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'wydarzenia_kilkudniowe' }, () => loadData())
       .subscribe();
 
     window.addEventListener('storage', loadData);
@@ -1261,6 +1557,359 @@ export default function DashboardPage() {
       window.removeEventListener('storage', loadData);
     };
   }, [selectedWeekDate]);
+
+  // OBSŁUGA HISTORII ZAJĘĆ (MODAL HISTORII)
+  const openHistoryModal = async (item: any, displayDate: string) => {
+    setHistoryModalClass({ ...item, displayDate });
+    setModalHistoryData([]); 
+    const classKey = `${item.id}_${displayDate}`;
+    const keys = getKeysVariants(item.id, displayDate);
+    
+    const { data } = await supabase
+      .from('transakcje')
+      .select('*')
+      .in('class_key', keys)
+      .order('created_at', { ascending: false });
+
+    if (data) {
+      setModalHistoryData(data);
+    }
+  };
+
+  // OBSŁUGA WYDARZEŃ KILKUDNIOWYCH (OBOZY ITP.)
+  const handleSaveMultiDayEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!multiDayTitle.trim()) {
+      showToast("Podaj nazwę wydarzenia!", 'warning');
+      return;
+    }
+
+    const { error } = await supabase.from('wydarzenia_kilkudniowe').insert([
+      {
+        title: multiDayTitle.toUpperCase(),
+        date_from: multiDayFrom,
+        date_to: multiDayTo
+      }
+    ]);
+
+    if (error) {
+      console.error("Błąd dodawania wydarzenia:", error);
+      showToast("Nie udało się zapisać wydarzenia: " + error.message, 'error');
+      return;
+    }
+
+    const currentMon = getMonday(selectedWeekDate);
+    const daysList = Array.from({ length: 5 }).map((_, index) => {
+      const dayDate = new Date(currentMon);
+      dayDate.setDate(currentMon.getDate() + index);
+      const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+      const dayStr = String(dayDate.getDate()).padStart(2, '0');
+      const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
+      return {
+        key: keys[index],
+        date: `${dayStr}/${monthStr}`,
+        isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`
+      };
+    });
+
+    for (const col of daysList) {
+      if (col.isoDate >= multiDayFrom && col.isoDate <= multiDayTo) {
+        const standardoweDnia = zapisaneZajecia
+          .filter((item: any) => item.days && item.days[col.key])
+          .map((item: any) => {
+            const classKey = `${item.id}_${col.date}`;
+            const override = nadpisaneZajeciaDni[classKey];
+            return override ? { ...item, ...override } : item;
+          });
+
+        const jednorazoweDnia = jednorazoweZajecia.filter((item: any) => item.displayDate === col.date);
+        const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia];
+
+        for (const item of zajeciaDnia) {
+          const classKey = `${item.id}_${col.date}`;
+          const keysToDelete = getKeysVariants(item.id, col.date);
+          const zapisani = zapisyNaZajecia[classKey] || [];
+          const participantIds: number[] = [];
+          
+          for (const u of zapisani) {
+            participantIds.push(u.id);
+            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
+            if (clientData) {
+              let parsedKarnety = [];
+              if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+              else if (typeof clientData.karnetyKlubowicza === 'string') {
+                try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+              }
+
+              const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+              if (passIndex !== -1) {
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                parsedKarnety[passIndex] = {
+                  ...parsedKarnety[passIndex],
+                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                };
+                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
+              }
+
+              await supabase.from('transakcje').insert([{
+                klient_id: u.id,
+                typ_operacji: 'zajecia_wypis',
+                class_key: classKey,
+                opis: `Wypisano z zajęć "${item.title}" (${col.date}) z powodu wydarzenia "${multiDayTitle}". Zwrócono 1 wejście.`
+              }]);
+            }
+          }
+
+          if (participantIds.length > 0) {
+            await sendPushNotification(participantIds, {
+              title: `Odwołano zajęcia: ${item.title}`,
+              body: `Zajęcia "${item.title}" w dniu ${col.date} zostały odwołane z powodu wydarzenia "${multiDayTitle}". Zwrócono wejście.`,
+              url: '/'
+            });
+          }
+
+          await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
+        }
+      }
+    }
+
+    setIsMultiDayModalOpen(false);
+    setMultiDayTitle('OBÓZ W WAŁCZU');
+    loadData();
+    showToast(`Pomyślnie dodano wydarzenie "${multiDayTitle.toUpperCase()}"!`);
+  };
+
+  const handleDeleteMultiDayEvent = async (id: number) => {
+    if (confirm("Czy na pewno chcesz usunąć to wydarzenie kilkudniowe? Zajęcia zostaną przywrócone bez zapisanych użytkowników.")) {
+      await supabase.from('wydarzenia_kilkudniowe').delete().eq('id', id);
+      loadData();
+      showToast("Wydarzenie zostało usunięte.");
+    }
+  };
+
+  // EDYCJA GODZIN / TRENERA / LIMITU ZAJĘĆ
+  const handleSaveClassEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editClassModalData) return;
+
+    const newStart = `${editStartHour.padStart(2, '0')}:${editStartMin.padStart(2, '0')}`;
+    const newEnd = `${editEndHour.padStart(2, '0')}:${editEndMin.padStart(2, '0')}`;
+    const newLimitNum = parseInt(editLimit, 10) || 12;
+
+    const classKey = `${editClassModalData.id}_${editClassModalData.displayDate}`;
+    const allVariantKeys = getKeysVariants(editClassModalData.id, editClassModalData.displayDate);
+
+    for (const vKey of allVariantKeys) {
+      await supabase.from('nadpisania_zajec').upsert({
+        class_key: vKey,
+        start: newStart,
+        end: newEnd,
+        trainer: editTrainer,
+        limit: newLimitNum,
+        is_odwolane: editClassModalData.isOdwołane || false,
+        is_usuniete: editClassModalData.isUsunięte || false
+      });
+    }
+
+    await supabase.from('transakcje').insert([{
+      typ_operacji: 'edycja_zajec',
+      class_key: classKey,
+      opis: `Zmieniono dane zajęć. Limit: ${newLimitNum}, Trener: ${editTrainer}, Czas: ${newStart}-${newEnd}`
+    }]);
+
+    setEditClassModalData(null);
+    loadData();
+    showToast("Zajęcia w tym dniu zostały zaktualizowane!");
+  };
+
+  // DUPLIKOWANIE ZAJĘĆ DO JEDNORAZOWYCH
+  const handleSaveDuplicateClass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dupPlan) {
+      showToast("Wybierz rodzaj zajęć / plan treningowy!", 'warning');
+      return;
+    }
+
+    const startStr = `${dupStartHour.padStart(2, '0')}:${dupStartMin.padStart(2, '0')}`;
+    const endStr = `${dupEndHour.padStart(2, '0')}:${dupEndMin.padStart(2, '0')}`;
+    const limitNum = parseInt(dupLimit, 10) || 12;
+
+    const [y, m, d] = dupDate.split('-');
+    const displayDateStr = `${d}/${m}`;
+
+    const { error } = await supabase.from('zajecia_jednorazowe').insert([
+      {
+        title: dupPlan,
+        start_time: startStr,
+        end_time: endStr,
+        trainer: dupTrainer,
+        limit_miejsc: limitNum,
+        display_date: displayDateStr,
+        full_date_str: dupDate
+      }
+    ]);
+
+    if (error) {
+      console.error("Błąd dodawania zajęć jednorazowych:", error);
+      showToast("Nie udało się zapisać zajęć: " + error.message, 'error');
+      return;
+    }
+
+    setDuplicateModalData(null);
+    showToast(`Pomyślnie dodano zajęcia "${dupPlan}" na dzień ${dupDate}!`);
+    loadData();
+  };
+
+  // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ
+  const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
+    const classKey = `${item.id}_${displayDate}`;
+    const keysToDelete = getKeysVariants(item.id, displayDate);
+    const nextOdwołaneState = !item.isOdwołane;
+
+    setActiveMenuClassId(null);
+
+    if (nextOdwołaneState) {
+      const zapisani = zapisyNaZajecia[classKey] || [];
+      const participantIds: number[] = [];
+
+      for (const u of zapisani) {
+        participantIds.push(u.id);
+        const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
+        if (clientData) {
+          let parsedKarnety = [];
+          if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+          else if (typeof clientData.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+          }
+
+          const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+          if (passIndex !== -1) {
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            parsedKarnety[passIndex] = {
+              ...parsedKarnety[passIndex],
+              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+            };
+            await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
+          }
+
+          await supabase.from('transakcje').insert([{
+            klient_id: u.id,
+            typ_operacji: 'zajecia_wypis',
+            class_key: classKey,
+            opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika i zwrócono 1 wejście.`
+          }]);
+        }
+      }
+
+      if (participantIds.length > 0) {
+        await sendPushNotification(participantIds, {
+          title: `Odwołano trening: ${item.title}`,
+          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany. Zwrócono wejście na karnet.`,
+          url: '/'
+        });
+      }
+
+      await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
+    }
+
+    for (const vKey of keysToDelete) {
+      await supabase.from('nadpisania_zajec').upsert({
+        class_key: vKey,
+        start: item.start || '08:00',
+        end: item.end || '09:00',
+        trainer: item.trainer || '',
+        limit: item.limit || 12,
+        is_odwolane: nextOdwołaneState,
+        is_usuniete: item.isUsunięte || false
+      });
+    }
+
+    await supabase.from('transakcje').insert([{
+      typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
+      class_key: classKey,
+      opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
+    }]);
+
+    loadData();
+    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały przywrócone.");
+  };
+
+  // USUWANIE I PRZYWRACANIE ZAJĘĆ
+  const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
+    const classKey = `${item.id}_${displayDate}`;
+    const keysToDelete = getKeysVariants(item.id, displayDate);
+    const nextUsunięteState = !item.isUsunięte;
+
+    setActiveMenuClassId(null);
+
+    if (nextUsunięteState) {
+      const zapisani = zapisyNaZajecia[classKey] || [];
+      const participantIds: number[] = [];
+
+      for (const u of zapisani) {
+        participantIds.push(u.id);
+        const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
+        if (clientData) {
+          let parsedKarnety = [];
+          if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+          else if (typeof clientData.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+          }
+
+          const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+          if (passIndex !== -1) {
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            parsedKarnety[passIndex] = {
+              ...parsedKarnety[passIndex],
+              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+            };
+            await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
+          }
+
+          await supabase.from('transakcje').insert([{
+            klient_id: u.id,
+            typ_operacji: 'zajecia_wypis',
+            class_key: classKey,
+            opis: `Usunięto zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika i zwrócono 1 wejście.`
+          }]);
+        }
+      }
+
+      if (participantIds.length > 0) {
+        await sendPushNotification(participantIds, {
+          title: `Usunięto trening: ${item.title}`,
+          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został usunięty z grafiku. Zwrócono wejście na karnet.`,
+          url: '/'
+        });
+      }
+
+      await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
+    }
+
+    for (const vKey of keysToDelete) {
+      await supabase.from('nadpisania_zajec').upsert({
+        class_key: vKey,
+        start: item.start || '08:00',
+        end: item.end || '09:00',
+        trainer: item.trainer || '',
+        limit: item.limit || 12,
+        is_odwolane: item.isOdwołane || false,
+        is_usuniete: nextUsunięteState
+      });
+    }
+
+    await supabase.from('transakcje').insert([{
+      typ_operacji: nextUsunięteState ? 'usuniecie_zajec' : 'przywrocenie_zajec',
+      class_key: classKey,
+      opis: nextUsunięteState ? 'Usunięto zajęcia z poziomu grafiku' : 'Przywrócono usunięte zajęcia'
+    }]);
+
+    loadData();
+    showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały przywrócone.");
+  };
 
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
     const safePayload = { ...payload };
@@ -2001,7 +2650,7 @@ export default function DashboardPage() {
     if (!profileClient) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
-      if (k.id === karnetTarget.id) { return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; }
+      if (k.id === targetPassId) { return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; }
       return k;
     });
     const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: null, powodBlokady: null };
@@ -2037,7 +2686,6 @@ export default function DashboardPage() {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
-  // PRECYZYJNE ZLICZANIE AKTYWNYCH ZAPISÓW (BEZ PODWAJANIA PRZEZ PODWÓJNE KLUCZE)
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -2592,7 +3240,14 @@ export default function DashboardPage() {
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
+    // SILNIK NATYCHMIASTOWEGO ODWOŁYWANIA GDY POZOSTAŁO ZBYT MAŁO OSÓB
+    const autoCancelled = await checkAndTriggerImmediateAutoCancel(
+      selectedClass,
+      selectedClass.displayDate,
+      pozostaliUczestnicy
+    );
+
+    if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
       const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
         const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
         return diffMinutes > cutoff;
@@ -2631,7 +3286,10 @@ export default function DashboardPage() {
       }
     }
 
-    showToast("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
+    showToast(autoCancelled 
+      ? "Wypisano z zajęć. Trening został automatycznie odwołany z powodu zbyt małej liczby osób (zwrócono wejścia)." 
+      : "Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście."
+    );
     loadData();
     setSelectedClass(null);
   };
@@ -2731,7 +3389,13 @@ export default function DashboardPage() {
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
+    const autoCancelled = await checkAndTriggerImmediateAutoCancel(
+      classInfo || { id: classId, title, start: startStr, limit: limitZajec },
+      dateStr,
+      pozostaliUczestnicy
+    );
+
+    if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
       const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
         const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
         return diffMinutes > cutoff;
@@ -2770,7 +3434,10 @@ export default function DashboardPage() {
       }
     }
 
-    showToast("Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście.");
+    showToast(autoCancelled 
+      ? "Wypisano z zajęć. Trening został automatycznie odwołany z powodu zbyt małej liczby osób (zwrócono wejścia)." 
+      : "Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście."
+    );
     loadData();
   };
 
@@ -2970,7 +3637,13 @@ export default function DashboardPage() {
     const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
     const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
 
-    if (listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
+    const autoCancelled = await checkAndTriggerImmediateAutoCancel(
+      selectedClass,
+      selectedClass.displayDate,
+      pozostaliUczestnicy
+    );
+
+    if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
       const pierwszaRezerwa = rezerwaPoWypisie[0];
       await supabase
         .from('zapisy_zajec')
@@ -3026,9 +3699,11 @@ export default function DashboardPage() {
       await handleAutoWypiszPoZablokowaniu(clientToUnregister.id, clientToUnregister, powod, classKey);
     }
     setClientToUnregister(null); setBlokadaZapisow(false); loadData();
-    showToast("Wypisano klienta z zajęć.");
+    showToast(autoCancelled 
+      ? "Wypisano klienta. Trening został automatycznie odwołany ze względu na brak minimalnej liczby uczestników." 
+      : "Wypisano klienta z zajęć."
+    );
   };
-
   const handlePotwierdzNieobecnosc = async () => {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -3036,7 +3711,12 @@ export default function DashboardPage() {
     const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', clientToMarkAbsent.id);
     if (error) { showToast(`Nie udało się oznaczyć: ${error.message}`, 'error'); return; }
     
-    await supabase.from('transakcje').insert([{ klient_id: clientToMarkAbsent.id, typ_operacji: 'zajecia_wypis', class_key: classKey, opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Został oznaczony jako NIEOBECNY na zajęciach ${selectedClass.title}.` }]);
+    await supabase.from('transakcje').insert([{ 
+      klient_id: clientToMarkAbsent.id, 
+      typ_operacji: 'zajecia_wypis', 
+      class_key: classKey, 
+      opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Został oznaczony jako NIEOBECNY na zajęciach ${selectedClass.title}.` 
+    }]);
     
     if (blokadaZapisow) {
       const dni = parseInt(dlugoscBlokady) || 3;
@@ -3064,28 +3744,6 @@ export default function DashboardPage() {
     showToast(`Oznaczono nieobecność dla ${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName}.`);
   };
 
-  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsunięte: boolean) => {
-    if (isOdwolane || isUsunięte) return '#fda4af';
-    if (!title) return '#0284c7';
-    const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
-    if (found && found.kolor) return found.kolor;
-    const colorPalette = ['#2563eb', '#9333ea', '#16a34a', '#dc2626', '#d97706', '#0d9488', '#c026d3'];
-    let hash = 0;
-    for (let i = 0; i < title.length; i++) hash = title.charCodeAt(i) + ((hash << 5) - hash);
-    return colorPalette[Math.abs(hash) % colorPalette.length];
-  };
-
-  const calculateDuration = (start: string, end: string) => {
-    if (!start || !end) return "60 min";
-    try {
-      const [sh, sm] = start.split(":").map(Number);
-      const [eh, em] = end.split(":").map(Number);
-      const diffMins = (eh * 60 + em) - (sh * 60 + sm);
-      if (diffMins > 0) return `${diffMins} min`;
-    } catch (e) {}
-    return "60 min";
-  };
-
   const filteredClients = klienciList.filter(client => {
     const fullName = `${client.firstName || ''} ${client.lastName || ''}`.toLowerCase();
     const email = (client.email || '').toLowerCase();
@@ -3111,7 +3769,13 @@ export default function DashboardPage() {
     const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
     const dayStr = String(dayDate.getDate()).padStart(2, '0');
     const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-    return { day: dayNames[index], key: keys[index], date: `${dayStr}/${monthStr}`, isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, fullDate: dayDate };
+    return { 
+      day: dayNames[index], 
+      key: keys[index], 
+      date: `${dayStr}/${monthStr}`, 
+      isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, 
+      fullDate: dayDate 
+    };
   });
 
   const currentMonthStr = todayStr.substring(0, 7);
@@ -3243,31 +3907,11 @@ export default function DashboardPage() {
     });
   }
 
-  const userPassNames = (currentUser?.karnetyKlubowicza || []).map((k: any) => k.nazwa);
-  if (currentUser?.pass && !userPassNames.includes(currentUser.pass)) {
-    userPassNames.push(currentUser.pass);
-  }
-
-  const activeOgloszeniaForUser = ogloszeniaList.filter((o: any) => {
-    if (o.isVisible === false) return false;
-    if (o.dateFrom && o.dateFrom > todayStr) return false;
-    if (o.dateTo && o.dateTo < todayStr) return false;
-    
-    if (o.target === 'Wszystkich' || (Array.isArray(o.targetArray) && o.targetArray.includes('Wszystkich'))) {
-      return true;
-    }
-    
-    if (Array.isArray(o.targetArray) && o.targetArray.length > 0) {
-      return o.targetArray.some((targetPass: string) => userPassNames.includes(targetPass));
-    }
-    
-    return true;
-  });
-
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
-return (
+
+  return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
       {/* NOWOCZESNE POWIADOMIENIE TOAST */}
@@ -3293,10 +3937,10 @@ return (
         </div>
       )}
 
-      {/* SEKCJA: OGŁOSZENIA KLUBU Z SUPABASE */}
-      {['klubowicz', 'trener'].includes(appRole) && activeOgloszeniaForUser.length > 0 && (
+      {/* SEKCJA: OGŁOSZENIA SPERSONALIZOWANE Z SUPABASE */}
+      {['klubowicz', 'trener'].includes(appRole) && ogloszeniaList.length > 0 && (
         <div className="space-y-3">
-          {activeOgloszeniaForUser.map((ogloszenie: any) => (
+          {ogloszeniaList.map((ogloszenie: any) => (
             <div
               key={ogloszenie.id}
               className="bg-gradient-to-r from-sky-950 via-slate-900 to-slate-950 text-white rounded-3xl p-5 sm:p-6 shadow-md border border-sky-800/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in zoom-in-95"
@@ -3483,7 +4127,6 @@ return (
                     return (
                       <div key={idx} className="flex items-center justify-between p-4 sm:px-5 sm:py-4 hover:bg-slate-50 transition-colors bg-white gap-2 sm:gap-4">
                         
-                        {/* LEWA KOLUMNA: DATA */}
                         <div className="shrink-0 min-w-[95px] sm:min-w-[130px] pr-1">
                           <div className="text-[10px] font-black text-sky-700 uppercase tracking-wider mb-0.5">
                             {['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'][cls.fullDateObj.getDay()]}
@@ -3496,7 +4139,6 @@ return (
                           </div>
                         </div>
 
-                        {/* ŚRODKOWA KOLUMNA: TYTUŁ, KRZESEŁKO I TRENING */}
                         <div className="flex-1 min-w-0 px-1">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="text-[12px] sm:text-[13px] font-bold text-slate-900">{cls.title}</span>
@@ -3537,7 +4179,6 @@ return (
                           <div className="text-[11px] sm:text-[12px] text-slate-500 mt-0.5 truncate">{cls.trainer || 'Brak trenera'}</div>
                         </div>
 
-                        {/* PRAWA KOLUMNA: LICZNIK CZASU + PRZYCISK WYPISU */}
                         <div className="shrink-0 flex items-center justify-end gap-2.5 pl-1">
                           {cancelInfo && (
                             <div className="text-right hidden sm:block">
@@ -3647,12 +4288,22 @@ return (
         </div>
       )}
 
-      {/* SEKCJA: GRAFIK ZAJĘĆ */}
+      {/* SEKCJA: GRAFIK ZAJĘĆ Z FUNKCJONALNOŚCIAMI GRAFIKU */}
       <section className="space-y-4">
         <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
-          <h2 className={`font-medium uppercase tracking-wider ${['klubowicz', 'trener'].includes(appRole) ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
-            {['klubowicz', 'trener'].includes(appRole) ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className={`font-medium uppercase tracking-wider ${['klubowicz', 'trener'].includes(appRole) ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
+              {['klubowicz', 'trener'].includes(appRole) ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
+            </h2>
+            {appRole === 'admin' && (
+              <button 
+                onClick={() => setIsMultiDayModalOpen(true)}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-1.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>⛺</span> + WYDARZENIE KILKUDNIOWE
+              </button>
+            )}
+          </div>
           
           <div className="flex items-center justify-center gap-4 bg-white border border-slate-200 rounded-3xl p-2.5 shadow-sm self-start md:self-auto w-full md:w-auto">
             <button onClick={() => shiftWeek(-1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
@@ -3723,12 +4374,24 @@ return (
             const renderEventsAndClasses = () => (
               <>
                 {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
-                  <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-xl p-2.5 text-center space-y-1 shadow-sm">
+                  <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-xl p-3 text-center space-y-1.5 shadow-sm relative group">
                     <div className="py-1 px-2 bg-rose-200 text-rose-950 font-black rounded-lg text-[11px] uppercase tracking-wider border border-rose-300">
                       {wydarzenie.title}
                     </div>
                     <div className="text-[10px] text-rose-900 font-bold">
                       Odwołano zajęcia z powodu wydarzenia
+                    </div>
+                    <div className="flex items-center justify-between text-[9px] text-rose-800 font-bold px-1 pt-1 border-t border-rose-200">
+                      <span>{wydarzenie.dateFrom} - {wydarzenie.dateTo}</span>
+                      {appRole === 'admin' && (
+                        <button 
+                          onClick={() => handleDeleteMultiDayEvent(wydarzenie.id)}
+                          className="text-rose-700 hover:text-rose-950 cursor-pointer underline"
+                          title="Usuń wydarzenie"
+                        >
+                          Usuń
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -3765,6 +4428,7 @@ return (
                       const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
 
                       const cancelDeadlineInfo = getCancelDeadlineInfo(item, col.date);
+                      const isMenuOpen = activeMenuClassId === classKey;
 
                       return (
                         <div
@@ -3831,10 +4495,81 @@ return (
                                   🔒
                                 </span>
                               )}
+
+                              {/* MENU ADMINISTRACYJNE ⚙️ */}
+                              {appRole === 'admin' && (
+                                <div className="relative" onClick={(e) => e.stopPropagation()}>
+                                  <button 
+                                    onClick={() => setActiveMenuClassId(isMenuOpen ? null : classKey)}
+                                    className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer text-xs"
+                                    title="Ustawienia zajęć"
+                                  >
+                                    ⚙️
+                                  </button>
+
+                                  {isMenuOpen && (
+                                    <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-50 text-xs">
+                                      <button onClick={() => { openHistoryModal(item, col.date); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                        🕒 Historia zajęć
+                                      </button>
+                                      <button onClick={() => { showToast("Moduł wysyłania wiadomości wkrótce dostępny.", 'info'); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                        ✉️ Wyślij wiadomość
+                                      </button>
+                                      <button onClick={() => { 
+                                        setEditClassModalData({ ...item, displayDate: col.date });
+                                        const [sh = '08', sm = '00'] = (item.start || '08:00').split(':');
+                                        const [eh = '09', em = '00'] = (item.end || '09:00').split(':');
+                                        setEditStartHour(sh);
+                                        setEditStartMin(sm);
+                                        setEditEndHour(eh);
+                                        setEditEndMin(em);
+                                        setEditTrainer(item.trainer || (zespolTrenerzy.length > 0 ? (zespolTrenerzy[0].imie_nazwisko || zespolTrenerzy[0].nazwa) : ''));
+                                        setEditLimit(String(item.limit || 12));
+                                        setActiveMenuClassId(null); 
+                                      }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                        ✏️ Edytuj zajęcia
+                                      </button>
+
+                                      {!item.isOdwołane && !item.isUsunięte ? (
+                                        <>
+                                          <button onClick={() => { 
+                                            const [sh = '14', sm = '15'] = (item.start || '14:15').split(':');
+                                            const [eh = '15', em = '15'] = (item.end || '15:15').split(':');
+                                            setDupDate('2026-' + col.date.split('/').reverse().join('-'));
+                                            setDupStartHour(sh);
+                                            setDupStartMin(sm);
+                                            setDupEndHour(eh);
+                                            setDupEndMin(em);
+                                            setDupPlan(item.title || '');
+                                            setDupTrainer(item.trainer || (zespolTrenerzy.length > 0 ? (zespolTrenerzy[0].imie_nazwisko || zespolTrenerzy[0].nazwa) : ''));
+                                            setDupLimit(String(item.limit || 12));
+                                            setDuplicateModalData(true);
+                                            setActiveMenuClassId(null); 
+                                          }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                            📋 Duplikuj
+                                          </button>
+                                          <button onClick={() => handleToggleOdwolajZajecia(item, col.date)} className="w-full text-left px-4 py-2 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 cursor-pointer">
+                                            ❌ Odwołaj zajęcia
+                                          </button>
+                                          <button onClick={() => handleToggleUsunZajecia(item, col.date)} className="w-full text-left px-4 py-2 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 cursor-pointer">
+                                            🗑️ Usuń zajęcia
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button onClick={() => {
+                                          if (item.isOdwołane) handleToggleOdwolajZajecia(item, col.date);
+                                          if (item.isUsunięte) handleToggleUsunZajecia(item, col.date);
+                                        }} className="w-full text-left px-4 py-2 text-emerald-700 hover:bg-emerald-50 font-bold flex items-center gap-2 cursor-pointer">
+                                          🔄 Przywróć zajęcia
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
 
-                          {/* WSKAŹNIK ODLICZANIA CZASU NA BEZPŁATNY WYPIS DLA ZAPISANYCH */}
                           {(isUserInMainGroup || isUserInWaitlist) && !isClassCancelled && !item.isUsunięte && cancelDeadlineInfo && (
                             <div className="pt-0.5">
                               {cancelDeadlineInfo.status === 'countdown' ? (
@@ -3943,7 +4678,6 @@ return (
           })}
         </div>
       </section>
-
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
@@ -4075,6 +4809,7 @@ return (
                         }
                       }
                     }
+
                     return (
                       <div
                         key={client.id}
@@ -4757,7 +5492,7 @@ return (
               <div className="bg-sky-50 border border-sky-200/80 rounded-2xl p-4 text-slate-700 leading-relaxed">
                 <p className="font-bold text-sky-950 mb-1">Na ile przed rozpoczęciem treningu system ma Cię automatycznie wypisać?</p>
                 <p className="text-[11px] text-slate-500">
-                  Jeśli przed wybranym czasem nie zwolni się miejsce na listie głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
+                  Jeśli przed wybranym czasem nie zwolni się miejsce na liście głównej, system automatycznie wypisze Cię z krzesełka i zwróci wejście na karnet.
                 </p>
               </div>
 
@@ -5682,6 +6417,241 @@ return (
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
                 <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zatwierdź zmianę</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL Z GRAFIKU: WYDARZENIE KILKUDNIOWE */}
+      {isMultiDayModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⛺ Dodaj wydarzenie kilkudniowe</h3>
+              <button onClick={() => setIsMultiDayModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+            
+            <form onSubmit={handleSaveMultiDayEvent} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Nazwa wydarzenia *</label>
+                <input 
+                  type="text"
+                  required
+                  placeholder="np. OBÓZ W WAŁCZU"
+                  value={multiDayTitle}
+                  onChange={(e) => setMultiDayTitle(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Data od *</label>
+                  <input 
+                    type="date"
+                    required
+                    value={multiDayFrom}
+                    onChange={(e) => setMultiDayFrom(e.target.value)}
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Data do *</label>
+                  <input 
+                    type="date"
+                    required
+                    value={multiDayTo}
+                    onChange={(e) => setMultiDayTo(e.target.value)}
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900 text-[11px]">
+                ⚠️ W wybranym zakresie dat wszystkie zajęcia zostaną automatycznie oznaczone jako odwołane z powodu obozu/wydarzenia, a uczestnikom zostaną zwrócone wejścia.
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setIsMultiDayModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz wydarzenie</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL Z GRAFIKU: HISTORIA ZAJĘĆ */}
+      {historyModalClass && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">🕒 Historia zajęć: {historyModalClass.title} ({historyModalClass.displayDate})</h3>
+              <button onClick={() => setHistoryModalClass(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+
+            <div className="overflow-x-auto text-xs max-h-72 overflow-y-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-sky-50 text-sky-900 uppercase text-[10px] tracking-wider border-b border-sky-200">
+                    <th className="py-2.5 px-3">Data</th>
+                    <th className="py-2.5 px-3">Typ operacji</th>
+                    <th className="py-2.5 px-3">Szczegóły logu</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {modalHistoryData.map((hItem: any) => (
+                    <tr key={hItem.id}>
+                      <td className="py-3 px-3 font-mono">
+                        {new Date(hItem.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800">
+                        {hItem.typ_operacji.replace('_', ' ')}
+                      </td>
+                      <td className="py-3 px-3 font-medium text-slate-700">
+                        {hItem.opis}
+                      </td>
+                    </tr>
+                  ))}
+                  {modalHistoryData.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych zdarzeń w historii tych zajęć.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="pt-3 flex justify-end border-t border-sky-100">
+              <button onClick={() => setHistoryModalClass(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer">Zamknij</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL Z GRAFIKU: EDYCJA ZAJĘĆ */}
+      {editClassModalData && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">✏️ Edytuj zajęcia ({editClassModalData.displayDate})</h3>
+              <button onClick={() => setEditClassModalData(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveClassEdit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700">Godzina rozpoczęcia</label>
+                  <div className="flex gap-2">
+                    <input type="text" maxLength={2} value={editStartHour} onChange={(e) => setEditStartHour(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                    <span className="self-center font-bold">:</span>
+                    <input type="text" maxLength={2} value={editStartMin} onChange={(e) => setEditStartMin(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700">Godzina zakończenia</label>
+                  <div className="flex gap-2">
+                    <input type="text" maxLength={2} value={editEndHour} onChange={(e) => setEditEndHour(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                    <span className="self-center font-bold">:</span>
+                    <input type="text" maxLength={2} value={editEndMin} onChange={(e) => setEditEndMin(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Trener</label>
+                <select 
+                  value={editTrainer} 
+                  onChange={(e) => setEditTrainer(e.target.value)} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                >
+                  <option value="">-- Wybierz trenera --</option>
+                  {zespolTrenerzy.map((t: any) => (
+                    <option key={t.id} value={t.imie_nazwisko || t.nazwa}>{t.imie_nazwisko || t.nazwa}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Limit miejsc</label>
+                <input type="number" min="1" value={editLimit} onChange={(e) => setEditLimit(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setEditClassModalData(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz zmiany</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL Z GRAFIKU: DUPLIKUJ ZAJĘCIA */}
+      {duplicateModalData && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📋 Duplikuj zajęcia</h3>
+              <button onClick={() => setDuplicateModalData(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveDuplicateClass} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Wybierz datę docelową</label>
+                <input type="date" value={dupDate} onChange={(e) => setDupDate(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700">Godzina startu</label>
+                  <div className="flex gap-2">
+                    <input type="text" maxLength={2} value={dupStartHour} onChange={(e) => setDupStartHour(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                    <span className="self-center font-bold">:</span>
+                    <input type="text" maxLength={2} value={dupStartMin} onChange={(e) => setDupStartMin(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700">Godzina końca</label>
+                  <div className="flex gap-2">
+                    <input type="text" maxLength={2} value={dupEndHour} onChange={(e) => setDupEndHour(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                    <span className="self-center font-bold">:</span>
+                    <input type="text" maxLength={2} value={dupEndMin} onChange={(e) => setDupEndMin(e.target.value)} className="w-14 bg-sky-50/50 border border-sky-200 rounded-xl px-2 py-2 text-center font-bold" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Rodzaj zajęć</label>
+                <select value={dupPlan} onChange={(e) => setDupPlan(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800">
+                  <option value="">-- Wybierz plan --</option>
+                  {rodzajeZajec.map((r: any) => (
+                    <option key={r.id} value={r.nazwa}>{r.nazwa}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Trener</label>
+                <select 
+                  value={dupTrainer} 
+                  onChange={(e) => setDupTrainer(e.target.value)} 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                >
+                  <option value="">-- Wybierz trenera --</option>
+                  {zespolTrenerzy.map((t: any) => (
+                    <option key={t.id} value={t.imie_nazwisko || t.nazwa}>{t.imie_nazwisko || t.nazwa}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Limit miejsc</label>
+                <input type="number" min="1" value={dupLimit} onChange={(e) => setDupLimit(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" />
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
+                <button type="button" onClick={() => setDuplicateModalData(null)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zduplikuj zajęcia</button>
               </div>
             </form>
           </div>
