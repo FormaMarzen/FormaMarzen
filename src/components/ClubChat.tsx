@@ -421,7 +421,6 @@ export default function ClubChat() {
 
       if (groupsData) setGroups(groupsData);
 
-      // Pobierz grafik zajęć bez sztywnego filtrowania po is_odwolane, aby nic nie zniknęło przez przypadek
       const { data: grafikData } = await supabase
         .from("grafik_zajec")
         .select("*")
@@ -615,26 +614,39 @@ export default function ClubChat() {
     }
   };
 
-  // Bardzo elastyczne sprawdzenie czy trening odbywa się dzisiaj (uwzględnia tablice, obiekty lub brak restrykcji dni)
+  // Precyzyjne sprawdzenie czy trening odbywa się DZIŚ (na podstawie dni tygodnia zapisanych w `days`)
   const isTrainingToday = (training: any) => {
     if (training.is_odwolane || training.is_usuniete) return false;
-    if (!training.days) return true; // Jeśli brak dni, traktujemy jako aktualne
-    const jsDay = new Date().getDay(); // 0 = Niedziela, 1 = Poniedziałek, ... 6 = Sobota
-    const dayIso = jsDay === 0 ? 7 : jsDay;
+    
+    // Jeśli brak zdefiniowanych dni w grafiku, nie traktujemy tego w ciemno jako dzisiejsze
+    if (!training.days) return false;
 
+    const jsDay = new Date().getDay(); // 0 = Niedziela, 1 = Poniedziałek, ... 6 = Sobota
+    const isoDay = jsDay === 0 ? 7 : jsDay; // 1 = Poniedziałek, ... 7 = Niedziela
+    const dayNames = ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"];
+    const dayShortNames = ["nie", "pon", "wt", "śr", "czw", "pt", "sob"];
+    const currentDayName = dayNames[jsDay];
+
+    let daysArr: any[] = [];
     if (Array.isArray(training.days)) {
+      daysArr = training.days;
+    } else if (typeof training.days === "object" && training.days !== null) {
+      daysArr = Object.entries(training.days)
+        .filter(([_, val]) => val)
+        .map(([key]) => key);
+    }
+
+    return daysArr.some((d: any) => {
+      const dStr = String(d).toLowerCase().trim();
       return (
-        training.days.includes(jsDay) ||
-        training.days.includes(dayIso) ||
-        training.days.includes(String(jsDay)) ||
-        training.days.includes(String(dayIso))
+        Number(d) === jsDay ||
+        Number(d) === isoDay ||
+        dStr === currentDayName ||
+        dStr.includes(dayShortNames[jsDay]) ||
+        dStr === String(jsDay) ||
+        dStr === String(isoDay)
       );
-    }
-    if (typeof training.days === "object" && training.days !== null) {
-      // Jeśli days to obiekt jsonb
-      return training.days[String(jsDay)] || training.days[String(dayIso)] || Object.values(training.days).some(Boolean);
-    }
-    return true;
+    });
   };
 
   // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu
@@ -1261,7 +1273,7 @@ export default function ClubChat() {
     return isPublic && !isAlreadyMember;
   });
 
-  // Dzisiejsze treningi – dla admina wszystkie z grafiku, dla klubowicza tylko te na które jest zapisany w zapisy_zajec
+  // DZISIEJSZE TRENINGI – TYLKO TE, KTÓRE RZECZYWIŚCIE ODBYWAJĄ SIĘ DZIŚ W GRAFIKU
   const todayTrainingsList = grafikZajec.filter((training: any) => {
     const isToday = isTrainingToday(training);
     if (!isToday) return false;
@@ -1737,8 +1749,8 @@ export default function ClubChat() {
 
                   {todayTrainingsList.length === 0 && (
                     <div className="py-12 text-center text-slate-400 text-xs space-y-1">
-                      <div>Brak zapisanych treningów na dzisiaj.</div>
-                      <p className="text-[10px]">Zapisz się na dzisiejsze zajęcia w grafiku, aby uzyskać dostęp do czatu treningowego.</p>
+                      <div>Brak treningów zaplanowanych na dzisiaj.</div>
+                      <p className="text-[10px]">Wszystkie dzisiejsze zajęcia pojawią się tutaj automatycznie.</p>
                     </div>
                   )}
                 </div>
