@@ -59,6 +59,11 @@ export default function LoginPage() {
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!resetEmail.trim()) {
+      alert("Wpisz adres e-mail.");
+      return;
+    }
+    
     setIsResetLoading(true);
     
     const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
@@ -71,6 +76,7 @@ export default function LoginPage() {
     } else {
       alert("Sprawdź skrzynkę e-mail. Wysłaliśmy link do zresetowania hasła.");
       setIsResetModalOpen(false);
+      setResetEmail('');
     }
   };
 
@@ -203,19 +209,33 @@ export default function LoginPage() {
           <div className="bg-white p-6 rounded-3xl max-w-sm w-full shadow-2xl space-y-4 border border-sky-200">
             <h3 className="font-black text-lg text-slate-900">Zresetuj hasło</h3>
             <p className="text-xs text-slate-500 font-medium">Wpisz swój e-mail, a wyślemy Ci instrukcje.</p>
-            <input 
-              type="email" 
-              placeholder="Twój adres e-mail" 
-              value={resetEmail} 
-              onChange={(e) => setResetEmail(e.target.value)} 
-              className="w-full p-3 border rounded-xl text-sm border-slate-300 focus:outline-none focus:border-sky-500 font-medium" 
-            />
-            <div className="flex gap-2">
-              <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer transition-colors">Anuluj</button>
-              <button onClick={handleResetPassword} disabled={isResetLoading} className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black cursor-pointer transition-colors disabled:opacity-50">
-                {isResetLoading ? 'Wysyłanie...' : 'Wyślij link'}
-              </button>
-            </div>
+            
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <input 
+                type="email" 
+                required
+                placeholder="Twój adres e-mail" 
+                value={resetEmail} 
+                onChange={(e) => setResetEmail(e.target.value)} 
+                className="w-full p-3 border rounded-xl text-sm border-slate-300 focus:outline-none focus:border-sky-500 font-medium" 
+              />
+              <div className="flex gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => setIsResetModalOpen(false)} 
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer transition-colors"
+                >
+                  Anuluj
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isResetLoading} 
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black cursor-pointer transition-colors disabled:opacity-50"
+                >
+                  {isResetLoading ? 'Wysyłanie...' : 'Wyślij link'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
