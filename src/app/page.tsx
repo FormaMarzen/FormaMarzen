@@ -1850,7 +1850,7 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (W TYM JEDNORAZOWYCH I SZABLONÓW)
+// ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (BEZAWARYJNE DELETE + INSERT ZAMIAST UPSERT)
   const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const keysToDelete = getKeysVariants(item.id, displayDate);
@@ -1858,7 +1858,11 @@ export default function DashboardPage() {
 
     setActiveMenuClassId(null);
 
+    // 1. Zawsze najpierw czyścimy stare rekordy nadpisań z bazy
+    await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
+
     if (nextOdwołaneState) {
+      // Przypadek: ODWOŁANIE ZAJĘĆ
       const zapisani = zapisyNaZajecia[classKey] || [];
       const participantIds: number[] = [];
 
@@ -1901,19 +1905,46 @@ export default function DashboardPage() {
       }
 
       await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
-    }
 
-    for (const vKey of keysToDelete) {
-      await supabase.from('nadpisania_zajec').upsert({
+      // Zapisujemy nowe nadpisanie ze statusem odwołane
+      const rowsToInsert = keysToDelete.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
         end: item.end || '09:00',
         trainer: item.trainer || '',
         limit: item.limit || 12,
-        is_odwolane: nextOdwołaneState,
+        is_odwolane: true,
         is_usuniete: item.isUsunięte || false
-      });
+      }));
+      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+    } else {
+      // Przypadek: PRZYWRÓCENIE ZAJĘĆ
+      if (item.isUsunięte) {
+        const rowsToInsert = keysToDelete.map(vKey => ({
+          class_key: vKey,
+          start: item.start || '08:00',
+          end: item.end || '09:00',
+          trainer: item.trainer || '',
+          limit: item.limit || 12,
+          is_odwolane: false,
+          is_usuniete: item.isUsunięte || false
+        }));
+        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+      }
     }
+
+    // Natychmiastowa aktualizacja stanu lokalnego w pamięci
+    setNadpisaneZajeciaDni(prev => {
+      const updated = { ...prev };
+      keysToDelete.forEach(k => {
+        if (nextOdwołaneState) {
+          updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false };
+        } else {
+          delete updated[k];
+        }
+      });
+      return updated;
+    });
 
     await supabase.from('transakcje').insert([{
       typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
@@ -1922,10 +1953,10 @@ export default function DashboardPage() {
     }]);
 
     await loadData();
-    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały przywrócone.");
+    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
   };
 
-  // USUWANIE I PRZYWRACANIE ZAJĘĆ
+  // USUWANIE I PRZYWRACANIE ZAJĘĆ (BEZAWARYJNE DELETE + INSERT)
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const keysToDelete = getKeysVariants(item.id, displayDate);
@@ -1933,7 +1964,11 @@ export default function DashboardPage() {
 
     setActiveMenuClassId(null);
 
+    // 1. Zawsze najpierw czyścimy stare rekordy nadpisań z bazy
+    await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
+
     if (nextUsunięteState) {
+      // Przypadek: USUNIĘCIE ZAJĘĆ
       const zapisani = zapisyNaZajecia[classKey] || [];
       const participantIds: number[] = [];
 
@@ -1976,19 +2011,46 @@ export default function DashboardPage() {
       }
 
       await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
-    }
 
-    for (const vKey of keysToDelete) {
-      await supabase.from('nadpisania_zajec').upsert({
+      // Zapisujemy nowe nadpisanie ze statusem usunięte
+      const rowsToInsert = keysToDelete.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
         end: item.end || '09:00',
         trainer: item.trainer || '',
         limit: item.limit || 12,
         is_odwolane: item.isOdwołane || false,
-        is_usuniete: nextUsunięteState
-      });
+        is_usuniete: true
+      }));
+      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+    } else {
+      // Przypadek: PRZYWRÓCENIE USUNIĘTYCH ZAJĘĆ
+      if (item.isOdwołane) {
+        const rowsToInsert = keysToDelete.map(vKey => ({
+          class_key: vKey,
+          start: item.start || '08:00',
+          end: item.end || '09:00',
+          trainer: item.trainer || '',
+          limit: item.limit || 12,
+          is_odwolane: true,
+          is_usuniete: false
+        }));
+        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+      }
     }
+
+    // Natychmiastowa aktualizacja stanu lokalnego
+    setNadpisaneZajeciaDni(prev => {
+      const updated = { ...prev };
+      keysToDelete.forEach(k => {
+        if (nextUsunięteState) {
+          updated[k] = { ...item, isOdwołane: item.isOdwołane || false, isUsunięte: true };
+        } else {
+          delete updated[k];
+        }
+      });
+      return updated;
+    });
 
     await supabase.from('transakcje').insert([{
       typ_operacji: nextUsunięteState ? 'usuniecie_zajec' : 'przywrocenie_zajec',
@@ -1997,7 +2059,7 @@ export default function DashboardPage() {
     }]);
 
     await loadData();
-    showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały przywrócone.");
+    showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały pomyślnie przywrócone!");
   };
 
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
