@@ -24,7 +24,7 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
-// Pomocniczy kalkulator dni do wygaśnięcia
+// Pomocniczy kalkulator dni do wygaśnięcia karnetu
 const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | null => {
   if (!expiryDateStr || expiryDateStr === '-') return null;
   const today = new Date();
@@ -192,6 +192,42 @@ export default function KlienciPage() {
     const day = normalizeDateToIsoDay(dateStr);
     const cleanTitle = (titleStr || '').trim().toLowerCase().replace(/\s+/g, ' ');
     return `${day}_${cleanTitle}`;
+  };
+
+  // FORMATOWANIE DATY TRENINGU WIDOCZNEJ DLA UŻYTKOWNIKA
+  const formatDisplayClassDate = (dateRaw: string, timeRaw: string = '') => {
+    if (!dateRaw) return { display: '-', sortTime: 0 };
+    const rawCombined = `${dateRaw} ${timeRaw}`.trim();
+    const ms = parseClassDate(rawCombined);
+    if (ms > 0) {
+      const d = new Date(ms);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      const hasTime = timeRaw || rawCombined.includes(':');
+      const display = hasTime ? `${yyyy}-${mm}-${dd} ${hh}:${min}` : `${yyyy}-${mm}-${dd}`;
+      return { display, sortTime: ms };
+    }
+    return { display: rawCombined, sortTime: 0 };
+  };
+
+  // PRECYZYJNE USTALENIE AUTORA ZAPISU (KLUBOWICZ VS PANEL KLUBU)
+  const resolveZapisujacy = (item: any, isAuto: boolean) => {
+    if (isAuto) {
+      return { label: '🛡️ Zapis automatyczny (Klub)', isClient: false };
+    }
+    const author = String(item?.zapisujacy || '').trim();
+    const authorLow = author.toLowerCase();
+    
+    if (authorLow === 'klubowicz' || authorLow === 'użytkownik' || authorLow === 'sam' || authorLow.includes('klubowicz (aplikacja)')) {
+      return { label: '📱 Klubowicz', isClient: true };
+    }
+    if (authorLow.includes('admin') || authorLow.includes('trener') || authorLow.includes('zarządca') || authorLow.includes('klub') || authorLow.includes('panel')) {
+      return { label: '🛡️ Panel Administratora', isClient: false };
+    }
+    return { label: author ? `🛡️ ${author}` : '🛡️ Panel Administratora', isClient: false };
   };
 
   // HELPERY SYNCHRONIZACJI DATY WAŻNOŚCI I CENY DO SUPABASE
@@ -435,7 +471,7 @@ export default function KlienciPage() {
     }
   };
 
-  // WYPISANIE POJEDYNCZE Z ZAJĘĆ
+  // WYPISANIE POJEDYNCZE Z ZAJĘĆ (W TYM ZAPISÓW AUTOMATYCZNYCH)
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient) return;
 
@@ -2409,37 +2445,30 @@ export default function KlienciPage() {
                         .forEach((z: any) => {
                           const parts = (z.class_key || '').split('_');
                           const classId = parts[0];
-                          const dateStr = parts[1] || '';
+                          const datePart = parts[1] || '';
+                          const timePart = parts[2] || '';
                           
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
                           const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
                           const override = nadpisaneZajeciaDni[z.class_key];
                           const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
                           const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
-                          const timeStr = classInfo?.start_time || classInfo?.start || '';
+                          const timeStr = timePart || classInfo?.start_time || classInfo?.start || '';
 
-                          const classStartMs = parseClassDate(`${dateStr} ${timeStr}`);
+                          const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(datePart, timeStr);
                           
                           if (classStartMs >= nowTime) {
                             const uniqueKey = z.class_key || `${z.id}`;
-                            const sig = normalizeClassSignature(`${dateStr} ${timeStr}`, title);
+                            const sig = normalizeClassSignature(displayDate, title);
                             
-                            // Uniwersalna weryfikacja automatycznego zapisu po ID grafiku, tytule zajęć lub autorze
+                            // Weryfikacja zapisu automatycznego
                             const isAutoEnrolled = clientAutoEnrollments.some((az: any) => {
                               const matchId = String(az.grafik_id) === String(classId);
                               const matchTitle = az.class_title && title && az.class_title.trim().toLowerCase() === title.trim().toLowerCase();
                               return matchId || matchTitle;
                             }) || (z.zapisujacy && String(z.zapisujacy).toLowerCase().includes('automatycz'));
 
-                            let author = 'Klubowicz';
-                            if (isAutoEnrolled) {
-                              author = 'Zapis automatyczny (Klub)';
-                            } else if (z.zapisujacy) {
-                              const zLow = String(z.zapisujacy).toLowerCase();
-                              if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
-                                author = z.zapisujacy;
-                              }
-                            }
+                            const authorInfo = resolveZapisujacy(z, isAutoEnrolled);
 
                             let statusDisplay = 'ZAPISANY';
                             if (z.status === 'krzesełko') {
@@ -2454,10 +2483,11 @@ export default function KlienciPage() {
                             upcomingMap.set(uniqueKey, {
                               id: z.id || uniqueKey,
                               classKey: z.class_key,
-                              data: `${dateStr} ${timeStr}`.trim(),
+                              data: displayDate,
                               zajecia: title,
                               status: statusDisplay,
-                              zapisujacy: author,
+                              zapisujacy: authorInfo.label,
+                              isClientSignup: authorInfo.isClient,
                               created_at: z.created_at || z.data_zapisu || null,
                               sortTime: classStartMs
                             });
@@ -2466,10 +2496,10 @@ export default function KlienciPage() {
 
                       // B. Dodatkowe nadchodzące zapisy z profilu klienta
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
-                        const classStartMs = parseClassDate(item.data);
+                        const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(item.data);
                         if (classStartMs >= nowTime) {
                           const uniqueKey = item.classKey || `${item.id}`;
-                          const sig = normalizeClassSignature(item.data, item.zajecia || 'Trening');
+                          const sig = normalizeClassSignature(displayDate, item.zajecia || 'Trening');
 
                           if (!upcomingMap.has(uniqueKey) && !seenSignatures.has(sig) && !(item.classKey && seenSignatures.has(item.classKey))) {
                             seenSignatures.add(sig);
@@ -2479,13 +2509,16 @@ export default function KlienciPage() {
                               return az.class_title && item.zajecia && az.class_title.trim().toLowerCase() === String(item.zajecia).trim().toLowerCase();
                             });
 
+                            const authorInfo = resolveZapisujacy(item, isAutoEnrolled);
+
                             upcomingMap.set(uniqueKey, {
                               id: item.id || uniqueKey,
                               classKey: item.classKey,
-                              data: item.data,
+                              data: displayDate,
                               zajecia: item.zajecia || 'Trening',
                               status: isAutoEnrolled ? 'ZAPIS AUTOMATYCZNY' : (item.status || 'ZAPISANY'),
-                              zapisujacy: isAutoEnrolled ? 'Zapis automatyczny (Klub)' : (item.zapisujacy || 'Klub (Panel Administratora)'),
+                              zapisujacy: authorInfo.label,
+                              isClientSignup: authorInfo.isClient,
                               created_at: item.created_at || null,
                               sortTime: classStartMs
                             });
@@ -2493,7 +2526,7 @@ export default function KlienciPage() {
                         }
                       });
 
-                      // C. Jeżeli w tabeli nie ma jeszcze konkretnych instancji z datami, dodajemy szablon z automatycznych zapisów
+                      // C. Fallback dla szablonu z automatycznych zapisów (gdy baza nie ma wygenerowanych instancji)
                       if (upcomingMap.size === 0) {
                         clientAutoEnrollments.forEach((az: any) => {
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
@@ -2508,7 +2541,8 @@ export default function KlienciPage() {
                             data: fullDateStr,
                             zajecia: title,
                             status: 'ZAPIS AUTOMATYCZNY',
-                            zapisujacy: 'Zapis automatyczny (Klub)',
+                            zapisujacy: '🛡️ Zapis automatyczny (Klub)',
+                            isClientSignup: false,
                             created_at: az.created_at || null,
                             sortTime: nowTime + 1000
                           });
@@ -2544,41 +2578,39 @@ export default function KlienciPage() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100 text-slate-700">
-                              {upcomingList.length > 0 ? upcomingList.map((item: any, idx: number) => {
-                                const isKlubowicz = !item.zapisujacy || 
-                                                    item.zapisujacy.toLowerCase().includes('klubowicz') || 
-                                                    item.zapisujacy.toLowerCase().includes('użytkownik') || 
-                                                    item.zapisujacy.toLowerCase().includes('sam');
-                                return (
-                                  <tr key={item.id || idx} className="hover:bg-slate-50 transition-colors">
-                                    <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                                    <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.data}</td>
-                                    <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
-                                    <td className="py-3 px-4 font-semibold whitespace-nowrap">
-                                      <span className={`px-2.5 py-0.5 rounded text-[10px] font-black border ${
-                                        item.status?.includes('REZERWOWA') || item.status?.includes('KRZESEŁKO')
-                                          ? 'bg-blue-100 text-blue-900 border-blue-200'
-                                          : item.status?.includes('AUTOMATYCZNY')
-                                          ? 'bg-purple-100 text-purple-900 border-purple-300'
-                                          : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                      }`}>
-                                        {item.status || 'ZAPISANY'}
-                                      </span>
-                                    </td>
-                                    <td className="py-3 px-4 whitespace-nowrap">
-                                      <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
-                                        {isKlubowicz ? '📱 Klubowicz' : `🛡️ ${item.zapisujacy || 'Klub (Administrator/Trener)'}`}
-                                      </span>
-                                    </td>
-                                    <td className="py-3 px-4 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                                      {item.created_at ? new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Zapisany w grafiku'}
-                                    </td>
-                                    <td className="py-3 px-4 text-right whitespace-nowrap">
-                                      <button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer transition-colors" title="Wypisz z zajęć">🗑️ Wypisz</button>
-                                    </td>
-                                  </tr>
-                                );
-                              }) : (
+                              {upcomingList.length > 0 ? upcomingList.map((item: any, idx: number) => (
+                                <tr key={item.id || idx} className="hover:bg-slate-50 transition-colors">
+                                  <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                                  <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.data}</td>
+                                  <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
+                                  <td className="py-3 px-4 font-semibold whitespace-nowrap">
+                                    <span className={`px-2.5 py-0.5 rounded text-[10px] font-black border ${
+                                      item.status?.includes('REZERWOWA') || item.status?.includes('KRZESEŁKO')
+                                        ? 'bg-blue-100 text-blue-900 border-blue-200'
+                                        : item.status?.includes('AUTOMATYCZNY')
+                                        ? 'bg-purple-100 text-purple-900 border-purple-300'
+                                        : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                    }`}>
+                                      {item.status || 'ZAPISANY'}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 whitespace-nowrap">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                      item.isClientSignup 
+                                        ? 'bg-blue-50 text-blue-900 border-blue-200' 
+                                        : 'bg-slate-100 text-slate-700 border-slate-200'
+                                    }`}>
+                                      {item.zapisujacy}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                                    {item.created_at ? new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Zapisany w grafiku'}
+                                  </td>
+                                  <td className="py-3 px-4 text-right whitespace-nowrap">
+                                    <button onClick={() => handleWypiszZajecia(item)} className="text-rose-600 hover:text-rose-800 font-bold cursor-pointer transition-colors" title="Wypisz z zajęć">🗑️ Wypisz</button>
+                                  </td>
+                                </tr>
+                              )) : (
                                 <tr>
                                   <td colSpan={7} className="p-8 text-center text-slate-400 text-xs">Brak nadchodzących zajęć dla tego klubowicza.</td>
                                 </tr>
@@ -2601,19 +2633,20 @@ export default function KlienciPage() {
                         .forEach((z: any) => {
                           const parts = (z.class_key || '').split('_');
                           const classId = parts[0];
-                          const dateStr = parts[1] || '';
+                          const datePart = parts[1] || '';
+                          const timePart = parts[2] || '';
                           
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === classId);
                           const jednorazClass = jednorazoweZajecia.find(zc => String(zc.id) === classId);
                           const override = nadpisaneZajeciaDni[z.class_key];
                           const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
                           const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
-                          const timeStr = classInfo?.start_time || classInfo?.start || '';
+                          const timeStr = timePart || classInfo?.start_time || classInfo?.start || '';
 
-                          const classStartMs = parseClassDate(`${dateStr} ${timeStr}`);
+                          const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(datePart, timeStr);
 
                           if (classStartMs > 0 && classStartMs < nowTime) {
-                            const sig = normalizeClassSignature(`${dateStr} ${timeStr}`, title);
+                            const sig = normalizeClassSignature(displayDate, title);
                             pastSignatures.add(sig);
 
                             let statusObecnosci = '⏳ Oczekuje na oznaczenie';
@@ -2626,29 +2659,24 @@ export default function KlienciPage() {
                               obecnoscKlasa = 'bg-rose-100 text-rose-800 border-rose-300';
                             }
 
-                            let author = 'Klubowicz';
-                            if (z.zapisujacy) {
-                              const zLow = String(z.zapisujacy).toLowerCase();
-                              if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
-                                author = z.zapisujacy;
-                              }
-                            }
+                            const authorInfo = resolveZapisujacy(z, false);
 
                             pastClassesList.push({
                               id: z.id || `${z.class_key}_${profileClient.id}`,
-                              data: `${dateStr} ${timeStr}`.trim(),
+                              data: displayDate,
                               zajecia: title,
                               obecnoscTekst: statusObecnosci,
                               obecnoscKlasa: obecnoscKlasa,
-                              zapisujacy: author,
+                              zapisujacy: authorInfo.label,
+                              isClientSignup: authorInfo.isClient,
                               _sortTime: classStartMs
                             });
                           }
                         });
 
                       (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
-                        const st = parseClassDate(item.data);
-                        const sig = normalizeClassSignature(item.data, item.zajecia || 'Trening');
+                        const { display: displayDate, sortTime: st } = formatDisplayClassDate(item.data);
+                        const sig = normalizeClassSignature(displayDate, item.zajecia || 'Trening');
                         
                         if (!pastSignatures.has(sig)) {
                           pastSignatures.add(sig);
@@ -2659,13 +2687,15 @@ export default function KlienciPage() {
                             statusObecnosci = '🔴 NIEOBECNY';
                             obecnoscKlasa = 'bg-rose-100 text-rose-800 border-rose-300';
                           }
+                          const authorInfo = resolveZapisujacy(item, false);
                           pastClassesList.push({
                             id: item.id || Date.now(),
-                            data: item.data,
+                            data: displayDate,
                             zajecia: item.zajecia,
                             obecnoscTekst: statusObecnosci,
                             obecnoscKlasa: obecnoscKlasa,
-                            zapisujacy: item.zapisujacy || 'Klub / System',
+                            zapisujacy: authorInfo.label,
+                            isClientSignup: authorInfo.isClient,
                             _sortTime: st || nowTime - 1000
                           });
                         }
@@ -2685,29 +2715,27 @@ export default function KlienciPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {pastClassesList.length > 0 ? pastClassesList.map((item: any, idx: number) => {
-                              const isKlubowicz = !item.zapisujacy || 
-                                                  item.zapisujacy.toLowerCase().includes('klubowicz') || 
-                                                  item.zapisujacy.toLowerCase().includes('użytkownik') || 
-                                                  item.zapisujacy.toLowerCase().includes('sam');
-                              return (
-                                <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
-                                  <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
-                                  <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.data}</td>
-                                  <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
-                                  <td className="py-3 px-4 whitespace-nowrap">
-                                    <span className={`px-2.5 py-1 rounded-lg text-xs font-black border ${item.obecnoscKlasa}`}>
-                                      {item.obecnoscTekst}
-                                    </span>
-                                  </td>
-                                  <td className="py-3 px-4 whitespace-nowrap">
-                                    <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
-                                      {isKlubowicz ? '📱 Sam (Klubowicz)' : `🛡️ ${item.zapisujacy || 'Klub (Administrator/Trener)'}`}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
-                            }) : (
+                            {pastClassesList.length > 0 ? pastClassesList.map((item: any, idx: number) => (
+                              <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
+                                <td className="py-3 px-4 font-mono text-slate-400 whitespace-nowrap">{idx + 1}</td>
+                                <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.data}</td>
+                                <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.zajecia}</td>
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <span className={`px-2.5 py-1 rounded-lg text-xs font-black border ${item.obecnoscKlasa}`}>
+                                    {item.obecnoscTekst}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                    item.isClientSignup 
+                                      ? 'bg-blue-50 text-blue-900 border-blue-200' 
+                                      : 'bg-slate-100 text-slate-700 border-slate-200'
+                                  }`}>
+                                    {item.zapisujacy}
+                                  </span>
+                                </td>
+                              </tr>
+                            )) : (
                               <tr>
                                 <td colSpan={5} className="p-8 text-center text-slate-400 text-xs">Brak historii odbytych przeszłych zajęć.</td>
                               </tr>
@@ -2726,17 +2754,13 @@ export default function KlienciPage() {
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
                         .forEach((z: any) => {
                           const parts = (z.class_key || '').split('_');
-                          const dateStr = parts[1] || '';
+                          const datePart = parts[1] || '';
+                          const timePart = parts[2] || '';
                           const tTime = z.created_at ? new Date(z.created_at).getTime() : Date.now();
                           const mId = `zapis_${z.id || z.class_key}`;
                           
-                          let author = 'Klubowicz';
-                          if (z.zapisujacy) {
-                            const zLow = String(z.zapisujacy).toLowerCase();
-                            if (zLow.includes('admin') || zLow.includes('trener') || zLow.includes('zarządca') || zLow.includes('klub') || zLow.includes('panel')) {
-                              author = z.zapisujacy;
-                            }
-                          }
+                          const authorInfo = resolveZapisujacy(z, false);
+                          const { display: displayDate } = formatDisplayClassDate(datePart, timePart);
 
                           if (!seenMovementIds.has(mId)) {
                             seenMovementIds.add(mId);
@@ -2744,8 +2768,8 @@ export default function KlienciPage() {
                               id: mId,
                               typ: 'ZAPISANIE NA ZAJĘCIA',
                               typKlasa: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-                              zajecia: z.class_title || `Trening (${dateStr})`,
-                              kto: author,
+                              zajecia: z.class_title || `Trening (${displayDate})`,
+                              kto: authorInfo.label,
                               dataZdarzenia: z.created_at ? new Date(z.created_at).toLocaleString('pl-PL') : 'Rejestracja w systemie',
                               sortTime: tTime
                             });
@@ -2762,7 +2786,7 @@ export default function KlienciPage() {
                             typ: 'WYPISANIE Z ZAJĘĆ',
                             typKlasa: 'bg-rose-100 text-rose-800 border-rose-200',
                             zajecia: `${item.zajecia || 'Zajęcia'} (${item.data || ''})`,
-                            kto: item.wypisujacy || 'Administrator / Trener',
+                            kto: item.wypisujacy || '🛡️ Panel Administratora',
                             dataZdarzenia: item.data_operacji ? new Date(item.data_operacji).toLocaleString('pl-PL') : 'Wcześniejsza operacja',
                             sortTime: tTime
                           });
@@ -2780,7 +2804,7 @@ export default function KlienciPage() {
                               typ: 'WYPISANIE (LOG TRANSAKCJI)',
                               typKlasa: 'bg-rose-100 text-rose-800 border-rose-200',
                               zajecia: t.opis.replace('Wypisano z zajęć: ', '').replace('Automatycznie wypisano z ', 'Trening: '),
-                              kto: 'System / Panel Zarządzania',
+                              kto: '🛡️ Panel Administratora',
                               dataZdarzenia: new Date(t.created_at).toLocaleString('pl-PL'),
                               sortTime: tTime
                             });
@@ -2816,28 +2840,22 @@ export default function KlienciPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {allMovements.length > 0 ? allMovements.map((mov: any, idx: number) => {
-                              const isKlubowicz = !mov.kto || 
-                                                  mov.kto.toLowerCase().includes('klubowicz') || 
-                                                  mov.kto.toLowerCase().includes('użytkownik') || 
-                                                  mov.kto.toLowerCase().includes('sam');
-                              return (
-                                <tr key={`${mov.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
-                                  <td className="py-3 px-4 font-mono font-bold text-slate-700 whitespace-nowrap">{mov.dataZdarzenia}</td>
-                                  <td className="py-3 px-4 whitespace-nowrap">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black border uppercase tracking-wider ${mov.typKlasa}`}>
-                                      {mov.typ}
-                                    </span>
-                                  </td>
-                                  <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{mov.zajecia}</td>
-                                  <td className="py-3 px-4 whitespace-nowrap">
-                                    <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
-                                      {isKlubowicz ? '📱 Klubowicz' : `🛡️ ${mov.kto}`}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
-                            }) : (
+                            {allMovements.length > 0 ? allMovements.map((mov: any, idx: number) => (
+                              <tr key={`${mov.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
+                                <td className="py-3 px-4 font-mono font-bold text-slate-700 whitespace-nowrap">{mov.dataZdarzenia}</td>
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black border uppercase tracking-wider ${mov.typKlasa}`}>
+                                    {mov.typ}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{mov.zajecia}</td>
+                                <td className="py-3 px-4 whitespace-nowrap">
+                                  <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
+                                    {mov.kto}
+                                  </span>
+                                </td>
+                              </tr>
+                            )) : (
                               <tr>
                                 <td colSpan={4} className="p-8 text-center text-slate-400 text-xs">Brak zarejestrowanych ruchów związanych z zapisami i wypisami.</td>
                               </tr>
