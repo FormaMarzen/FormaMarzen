@@ -317,7 +317,7 @@ export default function PublicSchedulePage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100/60 py-8 px-3 sm:px-6 font-sans antialiased text-slate-800">
+    <div className="min-h-screen bg-slate-100/60 pt-6 sm:pt-8 pb-32 px-3 sm:px-6 font-sans antialiased text-slate-800">
       <div className="max-w-[1700px] mx-auto space-y-6">
 
         {/* GÓRNA BELKA Z ZAKŁADKAMI I PRZYCISKAMI AKCJI */}
@@ -448,7 +448,7 @@ export default function PublicSchedulePage() {
 
         {/* WIDOK 1: GRAFIK ZAJĘĆ */}
         {activeTab === 'grafik' && (
-          <>
+          <div className="space-y-6">
             {/* NAWIGACJA TYGODNI */}
             <div className="flex items-center gap-2 overflow-x-auto pb-1">
               <button
@@ -546,7 +546,7 @@ export default function PublicSchedulePage() {
             )}
 
             {/* GŁÓWNA SIATKA GRAFIKU */}
-            <main className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
+            <main className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start mb-8">
               {daysList.map((col, idx) => {
                 const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
                 const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
@@ -570,7 +570,7 @@ export default function PublicSchedulePage() {
                 return (
                   <div
                     key={idx}
-                    className={`space-y-3 p-3.5 rounded-3xl border transition-all ${
+                    className={`space-y-3 p-3.5 pb-4 rounded-3xl border transition-all ${
                       col.isToday
                         ? 'bg-white border-rose-500 shadow-md border-t-4 border-t-rose-600'
                         : 'bg-white/80 border-sky-100'
@@ -681,12 +681,12 @@ export default function PublicSchedulePage() {
                 );
               })}
             </main>
-          </>
+          </div>
         )}
 
         {/* WIDOK 2: OBOWIĄZUJĄCE KARNETY (KATALOG KARNETÓW) */}
         {activeTab === 'karnety' && (
-          <section className="space-y-8 animate-in fade-in duration-200">
+          <section className="space-y-8 animate-in fade-in duration-200 mb-8">
             
             {/* NAGŁÓWEK SEKCJI KARNETÓW */}
             <div className="flex items-center gap-2 border-b border-amber-200 pb-3">
