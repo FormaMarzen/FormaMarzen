@@ -207,7 +207,7 @@ export default function ClubChat() {
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
 
-  // Powiadomienia Push
+  // Powiadomienia Push (1-na-1)
   const sendChatPushNotification = async (recipientId: number | string, senderName: string, messageText: string) => {
     try {
       if (Number(recipientId) === SYSTEM_ID) return;
@@ -253,6 +253,65 @@ export default function ClubChat() {
       });
     } catch (err) {
       console.error("Błąd podczas wysyłania powiadomienia Push:", err);
+    }
+  };
+
+  // Powiadomienia Push (Grupowe z uwzględnieniem wyciszenia)
+  const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string) => {
+    try {
+      const { data: groupData } = await supabase
+        .from("czat_grupy")
+        .select("czlonkowie_ids, wyciszeni_ids")
+        .eq("id", groupId)
+        .single();
+
+      if (!groupData) return;
+
+      const members = Array.isArray(groupData.czlonkowie_ids) ? groupData.czlonkowie_ids.map(String) : [];
+      const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
+
+      // Odbiorcy: członkowie grupy oprócz nadawcy i osób które wyciszyły powiadomienia
+      const recipientIds = members.filter((id) => id !== String(senderId) && !muted.includes(id));
+      if (recipientIds.length === 0) return;
+
+      const { data: clients } = await supabase
+        .from("klienci")
+        .select("id, push_subscription")
+        .in("id", recipientIds);
+
+      if (!clients || clients.length === 0) return;
+
+      const subscriptions = clients
+        .map((c: any) => {
+          if (!c.push_subscription) return null;
+          try {
+            return typeof c.push_subscription === "string"
+              ? JSON.parse(c.push_subscription)
+              : c.push_subscription;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      if (subscriptions.length === 0) return;
+
+      const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
+
+      await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscriptions,
+          payload: {
+            title: `${groupName} (${senderName})`,
+            body: previewText,
+            url: "/",
+          },
+        }),
+      });
+    } catch (err) {
+      console.error("Błąd wysyłki push grupowego:", err);
     }
   };
 
@@ -490,7 +549,7 @@ export default function ClubChat() {
     }
   };
 
-  // Pomocnicza funkcja do wgrywania własnego obrazka ikony grupy
+  // Wgrywanie własnego obrazka ikony grupy
   const handleGroupIconImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, isEditing: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -523,11 +582,13 @@ export default function ClubChat() {
       attachmentData = await uploadFileToSupabase(selectedFile);
     }
 
+    const messageText = newMessage.trim();
+
     const payload: any = {
       nadawca_id: senderId,
       nadawca_nazwa: currentUserName,
       nadawca_avatar: currentUserAvatar,
-      tresc: newMessage.trim(),
+      tresc: messageText,
       attachment_url: attachmentData?.url || null,
       attachment_type: attachmentData?.type || null,
       attachment_name: attachmentData?.name || null,
@@ -546,6 +607,7 @@ export default function ClubChat() {
         setFilePreview(null);
         fetchGroupMessages();
         updateLastSeen(senderId);
+        sendGroupPushNotification(selectedGroup.id, senderId, currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik");
       }
     } else if (selectedUser) {
       payload.odbiorca_id = selectedUser.id;
@@ -558,7 +620,7 @@ export default function ClubChat() {
         setFilePreview(null);
         fetchMessages();
         updateLastSeen(senderId);
-        sendChatPushNotification(selectedUser.id, currentUserName, newMessage.trim() || "📎 Wysłano załącznik");
+        sendChatPushNotification(selectedUser.id, currentUserName, messageText || "📎 Załącznik");
       }
     }
 
@@ -594,6 +656,29 @@ export default function ClubChat() {
           setSelectedGroup({ ...selectedGroup, czlonkowie_ids: currentMembers });
         }
       }
+    }
+  };
+
+  // Wyciszenie / Włączenie powiadomień dla danej grupy
+  const handleToggleMuteGroup = async () => {
+    if (!selectedGroup) return;
+    const myId = secondaryUserId || currentUserId;
+    let mutedList = Array.isArray(selectedGroup.wyciszeni_ids) ? [...selectedGroup.wyciszeni_ids.map(String)] : [];
+
+    if (mutedList.includes(String(myId))) {
+      mutedList = mutedList.filter((id) => id !== String(myId));
+    } else {
+      mutedList.push(String(myId));
+    }
+
+    const { error } = await supabase
+      .from("czat_grupy")
+      .update({ wyciszeni_ids: mutedList })
+      .eq("id", selectedGroup.id);
+
+    if (!error) {
+      setSelectedGroup({ ...selectedGroup, wyciszeni_ids: mutedList });
+      fetchGroups();
     }
   };
 
@@ -936,6 +1021,8 @@ export default function ClubChat() {
     return <span>{iconValue}</span>;
   };
 
+  const isCurrentGroupMuted = selectedGroup && Array.isArray(selectedGroup.wyciszeni_ids) && selectedGroup.wyciszeni_ids.map(String).includes(String(secondaryUserId || currentUserId));
+
   return (
     <div
       ref={containerRef}
@@ -982,7 +1069,7 @@ export default function ClubChat() {
                       </div>
                       <div className="overflow-hidden flex items-center gap-1.5">
                         <div>
-                          <div className="font-bold text-xs truncate max-w-[130px]">{selectedGroup.nazwa}</div>
+                          <div className="font-bold text-xs truncate max-w-[120px]">{selectedGroup.nazwa}</div>
                           <div className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
                             <span>{selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"}</span>
                             <span>•</span>
@@ -1041,7 +1128,20 @@ export default function ClubChat() {
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              {selectedGroup && (
+                <button
+                  onClick={handleToggleMuteGroup}
+                  className={`text-[10px] font-bold px-2 py-1 rounded-lg border transition-colors ${
+                    isCurrentGroupMuted
+                      ? "bg-rose-950/60 text-rose-300 border-rose-800"
+                      : "bg-slate-800 text-slate-300 border-slate-700"
+                  }`}
+                  title={isCurrentGroupMuted ? "Włącz powiadomienia Push" : "Wycisz powiadomienia Push"}
+                >
+                  {isCurrentGroupMuted ? "🔕 Wyciszone" : "🔔 Powiadomienia"}
+                </button>
+              )}
               {selectedGroup && selectedGroup.typ === "publiczna" && !isAdmin && (
                 <button
                   onClick={() => handleToggleGroupMembership(selectedGroup, false)}
