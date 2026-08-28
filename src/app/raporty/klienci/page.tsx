@@ -3,12 +3,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// Inicjalizacja klienta Supabase
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Bezpieczny parser JSON / JSONB
+// Bezpieczny parser danych JSON / JSONB z Supabase
 const safeJsonParse = (val: any, fallback: any = []) => {
   if (!val) return fallback;
   if (Array.isArray(val)) return val;
@@ -35,7 +35,7 @@ const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | 
   return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
-// Parser dat z obsługą formatów DD.MM.YYYY, YYYY-MM-DD i godzin
+// KULOODPORNY PARSER DAT (DD.MM.YYYY, YYYY-MM-DD, DD/MM/YYYY, DD/MM)
 const parseClassDate = (dateStr: string): number => {
   if (!dateStr) return 0;
   let d = String(dateStr).trim();
@@ -98,35 +98,61 @@ const normalizeClassSignature = (dateStr: string, titleStr: string): string => {
   return `${day}_${cleanTitle}`;
 };
 
-// Weryfikacja czy data odpowiada dniom tygodnia przypisanym do szablonu grafiku
+// PRECYZYJNA WERYFIKACJA DNI TYGODNIA Z TABELI grafik_zajec (OBIEKT JSONB)
 const isDateMatchingScheduleDays = (dateObj: Date, scheduleClass: any): boolean => {
   if (!scheduleClass) return true;
-  const daysMap: { [key: number]: string[] } = {
-    0: ['niedziela', 'nie', 'sun', 'sunday', '0', '7'],
-    1: ['poniedziałek', 'poniedzialek', 'pon', 'mon', 'monday', '1'],
-    2: ['wtorek', 'wto', 'tue', 'tuesday', '2'],
-    3: ['środa', 'sroda', 'śro', 'sro', 'wed', 'wednesday', '3'],
-    4: ['czwartek', 'czw', 'thu', 'thursday', '4'],
-    5: ['piątek', 'piatek', 'pią', 'pia', 'fri', 'friday', '5'],
-    6: ['sobota', 'sob', 'sat', 'saturday', '6'],
-  };
-  const dayIndex = dateObj.getDay();
-  const validNames = daysMap[dayIndex] || [];
-  
   const rawDays = scheduleClass.days || scheduleClass.dzien_tygodnia || scheduleClass.dni;
   if (!rawDays) return true;
-  
+
   const parsedDays = safeJsonParse(rawDays, rawDays);
-  if (Array.isArray(parsedDays)) {
-    return parsedDays.some((d: any) => {
-      const str = String(d).trim().toLowerCase();
-      return validNames.includes(str);
-    });
+  const dayIndex = dateObj.getDay(); // 0 = Niedziela, 1 = Poniedziałek, ..., 6 = Sobota
+
+  // Obsługa struktury obiektu JSONB z Supabase: {"pon": true, "wt": false, "sr": true, ...}
+  if (typeof parsedDays === 'object' && parsedDays !== null && !Array.isArray(parsedDays)) {
+    const dayKeys: { [key: number]: string[] } = {
+      0: ['nd', 'niedziela', 'nie', 'sun', 'sunday', '7'],
+      1: ['pon', 'poniedziałek', 'poniedzialek', 'mon', 'monday', '1'],
+      2: ['wt', 'wtorek', 'wto', 'tue', 'tuesday', '2'],
+      3: ['sr', 'śr', 'sroda', 'środa', 'wed', 'wednesday', '3'],
+      4: ['czw', 'czwartek', 'thu', 'thursday', '4'],
+      5: ['pt', 'piątek', 'piatek', 'pia', 'fri', 'friday', '5'],
+      6: ['sb', 'sobota', 'sat', 'saturday', '6'],
+    };
+    const possibleKeys = dayKeys[dayIndex] || [];
+    return possibleKeys.some(k => Boolean(parsedDays[k]) === true);
   }
+
+  // Obsługa tablicy ['pon', 'śr', 'pt']
+  if (Array.isArray(parsedDays)) {
+    const dayKeys: { [key: number]: string[] } = {
+      0: ['nd', 'niedziela', 'nie', 'sun', 'sunday', '0', '7'],
+      1: ['pon', 'poniedziałek', 'poniedzialek', 'mon', 'monday', '1'],
+      2: ['wt', 'wtorek', 'wto', 'tue', 'tuesday', '2'],
+      3: ['sr', 'śr', 'sroda', 'środa', 'wed', 'wednesday', '3'],
+      4: ['czw', 'czwartek', 'thu', 'thursday', '4'],
+      5: ['pt', 'piątek', 'piatek', 'pia', 'fri', 'friday', '5'],
+      6: ['sb', 'sobota', 'sat', 'saturday', '6'],
+    };
+    const validNames = dayKeys[dayIndex] || [];
+    return parsedDays.some((d: any) => validNames.includes(String(d).trim().toLowerCase()));
+  }
+
+  // Obsługa tekstu "Poniedziałek, Środa"
   if (typeof parsedDays === 'string') {
     const str = parsedDays.trim().toLowerCase();
+    const dayKeys: { [key: number]: string[] } = {
+      0: ['niedziela', 'nd'],
+      1: ['poniedziałek', 'poniedzialek', 'pon'],
+      2: ['wtorek', 'wt'],
+      3: ['środa', 'sroda', 'sr', 'śr'],
+      4: ['czwartek', 'czw'],
+      5: ['piątek', 'piatek', 'pt'],
+      6: ['sobota', 'sb'],
+    };
+    const validNames = dayKeys[dayIndex] || [];
     return validNames.some(vn => str.includes(vn));
   }
+
   return true;
 };
 
