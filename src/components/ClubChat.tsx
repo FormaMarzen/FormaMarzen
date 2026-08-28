@@ -19,7 +19,7 @@ export default function ClubChat() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Główne zakładki widoku listy: Prywatne | Grupy | Treningi
-  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("direct");
+  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public">("my");
 
   // Zakładka wewnątrz aktywnej rozmowy / grupy: Czat | Zdjęcia | Uczestnicy
@@ -622,7 +622,7 @@ export default function ClubChat() {
   const isTrainingToday = (training: any) => {
     if (training.is_odwolane || training.is_usuniete) return false;
     if (!training.days) return false;
-    const jsDay = new Date().getDay(); // 0 = Niedziela, 1 = Poniedziałek, ... 6 = Sobota
+    const jsDay = new Date().getDay();
     const isoDay = jsDay === 0 ? 7 : jsDay;
     const dayNames = ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"];
     const dayShortNames = ["nie", "pon", "wt", "śr", "czw", "pt", "sob"];
@@ -650,20 +650,35 @@ export default function ClubChat() {
     });
   };
 
-  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu
+  // Pobieranie lub automatyczne tworzenie grupy czatu dla danego treningu + dynamiczna synchronizacja zapisanych osób
   const getOrCreateTrainingGroup = async (training: any) => {
     const todayStr = new Date().toLocaleDateString("pl-PL");
     const groupName = `Trening: ${training.title} (${todayStr} ${training.start})`;
     
-    const existing = groups.find((g: any) => g.nazwa === groupName);
-    if (existing) return existing;
-
-    const signedUpClients = zapisyZajec
-      .filter((z: any) => String(z.class_key) === String(training.id))
-      .map((z: any) => z.klient_id);
+    // Pobierz z bazy lub stanu aktualne zapisy na ten trening
+    const activeSignups = zapisyZajec.filter((z: any) => 
+      String(z.class_key) === String(training.id) && z.status !== "odwolany" && z.status !== "anulowany"
+    );
+    const signedUpClients = activeSignups.map((z: any) => z.klient_id);
 
     const myClientId = secondaryUserId || currentUserId;
     const allMembers = Array.from(new Set([...signedUpClients, myClientId, 999999999]));
+
+    const existing = groups.find((g: any) => g.nazwa === groupName);
+    if (existing) {
+      // Synchronizacja listy osób w istniejącej grupie treningowej
+      const currentStored = Array.isArray(existing.czlonkowie_ids) ? existing.czlonkowie_ids.map(String) : [];
+      const newCalculated = allMembers.map(String);
+      
+      if (currentStored.length !== newCalculated.length || !newCalculated.every((id) => currentStored.includes(id))) {
+        await supabase
+          .from("czat_grupy")
+          .update({ czlonkowie_ids: allMembers })
+          .eq("id", existing.id);
+        existing.czlonkowie_ids = allMembers;
+      }
+      return existing;
+    }
 
     const { data, error } = await supabase
       .from("czat_grupy")
@@ -672,7 +687,7 @@ export default function ClubChat() {
           nazwa: groupName,
           tworca_id: myClientId,
           czlonkowie_ids: allMembers,
-          typ: "trening", // Jawny typ treningowy
+          typ: "trening",
           ikona: "🏋️‍♂️",
         },
       ])
@@ -1007,10 +1022,26 @@ export default function ClubChat() {
   );
   const pinnedMessage = currentConversationMessages.find((m: any) => m.przypinana);
 
-  // Pobieranie listy osób w wybranej grupie lub treningu
-  const groupMemberIds = selectedGroup && Array.isArray(selectedGroup.czlonkowie_ids) 
-    ? selectedGroup.czlonkowie_ids.map(String) 
-    : [];
+  // Dynamiczne pobieranie listy osób w wybranej grupie lub treningu na podstawie aktualnych zapisów
+  let groupMemberIds: string[] = [];
+  if (selectedGroup) {
+    const isTraining = selectedGroup.typ === "trening" || selectedGroup.nazwa?.startsWith("Trening:");
+    if (isTraining) {
+      const matchedTraining = grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
+      if (matchedTraining) {
+        const activeSignups = zapisyZajec.filter((z: any) => 
+          String(z.class_key) === String(matchedTraining.id) && z.status !== "odwolany" && z.status !== "anulowany"
+        );
+        const signedClientIds = activeSignups.map((z: any) => String(z.klient_id));
+        const adminsAndCreator = [String(selectedGroup.tworca_id), String(secondaryUserId || currentUserId), "999999999", String(SYSTEM_ID)];
+        groupMemberIds = Array.from(new Set([...signedClientIds, ...adminsAndCreator]));
+      } else {
+        groupMemberIds = Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.map(String) : [];
+      }
+    } else {
+      groupMemberIds = Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.map(String) : [];
+    }
+  }
 
   const groupMembersList = klienci.filter((k: any) => 
     groupMemberIds.includes(String(k.id)) || Number(k.id) === SYSTEM_ID
@@ -1196,14 +1227,17 @@ export default function ClubChat() {
         {/* DYMEK WIADOMOŚCI */}
         <div
           onClick={() => setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id)}
-          className={`max-w-[85%] p-3.5 rounded-2xl text-xs leading-relaxed shadow-sm cursor-pointer select-none ${
+          className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed shadow-sm cursor-pointer select-none ${
             isMe
               ? "bg-slate-900 text-white rounded-br-none ml-auto"
               : "bg-white text-slate-800 border border-slate-200 rounded-bl-none mr-auto"
           }`}
         >
-          {selectedGroup && !isMe && (
-            <div className="text-[10px] font-bold text-amber-500 mb-1">{msg.nadawca_nazwa}</div>
+          {/* IMIĘ I NAZWISKO NADAWCY W JEDNEJ LINII */}
+          {selectedGroup && !isMe && msg.nadawca_nazwa && (
+            <div className="text-[10px] font-bold text-amber-600 truncate whitespace-nowrap leading-tight mb-0.5 max-w-[220px]">
+              {msg.nadawca_nazwa}
+            </div>
           )}
           {msg.tresc && <div>{msg.tresc}</div>}
           {renderAttachment(msg)}
@@ -1299,7 +1333,7 @@ export default function ClubChat() {
 
     const myClientId = secondaryUserId || currentUserId;
     const isSignedUp = zapisyZajec.some(
-      (z: any) => String(z.class_key) === String(training.id) && String(z.klient_id) === String(myClientId)
+      (z: any) => String(z.class_key) === String(training.id) && String(z.klient_id) === String(myClientId) && z.status !== "odwolany" && z.status !== "anulowany"
     );
     return isSignedUp;
   });
@@ -1390,7 +1424,7 @@ export default function ClubChat() {
                         <div className="truncate min-w-0 flex-1">
                           <div className="font-bold text-xs truncate">{selectedGroup.nazwa}</div>
                           <div className="text-[9px] text-amber-400 font-medium truncate">
-                            {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.length : 0} os.
+                            {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {groupMembersList.length} os.
                           </div>
                         </div>
                         {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
@@ -1834,7 +1868,6 @@ export default function ClubChat() {
               {activeTab === "trainings" && (
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
                   {todayTrainingsList.map((training: any) => {
-                    // Sprawdź czy dany trening ma nieprzeczytane wiadomości
                     const matchedGroup = groups.find((g: any) => g.nazwa?.includes(training.title));
                     const trainingUnread = matchedGroup
                       ? messages.filter((m: any) => String(m.grupa_id) === String(matchedGroup.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length
@@ -2402,7 +2435,7 @@ export default function ClubChat() {
 
                   {newGroupType === "zamknieta" ? (
                     <div>
-                      <div className="text-[11px] font-bold text-slate-700 mb-1 block">Wybierz członków grupy:</div>
+                      <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz członków grupy:</div>
                       <div className="max-h-28 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                         {klienci
                           .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
