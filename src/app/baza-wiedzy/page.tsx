@@ -310,13 +310,15 @@ export default function BazaWiedzyPage() {
       });
   }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria]);
 
-  const sendPushNotification = async (email: string, title: string, body: string, url: string = "/baza-wiedzy") => {
+  const sendPushNotification = async (targetEmail: string, title: string, body: string, url: string = "/baza-wiedzy") => {
     try {
-      const cleanTargetEmail = email.toLowerCase().trim();
+      const cleanEmail = targetEmail.toLowerCase().trim();
+      const recipientName = klienciMap[cleanEmail] || "Klubowicz";
 
+      // 1. Zapis do tabeli powiadomień
       await supabase.from("powiadomienia").insert([
         {
-          odbiorca_email: cleanTargetEmail,
+          odbiorca_email: cleanEmail,
           tytul: title,
           tresc: body,
           przeczytane: false,
@@ -325,18 +327,48 @@ export default function BazaWiedzyPage() {
         },
       ]);
 
-      await fetch("/api/push/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: cleanTargetEmail,
-          title,
-          body,
-          url,
-        }),
-      }).catch(() => {});
+      // 2. Pobranie aktywnych tokenów push użytkownika z tabeli push_subscriptions
+      const { data: userSubs, error: subsError } = await supabase
+        .from("push_subscriptions")
+        .select("*")
+        .or(`user_id.ilike.%${cleanEmail}%,user_id.eq.${cleanEmail}`);
+
+      if (subsError) {
+        console.error("Błąd pobierania subskrypcji z push_subscriptions:", subsError);
+      }
+
+      if (userSubs && userSubs.length > 0) {
+        const formattedSubs = userSubs.map((s: any) => ({
+          subscription: s.subscription,
+          odbiorca: recipientName,
+          user_id: s.user_id,
+          role: s.role || "user",
+        }));
+
+        const pushPayload = {
+          subscriptions: formattedSubs,
+          payload: {
+            title,
+            body,
+            url,
+            typ: "suplement_dodany",
+            odbiorca: recipientName,
+          },
+        };
+
+        const res = await fetch("/api/push/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(pushPayload),
+        });
+
+        const resJson = await res.json();
+        console.log("Wynik wysyłki WebPush do klubowicza:", resJson);
+      } else {
+        console.log("Klubowicz nie ma jeszcze zapisanej subskrypcji WebPush w tabeli push_subscriptions");
+      }
     } catch (e) {
-      console.error("Błąd wysyłania powiadomienia:", e);
+      console.error("Błąd podczas wysyłania powiadomienia Push:", e);
     }
   };
 
@@ -633,6 +665,7 @@ export default function BazaWiedzyPage() {
       return;
     }
 
+    // JEŚLI DODAWANIE NASTĄPIŁO Z PROPOZYCJI KLUBOWICZA -> ZMIEŃ STATUS I WYŚLIJ WEBPUSH
     if (originatingSugestiaId && originatingSugestiaEmail) {
       await supabase
         .from("sugestie_suplementow")
@@ -745,7 +778,7 @@ export default function BazaWiedzyPage() {
       <div className="space-y-6">
         {activeTab === "suplementy" && (
           <>
-            {/* OFICJALNA KLAUZULA PRAWNO-MEDYCZNA (POLSKIE PRZEPISY / GIS / USTAWA O BEZPIECZEŃSTWIE ŻYWNOŚCI I ŻYWIENIA) */}
+            {/* OFICJALNA KLAUZULA PRAWNO-MEDYCZNA */}
             <div className="bg-amber-50 border-2 border-amber-300/80 rounded-3xl p-5 sm:p-6 shadow-sm flex items-start gap-4">
               <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm mt-0.5">
                 ⚠️
@@ -812,37 +845,39 @@ export default function BazaWiedzyPage() {
               </div>
             )}
 
-            {/* FORMULARZ ZGŁASZANIA DLA KLUBOWICZÓW */}
-            <div className="bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-200/80 rounded-3xl p-5 sm:p-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-              <div className="space-y-1 text-center md:text-left">
-                <h4 className="font-black text-sky-950 text-sm uppercase tracking-wide flex items-center justify-center md:justify-start gap-2">
-                  <span>💡</span> Nie znalazłeś suplementu na liście?
-                </h4>
-                <p className="text-xs text-slate-600 font-medium">
-                  Zaproponuj nazwę – po dodaniu przez trenera otrzymasz natychmiastowe powiadomienie Push!
+            {/* SEKCJA: NIE ZNALAZŁEŚ SUPLEMENTU W BAZIE? */}
+            <div className="bg-white border border-sky-100 rounded-3xl p-6 sm:p-7 shadow-sm space-y-4">
+              <div className="space-y-1">
+                <h3 className="font-black text-sky-950 text-base uppercase tracking-tight flex items-center gap-2">
+                  <span>💡</span> NIE ZNALAZŁEŚ SUPLEMENTU W BAZIE?
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Wpisz nazwę witaminy, minerału lub suplementu, o którym chciałbyś dowiedzieć się więcej. Sprawdzimy go i uzupełnimy opis w bazie wiedzy!
                 </p>
               </div>
-              <form onSubmit={handleWyslijSugestie} className="flex items-center gap-2 w-full md:w-auto">
+
+              <form onSubmit={handleWyslijSugestie} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                 <input
                   type="text"
                   required
-                  placeholder="Wpisz nazwę suplementu..."
+                  placeholder="np. Cytrulina, Kurkumina z Piperyną, Cynk..."
                   value={nowaSugestiaNazwa}
                   onChange={(e) => setNowaSugestiaNazwa(e.target.value)}
-                  className="bg-white border border-sky-300 rounded-xl px-4 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-sky-600 w-full md:w-64"
+                  className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-3.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-600 flex-1 transition-colors"
                 />
                 <button
                   type="submit"
                   disabled={isSendingSugestia}
-                  className="bg-sky-900 hover:bg-sky-950 text-white text-xs font-black px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
+                  className="bg-sky-950 hover:bg-sky-900 text-white text-xs font-black uppercase tracking-wider px-7 py-3.5 rounded-2xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer shrink-0 disabled:opacity-50"
                 >
-                  {isSendingSugestia ? "Wysyłanie..." : "Zaproponuj"}
+                  <span>🚀</span> {isSendingSugestia ? "WYSYŁANIE..." : "WYŚLIJ PROPOZYCJĘ"}
                 </button>
               </form>
             </div>
+
             {sugestiaSuccess && (
-              <div className="p-3 bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-bold rounded-2xl text-center animate-in fade-in">
-                ✅ Dziękujemy! Twoja propozycja została przesłana. Otrzymasz powiadomienie, gdy tylko pojawi się w Bazie Wiedzy.
+              <div className="p-3.5 bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-bold rounded-2xl text-center animate-in fade-in">
+                ✅ Dziękujemy! Twoja propozycja została przesłana. Otrzymasz powiadomienie Push, gdy pojawi się w Bazie Wiedzy.
               </div>
             )}
           </>
@@ -856,7 +891,7 @@ export default function BazaWiedzyPage() {
                 type="text"
                 placeholder={
                   activeTab === "suplementy"
-                    ? "Szukaj suplementu..."
+                    ? "Szukaj suplementu po nazwie..."
                     : activeTab === "sport"
                     ? "Szukaj ćwiczenia..."
                     : activeTab === "odzywianie"
@@ -879,7 +914,7 @@ export default function BazaWiedzyPage() {
             </div>
 
             <div className="flex items-center gap-1.5 flex-wrap justify-center w-full md:w-auto">
-              <span className="text-[11px] font-black uppercase text-slate-400 mr-1 hidden sm:inline">Kategoria:</span>
+              <span className="text-[11px] font-black uppercase text-slate-400 mr-1 hidden sm:inline">KATEGORIA:</span>
               <button
                 onClick={() => setSelectedKategoria("wszystkie")}
                 className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -922,22 +957,23 @@ export default function BazaWiedzyPage() {
               <table className="w-full text-left border-collapse min-w-[650px]">
                 <thead>
                   <tr className="bg-sky-50/60 border-b border-sky-100 text-[11px] font-black uppercase tracking-wider text-sky-900">
-                    <th className="py-4 px-6">{activeTab === "przepisy" ? "Nazwa przepisu" : "Nazwa / Tytuł"}</th>
-                    <th className="py-4 px-6 hidden sm:table-cell">Kategoria</th>
+                    <th className="py-4 px-6">{activeTab === "przepisy" ? "NAZWA PRZEPISU" : "NAZWA / TYTUŁ"}</th>
+                    <th className="py-4 px-6 hidden sm:table-cell">KATEGORIA</th>
                     <th className="py-4 px-6 hidden md:table-cell">
                       {activeTab === "suplementy"
-                        ? "Dawkowanie"
+                        ? "DAWKOWANIE"
                         : activeTab === "przepisy"
-                        ? "Makro na porcję (B / T / W / Kcal)"
-                        : "Kluczowe wskazówki"}
+                        ? "MAKRO NA PORCJĘ (B / T / W / KCAL)"
+                        : "KLUCZOWE WSKAZÓWKI"}
                     </th>
-                    <th className="py-4 px-6 text-right">Akcja</th>
+                    <th className="py-4 px-6 text-right">AKCJA</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
                   {currentFilteredList.map((item) => {
                     const itemCats = parseCategories(item.kategoria);
                     const podstawowe = item.dawkowanie_podstawowe || item.dawkowanie || "";
+                    const wyzsze = item.dawkowanie_wyzsze || "";
                     const autorWyswietlany = activeTab === "przepisy" ? getAutorDisplay(item) : "";
 
                     return (
@@ -1013,16 +1049,16 @@ export default function BazaWiedzyPage() {
 
                         <td className="py-4 px-6 hidden md:table-cell">
                           {activeTab === "suplementy" ? (
-                            <div className="space-y-1 max-w-xs">
-                              <div className="text-xs font-medium text-slate-700 truncate">
-                                {podstawowe ? (
-                                  <span>
-                                    <strong className="text-slate-900 font-bold">Podstawowe:</strong> {podstawowe}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
+                            <div className="space-y-1 text-xs">
+                              <div className="text-slate-800">
+                                <span className="font-bold text-slate-900">Podstawowe:</span> {podstawowe || "—"}
                               </div>
+                              {wyzsze && (
+                                <div className="text-amber-800 flex items-center gap-1 font-medium">
+                                  <span>⚡</span>
+                                  <span className="font-bold text-amber-900">Wyższe:</span> {wyzsze}
+                                </div>
+                              )}
                             </div>
                           ) : activeTab === "przepisy" ? (
                             <div className="text-xs font-bold text-slate-700">
@@ -1075,11 +1111,10 @@ export default function BazaWiedzyPage() {
         )}
       </div>
 
-      {/* MODAL PODGLĄDU - STYL INFOGRAFIKI ZE ZDJĘCIEM I KARTAMI DAWKOWANIA */}
+      {/* MODAL PODGLĄDU - STYL INFOGRAFIKI */}
       {isViewModalOpen && selectedItem && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-md overflow-y-auto">
           <div className="bg-white rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-200 my-auto max-h-[92vh] flex flex-col border border-slate-100">
-            {/* PRZYCISK ZAMKNIĘCIA */}
             <button
               onClick={() => setIsViewModalOpen(false)}
               className="absolute top-4 right-4 z-30 bg-white/90 hover:bg-white text-slate-800 w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-md cursor-pointer font-black text-base border border-slate-200 hover:scale-105"
@@ -1088,7 +1123,7 @@ export default function BazaWiedzyPage() {
             </button>
 
             <div className="overflow-y-auto space-y-6 flex-1 pb-8">
-              {/* DUŻY BANER / ZDJĘCIE INFOGRAFIKI */}
+              {/* DUŻY BANER / INFOGRAFIKA */}
               {selectedItem.grafika_url && (
                 <div
                   onClick={() => setZoomedImage(selectedItem.grafika_url)}
@@ -1109,7 +1144,6 @@ export default function BazaWiedzyPage() {
 
               {/* NAGŁÓWEK KARTY: KATEGORIE, TYTUŁ I AKCENT */}
               <div className="px-6 sm:px-10 text-center pt-2 space-y-3">
-                {/* KATEGORIE / STATUSY */}
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   {selectedItem.do_weryfikacji && (
                     <span className="bg-amber-500 text-slate-950 font-black text-xs px-3 py-1 rounded-lg uppercase tracking-wider animate-pulse">
@@ -1144,14 +1178,12 @@ export default function BazaWiedzyPage() {
                   </div>
                 )}
 
-                {/* POMARAŃCZOWY AKCENT POD TYTUŁEM */}
                 <div className="w-14 h-1.5 bg-amber-500 mx-auto rounded-full mt-2"></div>
               </div>
 
-              {/* DEDYKOWANY BLOK DAWKOWANIA DLA SUPLEMENTÓW */}
+              {/* KARTY DAWKOWANIA */}
               {activeTab === "suplementy" && (
                 <div className="px-6 sm:px-10 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* KARTA 1: DAWKOWANIE PODSTAWOWE */}
                   <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 sm:p-5 flex items-start gap-4 shadow-sm">
                     <div className="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-200 text-emerald-800 flex items-center justify-center text-xl shrink-0">
                       🌱
@@ -1166,7 +1198,6 @@ export default function BazaWiedzyPage() {
                     </div>
                   </div>
 
-                  {/* KARTA 2: DAWKOWANIE WYŻSZE */}
                   <div className="bg-amber-50/60 border border-amber-200/80 rounded-2xl p-4 sm:p-5 flex items-start gap-4 shadow-sm">
                     <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 text-amber-800 flex items-center justify-center text-xl shrink-0">
                       ⚡
@@ -1183,7 +1214,7 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* DEDYKOWANY BLOK DLA PRZEPISÓW (MAKRO I SKŁADNIKI) */}
+              {/* PRZEPISY - MAKRO I SKŁADNIKI */}
               {activeTab === "przepisy" && (
                 <div className="px-6 sm:px-10 space-y-4">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -1218,7 +1249,7 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* DLA SPORTU / ODŻYWIANIA - WSKAZÓWKI */}
+              {/* SPORT / ODŻYWIANIE - WSKAZÓWKI */}
               {(activeTab === "sport" || activeTab === "odzywianie") && selectedItem.wskazowki && (
                 <div className="px-6 sm:px-10">
                   <div className="bg-sky-50/70 border border-sky-200 rounded-2xl p-5 flex items-start gap-3.5">
@@ -1233,7 +1264,7 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* TREŚĆ SZCZEGÓŁOWA / OPIS */}
+              {/* TREŚĆ / OPIS */}
               {selectedItem.opis && (
                 <div className="px-6 sm:px-10">
                   <div className="bg-slate-50 p-6 sm:p-8 rounded-3xl border border-slate-200">
@@ -1247,7 +1278,7 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* PRZYCISKI AKCJI W MODALU PRZEPISÓW */}
+              {/* PRZYCISKI AKCJI PRZEPISÓW */}
               {activeTab === "przepisy" && (
                 <div className="px-6 sm:px-10 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
                   <button
