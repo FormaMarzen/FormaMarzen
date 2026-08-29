@@ -39,9 +39,10 @@ export default function RootLayout({
 
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [isMounted, setIsMounted] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   const [currentClientId, setCurrentClientId] = useState<number | string | null>(null);
-  const [profileName, setProfileName] = useState('Ładowanie...');
+  const [profileName, setProfileName] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
   const [profilePhone, setProfilePhone] = useState('-');
   const [profileBirth, setProfileBirth] = useState('');
@@ -93,7 +94,7 @@ export default function RootLayout({
           }
 
           if (!matched) {
-            matched = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput')) || clients[0];
+            matched = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput'));
           }
 
           if (matched) {
@@ -235,14 +236,18 @@ export default function RootLayout({
     }
 
     const checkAuthAndRole = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        if (!isPublicPage) router.push('/login');
-        return;
-      }
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (!user) {
+          if (!isPublicPage) {
+            router.push('/login');
+          } else {
+            setIsAuthLoading(false);
+          }
+          return;
+        }
 
-      if (user) {
         const userEmail = user.email || '';
         setProfileEmail(userEmail);
         
@@ -260,9 +265,7 @@ export default function RootLayout({
 
           if (!klientData) {
             if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
-              klientData = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput')) || clients[0];
-            } else {
-              klientData = clients[0];
+              klientData = clients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput'));
             }
           }
         }
@@ -307,12 +310,16 @@ export default function RootLayout({
             setAppRole('klubowicz');
             if (klientData) {
               const k = klientData as any;
-              setProfileName(`${k.Imię} ${k.Nazwisko}`);
+              setProfileName(`${k.Imię || ''} ${k.Nazwisko || ''}`.trim() || userEmail.split('@')[0]);
             } else {
               setProfileName(userEmail.split('@')[0]);
             }
           }
         }
+      } catch (err) {
+        console.error("Błąd sprawdzania sesji:", err);
+      } finally {
+        setIsAuthLoading(false);
       }
     };
 
@@ -331,6 +338,8 @@ export default function RootLayout({
     if (!isPublicPage) {
       checkAuthAndRole();
       fetchKarnetyFromSupabase();
+    } else {
+      setIsAuthLoading(false);
     }
   }, [pathname, isPublicPage, router]);
 
@@ -574,7 +583,7 @@ export default function RootLayout({
     window.location.reload();
   };
 
-  if (!isMounted) {
+  if (!isMounted || (!isPublicPage && isAuthLoading)) {
     return (
       <html lang="pl">
         <head>
@@ -582,26 +591,23 @@ export default function RootLayout({
           <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
           <meta name="HandheldFriendly" content="true" />
-          <meta property="og:title" content="Forma Marzeń" />
-          <meta property="og:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-          <meta property="og:image" content="https://forma-marzen.vercel.app/og-image.png" />
-          <meta property="og:image:width" content="1200" />
-          <meta property="og:image:height" content="630" />
-          <meta property="og:url" content="https://forma-marzen.vercel.app" />
-          <meta property="og:type" content="website" />
-          <meta name="twitter:card" content="summary_large_image" />
-          <meta name="twitter:title" content="Forma Marzeń" />
-          <meta name="twitter:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-          <meta name="twitter:image" content="https://forma-marzen.vercel.app/og-image.png" />
           <link rel="manifest" href="/manifest.json?v=2" />
           <meta name="theme-color" content="#0284c7" />
         </head>
-        <body className="min-h-screen bg-sky-50/50 text-slate-800 flex items-center justify-center font-sans antialiased h-screen overflow-hidden">
-          <div className="text-sky-900 font-bold text-sm animate-pulse">Ładowanie aplikacji Forma Marzeń...</div>
+        <body className="min-h-screen bg-sky-50/50 text-slate-800 flex flex-col items-center justify-center font-sans antialiased h-screen overflow-hidden">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-sky-950 font-black text-sm tracking-wider uppercase animate-pulse">Forma Marzeń</div>
+            <div className="text-slate-500 text-xs font-semibold">Ładowanie profilu...</div>
+          </div>
         </body>
       </html>
     );
   }
+
+  const avatarInitials = profileName
+    ? profileName.split(' ').map(n => n[0]).filter(Boolean).join('').substring(0, 2).toUpperCase()
+    : 'FM';
 
   return (
     <html lang="pl">
@@ -720,11 +726,11 @@ export default function RootLayout({
                     {profileAvatar ? (
                       <img src={profileAvatar} alt="Avatar" className="w-full h-full object-cover" />
                     ) : (
-                      <span className="uppercase">{profileName.substring(0, 2)}</span>
+                      <span className="uppercase">{avatarInitials}</span>
                     )}
                   </div>
                   <div className="overflow-hidden">
-                    <div className="text-xs font-bold text-slate-900 truncate">{profileName}</div>
+                    <div className="text-xs font-bold text-slate-900 truncate">{profileName || 'Użytkownik'}</div>
                     <div className="text-[10px] text-slate-500">
                       {appRole === 'admin' ? 'Administrator' : appRole === 'trener' ? 'Trener' : 'Klubowicz'}
                     </div>
@@ -781,7 +787,7 @@ export default function RootLayout({
                           {profileAvatar ? (
                             <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
                           ) : (
-                            <span className="uppercase">{profileName.substring(0, 2)}</span>
+                            <span className="uppercase">{avatarInitials}</span>
                           )}
                         </div>
                         <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
@@ -978,7 +984,7 @@ export default function RootLayout({
                   {profileAvatar ? (
                     <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
                   ) : (
-                    <span className="uppercase">{profileName.substring(0, 2)}</span>
+                    <span className="uppercase">{avatarInitials}</span>
                   )}
                 </div>
                 <div className="flex items-center gap-2">

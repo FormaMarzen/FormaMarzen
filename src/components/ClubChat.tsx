@@ -37,6 +37,9 @@ export default function ClubChat() {
   // Stan dla menu reakcji / akcji dla konkretnej wiadomości
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
 
+  // Menu opcji w nagłówku aktywnej rozmowy (...)
+  const [showChatOptionsMenu, setShowChatOptionsMenu] = useState(false);
+
   // Stan archiwizacji rozmów (direct_{id} lub group_{id})
   const [archivedChatIds, setArchivedChatIds] = useState<string[]>([]);
   const [showArchivedDirect, setShowArchivedDirect] = useState(false);
@@ -208,6 +211,7 @@ export default function ClubChat() {
     setSelectedGroup(null);
     setChatInsideTab("messages");
     setActiveMessageMenuId(null);
+    setShowChatOptionsMenu(false);
   };
 
   // Całkowite zamknięcie okna czatu
@@ -224,9 +228,10 @@ export default function ClubChat() {
     setActiveMessageMenuId(null);
     setShowInviteModal(false);
     setShowCategoryManagerModal(false);
+    setShowChatOptionsMenu(false);
   };
 
-  // Zmiana kolejności kategorii w górę / w dół
+  // Zmiana kolejności kategorii
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
     const newOrder = [...categoriesOrder];
     const targetIndex = direction === "up" ? index - 1 : index + 1;
@@ -240,7 +245,7 @@ export default function ClubChat() {
     localStorage.setItem("group_categories_order", JSON.stringify(newOrder));
   };
 
-  // Zmiana nazwy kategorii w bazie Supabase i konfiguracji lokalnej
+  // Zmiana nazwy kategorii
   const handleRenameCategory = async (oldName: string, newName: string) => {
     if (!newName.trim() || oldName === newName.trim()) {
       setEditingCategoryOldName(null);
@@ -328,6 +333,7 @@ export default function ClubChat() {
         handleExitCurrentChat();
       }
       setShowEditGroupModal(false);
+      setShowChatOptionsMenu(false);
       fetchGroupsAndTrainings();
     } catch (err) {
       console.error("Błąd usuwania grupy:", err);
@@ -1898,7 +1904,6 @@ export default function ClubChat() {
   const unpinnedMyGroups = activeMyGroups.filter((g) => !pinnedChatIds.includes(`group_${g.id}`));
   const archivedMyGroups = allMyGroups.filter((g) => archivedChatIds.includes(`group_${g.id}`));
 
-  // Podział na kategorie z uwzględnieniem ustalonej kolejności
   const myGroupsByCategory = unpinnedMyGroups.reduce((acc: Record<string, any[]>, group: any) => {
     const cat = group.kategoria?.trim() || group.category?.trim() || "Ogólne";
     if (!acc[cat]) acc[cat] = [];
@@ -1906,7 +1911,6 @@ export default function ClubChat() {
     return acc;
   }, {});
 
-  // Posortowane nazwy kategorii wg categoriesOrder
   const sortedCategoryNames = Array.from(
     new Set([
       ...categoriesOrder.filter((cat) => myGroupsByCategory[cat]),
@@ -2195,8 +2199,8 @@ export default function ClubChat() {
           } ${isTopSide ? "top-16 slide-in-from-top-4" : "bottom-16 slide-in-from-bottom-4"}`}
         >
           {/* NAGŁÓWEK CZATU */}
-          <div className="bg-slate-900 text-white px-3 py-2.5 flex items-center justify-between shadow-sm select-none">
-            <div className="flex items-center gap-1.5 overflow-hidden flex-1 min-w-0 mr-1">
+          <div className="bg-slate-900 text-white px-3 py-2.5 flex items-center justify-between shadow-sm select-none relative">
+            <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0 mr-1">
               {selectedUser || selectedGroup ? (
                 <>
                   <button
@@ -2210,41 +2214,23 @@ export default function ClubChat() {
 
                   {selectedGroup ? (
                     <>
-                      <div className="w-7 h-7 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0 overflow-hidden">
+                      <div className="w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs border border-amber-300 shrink-0 overflow-hidden">
                         {renderGroupIcon(selectedGroup.ikona, selectedGroup.typ)}
                       </div>
-                      <div className="overflow-hidden flex items-center gap-1 min-w-0 flex-1">
-                        <div className="truncate min-w-0 flex-1">
-                          <div className="font-bold text-xs truncate flex items-center gap-1">
-                            <span>{selectedGroup.nazwa}</span>
-                            {isCurrentChatPinned && <span title="Przypięty czat">📌</span>}
-                          </div>
-                          <div className="text-[9px] text-amber-400 font-medium truncate">
-                            {selectedGroup.kategoria ? `${selectedGroup.kategoria} • ` : ""}
-                            {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {groupMembersList.length} os.
-                          </div>
+                      <div className="overflow-hidden min-w-0 flex-1">
+                        <div className="font-bold text-xs truncate flex items-center gap-1 text-white">
+                          <span className="truncate">{selectedGroup.nazwa}</span>
+                          {isCurrentChatPinned && <span title="Przypięta grupa" className="text-[10px] shrink-0">📌</span>}
                         </div>
-                        {(isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditGroupName(selectedGroup.nazwa);
-                              setEditGroupCategory(selectedGroup.kategoria || "Ogólne");
-                              setEditGroupIcon(selectedGroup.ikona || "🏋️‍♂️");
-                              setShowEditGroupModal(true);
-                            }}
-                            className="text-slate-400 hover:text-amber-400 p-1 text-xs cursor-pointer shrink-0"
-                            title="Edytuj grupę"
-                          >
-                            ✏️
-                          </button>
-                        )}
+                        <div className="text-[9px] text-amber-400 font-medium truncate">
+                          {selectedGroup.kategoria ? `${selectedGroup.kategoria} • ` : ""}
+                          {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {groupMembersList.length} os.
+                        </div>
                       </div>
                     </>
                   ) : (
                     <>
-                      <div className={`w-7 h-7 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${Number(selectedUser.id) === SYSTEM_ID ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
+                      <div className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${Number(selectedUser.id) === SYSTEM_ID ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
                         {selectedUser.avatar ? (
                           <img src={selectedUser.avatar} alt={selectedUser.name} className="w-full h-full object-cover" />
                         ) : Number(selectedUser.id) === SYSTEM_ID ? (
@@ -2254,9 +2240,9 @@ export default function ClubChat() {
                         )}
                       </div>
                       <div className="overflow-hidden min-w-0 flex-1">
-                        <div className="font-bold text-xs truncate flex items-center gap-1">
-                          <span>{selectedUser.name}</span>
-                          {isCurrentChatPinned && <span title="Przypięty czat">📌</span>}
+                        <div className="font-bold text-xs truncate flex items-center gap-1 text-white">
+                          <span className="truncate">{selectedUser.name}</span>
+                          {isCurrentChatPinned && <span title="Przypięty czat" className="text-[10px] shrink-0">📌</span>}
                         </div>
                         <div className="text-[9px] font-medium truncate">
                           {Number(selectedUser.id) === SYSTEM_ID ? (
@@ -2282,75 +2268,130 @@ export default function ClubChat() {
               )}
             </div>
 
-            <div className="flex items-center gap-1 shrink-0">
-              {(selectedUser || (selectedGroup && selectedGroup.typ !== "trening")) && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    if (selectedGroup) togglePinChat(selectedGroup.id, "group", e);
-                    else if (selectedUser) togglePinChat(selectedUser.id, "direct", e);
-                  }}
-                  className={`text-xs p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                    isCurrentChatPinned
-                      ? "bg-amber-400 text-slate-950 border-amber-300 font-bold shadow-xs"
-                      : "bg-slate-800 text-slate-300 border-slate-700 hover:text-white"
-                  }`}
-                  title={isCurrentChatPinned ? "Odepnij rozmowę z góry" : "Przypnij rozmowę na samej górze"}
-                >
-                  📌
-                </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Przycisk trzech kropek (Opcje) */}
+              {(selectedUser || selectedGroup) && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowChatOptionsMenu(!showChatOptionsMenu);
+                    }}
+                    className={`w-7 h-7 rounded-full flex items-center justify-center font-black text-sm transition-all cursor-pointer border ${
+                      showChatOptionsMenu
+                        ? "bg-amber-400 text-slate-950 border-amber-300"
+                        : "bg-slate-800 text-slate-300 border-slate-700 hover:text-white hover:bg-slate-700"
+                    }`}
+                    title="Więcej opcji"
+                  >
+                    •••
+                  </button>
+
+                  {/* Rozwijane menu z opcjami */}
+                  {showChatOptionsMenu && (
+                    <div className="absolute right-0 top-9 w-48 bg-slate-900 border border-slate-700 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 space-y-0.5">
+                      {/* Przypnij / Odepnij */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          if (selectedGroup) togglePinChat(selectedGroup.id, "group", e);
+                          else if (selectedUser) togglePinChat(selectedUser.id, "direct", e);
+                          setShowChatOptionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+                      >
+                        <span className="text-amber-400 text-sm">📌</span>
+                        <span>{isCurrentChatPinned ? "Odepnij z góry" : "Przypnij na górze"}</span>
+                      </button>
+
+                      {/* Zarchiwizuj / Przywróć */}
+                      {(!selectedGroup || selectedGroup.typ !== "trening") && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            if (selectedGroup) toggleArchiveChat(selectedGroup.id, "group", e);
+                            else if (selectedUser) toggleArchiveChat(selectedUser.id, "direct", e);
+                            setShowChatOptionsMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+                        >
+                          <span className="text-sm">📦</span>
+                          <span>{isCurrentChatArchived ? "Przywróć z archiwum" : "Zarchiwizuj"}</span>
+                        </button>
+                      )}
+
+                      {/* Wycisz / Włącz powiadomienia (Grupa) */}
+                      {selectedGroup && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleMuteGroup();
+                            setShowChatOptionsMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+                        >
+                          <span className="text-sm">{isCurrentGroupMuted ? "🔔" : "🔕"}</span>
+                          <span>{isCurrentGroupMuted ? "Włącz powiadomienia" : "Wycisz grupę"}</span>
+                        </button>
+                      )}
+
+                      {/* Edytuj grupę (Admin / Twórca) */}
+                      {selectedGroup && (isAdmin || String(selectedGroup.tworca_id) === String(secondaryUserId || currentUserId)) && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditGroupName(selectedGroup.nazwa);
+                            setEditGroupCategory(selectedGroup.kategoria || "Ogólne");
+                            setEditGroupIcon(selectedGroup.ikona || "🏋️‍♂️");
+                            setShowEditGroupModal(true);
+                            setShowChatOptionsMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+                        >
+                          <span className="text-sm">✏️</span>
+                          <span>Edytuj grupę</span>
+                        </button>
+                      )}
+
+                      {/* Opuść grupę (Klubowicz w grupie publicznej) */}
+                      {selectedGroup && selectedGroup.typ === "publiczna" && !isAdmin && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleGroupMembership(selectedGroup, false);
+                            setShowChatOptionsMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                        >
+                          <span className="text-sm">🚪</span>
+                          <span>Opuść grupę</span>
+                        </button>
+                      )}
+
+                      {/* Usuń grupę (Admin) */}
+                      {selectedGroup && isAdmin && selectedGroup.typ !== "trening" && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            handleDeleteGroup(selectedGroup.id, selectedGroup.nazwa, e);
+                            setShowChatOptionsMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer border-t border-slate-800 mt-1"
+                        >
+                          <span className="text-sm">🗑️</span>
+                          <span>Usuń grupę</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
-              {(selectedUser || (selectedGroup && selectedGroup.typ !== "trening")) && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    if (selectedGroup) toggleArchiveChat(selectedGroup.id, "group", e);
-                    else if (selectedUser) toggleArchiveChat(selectedUser.id, "direct", e);
-                  }}
-                  className={`text-xs p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                    isCurrentChatArchived
-                      ? "bg-amber-400 text-slate-950 border-amber-300 font-bold"
-                      : "bg-slate-800 text-slate-300 border-slate-700 hover:text-white"
-                  }`}
-                  title={isCurrentChatArchived ? "Przywróć czat z archiwum" : "Przenieś czat do archiwum"}
-                >
-                  📦
-                </button>
-              )}
-
-              {selectedGroup && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggleMuteGroup();
-                  }}
-                  className={`text-xs p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                    isCurrentGroupMuted
-                      ? "bg-rose-950/80 text-rose-300 border-rose-800"
-                      : "bg-slate-800 text-slate-300 border-slate-700 hover:text-white"
-                  }`}
-                  title={isCurrentGroupMuted ? "Włącz powiadomienia" : "Wycisz powiadomienia"}
-                >
-                  {isCurrentGroupMuted ? "🔕" : "🔔"}
-                </button>
-              )}
-
-              {selectedGroup && selectedGroup.typ === "publiczna" && !isAdmin && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggleGroupMembership(selectedGroup, false);
-                  }}
-                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-1.5 rounded-lg border border-rose-800 transition-colors"
-                  title="Opuść tę grupę"
-                >
-                  Opuść
-                </button>
-              )}
-
+              {/* Zamknięcie okna czatu */}
               <button
                 type="button"
                 onClick={(e) => {
@@ -3624,7 +3665,7 @@ export default function ClubChat() {
                     <div className="pt-2 border-t border-slate-200">
                       <button
                         type="button"
-                        onClick={() => handleDeleteGroup(selectedGroup.id, selectedGroup.nazwa)}
+                        onClick={(e) => handleDeleteGroup(selectedGroup.id, selectedGroup.nazwa, e)}
                         className="w-full py-2 rounded-xl text-xs font-black text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
                       >
                         <span>🗑️</span> Usuń grupę bezpowrotnie
