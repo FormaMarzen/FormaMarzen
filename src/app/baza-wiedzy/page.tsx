@@ -454,7 +454,6 @@ export default function BazaWiedzyPage() {
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Walidacja wymaganych pól dla przepisów
     if (activeTab === "przepisy") {
       if (!form.nazwa.trim() || !form.skladniki.trim() || !form.opis.trim()) {
         alert("Wypełnij wymagane pola: Nazwa, Składniki oraz Sposób przygotowania!");
@@ -540,7 +539,6 @@ export default function BazaWiedzyPage() {
     fetchData();
   };
 
-  // Obsługa skanera kodów kreskowych i Open Food Facts API
   const handleSearchBarcode = async (barcodeToSearch?: string) => {
     const code = barcodeToSearch || barcodeInput;
     if (!code.trim()) return;
@@ -549,7 +547,6 @@ export default function BazaWiedzyPage() {
     setProduktSuccessMsg("");
 
     try {
-      // 1. Sprawdź najpierw w naszej bazie Supabase
       const { data: localProd } = await supabase
         .from("produkty_spozywcze")
         .select("*")
@@ -570,7 +567,6 @@ export default function BazaWiedzyPage() {
         return;
       }
 
-      // 2. Jeśli brak w bazie, odpytaj Open Food Facts API
       const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${code.trim()}.json`);
       const data = await res.json();
 
@@ -658,7 +654,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGŁÓWEK GŁÓWNY */}
+      {/* NAGłóWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -693,11 +689,11 @@ export default function BazaWiedzyPage() {
         </div>
       </div>
 
-      {/* SYSTEM 4 ZAKŁADEK */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
+      {/* SYSTEM 4 ZAKŁADEK - ZAWIJANY (FLEX-WRAP) NA JEDNYM WIDOKU */}
+      <div className="flex items-center gap-2 flex-wrap border-b border-slate-200 pb-4">
         <button
           onClick={() => setActiveTab("suplementy")}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
             activeTab === "suplementy"
               ? "bg-sky-900 text-white shadow-md shadow-sky-900/20"
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -708,7 +704,7 @@ export default function BazaWiedzyPage() {
 
         <button
           onClick={() => setActiveTab("sport")}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
             activeTab === "sport"
               ? "bg-sky-900 text-white shadow-md shadow-sky-900/20"
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -719,7 +715,7 @@ export default function BazaWiedzyPage() {
 
         <button
           onClick={() => setActiveTab("odzywianie")}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
             activeTab === "odzywianie"
               ? "bg-sky-900 text-white shadow-md shadow-sky-900/20"
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -730,7 +726,7 @@ export default function BazaWiedzyPage() {
 
         <button
           onClick={() => setActiveTab("przepisy")}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
             activeTab === "przepisy"
               ? "bg-sky-900 text-white shadow-md shadow-sky-900/20"
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -871,7 +867,7 @@ export default function BazaWiedzyPage() {
           </div>
         </div>
 
-        {/* TABELA DANYCH (Z WYDZIELENIEM DLA PRZEPISÓW - BEZ ZDJĘCIA W TABELI) */}
+        {/* TABELA DANYCH */}
         {currentFilteredList.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-3xl border border-sky-100 border-dashed">
             <div className="text-5xl mb-4">
@@ -914,7 +910,6 @@ export default function BazaWiedzyPage() {
                         }}
                         className="hover:bg-sky-50/40 transition-colors cursor-pointer group"
                       >
-                        {/* Nazwa i miniatura (dla przepisów bez zdjęcia w tabeli) */}
                         <td className="py-4 px-6">
                           <div className="flex items-center gap-4">
                             {activeTab !== "przepisy" && (
@@ -952,7 +947,6 @@ export default function BazaWiedzyPage() {
                           </div>
                         </td>
 
-                        {/* Kategorie */}
                         <td className="py-4 px-6 hidden sm:table-cell">
                           <div className="flex flex-wrap gap-1.5 max-w-xs">
                             {itemCats.map((catKey) => {
@@ -969,7 +963,6 @@ export default function BazaWiedzyPage() {
                           </div>
                         </td>
 
-                        {/* Dawkowanie / Makro / Wskazówki */}
                         <td className="py-4 px-6 hidden md:table-cell">
                           {activeTab === "suplementy" ? (
                             <div className="space-y-1 max-w-xs">
@@ -1000,7 +993,6 @@ export default function BazaWiedzyPage() {
                           )}
                         </td>
 
-                        {/* Przyciski */}
                         <td className="py-4 px-6 text-right">
                           <div className="flex items-center justify-end gap-2">
                             {(isAdmin || (activeTab === "przepisy" && item.autor_email === userEmail)) && (
@@ -1049,7 +1041,6 @@ export default function BazaWiedzyPage() {
               ✕
             </button>
 
-            {/* Grafika (jeśli dostępna) */}
             {activeTab !== "przepisy" && (
               <div
                 className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden"
@@ -1078,7 +1069,6 @@ export default function BazaWiedzyPage() {
               </div>
             )}
 
-            {/* Treść podglądu */}
             <div className="p-6 sm:p-10 space-y-6">
               <div className="text-center">
                 <div className="flex flex-wrap justify-center gap-1.5 mb-3">
@@ -1103,7 +1093,6 @@ export default function BazaWiedzyPage() {
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
               </div>
 
-              {/* Sekcja Makro dla Przepisu */}
               {activeTab === "przepisy" && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-center">
@@ -1125,7 +1114,6 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* Składniki dla Przepisu */}
               {activeTab === "przepisy" && selectedItem.skladniki && (
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
                   <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
@@ -1137,7 +1125,6 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* Opis / Przygotowanie */}
               <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
                 <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                   <span>📝</span>{" "}
@@ -1156,7 +1143,7 @@ export default function BazaWiedzyPage() {
         </div>
       )}
 
-      {/* MODAL DODAWANIA / EDYCJI WPISU LUB PRZEPISU */}
+      {/* MODAL DODAWANIA / EDYCJI */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-8">
@@ -1179,7 +1166,6 @@ export default function BazaWiedzyPage() {
             </div>
 
             <form onSubmit={handleSaveItem} className="space-y-5">
-              {/* Zdjęcie (tylko dla nienależących do przepisów) */}
               {activeTab !== "przepisy" && (
                 <div className="space-y-2">
                   <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
@@ -1207,7 +1193,6 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* Kategorie */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
@@ -1237,7 +1222,6 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* Tytuł / Nazwa */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
                   Tytuł / Nazwa {activeTab === "przepisy" ? "przepisu *" : "wpisu *"}
@@ -1252,7 +1236,6 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* Pola makro dla Przepisów */}
               {activeTab === "przepisy" && (
                 <div className="space-y-4 bg-sky-50/60 p-4 rounded-2xl border border-sky-100">
                   <h4 className="font-black text-xs uppercase text-sky-900 tracking-wider">
@@ -1313,7 +1296,6 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* Pola suplementów lub sportu */}
               {activeTab === "suplementy" && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
@@ -1358,7 +1340,6 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* Opis / Sposób przygotowania */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
                   {activeTab === "przepisy" ? "Sposób przygotowania *" : "Treść artykułu / Opis szczegółowy *"}
@@ -1377,7 +1358,6 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* Przyciski */}
               <div className="pt-3 flex gap-3">
                 <button
                   type="button"
@@ -1419,7 +1399,6 @@ export default function BazaWiedzyPage() {
             </div>
 
             <div className="space-y-5">
-              {/* Wyszukiwanie kodu kreskowego */}
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -1444,7 +1423,6 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              {/* Formularz edycji makro produktu na 100g */}
               <form onSubmit={handleSaveCustomProduct} className="space-y-4 pt-2 border-t border-slate-100">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
