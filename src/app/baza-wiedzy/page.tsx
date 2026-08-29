@@ -155,7 +155,6 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
-    // Pobranie imienia i nazwiska zalogowanego użytkownika z tabeli klienci
     if (email) {
       const { data: klientRec } = await supabase
         .from("klienci")
@@ -191,7 +190,7 @@ export default function BazaWiedzyPage() {
       .order("nazwa", { ascending: true });
     if (odzData) setOdzywianieWpisy(odzData);
 
-    // 4. Przepisy (sortowanie: najpierw do weryfikacji, potem alfabetycznie)
+    // 4. Przepisy
     const { data: przData } = await supabase
       .from("baza_przepisow")
       .select("*");
@@ -352,7 +351,6 @@ export default function BazaWiedzyPage() {
 
   const handleOpenEdit = (item: any, e: React.MouseEvent) => {
     e.stopPropagation();
-    // Sprawdzenie uprawnień: tylko autor lub admin
     if (activeTab === "przepisy" && item.autor_email && item.autor_email !== userEmail && !isAdmin) {
       alert("Możesz edytować tylko przepisy dodane przez siebie!");
       return;
@@ -413,7 +411,6 @@ export default function BazaWiedzyPage() {
     fetchData();
   };
 
-  // Klubowicz zgłasza chęć usunięcia (oznacza do usunięcia)
   const handleZaznaczDoUsuniecia = async (id: number) => {
     const { error } = await supabase
       .from("baza_przepisow")
@@ -429,7 +426,6 @@ export default function BazaWiedzyPage() {
     }
   };
 
-  // Zgłoszenie błędu w przepisie
   const handleZglosBlad = async (id: number) => {
     const { error } = await supabase
       .from("baza_przepisow")
@@ -445,7 +441,6 @@ export default function BazaWiedzyPage() {
     }
   };
 
-  // Zatwierdzenie / weryfikacja przepisu przez Admina
   const handleZweryfikuj = async (id: number) => {
     const { error } = await supabase
       .from("baza_przepisow")
@@ -554,10 +549,18 @@ export default function BazaWiedzyPage() {
       payload.wskazowki = form.wskazowki;
     }
 
+    let error = null;
     if (editingId) {
-      await supabase.from(tableName).update(payload).eq("id", editingId);
+      const res = await supabase.from(tableName).update(payload).eq("id", editingId);
+      error = res.error;
     } else {
-      await supabase.from(tableName).insert([payload]);
+      const res = await supabase.from(tableName).insert([payload]);
+      error = res.error;
+    }
+
+    if (error) {
+      alert("Błąd zapisu do bazy Supabase: " + error.message);
+      return;
     }
 
     setIsAdminModalOpen(false);
@@ -985,7 +988,6 @@ export default function BazaWiedzyPage() {
               {/* PRZYCISKI AKCJI SPECJALNYCH DLA PRZEPISÓW */}
               {activeTab === "przepisy" && (
                 <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
-                  {/* Czerwony przycisk zgłoszenia błędu */}
                   <button
                     type="button"
                     onClick={() => handleZglosBlad(selectedItem.id)}
@@ -995,7 +997,6 @@ export default function BazaWiedzyPage() {
                   </button>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    {/* Panel Administratora: weryfikacja */}
                     {isAdmin && selectedItem.do_weryfikacji && (
                       <button
                         type="button"
@@ -1006,7 +1007,6 @@ export default function BazaWiedzyPage() {
                       </button>
                     )}
 
-                    {/* Przycisk zgłoszenia do usunięcia dla autora */}
                     {selectedItem.autor_email === userEmail && !selectedItem.do_usuniecia && (
                       <button
                         type="button"
@@ -1017,7 +1017,6 @@ export default function BazaWiedzyPage() {
                       </button>
                     )}
 
-                    {/* Całkowite usunięcie dla Admina */}
                     {isAdmin && (
                       <button
                         type="button"
@@ -1055,7 +1054,6 @@ export default function BazaWiedzyPage() {
             </div>
 
             <form onSubmit={handleSaveItem} className="space-y-5">
-              {/* ZDJĘCIE */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
                   Zdjęcie / Grafika {activeTab === "przepisy" ? "(opcjonalnie zamiast tekstu składników/przygotowania)" : ""}
@@ -1081,7 +1079,6 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* KATEGORIA */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider text-center sm:text-left">
                   Kategoria {activeTab === "przepisy" ? "(wybierz jedną)" : ""}
@@ -1131,7 +1128,6 @@ export default function BazaWiedzyPage() {
                 )}
               </div>
 
-              {/* NAZWA */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
                   Tytuł / Nazwa *
@@ -1146,7 +1142,6 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* MAKRO NA PORCJĘ DLA PRZEPISÓW (CZYSZCZENIE POLA PO KLIKNIĘCIU) */}
               {activeTab === "przepisy" && (
                 <div className="space-y-4 bg-sky-50/60 p-4 rounded-2xl border border-sky-100">
                   <h4 className="font-black text-xs uppercase text-sky-900 tracking-wider">
