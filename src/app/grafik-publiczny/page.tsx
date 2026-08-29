@@ -103,7 +103,6 @@ export default function PublicSchedulePage() {
     return { isAutoCancelled: false, reason: '' };
   };
 
-  // Dopasowanie nadpisań i odwołań z panelu
   const findOverride = (item: any, col: any) => {
     const keysToCheck = [
       `${item.id}_${col.date}`,
@@ -119,7 +118,6 @@ export default function PublicSchedulePage() {
     return null;
   };
 
-  // Pobieranie zapisów na zajęcia
   const getSignups = (item: any, col: any) => {
     const keysToCheck = [
       `${item.id}_${col.date}`,
@@ -136,10 +134,10 @@ export default function PublicSchedulePage() {
   };
 
   const loadPublicData = async () => {
-    try {
-      setIsLoading(true);
+    setIsLoading(true);
 
-      // 1. Nadrzędne reguły autoodwoływania
+    // 1. Nadrzędne reguły autoodwoływania
+    try {
       const { data: rulesData } = await supabase
         .from('club_booking_rules')
         .select('*')
@@ -155,8 +153,12 @@ export default function PublicSchedulePage() {
           auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
         });
       }
+    } catch (e) {
+      console.error("Błąd ładowania reguł:", e);
+    }
 
-      // 2. Szablony grafiku stałego
+    // 2. Szablony grafiku stałego
+    try {
       const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
       if (szablonyData) {
         setZapisaneZajecia(szablonyData.map((s: any) => ({
@@ -172,8 +174,12 @@ export default function PublicSchedulePage() {
           powodOdwolania: s.powod_odwolania || s.powod || ''
         })));
       }
+    } catch (e) {
+      console.error("Błąd ładowania szablonów grafiku:", e);
+    }
 
-      // 3. Zajęcia jednorazowe
+    // 3. Zajęcia jednorazowe
+    try {
       const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
       if (jednorazoweData) {
         setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
@@ -191,8 +197,12 @@ export default function PublicSchedulePage() {
           powodOdwolania: j.powod_odwolania || j.powod || ''
         })));
       }
+    } catch (e) {
+      console.error("Błąd ładowania zajęć jednorazowych:", e);
+    }
 
-      // 4. Nadpisania dni (edycje/odwołania z grafiku)
+    // 4. Nadpisania dni
+    try {
       const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
       if (nadpisaniaData) {
         const nadpisaniaMap: { [key: string]: any } = {};
@@ -209,8 +219,12 @@ export default function PublicSchedulePage() {
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
+    } catch (e) {
+      console.error("Błąd ładowania nadpisań:", e);
+    }
 
-      // 5. Zapisy na zajęcia (liczniki wolnych miejsc)
+    // 5. Zapisy na zajęcia
+    try {
       const { data: zapisyData } = await supabase.from('zapisy_zajec').select('class_key, status');
       if (zapisyData) {
         const grouped: { [key: string]: any[] } = {};
@@ -220,8 +234,12 @@ export default function PublicSchedulePage() {
         });
         setZapisyNaZajecia(grouped);
       }
+    } catch (e) {
+      console.error("Błąd ładowania zapisów:", e);
+    }
 
-      // 6. Wydarzenia kilkudniowe (obozy)
+    // 6. Wydarzenia kilkudniowe
+    try {
       const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
       if (wydarzeniaData) {
         setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({
@@ -231,14 +249,22 @@ export default function PublicSchedulePage() {
           dateTo: w.date_to
         })));
       }
+    } catch (e) {
+      console.error("Błąd ładowania wydarzeń:", e);
+    }
 
-      // 7. Rodzaje zajęć (kolorystyka)
+    // 7. Rodzaje zajęć
+    try {
       const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
       if (rodzajeData) {
         setRodzajeZajec(rodzajeData);
       }
+    } catch (e) {
+      console.error("Błąd ładowania rodzajów zajęć:", e);
+    }
 
-      // 8. Katalog karnetów (z tabeli katalog_karnetow)
+    // 8. Katalog karnetów (Niezależny blok z fallbackiem)
+    try {
       const { data: karnetyData, error: karnetyError } = await supabase
         .from('katalog_karnetow')
         .select('*')
@@ -248,12 +274,13 @@ export default function PublicSchedulePage() {
         setKatalogKarnetow(karnetyData.filter((k: any) => k.aktywny !== false));
       } else {
         if (karnetyError) {
-          console.error("Błąd podczas pobierania katalogu karnetów:", karnetyError);
+          console.error("Błąd tabeli katalog_karnetow:", karnetyError);
         }
         setKatalogKarnetow([]);
       }
     } catch (err) {
-      console.error("Błąd podczas pobierania publicznego grafiku:", err);
+      console.error("Błąd podczas pobierania katalogu karnetów:", err);
+      setKatalogKarnetow([]);
     } finally {
       setIsLoading(false);
     }
@@ -358,7 +385,6 @@ export default function PublicSchedulePage() {
         {/* GÓRNA BELKA Z LOGO, ZAKŁADKAMI I PRZYCISKAMI AKCJI */}
         <header className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-5">
           
-          {/* LOGO Z PUBLIC/LOGO.PNG I TYTUŁ */}
           <div className="flex items-center gap-4 text-center lg:text-left">
             <div className="w-14 h-14 rounded-2xl bg-white border border-sky-200 p-1 flex items-center justify-center shadow-sm shrink-0 overflow-hidden">
               <img
@@ -366,7 +392,6 @@ export default function PublicSchedulePage() {
                 alt="Logo Forma Marzeń"
                 className="w-full h-full object-contain"
                 onError={(e) => {
-                  // Awaryjny fallback, gdyby plik nie został znaleziony
                   (e.currentTarget as HTMLElement).style.display = 'none';
                 }}
               />
@@ -381,7 +406,6 @@ export default function PublicSchedulePage() {
             </div>
           </div>
 
-          {/* PRZEŁĄCZNIK ZAKŁADEK: GRAFIK / KARNETY */}
           <div className="flex items-center bg-slate-100 p-1.5 rounded-2xl border border-sky-100">
             <button
               onClick={() => setActiveTab('grafik')}
@@ -405,7 +429,6 @@ export default function PublicSchedulePage() {
             </button>
           </div>
 
-          {/* PRZYCISKI AKCJI: ZAPISZ NA TRENING / ZALOGUJ */}
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-center">
             <button
               onClick={() => setIsSignupModalOpen(true)}
@@ -423,7 +446,6 @@ export default function PublicSchedulePage() {
           </div>
         </header>
 
-        {/* OKNO MODALNE PO KLIKNIĘCIU "ZAPISZ NA TRENING" */}
         {isSignupModalOpen && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
             <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-6 relative">
@@ -451,7 +473,6 @@ export default function PublicSchedulePage() {
               </div>
 
               <div className="space-y-3 pt-2">
-                {/* PRZYCISK 1: KUP KARNET */}
                 <Link
                   href="https://forma-marzen.vercel.app/rejestracja-karnet"
                   onClick={() => setIsSignupModalOpen(false)}
@@ -467,7 +488,6 @@ export default function PublicSchedulePage() {
                   <span className="text-sky-300 group-hover:translate-x-1 transition-transform">→</span>
                 </Link>
 
-                {/* PRZYCISK 2: PIERWSZY BEZPŁATNY TRENING */}
                 <Link
                   href="https://forma-marzen.vercel.app/rejestracja"
                   onClick={() => setIsSignupModalOpen(false)}
@@ -493,10 +513,8 @@ export default function PublicSchedulePage() {
           </div>
         )}
 
-        {/* WIDOK 1: GRAFIK ZAJĘĆ */}
         {activeTab === 'grafik' && (
           <div className="space-y-6">
-            {/* NAWIGACJA TYGODNI */}
             <div className="flex items-center gap-2 overflow-x-auto pb-1">
               <button
                 onClick={handlePrevWeek}
@@ -544,7 +562,6 @@ export default function PublicSchedulePage() {
               </button>
             </div>
 
-            {/* KALENDARZ MIESIĘCZNY (POPUP) */}
             {isCalendarOpen && (
               <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-2xl max-w-md mx-auto space-y-4 animate-in fade-in zoom-in-95 duration-150">
                 <div className="flex items-center justify-between border-b border-sky-100 pb-3">
@@ -592,13 +609,11 @@ export default function PublicSchedulePage() {
               </div>
             )}
 
-            {/* GŁÓWNA SIATKA GRAFIKU */}
             <main className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start mb-8">
               {daysList.map((col, idx) => {
                 const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
                 const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
 
-                // 1. ZAJĘCIA STAŁE Z GRAFIKU
                 const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
                   .filter((item: any) => item.days && item.days[col.key])
                   .map((item: any) => {
@@ -612,7 +627,6 @@ export default function PublicSchedulePage() {
                   })
                   .filter((item: any) => !item.isUsunięte);
 
-                // 2. ZAJĘCIA JEDNORAZOWE
                 const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
                   .filter((item: any) => item.displayDate === col.date || item.fullDateStr === col.isoDate || item.displayDate === col.isoDate)
                   .map((item: any) => {
@@ -626,13 +640,10 @@ export default function PublicSchedulePage() {
                   })
                   .filter((item: any) => !item.isUsunięte);
 
-                // 3. INTELIGENTNA DEDUPLIKACJA ZAJĘĆ
                 const uniqueZajeciaMap = new Map<string, any>();
 
                 [...standardoweDnia, ...jednorazoweDnia].forEach((item: any) => {
                   if (item.isUsunięte) return;
-
-                  // Unikalny klucz sygnatury w danym dniu
                   const sigKey = `${(item.start || '').trim()}_${(item.end || '').trim()}_${(item.title || '').trim().toLowerCase()}`;
 
                   if (!uniqueZajeciaMap.has(sigKey)) {
@@ -670,7 +681,6 @@ export default function PublicSchedulePage() {
                       <span className={`text-[10px] font-normal ${col.isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
                     </div>
 
-                    {/* WYDARZENIA KILKUDNIOWE (OBOZY) */}
                     {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
                       <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-2xl p-4 text-center space-y-1.5 shadow-sm">
                         <div className="py-1.5 px-3 bg-rose-200 text-rose-950 font-black rounded-xl text-xs uppercase tracking-wider border border-rose-300">
@@ -682,7 +692,6 @@ export default function PublicSchedulePage() {
                       </div>
                     ))}
 
-                    {/* LISTA ZAJĘĆ */}
                     {zajeciaDnia.length > 0 ? (
                       zajeciaDnia.map((item: any, classIdx: number) => {
                         const durationText = calculateDuration(item.start, item.end);
@@ -772,11 +781,8 @@ export default function PublicSchedulePage() {
           </div>
         )}
 
-        {/* WIDOK 2: OBOWIĄZUJĄCE KARNETY (KATALOG KARNETÓW) */}
         {activeTab === 'karnety' && (
           <section className="space-y-8 animate-in fade-in duration-200 mb-8">
-            
-            {/* NAGŁÓWEK SEKCJI KARNETÓW */}
             <div className="flex items-center gap-2 border-b border-amber-200 pb-3">
               <span className="text-xl">⭐</span>
               <h2 className="text-lg sm:text-xl font-black text-sky-950 uppercase tracking-wider">
@@ -802,7 +808,6 @@ export default function PublicSchedulePage() {
                       key={karnet.id}
                       className="bg-white rounded-3xl border-2 border-amber-400/70 shadow-sm hover:shadow-xl transition-all duration-200 flex flex-col justify-between overflow-hidden relative group"
                     >
-                      {/* GÓRNA CZĘŚĆ: GRAFIKA + BADGE */}
                       <div className="relative p-3 pb-0">
                         <div className="relative h-52 sm:h-56 w-full rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 flex items-center justify-center">
                           {karnet.grafika_url ? (
@@ -818,7 +823,6 @@ export default function PublicSchedulePage() {
                             </div>
                           )}
 
-                          {/* BADGE WYRÓŻNIENIA */}
                           {tagText && (
                             <div className="absolute top-3 left-3 bg-amber-500 text-slate-950 text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-xl shadow-md flex items-center gap-1.5 border border-amber-300">
                               <span>★</span>
@@ -826,7 +830,6 @@ export default function PublicSchedulePage() {
                             </div>
                           )}
 
-                          {/* PŁYWAJĄCE BADGE NA DOLE GRAFIKI */}
                           <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-2">
                             {karnet.dlugosc && (
                               <div className="bg-white/95 backdrop-blur-sm text-slate-900 text-[11px] font-black px-3 py-1 rounded-xl shadow border border-slate-200 flex items-center gap-1.5">
@@ -845,9 +848,7 @@ export default function PublicSchedulePage() {
                         </div>
                       </div>
 
-                      {/* TREŚĆ KARTY */}
                       <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                        
                         <div className="space-y-3">
                           <div>
                             <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${
@@ -894,7 +895,6 @@ export default function PublicSchedulePage() {
                           )}
                         </div>
 
-                        {/* CENA I PRZYCISK KUPNA */}
                         <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3 mt-auto">
                           <div>
                             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -913,7 +913,6 @@ export default function PublicSchedulePage() {
                             <span>↗</span>
                           </Link>
                         </div>
-
                       </div>
                     </div>
                   );
@@ -924,7 +923,6 @@ export default function PublicSchedulePage() {
                 Brak dostępnych karnetów w katalogu.
               </div>
             )}
-
           </section>
         )}
 
