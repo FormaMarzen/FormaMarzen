@@ -43,7 +43,6 @@ export default function ClubChat() {
   const [zapisyZajec, setZapisyZajec] = useState<any[]>([]);
 
   const [newMessage, setNewMessage] = useState("");
-  const [unreadCount, setUnreadCount] = useState(0);
 
   // Załączniki do wiadomości
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -507,20 +506,45 @@ export default function ClubChat() {
     }
   }, [selectedGroup]);
 
-  // Oznaczanie wiadomości 1-na-1 jako przeczytane
+  // Oznaczanie wiadomości 1-na-1 jako przeczytane (w tym wiadomości systemowych od Admina)
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
         const targetId = secondaryUserId || currentUserId;
-        await supabase
-          .from("czat_wiadomosci")
-          .update({
-            przeczytana: true,
-            przeczytana_at: new Date().toISOString(),
-          })
-          .eq("nadawca_id", selectedUser.id)
-          .eq("odbiorca_id", targetId)
-          .eq("przeczytana", false);
+        const isSys = Number(selectedUser.id) === SYSTEM_ID;
+
+        if (isSys) {
+          // Oznaczanie wiadomości z nadawca_id === null oraz nadawca_id === SYSTEM_ID
+          await supabase
+            .from("czat_wiadomosci")
+            .update({
+              przeczytana: true,
+              przeczytana_at: new Date().toISOString(),
+            })
+            .eq("odbiorca_id", targetId)
+            .is("nadawca_id", null)
+            .eq("przeczytana", false);
+
+          await supabase
+            .from("czat_wiadomosci")
+            .update({
+              przeczytana: true,
+              przeczytana_at: new Date().toISOString(),
+            })
+            .eq("odbiorca_id", targetId)
+            .eq("nadawca_id", SYSTEM_ID)
+            .eq("przeczytana", false);
+        } else {
+          await supabase
+            .from("czat_wiadomosci")
+            .update({
+              przeczytana: true,
+              przeczytana_at: new Date().toISOString(),
+            })
+            .eq("nadawca_id", selectedUser.id)
+            .eq("odbiorca_id", targetId)
+            .eq("przeczytana", false);
+        }
 
         fetchMessages();
       };
@@ -644,13 +668,13 @@ export default function ClubChat() {
     });
   };
 
-  // Precyzyjne dopasowanie aktywnych zapisów dla konkretnego treningu (ID, Godzina i Data)
+  // Precyzyjne dopasowanie aktywnych zapisów dla konkretnego treningu
   const getSignupsForTraining = (training: any) => {
     if (!training) return [];
     const tId = String(training.id || "").trim();
     const tTitle = String(training.title || "").toLowerCase().trim();
-    const tStart = String(training.start || "").trim(); // np. "19:35"
-    const todayIso = new Date().toISOString().split("T")[0]; // "2026-08-28"
+    const tStart = String(training.start || "").trim();
+    const todayIso = new Date().toISOString().split("T")[0];
     const now = new Date();
     const day = String(now.getDate()).padStart(2, "0");
     const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -671,7 +695,7 @@ export default function ClubChat() {
       // 1. Dokładne dopasowanie ID
       if (ck === tId) return true;
 
-      // 2. Tokeny ID rozdzielone podkreśleniem lub myślnikiem (np. "12_2026-08-28", "12_2026-08-28_19:35")
+      // 2. Tokeny ID rozdzielone podkreśleniem lub myślnikiem
       const tokens = ck.split(/[_:-]/);
       if (tokens.includes(tId)) {
         const hasTodayDate = ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayDash);
@@ -1050,10 +1074,18 @@ export default function ClubChat() {
     secondaryUserId ? String(secondaryUserId) : null,
   ].filter(Boolean);
 
+  // Filtrowanie wiadomości dla aktywnej rozmowy 1-na-1 (w tym wiadomości systemowe / od administratora)
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     const isSenderMe = effectiveIds.includes(String(m.nadawca_id));
     const isReceiverMe = effectiveIds.includes(String(m.odbiorca_id));
+    const isSelectedUserSystem = Number(selectedUser.id) === SYSTEM_ID;
+
+    if (isSelectedUserSystem) {
+      const isSystemMessage = m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID;
+      return (isSystemMessage && isReceiverMe) || (isSenderMe && Number(m.odbiorca_id) === SYSTEM_ID);
+    }
+
     const isTargetThem =
       String(m.nadawca_id) === String(selectedUser.id) ||
       String(m.odbiorca_id) === String(selectedUser.id);
@@ -1101,7 +1133,9 @@ export default function ClubChat() {
   const latestMessageTextMap = new Map();
 
   messages.forEach((m: any) => {
-    const otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
+    let otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
+    if (otherId === null || otherId === undefined) otherId = SYSTEM_ID;
+    
     const msgTime = new Date(m.created_at).getTime();
     if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
       latestMessageMap.set(otherId, msgTime);
@@ -1114,7 +1148,7 @@ export default function ClubChat() {
     if (effectiveIds.includes(String(m.nadawca_id))) {
       chattedUserIds.add(m.odbiorca_id);
     } else if (effectiveIds.includes(String(m.odbiorca_id))) {
-      chattedUserIds.add(m.nadawca_id);
+      chattedUserIds.add(m.nadawca_id ?? SYSTEM_ID);
     }
   });
 
@@ -1203,10 +1237,11 @@ export default function ClubChat() {
   };
 
   const renderMessageContent = (msg: any, isMe: boolean) => {
-    const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID;
+    const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null;
     const isBirthdayNotification = isSystemSender && (msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin"));
     const isBadgeNotification = isSystemSender && (msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową"));
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
+    const isKnowledgeBaseNotification = isSystemSender && (msg.tresc?.includes("Bazy Wiedzy") || msg.tresc?.includes("Baza Wiedzy") || msg.tresc?.includes("suplemencie"));
 
     const reactionsObj = msg.reakcje || {};
 
@@ -1230,7 +1265,27 @@ export default function ClubChat() {
       );
     }
 
-    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification && !isChallengeNotification)) {
+    if (isKnowledgeBaseNotification) {
+      return (
+        <div className="w-full bg-gradient-to-br from-sky-50 to-amber-50/60 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
+          <div className="flex items-center justify-between border-b border-amber-300/50 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">📚</span>
+              <span className="font-black text-[11px] uppercase tracking-wider text-sky-950">
+                Baza Wiedzy Uzupełniona!
+              </span>
+            </div>
+            <span className="text-[9px] bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded-full uppercase">
+              Administrator
+            </span>
+          </div>
+          <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+          {renderAttachment(msg)}
+        </div>
+      );
+    }
+
+    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification && !isChallengeNotification && !isKnowledgeBaseNotification)) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
@@ -1354,7 +1409,7 @@ export default function ClubChat() {
   const isLeftSide = isPositioned ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 200) : false;
   const isTopSide = isPositioned ? position.y < 540 : false;
 
-  // FILTROWANIE ZWYKŁYCH GRUP – czaty treningowe są całkowicie wykluczone z tej listy!
+  // FILTROWANIE ZWYKŁYCH GRUP
   const myGroupsList = groups.filter((g: any) => {
     const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
     if (isTraining) return false;
@@ -1374,7 +1429,7 @@ export default function ClubChat() {
     return isPublic && !isAlreadyMember;
   });
 
-  // DZISIEJSZE TRENINGI – dokładnie te, które odbywają się dzisiaj
+  // DZISIEJSZE TRENINGI
   const todayTrainingsList = grafikZajec.filter((training: any) => {
     const isToday = isTrainingToday(training);
     if (!isToday) return false;
@@ -1573,7 +1628,7 @@ export default function ClubChat() {
             </div>
           </div>
 
-          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE: Wiadomości | Zdjęcia | Uczestnicy */}
+          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE */}
           {selectedGroup && (
             <div className="bg-slate-900 border-t border-slate-800 px-3 py-1.5 flex items-center justify-center gap-1.5 text-xs">
               <button
@@ -1615,7 +1670,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1: Wiadomości | Zdjęcia */}
+          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1 */}
           {selectedUser && (
             <div className="bg-slate-900 border-t border-slate-800 px-4 py-1.5 flex items-center justify-center gap-2 text-xs">
               <button
@@ -1648,7 +1703,7 @@ export default function ClubChat() {
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
-              {/* ZAKŁADKI GŁÓWNE Z LICZNIKAMI NIEPRZECZYTANYCH (BADGE) */}
+              {/* ZAKŁADKI GŁÓWNE Z LICZNIKAMI NIEPRZECZYTANYCH */}
               <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-2">
                 <div className="flex gap-1 bg-slate-200 p-1 rounded-xl">
                   {/* Zakładka Prywatne */}
@@ -1730,12 +1785,13 @@ export default function ClubChat() {
                   <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
                     {displayedUsers.map((user: any) => {
                       const isSys = Number(user.id) === SYSTEM_ID;
-                      const userUnread = messages.filter(
-                        (m: any) =>
-                          String(m.nadawca_id) === String(user.id) &&
-                          effectiveIds.includes(String(m.odbiorca_id)) &&
-                          !m.przeczytana
-                      ).length;
+                      const userUnread = messages.filter((m: any) => {
+                        if (!effectiveIds.includes(String(m.odbiorca_id)) || m.grupa_id || m.przeczytana) return false;
+                        if (isSys) {
+                          return m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID;
+                        }
+                        return String(m.nadawca_id) === String(user.id);
+                      }).length;
 
                       const lastMessageText = latestMessageTextMap.get(user.id);
 
@@ -2100,7 +2156,7 @@ export default function ClubChat() {
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
-                  const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂");
+                  const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂") || msg.tresc?.includes("Bazy Wiedzy");
                   
                   const time = msg.created_at
                     ? new Date(msg.created_at).toLocaleTimeString("pl-PL", {
@@ -2146,7 +2202,7 @@ export default function ClubChat() {
                       {selectedGroup
                         ? "Napisz pierwszą wiadomość do wszystkich uczestników tego treningu."
                         : Number(selectedUser?.id) === SYSTEM_ID
-                        ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, urodzinach i wydarzeniach."
+                        ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, suplementach, urodzinach i wydarzeniach."
                         : "Napisz pierwszą wiadomość do tego klubowicza."}
                     </p>
                   </div>
