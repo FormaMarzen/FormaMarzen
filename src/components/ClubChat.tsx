@@ -121,7 +121,7 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab]);
 
-  // Wczytywanie zarchiwizowanych i przypiętych rozmów dla danego użytkownika
+  // Wczytywanie zarchiwizowanych i przypiętych rozmów
   useEffect(() => {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
@@ -206,6 +206,50 @@ export default function ClubChat() {
     setFullscreenImage(null);
     setActiveMessageMenuId(null);
     setShowInviteModal(false);
+  };
+
+  // Trwałe usuwanie czatu grupowego (Admin)
+  const handleDeleteGroup = async (groupId: string | number, groupName: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    if (!isAdmin) return;
+
+    const isConfirmed = confirm(`Czy na pewno chcesz bezpowrotnie usunąć grupę "${groupName}" oraz wszystkie jej wiadomości?`);
+    if (!isConfirmed) return;
+
+    try {
+      // 1. Usuń wiadomości powiązane z grupą
+      await supabase.from("czat_wiadomosci").delete().eq("grupa_id", groupId);
+
+      // 2. Usuń samą grupę
+      const { error } = await supabase.from("czat_grupy").delete().eq("id", groupId);
+      if (error) {
+        alert("Błąd podczas usuwania grupy: " + error.message);
+        return;
+      }
+
+      // 3. Wyczyść ze stanów lokalnych
+      const key = `group_${groupId}`;
+      const uid = secondaryUserId || currentUserId;
+      const newPinned = pinnedChatIds.filter((k) => k !== key);
+      const newArchived = archivedChatIds.filter((k) => k !== key);
+      setPinnedChatIds(newPinned);
+      setArchivedChatIds(newArchived);
+      if (uid) {
+        localStorage.setItem(`chat_pinned_${uid}`, JSON.stringify(newPinned));
+        localStorage.setItem(`chat_archived_${uid}`, JSON.stringify(newArchived));
+      }
+
+      if (selectedGroupRef.current?.id === groupId) {
+        handleExitCurrentChat();
+      }
+      setShowEditGroupModal(false);
+      fetchGroupsAndTrainings();
+    } catch (err) {
+      console.error("Błąd usuwania grupy:", err);
+    }
   };
 
   // Inicjalizacja pozycji dymka
@@ -552,7 +596,7 @@ export default function ClubChat() {
     }
   };
 
-  // Pobieranie wiadomości z wybranej grupy / treningu
+  // Pobieranie wiadomości z wybranej grupy
   const fetchGroupMessages = async (groupId?: string | number) => {
     const targetGroupId = groupId || selectedGroupRef.current?.id;
     if (!targetGroupId) return;
@@ -583,7 +627,7 @@ export default function ClubChat() {
     }
   };
 
-  // Subskrypcje Realtime oraz cykliczne odświeżanie (stabilne bez resetowania przy przełączaniu czatów)
+  // Subskrypcje Realtime oraz cykliczne odświeżanie
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -674,7 +718,7 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
-  // Oznaczanie wiadomości w grupie/treningu jako przeczytane po otwarciu
+  // Oznaczanie wiadomości w grupie/treningu jako przeczytane
   useEffect(() => {
     if (isOpen && selectedGroup && currentUserId) {
       const markGroupAsRead = async () => {
@@ -790,7 +834,7 @@ export default function ClubChat() {
     });
   };
 
-  // Dopasowanie aktywnych zapisów dla konkretnego treningu
+  // Dopasowanie aktywnych zapisów dla treningu
   const getSignupsForTraining = (training: any) => {
     if (!training) return [];
     const tId = String(training.id || "").trim();
@@ -974,7 +1018,7 @@ export default function ClubChat() {
     setIsUploading(false);
   };
 
-  // Przypinanie wiadomości
+  // Przypinanie wiadomości wewnątrz czatu
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
     const newStatus = !msg.przypinana;
@@ -1979,6 +2023,16 @@ export default function ClubChat() {
           >
             📦
           </button>
+          {isAdmin && group.typ !== "trening" && (
+            <button
+              type="button"
+              onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
+              className="text-slate-300 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
+              title="Usuń grupę na stałe"
+            >
+              🗑️
+            </button>
+          )}
         </div>
       </div>
     );
@@ -2254,62 +2308,76 @@ export default function ClubChat() {
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
-              {/* ZAKŁADKI GŁÓWNE */}
-              <div className="flex items-center justify-between gap-1 border-b border-slate-200 pb-2">
-                <div className="flex gap-1 bg-slate-200 p-1 rounded-xl">
-                  <button
-                    onClick={() => setActiveTab("direct")}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all relative flex items-center gap-1 ${activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
-                  >
-                    <span>Prywatne</span>
-                    {unreadDirectCount > 0 && (
-                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
-                        {unreadDirectCount}
-                      </span>
-                    )}
-                  </button>
+              {/* ZAKŁADKI GŁÓWNE I PASEK AKCJI ADMINA */}
+              <div className="flex flex-col gap-2 border-b border-slate-200 pb-2">
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex-1 grid grid-cols-3 gap-1 bg-slate-200/90 p-1 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("direct")}
+                      className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+                        activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      <span>Prywatne</span>
+                      {unreadDirectCount > 0 && (
+                        <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
+                          {unreadDirectCount}
+                        </span>
+                      )}
+                    </button>
 
-                  <button
-                    onClick={() => setActiveTab("groups")}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all relative flex items-center gap-1 ${activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
-                  >
-                    <span>Grupy ({activeMyGroups.length})</span>
-                    {unreadGroupsCount > 0 && (
-                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
-                        {unreadGroupsCount}
-                      </span>
-                    )}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("groups")}
+                      className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+                        activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      <span>Grupy ({activeMyGroups.length})</span>
+                      {unreadGroupsCount > 0 && (
+                        <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
+                          {unreadGroupsCount}
+                        </span>
+                      )}
+                    </button>
 
-                  <button
-                    onClick={() => setActiveTab("trainings")}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all relative flex items-center gap-1 ${activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
-                  >
-                    <span>Treningi ({todayTrainingsList.length})</span>
-                    {unreadTrainingsCount > 0 && (
-                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
-                        {unreadTrainingsCount}
-                      </span>
-                    )}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("trainings")}
+                      className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+                        activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      <span>Treningi ({todayTrainingsList.length})</span>
+                      {unreadTrainingsCount > 0 && (
+                        <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
+                          {unreadTrainingsCount}
+                        </span>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
-                {isAdmin && activeTab !== "trainings" && (
-                  <div className="flex items-center gap-1">
+                {/* Dedykowany, nieucity pasek przycisków administratora */}
+                {isAdmin && (
+                  <div className="flex items-center gap-1.5 justify-end">
                     <button
+                      type="button"
                       onClick={() => setShowBroadcastModal(true)}
-                      className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-1.5 rounded-xl shadow-sm transition-all cursor-pointer"
-                      title="Wszyscy"
+                      className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[10px] px-2.5 py-1 rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1 border border-amber-300"
+                      title="Wyślij wiadomość do wszystkich klubowiczów"
                     >
-                      📢 Wszyscy
+                      <span>📢</span> Wiadomość do Wszystkich
                     </button>
                     {activeTab === "groups" && (
                       <button
+                        type="button"
                         onClick={() => setShowCreateGroupModal(true)}
-                        className="bg-slate-900 hover:bg-slate-800 text-white font-black text-[10px] px-2 py-1.5 rounded-xl shadow-sm transition-all cursor-pointer"
-                        title="Nowa grupa"
+                        className="bg-slate-900 hover:bg-slate-800 text-white font-black text-[10px] px-2.5 py-1 rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1 border border-slate-700"
+                        title="Utwórz nowy czat grupowy"
                       >
-                        + Nowa
+                        <span>+</span> Nowa grupa
                       </button>
                     )}
                   </div>
@@ -2510,6 +2578,16 @@ export default function ClubChat() {
                                     >
                                       Przywróć ↩
                                     </button>
+                                    {isAdmin && group.typ !== "trening" && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
+                                        className="text-slate-400 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
+                                        title="Usuń grupę na stałe"
+                                      >
+                                        🗑️
+                                      </button>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -3249,6 +3327,18 @@ export default function ClubChat() {
                       Zapisz zmiany
                     </button>
                   </div>
+
+                  {isAdmin && selectedGroup?.typ !== "trening" && (
+                    <div className="pt-2 border-t border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteGroup(selectedGroup.id, selectedGroup.nazwa)}
+                        className="w-full py-2 rounded-xl text-xs font-black text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <span>🗑️</span> Usuń grupę bezpowrotnie
+                      </button>
+                    </div>
+                  )}
                 </form>
               </div>
             </div>
