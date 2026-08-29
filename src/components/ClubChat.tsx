@@ -18,6 +18,24 @@ const DEFAULT_GROUP_CATEGORIES = [
   "Wyzwania",
 ];
 
+// Nowoczesna ikona SVG dla galerii zdjęć/mediów
+const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+  </svg>
+);
+
 export default function ClubChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
@@ -26,7 +44,7 @@ export default function ClubChat() {
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // Główne zakładki widoku listy: Prywatne | Grupy | Treningi
+  // Główne zakładki widoku listy: Prywatne | Grupy | Treningi (z pamięcią stanu)
   const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public" | "closed">("my");
 
@@ -48,7 +66,7 @@ export default function ClubChat() {
   // Stan przypiętych czatów i grup (direct_{id} lub group_{id})
   const [pinnedChatIds, setPinnedChatIds] = useState<string[]>([]);
 
-  // Znaczniki czasu usunięcia czatu 1:1 przez użytkownika (ukrywa do nowej wiadomości)
+  // Znaczniki czasu usunięcia czatu 1:1 przez użytkownika
   const [deletedDirectChatTimestamps, setDeletedDirectChatTimestamps] = useState<Record<string, number>>({});
 
   // Kolejność i zarządzanie kategoriami grup
@@ -135,10 +153,16 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab]);
 
-  // Wczytywanie zarchiwizowanych, przypiętych i usuniętych rozmów
+  // Wczytywanie zarchiwizowanych, przypiętych, usuniętych rozmów oraz zapamiętanej zakładki
   useEffect(() => {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
+
+    // Odczyt zapamiętanej zakładki
+    const savedActiveTab = localStorage.getItem(`chat_last_tab_${uid}`);
+    if (savedActiveTab === "direct" || savedActiveTab === "groups" || savedActiveTab === "trainings") {
+      setActiveTab(savedActiveTab);
+    }
 
     const savedArchived = localStorage.getItem(`chat_archived_${uid}`);
     if (savedArchived) {
@@ -177,6 +201,15 @@ export default function ClubChat() {
     }
   }, [currentUserId, secondaryUserId]);
 
+  // Zmiana i zapamiętanie aktywnej zakładki
+  const handleTabChange = (tab: "direct" | "groups" | "trainings") => {
+    setActiveTab(tab);
+    const uid = secondaryUserId || currentUserId;
+    if (uid) {
+      localStorage.setItem(`chat_last_tab_${uid}`, tab);
+    }
+  };
+
   // Przełączanie statusu archiwizacji (Tylko Admin)
   const toggleArchiveChat = (id: string | number, type: "direct" | "group", e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -195,10 +228,10 @@ export default function ClubChat() {
     }
   };
 
-  // Usuwanie czatu 1:1 z widoku (pojawi się ponownie po nowej wiadomości)
+  // Usuwanie czatu 1:1 z widoku
   const handleDeleteDirectChat = (targetUserId: string | number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    const confirmed = confirm("Czy na pewno chcesz usunąć tę rozmowę z listy? Wątek pojawi się ponownie, gdy pojawi się nowa wiadomość.");
+    const confirmed = confirm("Czy na pewno chcesz usunąć tę rozmowę z listy? Wątek pojawi się ponownie po otrzymaniu nowej wiadomości.");
     if (!confirmed) return;
 
     const uid = secondaryUserId || currentUserId;
@@ -1987,7 +2020,6 @@ export default function ClubChat() {
     return acc;
   }, {});
 
-  // Sortujemy grupy wewnątrz każdej kategorii: najnowsza wiadomość wskakuje na samą górę kategorii
   Object.keys(myGroupsByCategory).forEach((cat) => {
     myGroupsByCategory[cat].sort((a, b) => {
       const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
@@ -2078,7 +2110,7 @@ export default function ClubChat() {
     ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
     : false;
 
-  // Render kafelka czatu 1-na-1
+  // Czysty render kafelka czatu 1-na-1 bez zbędnych przycisków
   const renderDirectUserItem = (user: any, isPinnedItem: boolean = false) => {
     const isSys = Number(user.id) === SYSTEM_ID;
     const userUnread = messages.filter((m: any) => {
@@ -2144,47 +2176,18 @@ export default function ClubChat() {
           </div>
         </button>
 
-        <div className="flex items-center gap-1 shrink-0 ml-2">
-          {userUnread > 0 && (
+        {userUnread > 0 && (
+          <div className="flex items-center gap-1 shrink-0 ml-2">
             <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm">
               {userUnread}
             </span>
-          )}
-          <button
-            type="button"
-            onClick={(e) => togglePinChat(user.id, "direct", e)}
-            className={`p-1 text-xs transition-colors cursor-pointer rounded-lg ${
-              isPinnedItem ? "text-amber-600 hover:text-amber-800" : "text-slate-300 hover:text-amber-500"
-            }`}
-            title={isPinnedItem ? "Odepnij z góry" : "Przypnij na górze listy"}
-          >
-            📌
-          </button>
-          {isAdmin ? (
-            <button
-              type="button"
-              onClick={(e) => toggleArchiveChat(user.id, "direct", e)}
-              className="text-slate-300 hover:text-slate-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
-              title="Zarchiwizuj rozmowę"
-            >
-              📦
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={(e) => handleDeleteDirectChat(user.id, e)}
-              className="text-slate-300 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
-              title="Usuń rozmowę z listy"
-            >
-              🗑️
-            </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     );
   };
 
-  // Render kafelka grupy
+  // Czysty render kafelka grupy bez zbędnych przycisków
   const renderGroupItem = (group: any, isPinnedItem: boolean = false) => {
     const isPublic = group.typ === "publiczna";
     const groupUnread = messages.filter(
@@ -2230,43 +2233,13 @@ export default function ClubChat() {
           </div>
         </button>
 
-        <div className="flex items-center gap-1 shrink-0 ml-2">
-          {groupUnread > 0 && (
+        {groupUnread > 0 && (
+          <div className="flex items-center gap-1 shrink-0 ml-2">
             <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm">
               {groupUnread}
             </span>
-          )}
-          <button
-            type="button"
-            onClick={(e) => togglePinChat(group.id, "group", e)}
-            className={`p-1 text-xs transition-colors cursor-pointer rounded-lg ${
-              isPinnedItem ? "text-amber-600 hover:text-amber-800" : "text-slate-300 hover:text-amber-500"
-            }`}
-            title={isPinnedItem ? "Odepnij z góry" : "Przypnij grupę na górze"}
-          >
-            📌
-          </button>
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={(e) => toggleArchiveChat(group.id, "group", e)}
-              className="text-slate-300 hover:text-slate-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
-              title="Zarchiwizuj grupę"
-            >
-              📦
-            </button>
-          )}
-          {isAdmin && group.typ !== "trening" && (
-            <button
-              type="button"
-              onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
-              className="text-slate-300 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
-              title="Usuń grupę na stałe"
-            >
-              🗑️
-            </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -2386,7 +2359,7 @@ export default function ClubChat() {
                     •••
                   </button>
 
-                  {/* Rozwijane menu z opcjami */}
+                  {/* Rozwijane menu opcji */}
                   {showChatOptionsMenu && (
                     <div className="absolute right-0 top-9 w-48 bg-slate-900 border border-slate-700 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 space-y-0.5">
                       {/* Przypnij / Odepnij */}
@@ -2533,14 +2506,14 @@ export default function ClubChat() {
               <button
                 type="button"
                 onClick={() => setChatInsideTab("media")}
-                className={`px-2.5 h-8 rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                className={`px-2.5 h-8 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   chatInsideTab === "media"
                     ? "bg-amber-400 text-slate-950 shadow-sm font-bold text-xs"
                     : "text-slate-400 hover:text-white hover:bg-slate-800 text-xs"
                 }`}
                 title="Zdjęcia"
               >
-                <span>🖼️</span>
+                <ImageIcon className="w-4 h-4" />
                 <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "media" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
                   {conversationImages.length}
                 </span>
@@ -2588,7 +2561,7 @@ export default function ClubChat() {
                 }`}
                 title="Zdjęcia"
               >
-                <span>🖼️</span>
+                <ImageIcon className="w-4 h-4" />
                 <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "media" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
                   {conversationImages.length}
                 </span>
@@ -2605,7 +2578,7 @@ export default function ClubChat() {
                 <div className="flex-1 grid grid-cols-3 gap-1 bg-slate-200/90 p-1 rounded-xl">
                   <button
                     type="button"
-                    onClick={() => setActiveTab("direct")}
+                    onClick={() => handleTabChange("direct")}
                     className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
                       activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
@@ -2620,7 +2593,7 @@ export default function ClubChat() {
 
                   <button
                     type="button"
-                    onClick={() => setActiveTab("groups")}
+                    onClick={() => handleTabChange("groups")}
                     className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
                       activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
@@ -2635,7 +2608,7 @@ export default function ClubChat() {
 
                   <button
                     type="button"
-                    onClick={() => setActiveTab("trainings")}
+                    onClick={() => handleTabChange("trainings")}
                     className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
                       activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
@@ -3071,8 +3044,8 @@ export default function ClubChat() {
             /* WIDOK GALERII ZDJĘĆ */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3">
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
-                <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                  Udostępnione Zdjęcia ({conversationImages.length})
+                <span className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <ImageIcon className="w-4 h-4 text-amber-500" /> Udostępnione Zdjęcia ({conversationImages.length})
                 </span>
                 <span className="text-[10px] text-slate-500">Kliknij zdjęcie, aby powiększyć</span>
               </div>
@@ -3109,7 +3082,9 @@ export default function ClubChat() {
                   </div>
                 ) : (
                   <div className="py-20 text-center text-slate-400 text-xs space-y-2">
-                    <span className="text-3xl block">🖼️</span>
+                    <div className="w-10 h-10 mx-auto rounded-full bg-slate-200 flex items-center justify-center text-slate-400">
+                      <ImageIcon className="w-5 h-5" />
+                    </div>
                     <div>Brak zdjęć w tej rozmowie.</div>
                     <p className="text-[10px]">Zdjęcia przesłane przez uczestników pojawią się tutaj automatycznie.</p>
                   </div>
