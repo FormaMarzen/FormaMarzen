@@ -54,6 +54,8 @@ interface Sugestia {
 
 type TabType = "suplementy" | "sport" | "odzywianie" | "przepisy";
 
+const SYSTEM_ID = 5000;
+
 const KATEGORIE_SUPL = [
   { id: "witaminy", label: "🌱 Witaminy" },
   { id: "suplementy", label: "💊 Suplementy" },
@@ -89,6 +91,7 @@ export default function BazaWiedzyPage() {
   const [userEmail, setUserEmail] = useState("");
   const [userImieNazwisko, setUserImieNazwisko] = useState("Klubowicz");
   const [klienciMap, setKlienciMap] = useState<Record<string, string>>({});
+  const [klienciIdMap, setKlienciIdMap] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>("suplementy");
 
@@ -162,6 +165,7 @@ export default function BazaWiedzyPage() {
     const { data: klienciData } = await supabase.from("klienci").select("*");
 
     const newKlienciMap: Record<string, string> = {};
+    const newKlienciIdMap: Record<string, number> = {};
     let currentFullName = "";
 
     if (klienciData && Array.isArray(klienciData)) {
@@ -169,10 +173,14 @@ export default function BazaWiedzyPage() {
         const imie = String(row["Imię"] || row["imie"] || row["Imie"] || "").trim();
         const nazwisko = String(row["Nazwisko"] || row["nazwisko"] || "").trim();
         const mail = String(row["E-mail"] || row["email"] || row["mail"] || "").toLowerCase().trim();
+        const idNum = Number(row.id);
 
         const full = `${imie} ${nazwisko}`.trim();
         if (mail && full) {
           newKlienciMap[mail] = full;
+          if (!isNaN(idNum)) {
+            newKlienciIdMap[mail] = idNum;
+          }
           if (mail === cleanEmail) {
             currentFullName = full;
           }
@@ -187,6 +195,7 @@ export default function BazaWiedzyPage() {
     }
 
     setKlienciMap(newKlienciMap);
+    setKlienciIdMap(newKlienciIdMap);
     setUserImieNazwisko(currentFullName || "Klubowicz");
 
     const { data: suplData } = await supabase
@@ -297,48 +306,67 @@ export default function BazaWiedzyPage() {
       });
   }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria]);
 
-  const sendPushNotification = async (targetEmail: string, title: string, body: string, url: string = "/baza-wiedzy") => {
+  // WYSYŁANIE WIADOMOŚCI NA CZAT ORAZ POWIADOMIENIA
+  const notifyKlubowiczOnChatAndPush = async (targetEmail: string, supplementName: string) => {
     try {
       const cleanEmail = targetEmail.toLowerCase().trim();
       const recipientName = klienciMap[cleanEmail] || "Klubowicz";
+      const recipientId = klienciIdMap[cleanEmail] || null;
 
-      // 1. Zapis do tabeli powiadomień w Supabase
+      const trescWiadomosci = `Cześć ${recipientName}! Z przyjemnością informujemy, że Twój proponowany suplement "${supplementName}" został zweryfikowany przez Trenera i dodany do Bazy Wiedzy! 💊 Możesz go teraz sprawdzić w zakładce Baza Wiedzy.`;
+
+      // 1. Zapis bezpośrednio na czacie (tabela czat_wiadomosci)
+      if (recipientId) {
+        await supabase.from("czat_wiadomosci").insert([
+          {
+            nadawca_id: SYSTEM_ID,
+            nadawca_nazwa: "Maciej Kłaput (Admin)",
+            nadawca_avatar: null,
+            odbiorca_id: recipientId,
+            grupa_id: null,
+            tresc: trescWiadomosci,
+            przeczytana: false,
+            przeczytana_at: null,
+            przypinana: false,
+            reakcje: {},
+          },
+        ]);
+      }
+
+      // 2. Zapis w tabeli powiadomienia
       await supabase.from("powiadomienia").insert([
         {
           odbiorca_email: cleanEmail,
           odbiorca: recipientName,
-          tytul: title,
-          tresc: body,
+          tytul: "Baza Wiedzy Uzupełniona! 📚",
+          tresc: `Twój suplement "${supplementName}" został dodany do Bazy Wiedzy!`,
           przeczytane: false,
           typ: "suplement_dodany",
-          link: url,
+          link: "/baza-wiedzy",
         },
       ]);
 
-      // 2. Wysłanie push do endpointu z pełnym imieniem i nazwiskiem odbiorcy
+      // 3. Wysłanie push do endpointu
       const pushPayload = {
         targetEmail: cleanEmail,
         email: cleanEmail,
         targetName: recipientName,
         payload: {
-          title,
-          body,
-          url,
+          title: "Baza Wiedzy Uzupełniona! 📚",
+          body: `Twój suplement "${supplementName}" został dodany do Bazy Wiedzy!`,
+          url: "/baza-wiedzy",
           typ: "suplement_dodany",
           odbiorca: recipientName,
         },
       };
 
-      const res = await fetch("/api/push/send", {
+      await fetch("/api/push/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(pushPayload),
-      });
-
-      const resJson = await res.json();
-      console.log("Wynik wysyłki WebPush do klubowicza:", resJson);
+      }).catch(() => {});
     } catch (e) {
-      console.error("Błąd podczas wysyłania powiadomienia Push:", e);
+      console.error("Błąd wysyłania powiadomienia na czacie:", e);
     }
   };
 
@@ -635,18 +663,14 @@ export default function BazaWiedzyPage() {
       return;
     }
 
-    // JEŚLI DODAWANIE NASTĄPIŁO Z PROPOZYCJI KLUBOWICZA -> ZMIEŃ STATUS I WYŚLIJ WEBPUSH
+    // JEŚLI DODAWANIE NASTĄPIŁO Z PROPOZYCJI KLUBOWICZA -> ZMIEŃ STATUS I WYŚLIJ WIADOMOŚĆ NA CZACIE
     if (originatingSugestiaId && originatingSugestiaEmail) {
       await supabase
         .from("sugestie_suplementow")
         .update({ status: "zaakceptowane" })
         .eq("id", originatingSugestiaId);
 
-      await sendPushNotification(
-        originatingSugestiaEmail,
-        "Twój suplement został dodany! 💊",
-        `Proponowany przez Ciebie suplement "${form.nazwa}" został zweryfikowany i dodany do Bazy Wiedzy!`
-      );
+      await notifyKlubowiczOnChatAndPush(originatingSugestiaEmail, form.nazwa);
 
       setOriginatingSugestiaId(null);
       setOriginatingSugestiaEmail(null);
@@ -776,7 +800,7 @@ export default function BazaWiedzyPage() {
                       Oczekujące propozycje suplementów od Klubowiczów ({sugestie.length})
                     </h3>
                   </div>
-                  <span className="text-xs text-slate-300">Po kliknięciu „Dodaj” klubowicz otrzyma Push!</span>
+                  <span className="text-xs text-slate-300">Po kliknięciu „Dodaj” klubowicz otrzyma wiadomość na czacie!</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {sugestie.map((sug) => {
@@ -847,7 +871,7 @@ export default function BazaWiedzyPage() {
 
             {sugestiaSuccess && (
               <div className="p-3.5 bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-bold rounded-2xl text-center animate-in fade-in">
-                ✅ Dziękujemy! Twoja propozycja została przesłana. Otrzymasz powiadomienie Push, gdy pojawi się w Bazie Wiedzy.
+                ✅ Dziękujemy! Twoja propozycja została przesłana. Otrzymasz powiadomienie na czacie, gdy pojawi się w Bazie Wiedzy.
               </div>
             )}
           </>
@@ -1335,7 +1359,7 @@ export default function BazaWiedzyPage() {
               </h3>
               {originatingSugestiaEmail && (
                 <p className="text-xs text-amber-700 font-bold mt-1">
-                  💡 Dodajesz pozycję z propozycji klubowicza ({originatingSugestiaEmail}). Po zapisaniu otrzyma on powiadomienie push.
+                  💡 Dodajesz pozycję z propozycji klubowicza ({originatingSugestiaEmail}). Po zapisaniu otrzyma on powiadomienie na czacie.
                 </p>
               )}
             </div>
