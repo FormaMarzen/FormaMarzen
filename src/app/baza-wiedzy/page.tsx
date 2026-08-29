@@ -84,6 +84,7 @@ export default function BazaWiedzyPage() {
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [originatingSugestiaId, setOriginatingSugestiaId] = useState<number | null>(null);
+  const [originatingSugestiaEmail, setOriginatingSugestiaEmail] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     nazwa: "",
@@ -171,7 +172,7 @@ export default function BazaWiedzyPage() {
     return KATEGORIE_ODZYWIANIE;
   }, [activeTab]);
 
-  // Wyszukiwanie w czasie rzeczywistym ściśle po nazwie pozycji
+  // Wyszukiwanie w czasie rzeczywistym po nazwie pozycji
   const currentFilteredList = useMemo(() => {
     let sourceList: any[] = [];
     if (activeTab === "suplementy") sourceList = suplementy;
@@ -192,26 +193,65 @@ export default function BazaWiedzyPage() {
 
   const handleWyslijSugestie = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nowaSugestiaNazwa.trim()) return;
+    const nazwaWpisu = nowaSugestiaNazwa.trim();
+    if (!nazwaWpisu) return;
 
     setIsSendingSugestia(true);
-    const { error } = await supabase.from("sugestie_suplementow").insert([
-      {
-        nazwa: nowaSugestiaNazwa.trim(),
-        klient_email: userEmail || "anonim@klubowicz.pl",
-        status: "oczekujace",
-      },
-    ]);
+    const zgłaszajacyEmail = userEmail || "anonim@klubowicz.pl";
 
-    if (!error) {
-      setNowaSugestiaNazwa("");
-      setSugestiaSuccess(true);
-      setTimeout(() => setSugestiaSuccess(false), 5000);
-      fetchData();
-    } else {
-      alert("Błąd podczas wysyłania: " + error.message);
+    try {
+      const { error } = await supabase.from("sugestie_suplementow").insert([
+        {
+          nazwa: nazwaWpisu,
+          klient_email: zgłaszajacyEmail,
+          status: "oczekujace",
+        },
+      ]);
+
+      if (!error) {
+        // 1. WYSYŁKA POWIADOMIENIA PUSH DO ADMINISTRATORA
+        try {
+          await fetch("/api/push/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: "📬 Nowa propozycja w Bazie Wiedzy",
+              body: `Klubowicz (${zgłaszajacyEmail}) poprosił o dodanie: ${nazwaWpisu}`,
+              url: "/baza-wiedzy",
+              target: "admin",
+              target_group: "admin",
+            }),
+          });
+        } catch (pushErr) {
+          console.error("Błąd wysyłki powiadomienia push:", pushErr);
+        }
+
+        // 2. Zapis w historii powiadomień
+        try {
+          await supabase.from("historia_powiadomien").insert([
+            {
+              odbiorca: "Administratorzy",
+              tytul: "Nowa propozycja suplementu",
+              tresc: `Klubowicz (${zgłaszajacyEmail}) zgłosił propozycję: ${nazwaWpisu}`,
+              created_at: new Date().toISOString(),
+            },
+          ]);
+        } catch (hErr) {
+          console.error("Błąd zapisu w historii powiadomień:", hErr);
+        }
+
+        setNowaSugestiaNazwa("");
+        setSugestiaSuccess(true);
+        setTimeout(() => setSugestiaSuccess(false), 5000);
+        fetchData();
+      } else {
+        alert("Błąd podczas wysyłania: " + error.message);
+      }
+    } catch (err: any) {
+      console.error("Błąd ogólny zgłaszania propozycji:", err);
+    } finally {
+      setIsSendingSugestia(false);
     }
-    setIsSendingSugestia(false);
   };
 
   const handleUsunSugestie = async (id: number) => {
@@ -222,6 +262,7 @@ export default function BazaWiedzyPage() {
   const handleQuickAddFromSugestia = (sugestia: Sugestia) => {
     setEditingId(null);
     setOriginatingSugestiaId(sugestia.id);
+    setOriginatingSugestiaEmail(sugestia.klient_email || null);
     setForm({
       nazwa: sugestia.nazwa,
       kategorie: ["suplementy"],
@@ -237,6 +278,7 @@ export default function BazaWiedzyPage() {
   const handleOpenAdd = () => {
     setEditingId(null);
     setOriginatingSugestiaId(null);
+    setOriginatingSugestiaEmail(null);
     const domyslnaKategoria = currentCategoryList[0]?.id || "ogolne";
     setForm({
       nazwa: "",
@@ -254,6 +296,7 @@ export default function BazaWiedzyPage() {
     e.stopPropagation();
     setEditingId(item.id);
     setOriginatingSugestiaId(null);
+    setOriginatingSugestiaEmail(null);
     setForm({
       nazwa: item.nazwa,
       kategorie: parseCategories(item.kategoria),
@@ -355,10 +398,54 @@ export default function BazaWiedzyPage() {
       await supabase.from(tableName).update(payload).eq("id", editingId);
     } else {
       await supabase.from(tableName).insert([payload]);
+
+      // JEŻELI WPIS POWSTAŁ Z PROPOZYCJI KLUBOWICZA:
       if (originatingSugestiaId && activeTab === "suplementy") {
         await supabase.from("sugestie_suplementow").delete().eq("id", originatingSugestiaId);
+
+        // Automatyczna wiadomość na czacie dla klubowicza
+        if (originatingSugestiaEmail && !originatingSugestiaEmail.includes("anonim")) {
+          try {
+            // Pobieramy ID klienta z bazy po adresie e-mail
+            const { data: klientData } = await supabase
+              .from("klienci")
+              .select("id, imie, email")
+              .ilike("email", originatingSugestiaEmail.trim())
+              .maybeSingle();
+
+            const wiadomoscTresc = `Cześć! Informacje o suplemencie, o który pytałeś (${form.nazwa}), zostały właśnie opracowane i dodane do Bazy Wiedzy. Sprawdź szczegóły, działanie i dawkowanie w aplikacji! 💊`;
+
+            await supabase.from("czat_wiadomosci").insert([
+              {
+                klient_id: klientData?.id || null,
+                klient_email: originatingSugestiaEmail,
+                nadawca: "Administrator",
+                tresc: wiadomoscTresc,
+                created_at: new Date().toISOString(),
+                is_admin: true,
+                czy_przeczytana: false,
+              },
+            ]);
+
+            // Powiadomienie push bezpośrednio do klubowicza
+            await fetch("/api/push/send", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: "📚 Baza Wiedzy uzupełniona!",
+                body: `Dodano informacje o suplemencie: ${form.nazwa}`,
+                url: "/baza-wiedzy",
+                user_email: originatingSugestiaEmail,
+                klient_id: klientData?.id || null,
+              }),
+            });
+          } catch (chatErr) {
+            console.error("Błąd podczas automatycznego powiadamiania klubowicza na czacie:", chatErr);
+          }
+        }
       }
     }
+
     setIsAdminModalOpen(false);
     fetchData();
   };
@@ -381,7 +468,7 @@ export default function BazaWiedzyPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0">
+    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
       {/* NAGŁÓWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
@@ -908,7 +995,7 @@ export default function BazaWiedzyPage() {
         </div>
       )}
 
-      {/* POWIĘKSZONY MODAL ADMINA */}
+      {/* MODAL ADMINA */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-8">
