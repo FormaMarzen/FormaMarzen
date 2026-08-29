@@ -45,6 +45,13 @@ export default function ClubChat() {
   // Stan przypiętych czatów i grup (direct_{id} lub group_{id})
   const [pinnedChatIds, setPinnedChatIds] = useState<string[]>([]);
 
+  // Kolejność i zarządzanie kategoriami grup
+  const [categoriesOrder, setCategoriesOrder] = useState<string[]>(DEFAULT_GROUP_CATEGORIES);
+  const [showCategoryManagerModal, setShowCategoryManagerModal] = useState(false);
+  const [editingCategoryOldName, setEditingCategoryOldName] = useState<string | null>(null);
+  const [editingCategoryNewName, setEditingCategoryNewName] = useState("");
+  const [newCategoryInput, setNewCategoryInput] = useState("");
+
   const [klienci, setKlienci] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
@@ -122,7 +129,7 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab]);
 
-  // Wczytywanie zarchiwizowanych i przypiętych rozmów
+  // Wczytywanie zarchiwizowanych, przypiętych rozmów oraz kolejności kategorii
   useEffect(() => {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
@@ -142,6 +149,15 @@ export default function ClubChat() {
         setPinnedChatIds(JSON.parse(savedPinned));
       } catch {
         setPinnedChatIds([]);
+      }
+    }
+
+    const savedOrder = localStorage.getItem("group_categories_order");
+    if (savedOrder) {
+      try {
+        setCategoriesOrder(JSON.parse(savedOrder));
+      } catch {
+        setCategoriesOrder(DEFAULT_GROUP_CATEGORIES);
       }
     }
   }, [currentUserId, secondaryUserId]);
@@ -207,6 +223,75 @@ export default function ClubChat() {
     setFullscreenImage(null);
     setActiveMessageMenuId(null);
     setShowInviteModal(false);
+    setShowCategoryManagerModal(false);
+  };
+
+  // Zmiana kolejności kategorii w górę / w dół
+  const handleMoveCategory = (index: number, direction: "up" | "down") => {
+    const newOrder = [...categoriesOrder];
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= newOrder.length) return;
+
+    const temp = newOrder[index];
+    newOrder[index] = newOrder[targetIndex];
+    newOrder[targetIndex] = temp;
+
+    setCategoriesOrder(newOrder);
+    localStorage.setItem("group_categories_order", JSON.stringify(newOrder));
+  };
+
+  // Zmiana nazwy kategorii w bazie Supabase i konfiguracji lokalnej
+  const handleRenameCategory = async (oldName: string, newName: string) => {
+    if (!newName.trim() || oldName === newName.trim()) {
+      setEditingCategoryOldName(null);
+      return;
+    }
+    const trimmedNew = newName.trim();
+
+    try {
+      const { error } = await supabase
+        .from("czat_grupy")
+        .update({ kategoria: trimmedNew })
+        .eq("kategoria", oldName);
+
+      if (error && !error.message?.includes("kategoria")) {
+        alert("Błąd podczas aktualizacji nazwy kategorii w bazie: " + error.message);
+        return;
+      }
+
+      const updatedOrder = categoriesOrder.map((c) => (c === oldName ? trimmedNew : c));
+      setCategoriesOrder(updatedOrder);
+      localStorage.setItem("group_categories_order", JSON.stringify(updatedOrder));
+
+      setEditingCategoryOldName(null);
+      setEditingCategoryNewName("");
+      fetchGroupsAndTrainings();
+    } catch (err) {
+      console.error("Błąd edycji kategorii:", err);
+    }
+  };
+
+  // Dodawanie nowej kategorii
+  const handleAddNewCategory = () => {
+    const trimmed = newCategoryInput.trim();
+    if (!trimmed) return;
+    if (!categoriesOrder.includes(trimmed)) {
+      const updated = [...categoriesOrder, trimmed];
+      setCategoriesOrder(updated);
+      localStorage.setItem("group_categories_order", JSON.stringify(updated));
+    }
+    setNewCategoryInput("");
+  };
+
+  // Usuwanie kategorii z listy
+  const handleDeleteCategoryFromList = (catName: string) => {
+    if (catName === "Ogólne") {
+      alert("Nie można usunąć domyślnej kategorii 'Ogólne'.");
+      return;
+    }
+    const updated = categoriesOrder.filter((c) => c !== catName);
+    setCategoriesOrder(updated);
+    localStorage.setItem("group_categories_order", JSON.stringify(updated));
   };
 
   // Trwałe usuwanie czatu grupowego (Admin)
@@ -1344,7 +1429,7 @@ export default function ClubChat() {
     setIsSendingBroadcast(false);
   };
 
-  // Tworzenie nowej grupy (Zabezpieczenie typów i obsługa bazy)
+  // Tworzenie nowej grupy
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGroupName.trim() || isCreatingGroup) return;
@@ -1371,7 +1456,6 @@ export default function ClubChat() {
         .insert([payload])
         .select();
 
-      // Automatyczny fallback w razie braku kolumny kategoria w starszej wersji bazy
       if (error && (error.message?.includes("kategoria") || error.code === "PGRST204" || error.code === "42703")) {
         delete payload.kategoria;
         const retry = await supabase.from("czat_grupy").insert([payload]).select();
@@ -1814,12 +1898,21 @@ export default function ClubChat() {
   const unpinnedMyGroups = activeMyGroups.filter((g) => !pinnedChatIds.includes(`group_${g.id}`));
   const archivedMyGroups = allMyGroups.filter((g) => archivedChatIds.includes(`group_${g.id}`));
 
+  // Podział na kategorie z uwzględnieniem ustalonej kolejności
   const myGroupsByCategory = unpinnedMyGroups.reduce((acc: Record<string, any[]>, group: any) => {
     const cat = group.kategoria?.trim() || group.category?.trim() || "Ogólne";
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(group);
     return acc;
   }, {});
+
+  // Posortowane nazwy kategorii wg categoriesOrder
+  const sortedCategoryNames = Array.from(
+    new Set([
+      ...categoriesOrder.filter((cat) => myGroupsByCategory[cat]),
+      ...Object.keys(myGroupsByCategory),
+    ])
+  );
 
   const publicDiscoverGroups = groups.filter((g: any) => {
     const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
@@ -2271,41 +2364,47 @@ export default function ClubChat() {
             </div>
           </div>
 
-          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE */}
+          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE: TYLKO IKONY */}
           {selectedGroup && (
-            <div className="bg-slate-900 border-t border-slate-800 px-3 py-1.5 flex items-center justify-center gap-1.5 text-xs">
+            <div className="bg-slate-900 border-t border-slate-800 px-3 py-1.5 flex items-center justify-center gap-3 text-base">
               <button
+                type="button"
                 onClick={() => setChatInsideTab("messages")}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                className={`w-10 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                   chatInsideTab === "messages"
                     ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
                 }`}
+                title="Wiadomości"
               >
-                💬 Wiadomości
+                💬
               </button>
               <button
+                type="button"
                 onClick={() => setChatInsideTab("media")}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all flex items-center gap-1 ${
+                className={`px-2.5 h-8 rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer ${
                   chatInsideTab === "media"
-                    ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    ? "bg-amber-400 text-slate-950 shadow-sm font-bold text-xs"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800 text-xs"
                 }`}
+                title="Zdjęcia"
               >
-                <span>🖼️ Zdjęcia</span>
+                <span>🖼️</span>
                 <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "media" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
                   {conversationImages.length}
                 </span>
               </button>
               <button
+                type="button"
                 onClick={() => setChatInsideTab("members")}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-all flex items-center gap-1 ${
+                className={`px-2.5 h-8 rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer ${
                   chatInsideTab === "members"
-                    ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    ? "bg-amber-400 text-slate-950 shadow-sm font-bold text-xs"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800 text-xs"
                 }`}
+                title="Uczestnicy"
               >
-                <span>👥 Uczestnicy</span>
+                <span>👥</span>
                 <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "members" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
                   {groupMembersList.length}
                 </span>
@@ -2313,28 +2412,32 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1 */}
+          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1: TYLKO IKONY */}
           {selectedUser && (
-            <div className="bg-slate-900 border-t border-slate-800 px-4 py-1.5 flex items-center justify-center gap-2 text-xs">
+            <div className="bg-slate-900 border-t border-slate-800 px-4 py-1.5 flex items-center justify-center gap-3 text-base">
               <button
+                type="button"
                 onClick={() => setChatInsideTab("messages")}
-                className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                className={`w-10 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                   chatInsideTab === "messages"
                     ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
                 }`}
+                title="Wiadomości"
               >
-                💬 Wiadomości
+                💬
               </button>
               <button
+                type="button"
                 onClick={() => setChatInsideTab("media")}
-                className={`px-3 py-1 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 h-8 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   chatInsideTab === "media"
-                    ? "bg-amber-400 text-slate-950 shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                    ? "bg-amber-400 text-slate-950 shadow-sm font-bold text-xs"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800 text-xs"
                 }`}
+                title="Zdjęcia"
               >
-                <span>🖼️ Zdjęcia</span>
+                <span>🖼️</span>
                 <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${chatInsideTab === "media" ? "bg-slate-950 text-amber-400 font-black" : "bg-slate-800 text-slate-300"}`}>
                   {conversationImages.length}
                 </span>
@@ -2346,7 +2449,7 @@ export default function ClubChat() {
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50">
               
-              {/* ZAKŁADKI GŁÓWNE ORAZ MAŁE PRZYCISKI ADMINISTRATORA */}
+              {/* ZAKŁADKI GŁÓWNE ORAZ PRZYCISKI ADMINISTRATORA */}
               <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-2">
                 <div className="flex-1 grid grid-cols-3 gap-1 bg-slate-200/90 p-1 rounded-xl">
                   <button
@@ -2395,7 +2498,7 @@ export default function ClubChat() {
                   </button>
                 </div>
 
-                {/* MAŁE PRZYCISKI PLUSÓW DLA ADMINA */}
+                {/* PRZYCISKI ADMINISTRATORA */}
                 {isAdmin && (
                   <div className="flex items-center gap-1 shrink-0">
                     <button
@@ -2519,25 +2622,38 @@ export default function ClubChat() {
               {/* LISTA GRUP: Moje grupy | Otwarte | Zamknięte */}
               {activeTab === "groups" && (
                 <div className="flex-1 flex flex-col overflow-hidden space-y-2">
-                  <div className="flex gap-1.5 border-b border-slate-200 pb-1.5 text-xs font-bold">
-                    <button
-                      onClick={() => setGroupFilterTab("my")}
-                      className={`pb-1 px-1 transition-colors ${groupFilterTab === "my" ? "border-b-2 border-slate-900 text-slate-900 font-black" : "text-slate-400 hover:text-slate-600"}`}
-                    >
-                      Moje grupy ({activeMyGroups.length})
-                    </button>
-                    <button
-                      onClick={() => setGroupFilterTab("public")}
-                      className={`pb-1 px-1 transition-colors ${groupFilterTab === "public" ? "border-b-2 border-amber-500 text-amber-700 font-black" : "text-slate-400 hover:text-slate-600"}`}
-                    >
-                      Otwarte ({publicDiscoverGroups.length})
-                    </button>
-                    <button
-                      onClick={() => setGroupFilterTab("closed")}
-                      className={`pb-1 px-1 transition-colors ${groupFilterTab === "closed" ? "border-b-2 border-slate-700 text-slate-800 font-black" : "text-slate-400 hover:text-slate-600"}`}
-                    >
-                      Zamknięte ({closedDiscoverGroups.length})
-                    </button>
+                  <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-1.5 text-xs font-bold">
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => setGroupFilterTab("my")}
+                        className={`pb-1 px-1 transition-colors ${groupFilterTab === "my" ? "border-b-2 border-slate-900 text-slate-900 font-black" : "text-slate-400 hover:text-slate-600"}`}
+                      >
+                        Moje grupy ({activeMyGroups.length})
+                      </button>
+                      <button
+                        onClick={() => setGroupFilterTab("public")}
+                        className={`pb-1 px-1 transition-colors ${groupFilterTab === "public" ? "border-b-2 border-amber-500 text-amber-700 font-black" : "text-slate-400 hover:text-slate-600"}`}
+                      >
+                        Otwarte ({publicDiscoverGroups.length})
+                      </button>
+                      <button
+                        onClick={() => setGroupFilterTab("closed")}
+                        className={`pb-1 px-1 transition-colors ${groupFilterTab === "closed" ? "border-b-2 border-slate-700 text-slate-800 font-black" : "text-slate-400 hover:text-slate-600"}`}
+                      >
+                        Zamknięte ({closedDiscoverGroups.length})
+                      </button>
+                    </div>
+
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCategoryManagerModal(true)}
+                        className="text-[10px] font-black text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg border border-amber-300 transition-all cursor-pointer flex items-center gap-1 shadow-2xs shrink-0"
+                        title="Ustal kolejność i edytuj nazwy kategorii"
+                      >
+                        <span>⚙️</span> Kategorie
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex-1 overflow-y-auto space-y-2 pr-1">
@@ -2552,14 +2668,19 @@ export default function ClubChat() {
                           </div>
                         )}
 
-                        {Object.entries(myGroupsByCategory).map(([categoryName, groupList]: [string, any[]]) => (
-                          <div key={categoryName} className="space-y-1.5 pt-1">
-                            <div className="text-[11px] font-bold text-slate-400 px-1">
-                              {categoryName}
+                        {sortedCategoryNames.map((categoryName) => {
+                          const groupList = myGroupsByCategory[categoryName] || [];
+                          if (groupList.length === 0) return null;
+
+                          return (
+                            <div key={categoryName} className="space-y-1.5 pt-1">
+                              <div className="text-[11px] font-bold text-slate-400 px-1 flex items-center justify-between">
+                                <span>{categoryName}</span>
+                              </div>
+                              {groupList.map((group: any) => renderGroupItem(group, false))}
                             </div>
-                            {groupList.map((group: any) => renderGroupItem(group, false))}
-                          </div>
-                        ))}
+                          );
+                        })}
 
                         {activeMyGroups.length === 0 && archivedMyGroups.length === 0 && (
                           <div className="py-12 text-center text-slate-400 text-xs space-y-1">
@@ -3178,6 +3299,142 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* MODAL ZARZĄDZANIA KATEGORIAMI */}
+          {showCategoryManagerModal && (
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                    <span>⚙️</span> Zarządzanie Kategoriami
+                  </div>
+                  <button onClick={() => setShowCategoryManagerModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+                    ✕
+                  </button>
+                </div>
+
+                {/* Dodawanie nowej kategorii */}
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="Nowa nazwa kategorii..."
+                    value={newCategoryInput}
+                    onChange={(e) => setNewCategoryInput(e.target.value)}
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddNewCategory}
+                    disabled={!newCategoryInput.trim()}
+                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all cursor-pointer"
+                  >
+                    + Dodaj
+                  </button>
+                </div>
+
+                {/* Lista kategorii do ustalania kolejności i edycji */}
+                <div className="max-h-56 overflow-y-auto space-y-1.5 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                  {categoriesOrder.map((catName, index) => {
+                    const isEditing = editingCategoryOldName === catName;
+
+                    return (
+                      <div
+                        key={catName}
+                        className="flex items-center justify-between bg-white p-2 rounded-xl border border-slate-200 text-xs shadow-2xs gap-1.5"
+                      >
+                        {isEditing ? (
+                          <div className="flex items-center gap-1 flex-1">
+                            <input
+                              type="text"
+                              value={editingCategoryNewName}
+                              onChange={(e) => setEditingCategoryNewName(e.target.value)}
+                              className="flex-1 bg-slate-50 border border-amber-400 rounded-lg px-2 py-0.5 text-xs text-slate-900 font-bold focus:outline-none"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRenameCategory(catName, editingCategoryNewName)}
+                              className="text-emerald-600 hover:text-emerald-700 font-black p-1 text-xs cursor-pointer"
+                              title="Zapisz"
+                            >
+                              ✓
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingCategoryOldName(null)}
+                              className="text-slate-400 hover:text-slate-600 font-bold p-1 text-xs cursor-pointer"
+                              title="Anuluj"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="font-bold text-slate-800 truncate flex-1">{catName}</span>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingCategoryOldName(catName);
+                                  setEditingCategoryNewName(catName);
+                                }}
+                                className="text-slate-400 hover:text-slate-700 p-1 text-xs cursor-pointer"
+                                title="Zmień nazwę kategorii"
+                              >
+                                ✏️
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={index === 0}
+                                onClick={() => handleMoveCategory(index, "up")}
+                                className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-30 text-slate-700 font-bold text-[10px] flex items-center justify-center cursor-pointer"
+                                title="Przesuń w górę"
+                              >
+                                ▲
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={index === categoriesOrder.length - 1}
+                                onClick={() => handleMoveCategory(index, "down")}
+                                className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-30 text-slate-700 font-bold text-[10px] flex items-center justify-center cursor-pointer"
+                                title="Przesuń w dół"
+                              >
+                                ▼
+                              </button>
+
+                              {catName !== "Ogólne" && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCategoryFromList(catName)}
+                                  className="text-slate-300 hover:text-rose-600 p-1 text-xs cursor-pointer"
+                                  title="Usuń z listy"
+                                >
+                                  🗑️
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-2 border-t border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setShowCategoryManagerModal(false)}
+                    className="w-full py-2 rounded-xl text-xs font-black text-white bg-slate-900 hover:bg-slate-800 shadow-md cursor-pointer"
+                  >
+                    Gotowe
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {showInviteModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
               <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
@@ -3282,7 +3539,7 @@ export default function ClubChat() {
                     <label className="text-[11px] font-bold text-slate-700 mb-1 block">Kategoria grupy:</label>
                     <div className="space-y-1.5">
                       <select
-                        value={DEFAULT_GROUP_CATEGORIES.includes(editGroupCategory) ? editGroupCategory : "Inna"}
+                        value={categoriesOrder.includes(editGroupCategory) ? editGroupCategory : "Inna"}
                         onChange={(e) => {
                           if (e.target.value !== "Inna") {
                             setEditGroupCategory(e.target.value);
@@ -3290,7 +3547,7 @@ export default function ClubChat() {
                         }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
                       >
-                        {DEFAULT_GROUP_CATEGORIES.map((cat) => (
+                        {categoriesOrder.map((cat) => (
                           <option key={cat} value={cat}>
                             {cat}
                           </option>
@@ -3465,7 +3722,7 @@ export default function ClubChat() {
                     <label className="text-[11px] font-bold text-slate-700 mb-1 block">Kategoria / Grupowanie:</label>
                     <div className="space-y-1.5">
                       <select
-                        value={DEFAULT_GROUP_CATEGORIES.includes(newGroupCategory) ? newGroupCategory : "Inna"}
+                        value={categoriesOrder.includes(newGroupCategory) ? newGroupCategory : "Inna"}
                         onChange={(e) => {
                           if (e.target.value !== "Inna") {
                             setNewGroupCategory(e.target.value);
@@ -3473,7 +3730,7 @@ export default function ClubChat() {
                         }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
                       >
-                        {DEFAULT_GROUP_CATEGORIES.map((cat) => (
+                        {categoriesOrder.map((cat) => (
                           <option key={cat} value={cat}>
                             {cat}
                           </option>
