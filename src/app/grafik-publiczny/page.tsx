@@ -165,7 +165,7 @@ export default function PublicSchedulePage() {
           start: s.start || s.start_time,
           end: s.end || s.end_time,
           trainer: s.trainer || s.prowadzacy,
-          limit: s.limit || s.limit_miejsc,
+          limit: s.limit || s.limit_miejsc || 12,
           days: s.days || {},
           isOdwołane: Boolean(s.is_odwolane || s.is_odwołane || s.odwolane || s.status === 'odwołane' || s.status === 'odwolane'),
           isUsunięte: Boolean(s.is_usuniete || s.is_usunięte || s.usuniete || s.status === 'usunięte' || s.status === 'usuniete'),
@@ -185,7 +185,7 @@ export default function PublicSchedulePage() {
           start: j.start_time || j.start,
           end: j.end_time || j.end,
           trainer: j.trainer,
-          limit: j.limit_miejsc || j.limit,
+          limit: j.limit_miejsc || j.limit || 12,
           displayDate: j.display_date || j.displayDate,
           fullDateStr: j.full_date_str || j.fullDateStr || j.date,
           isJednorazowe: true,
@@ -421,7 +421,7 @@ export default function PublicSchedulePage() {
             </button>
           </div>
 
-          {/* PRZYCISKI AKCJI: ZAPISZ / BEZPŁATNA APLIKACJA / ZALOGUJ */}
+          {/* PRZYCISKI AKCJI */}
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-center">
             <button
               onClick={() => setIsSignupModalOpen(true)}
@@ -695,16 +695,12 @@ export default function PublicSchedulePage() {
                     {zajeciaDnia.length > 0 ? (
                       zajeciaDnia.map((item: any, classIdx: number) => {
                         const durationText = calculateDuration(item.start, item.end);
-                        const zapisani = getSignups(item, col);
                         const limitZajec = item.limit || 12;
 
-                        const liczbaGlowna = Math.min(zapisani.length, limitZajec);
-                        const liczbaKrzesełko = Math.max(0, zapisani.length - limitZajec);
-                        const isFull = zapisani.length >= limitZajec;
                         const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
                         const isPastEvent = isPastDay || isPastTime;
 
-                        const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
+                        const autoCancelStatus = checkClassAutoCancellation(item, col.date, getSignups(item, col));
                         const isClassCancelled = Boolean(item.isOdwołane || autoCancelStatus.isAutoCancelled);
                         const topColor = getTopBorderColor(item.title, isClassCancelled, Boolean(item.isUsunięte));
 
@@ -743,16 +739,9 @@ export default function PublicSchedulePage() {
                             ) : (
                               <div className="flex items-center justify-between gap-1 text-[10px]">
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className={`font-bold px-2 py-0.5 rounded-md border ${
-                                    isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                  }`}>
-                                    👥 {liczbaGlowna}/{limitZajec}
+                                  <span className="font-bold px-2 py-0.5 rounded-md border bg-sky-50 text-sky-950 border-sky-200">
+                                    👥 Maks. osób: {limitZajec}
                                   </span>
-                                  {liczbaKrzesełko > 0 && (
-                                    <span className="bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded-md border border-blue-200">
-                                      🪑 {liczbaKrzesełko}
-                                    </span>
-                                  )}
                                 </div>
                                 <span className="text-slate-400 font-medium whitespace-nowrap text-[10px]">
                                   ⏱ {durationText}
