@@ -79,8 +79,8 @@ const KATEGORIE_PRZEPISY = [
   { id: "sniadanie", label: "🍳 Śniadanie" },
   { id: "obiad", label: "🍲 Obiad" },
   { id: "kolacja", label: "🌙 Kolacja" },
-  { id: "przekaska", label: "🍎 Przekąska" },
   { id: "deser", label: "🍰 Deser" },
+  { id: "przekaska", label: "🍎 Przekąska" },
   { id: "inne", label: "📌 Inne" },
 ];
 
@@ -88,6 +88,7 @@ export default function BazaWiedzyPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState("");
   const [userImieNazwisko, setUserImieNazwisko] = useState("Klubowicz");
+  const [klienciMap, setKlienciMap] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>("suplementy");
 
@@ -155,25 +156,31 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
-    // Pobieranie pełnego Imienia i Nazwiska z tabeli klienci (bez wyciągania z emaila)
-    let resolvedName = "Klubowicz";
-    if (email) {
-      const { data: klientRec } = await supabase
-        .from("klienci")
-        .select(`"Imię", "Nazwisko", "E-mail"`)
-        .ilike('"E-mail"', email.trim())
-        .maybeSingle();
+    // Pobranie bazy wszystkich klientów i stworzenie mapy e-mail -> Imię i Nazwisko
+    const { data: klienciData } = await supabase
+      .from("klienci")
+      .select(`"Imię", "Nazwisko", "E-mail"`);
 
-      if (klientRec) {
-        const imie = (klientRec as any)["Imię"] || "";
-        const nazwisko = (klientRec as any)["Nazwisko"] || "";
-        const combined = `${imie} ${nazwisko}`.trim();
-        if (combined) {
-          resolvedName = combined;
+    const newKlienciMap: Record<string, string> = {};
+    let currentUserFullName = "Klubowicz";
+
+    if (klienciData && Array.isArray(klienciData)) {
+      klienciData.forEach((k: any) => {
+        const mail = (k["E-mail"] || "").toLowerCase().trim();
+        const imie = (k["Imię"] || "").trim();
+        const nazwisko = (k["Nazwisko"] || "").trim();
+        const full = `${imie} ${nazwisko}`.trim();
+        if (mail && full) {
+          newKlienciMap[mail] = full;
+          if (mail === cleanEmail) {
+            currentUserFullName = full;
+          }
         }
-      }
+      });
     }
-    setUserImieNazwisko(resolvedName);
+
+    setKlienciMap(newKlienciMap);
+    setUserImieNazwisko(currentUserFullName);
 
     // 1. Suplementy
     const { data: suplData } = await supabase
@@ -220,6 +227,18 @@ export default function BazaWiedzyPage() {
     setIsLoading(false);
   };
 
+  // Pomocnik do wyznaczania pełnego imienia i nazwiska autora przepisu
+  const getAutorDisplay = (item: Przepis) => {
+    const emailKey = (item.autor_email || "").toLowerCase().trim();
+    if (klienciMap[emailKey]) {
+      return klienciMap[emailKey];
+    }
+    if (item.autor_nazwa && !item.autor_nazwa.includes("@") && item.autor_nazwa !== "Klubowicz") {
+      return item.autor_nazwa;
+    }
+    return "Klubowicz";
+  };
+
   const parseCategories = (kategoria: string | string[] | undefined | null): string[] => {
     if (!kategoria) return [];
     if (Array.isArray(kategoria)) return kategoria;
@@ -238,7 +257,8 @@ export default function BazaWiedzyPage() {
   const currentCategoryList = useMemo(() => {
     if (activeTab === "suplementy") return KATEGORIE_SUPL;
     if (activeTab === "sport") return KATEGORIE_SPORT;
-    return KATEGORIE_ODZYWIANIE;
+    if (activeTab === "odzywianie") return KATEGORIE_ODZYWIANIE;
+    return KATEGORIE_PRZEPISY;
   }, [activeTab]);
 
   const currentFilteredList = useMemo(() => {
@@ -335,7 +355,7 @@ export default function BazaWiedzyPage() {
     setEditingId(null);
     setOriginatingSugestiaId(null);
     setOriginatingSugestiaEmail(null);
-    const domyslnaKategoria = currentCategoryList[0]?.id || "witaminy";
+    const domyslnaKategoria = currentCategoryList[0]?.id || "sniadanie";
     setForm({
       nazwa: "",
       kategorie: [domyslnaKategoria],
@@ -591,7 +611,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGłÓWEK GŁÓWNY */}
+      {/* NAGŁÓWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -679,7 +699,7 @@ export default function BazaWiedzyPage() {
           </div>
         )}
 
-        {/* WYSZUKIWARKA I KATEGORIE (WYŚRODKOWANE) */}
+        {/* WYSZUKIWARKA I KATEGORIE (WYŚRODKOWANE DLA PRZEPISÓW) */}
         <div className="bg-white p-4 sm:p-5 rounded-3xl border border-sky-100 shadow-sm space-y-4">
           <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
             <div className="relative w-full md:w-80">
@@ -771,6 +791,7 @@ export default function BazaWiedzyPage() {
                     const podstawowe = item.dawkowanie_podstawowe || item.dawkowanie || "";
                     const wyzsze = item.dawkowanie_wyzsze || "";
                     const wskazowki = item.wskazowki || "";
+                    const autorWyswietlany = activeTab === "przepisy" ? getAutorDisplay(item) : "";
 
                     return (
                       <tr
@@ -812,9 +833,11 @@ export default function BazaWiedzyPage() {
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[11px] text-slate-400 mt-0.5">
-                                Dodane przez: <span className="font-bold text-slate-600">{item.autor_nazwa || "Klubowicz"}</span>
-                              </div>
+                              {activeTab === "przepisy" && (
+                                <div className="text-[11px] text-slate-400 mt-0.5">
+                                  Dodane przez: <span className="font-bold text-slate-600">{autorWyswietlany}</span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -907,7 +930,7 @@ export default function BazaWiedzyPage() {
 
       {/* MODAL PODGLĄDU - PŁYNNE PRZEWIJANIE (SCROLL) */}
       {isViewModalOpen && selectedItem && (
-        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] flex flex-col">
             <button
               onClick={() => setIsViewModalOpen(false)}
@@ -916,7 +939,7 @@ export default function BazaWiedzyPage() {
               ✕
             </button>
 
-            {/* Kontener zawartości z włączonym płynnym przewijaniem (overflow-y-auto) */}
+            {/* Kontener zawartości z płynnym przewijaniem */}
             <div className="overflow-y-auto p-6 sm:p-10 space-y-6 flex-1">
               {activeTab === "przepisy" && selectedItem.grafika_url && (
                 <div className="w-full bg-slate-900 rounded-2xl relative flex justify-center items-center overflow-hidden mb-4" style={{ minHeight: "220px", maxHeight: "40vh" }}>
@@ -942,7 +965,7 @@ export default function BazaWiedzyPage() {
                 </h2>
                 {activeTab === "przepisy" && (
                   <div className="text-xs text-slate-500 mt-1 font-medium">
-                    Dodane przez: <span className="font-bold text-slate-800">{selectedItem.autor_nazwa || "Klubowicz"}</span>
+                    Dodane przez: <span className="font-bold text-slate-800">{getAutorDisplay(selectedItem)}</span>
                   </div>
                 )}
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
@@ -957,7 +980,7 @@ export default function BazaWiedzyPage() {
                     </div>
                     <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze / porcja</div>
-                      <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.tluszcze || 0}g</div>
+                      <div className="text-lg font-black text-amber-950 mt-1">{selectedItem.tluszcze || 0}g</div>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / porcja</div>
@@ -1276,7 +1299,7 @@ export default function BazaWiedzyPage() {
                       : "Wpisz pełny opis, badania i wskazówki..."
                   }
                   rows={6}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
 
