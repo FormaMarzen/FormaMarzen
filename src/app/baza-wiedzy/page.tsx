@@ -581,7 +581,7 @@ export default function BazaWiedzyPage() {
           </div>
         )}
 
-        {/* WYSZUKIWARKA I KATEGORIE */}
+        {/* WYSZUKIWARKA I KATEGORIE (WYŚRODKOWANE) */}
         <div className="bg-white p-4 sm:p-5 rounded-3xl border border-sky-100 shadow-sm space-y-4">
           <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
             <div className="relative w-full md:w-80">
@@ -611,7 +611,7 @@ export default function BazaWiedzyPage() {
               )}
             </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap w-full md:w-auto">
+            <div className="flex items-center gap-1.5 flex-wrap justify-center w-full md:w-auto">
               <span className="text-[11px] font-black uppercase text-slate-400 mr-1 hidden sm:inline">Kategoria:</span>
               <button
                 onClick={() => setSelectedKategoria("wszystkie")}
@@ -868,7 +868,7 @@ export default function BazaWiedzyPage() {
         </div>
       )}
 
-      {/* MODAL DODAWANIA / EDYCJI (NAPRAWIONE OBCINANIE GÓRY I WYŚRODKOWANE KATEGORIE) */}
+      {/* MODAL DODAWANIA / EDYCJI */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-8 max-h-[90vh] overflow-y-auto">
@@ -912,7 +912,7 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* KATEGORIA (WYŚRODKOWANA DLA PRZEPISÓW) */}
+              {/* KATEGORIA */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider text-center sm:text-left">
                   Kategoria {activeTab === "przepisy" ? "(wybierz jedną)" : ""}
