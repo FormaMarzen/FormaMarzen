@@ -618,7 +618,7 @@ export default function RootLayout({
         <meta name="HandheldFriendly" content="true" />
         <meta property="og:title" content="Forma Marzeń" />
         <meta property="og:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-        <meta property="og:image" content="https://forma-marzen.vercel.app/og-image.png" />
+        <meta property="og:image" content="https://forma-marzen.vercel.app/logo.png" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:url" content="https://forma-marzen.vercel.app" />
@@ -626,7 +626,7 @@ export default function RootLayout({
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Forma Marzeń" />
         <meta name="twitter:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-        <meta name="twitter:image" content="https://forma-marzen.vercel.app/og-image.png" />
+        <meta name="twitter:image" content="https://forma-marzen.vercel.app/logo.png" />
         <link rel="manifest" href="/manifest.json?v=2" />
         <meta name="theme-color" content="#0284c7" />
         <meta name="mobile-web-app-capable" content="yes" />
