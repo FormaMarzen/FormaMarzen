@@ -20,7 +20,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Walidacja i formatowanie subject wymaganego przez standard WebPush / Apple APNs
     if (!subject.startsWith('mailto:') && !subject.startsWith('http://') && !subject.startsWith('https://')) {
       subject = `mailto:${subject}`;
     }
@@ -28,11 +27,29 @@ export async function POST(request: Request) {
     webpush.setVapidDetails(subject, publicKey, privateKey);
 
     const bodyData = await request.json();
-    const { subscriptions, payload } = bodyData;
+    let { subscriptions, payload, targetEmail, email } = bodyData;
+
+    const recipientEmail = (targetEmail || email || '').toLowerCase().trim();
+
+    // Jeśli nie przekazano tablicy subscriptions, pobieramy ją po stronie serwera z bazy Supabase (omija RLS)
+    if ((!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) && recipientEmail) {
+      const { data: dbSubs, error: dbError } = await supabase
+        .from('push_subscriptions')
+        .select('*')
+        .or(`user_id.ilike.%${recipientEmail}%,user_id.eq.${recipientEmail}`);
+
+      if (dbError) {
+        console.error('Błąd pobierania subskrypcji z push_subscriptions:', dbError);
+      }
+
+      if (dbSubs && dbSubs.length > 0) {
+        subscriptions = dbSubs;
+      }
+    }
 
     if (!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) {
       return NextResponse.json(
-        { success: false, error: 'Brak aktywnych subskrypcji' },
+        { success: false, error: 'Brak aktywnych subskrypcji dla podanego użytkownika' },
         { status: 400 }
       );
     }
@@ -44,17 +61,17 @@ export async function POST(request: Request) {
     const notificationPayload = JSON.stringify({
       title: tytulPowiadomienia,
       body: trescPowiadomienia,
-      url: payload?.url || '/',
+      url: payload?.url || '/baza-wiedzy',
       icon: payload?.icon || '/logo.png',
       badge: payload?.badge || '/logo.png',
       data: {
-        url: payload?.url || '/',
+        url: payload?.url || '/baza-wiedzy',
         dateOfArrival: Date.now()
       }
     });
 
     const pushOptions = {
-      TTL: 86400, // 24 godziny ważności w kolejce Apple APNs / Google FCM
+      TTL: 86400,
       urgency: 'high' as const,
       headers: {
         Urgency: 'high'
@@ -73,7 +90,7 @@ export async function POST(request: Request) {
     const results = await Promise.allSettled(
       subscriptions.map(async (rawSub: any) => {
         let subObj = rawSub;
-        let recipientName = rawSub?.odbiorca || rawSub?.imie_nazwisko || payload?.odbiorca || '';
+        let recipientName = rawSub?.odbiorca || rawSub?.imie_nazwisko || payload?.odbiorca || recipientEmail || '';
         let recipientIdRaw = rawSub?.odbiorca_id || rawSub?.klient_id || rawSub?.user_id || payload?.odbiorca_id || null;
         
         let recipientId: number | null = null;
@@ -81,12 +98,10 @@ export async function POST(request: Request) {
           recipientId = Number(recipientIdRaw);
         }
 
-        // Ustalenie domyślnej nazwy odbiorcy
         if (!recipientName) {
           recipientName = rawSub?.role === 'admin' || rawSub?.user_id === 'admin_device' ? 'Administrator' : 'Klubowicz';
         }
 
-        // Bezpieczne odpakowanie subskrypcji w formacie tekstowym lub zagnieżdżonym
         if (typeof subObj === 'string') {
           try {
             subObj = JSON.parse(subObj);
@@ -169,7 +184,6 @@ export async function POST(request: Request) {
       })
     );
 
-    // Zapis historii wysłanych powiadomień do tabeli historia_powiadomien
     if (logEntries.length > 0) {
       const { error: logError } = await supabase
         .from('historia_powiadomien')

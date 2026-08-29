@@ -315,7 +315,7 @@ export default function BazaWiedzyPage() {
       const cleanEmail = targetEmail.toLowerCase().trim();
       const recipientName = klienciMap[cleanEmail] || "Klubowicz";
 
-      // 1. Zapis do tabeli powiadomień
+      // 1. Zapis do tabeli powiadomień w Supabase
       await supabase.from("powiadomienia").insert([
         {
           odbiorca_email: cleanEmail,
@@ -327,46 +327,27 @@ export default function BazaWiedzyPage() {
         },
       ]);
 
-      // 2. Pobranie aktywnych tokenów push użytkownika z tabeli push_subscriptions
-      const { data: userSubs, error: subsError } = await supabase
-        .from("push_subscriptions")
-        .select("*")
-        .or(`user_id.ilike.%${cleanEmail}%,user_id.eq.${cleanEmail}`);
-
-      if (subsError) {
-        console.error("Błąd pobierania subskrypcji z push_subscriptions:", subsError);
-      }
-
-      if (userSubs && userSubs.length > 0) {
-        const formattedSubs = userSubs.map((s: any) => ({
-          subscription: s.subscription,
+      // 2. Wysłanie bezpośrednio do endpointu /api/push/send z adresem e-mail
+      const pushPayload = {
+        targetEmail: cleanEmail,
+        email: cleanEmail,
+        payload: {
+          title,
+          body,
+          url,
+          typ: "suplement_dodany",
           odbiorca: recipientName,
-          user_id: s.user_id,
-          role: s.role || "user",
-        }));
+        },
+      };
 
-        const pushPayload = {
-          subscriptions: formattedSubs,
-          payload: {
-            title,
-            body,
-            url,
-            typ: "suplement_dodany",
-            odbiorca: recipientName,
-          },
-        };
+      const res = await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pushPayload),
+      });
 
-        const res = await fetch("/api/push/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(pushPayload),
-        });
-
-        const resJson = await res.json();
-        console.log("Wynik wysyłki WebPush do klubowicza:", resJson);
-      } else {
-        console.log("Klubowicz nie ma jeszcze zapisanej subskrypcji WebPush w tabeli push_subscriptions");
-      }
+      const resJson = await res.json();
+      console.log("Wynik wysyłki WebPush do klubowicza:", resJson);
     } catch (e) {
       console.error("Błąd podczas wysyłania powiadomienia Push:", e);
     }
@@ -1591,7 +1572,7 @@ export default function BazaWiedzyPage() {
                   onChange={(e) => setForm({ ...form, opis: e.target.value })}
                   placeholder={
                     activeTab === "przepisy"
-                      ? "Opisz krok po kroku jak przygotować posiłek..."
+                      ? "Opisz krok po roku jak przygotować posiłek..."
                       : "Wpisz pełny opis, badania i wskazówki..."
                   }
                   rows={6}
