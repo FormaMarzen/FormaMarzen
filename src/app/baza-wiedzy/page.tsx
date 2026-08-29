@@ -419,7 +419,6 @@ export default function BazaWiedzyPage() {
         alert("Podaj nazwę przepisu!");
         return;
       }
-      // Weryfikacja makroskładników i kalorii na 100g
       const b = Number(form.bialko) || 0;
       const t = Number(form.tluszcze) || 0;
       const w = Number(form.weglowodany) || 0;
@@ -431,7 +430,6 @@ export default function BazaWiedzyPage() {
         return;
       }
 
-      // Sprawdzenie czy podano składniki i sposób przygotowania LUB zdjęcie
       const maTekst = form.skladniki.trim().length > 0 && form.opis.trim().length > 0;
       const maZdjecie = Boolean(form.grafika_url);
       if (!maTekst && !maZdjecie) {
@@ -642,7 +640,7 @@ export default function BazaWiedzyPage() {
           </div>
         </div>
 
-        {/* TABELA DANYCH (ZABEZPIECZONA PRZED OBCINANIEM) */}
+        {/* TABELA DANYCH */}
         {currentFilteredList.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-3xl border border-sky-100 border-dashed">
             <div className="text-5xl mb-4">
@@ -798,7 +796,7 @@ export default function BazaWiedzyPage() {
       {/* MODAL PODGLĄDU */}
       {isViewModalOpen && selectedItem && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
-          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
+          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setIsViewModalOpen(false)}
               className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
@@ -870,13 +868,13 @@ export default function BazaWiedzyPage() {
         </div>
       )}
 
-      {/* MODAL DODAWANIA / EDYCJI */}
+      {/* MODAL DODAWANIA / EDYCJI (NAPRAWIONE OBCINANIE GÓRY I WYŚRODKOWANE KATEGORIE) */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-8">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-8 max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setIsAdminModalOpen(false)}
-              className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 font-bold cursor-pointer text-lg"
+              className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 font-bold cursor-pointer text-lg z-10 bg-white/90 w-8 h-8 rounded-full flex items-center justify-center shadow"
             >
               ✕
             </button>
@@ -888,7 +886,7 @@ export default function BazaWiedzyPage() {
             </div>
 
             <form onSubmit={handleSaveItem} className="space-y-5">
-              {/* ZDJĘCIE (DLA PRZEPISÓW OPCJONALNIE ZAMIAST TEKSTU) */}
+              {/* ZDJĘCIE */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
                   Zdjęcie / Grafika {activeTab === "przepisy" ? "(opcjonalnie zamiast tekstu składników/przygotowania)" : ""}
@@ -914,13 +912,13 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* KATEGORIA (JEDNA DLA PRZEPISÓW) */}
+              {/* KATEGORIA (WYŚRODKOWANA DLA PRZEPISÓW) */}
               <div className="space-y-2">
-                <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
+                <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider text-center sm:text-left">
                   Kategoria {activeTab === "przepisy" ? "(wybierz jedną)" : ""}
                 </label>
                 {activeTab === "przepisy" ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  <div className="flex flex-wrap justify-center gap-2.5">
                     {KATEGORIE_PRZEPISY.map((kat) => {
                       const isSelected = form.kategoriaPojedyncza === kat.id;
                       return (
@@ -928,7 +926,7 @@ export default function BazaWiedzyPage() {
                           type="button"
                           key={kat.id}
                           onClick={() => setForm({ ...form, kategoriaPojedyncza: kat.id })}
-                          className={`py-3 px-3 rounded-2xl border-2 font-black text-xs transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                          className={`py-3 px-4 rounded-2xl border-2 font-black text-xs transition-all cursor-pointer flex items-center justify-center gap-2 w-[calc(50%-6px)] sm:w-[calc(33%-10px)] max-w-[200px] ${
                             isSelected
                               ? "border-amber-500 bg-amber-50 text-amber-950 shadow-sm"
                               : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"
