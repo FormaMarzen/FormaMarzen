@@ -89,7 +89,6 @@ export default function PromocjePage() {
     .filter(p => p.status === 'nadchodzace')
     .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
 
-
   const handleOpenAdd = () => {
     setEditingId(null);
     setForm({ 
@@ -169,7 +168,6 @@ export default function PromocjePage() {
   const handleSavePromo = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Przygotowanie bezpiecznego payloadu zgodnego ze strukturą tabeli Supabase
     const payload = {
       tytul: form.tytul,
       data_od: form.data_od,
@@ -220,14 +218,26 @@ export default function PromocjePage() {
   const PromoCard = ({ p, isPast = false }: { p: Promocja, isPast?: boolean }) => (
     <div 
       onClick={() => !isPast && (setSelectedPromo(p), setIsViewModalOpen(true))}
-      className={`relative bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
+      className={`relative isolate bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
         isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
       }`}
     >
       {isAdmin && (
-        <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
-          <button onClick={(e) => handleOpenEdit(p, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm">✏️</button>
-          <button onClick={(e) => handleDelete(p.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm">🗑️</button>
+        <div className="absolute top-3 right-3 flex gap-2 z-10 bg-white p-1.5 rounded-xl shadow-md border border-slate-200">
+          <button 
+            type="button"
+            onClick={(e) => handleOpenEdit(p, e)} 
+            className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm cursor-pointer"
+          >
+            ✏️
+          </button>
+          <button 
+            type="button"
+            onClick={(e) => handleDelete(p.id, e)} 
+            className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm cursor-pointer"
+          >
+            🗑️
+          </button>
         </div>
       )}
 
@@ -237,7 +247,7 @@ export default function PromocjePage() {
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎁</div>
         )}
-        <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-white/50">
+        <div className="absolute bottom-3 left-3 bg-white px-3 py-1.5 rounded-lg text-xs font-black text-sky-950 shadow-sm flex items-center gap-1.5 z-10 border border-slate-200">
           <span>📅</span> {formatTermin(p.data_od, p.data_do)}
         </div>
       </div>
@@ -272,7 +282,7 @@ export default function PromocjePage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500 pb-12">
+    <div className="max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500 pb-12 font-sans antialiased">
       
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
