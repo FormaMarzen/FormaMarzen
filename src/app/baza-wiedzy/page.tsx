@@ -87,7 +87,7 @@ const KATEGORIE_PRZEPISY = [
 export default function BazaWiedzyPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState("");
-  const [userImieNazwisko, setUserImieNazwisko] = useState("");
+  const [userImieNazwisko, setUserImieNazwisko] = useState("Klubowicz");
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>("suplementy");
 
@@ -155,23 +155,25 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
-    // Pobranie imienia i nazwiska z uwzględnieniem dokładnych nazw kolumn z Supabase ("Imię", "Nazwisko", "E-mail")
+    // Pobieranie pełnego Imienia i Nazwiska z tabeli klienci (bez wyciągania z emaila)
+    let resolvedName = "Klubowicz";
     if (email) {
       const { data: klientRec } = await supabase
         .from("klienci")
-        .select(`"Imię", "Nazwisko"`)
+        .select(`"Imię", "Nazwisko", "E-mail"`)
         .ilike('"E-mail"', email.trim())
         .maybeSingle();
 
       if (klientRec) {
         const imie = (klientRec as any)["Imię"] || "";
         const nazwisko = (klientRec as any)["Nazwisko"] || "";
-        const pelneImie = `${imie} ${nazwisko}`.trim();
-        setUserImieNazwisko(pelneImie || email.split("@")[0]);
-      } else {
-        setUserImieNazwisko(email.split("@")[0]);
+        const combined = `${imie} ${nazwisko}`.trim();
+        if (combined) {
+          resolvedName = combined;
+        }
       }
     }
+    setUserImieNazwisko(resolvedName);
 
     // 1. Suplementy
     const { data: suplData } = await supabase
@@ -236,8 +238,7 @@ export default function BazaWiedzyPage() {
   const currentCategoryList = useMemo(() => {
     if (activeTab === "suplementy") return KATEGORIE_SUPL;
     if (activeTab === "sport") return KATEGORIE_SPORT;
-    if (activeTab === "odzywianie") return KATEGORIE_ODZYWIANIE;
-    return KATEGORIE_PRZEPISY;
+    return KATEGORIE_ODZYWIANIE;
   }, [activeTab]);
 
   const currentFilteredList = useMemo(() => {
@@ -548,7 +549,7 @@ export default function BazaWiedzyPage() {
       payload.tluszcze = Number(form.tluszcze) || 0;
       payload.weglowodany = Number(form.weglowodany) || 0;
       payload.autor_email = userEmail || "klubowicz@formamarzen.pl";
-      payload.autor_nazwa = userImieNazwisko || userEmail || "Klubowicz";
+      payload.autor_nazwa = userImieNazwisko || "Klubowicz";
     } else {
       payload.wskazowki = form.wskazowki;
     }
@@ -812,7 +813,7 @@ export default function BazaWiedzyPage() {
                                 )}
                               </div>
                               <div className="text-[11px] text-slate-400 mt-0.5">
-                                Dodane przez: <span className="font-bold text-slate-600">{item.autor_nazwa || item.autor_email || "Klubowicz"}</span>
+                                Dodane przez: <span className="font-bold text-slate-600">{item.autor_nazwa || "Klubowicz"}</span>
                               </div>
                             </div>
                           </div>
@@ -904,24 +905,25 @@ export default function BazaWiedzyPage() {
         )}
       </div>
 
-      {/* MODAL PODGLĄDU */}
+      {/* MODAL PODGLĄDU - PŁYNNE PRZEWIJANIE (SCROLL) */}
       {isViewModalOpen && selectedItem && (
-        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
-          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] flex flex-col">
             <button
               onClick={() => setIsViewModalOpen(false)}
-              className="absolute top-4 right-4 z-20 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
+              className="absolute top-4 right-4 z-30 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
             >
               ✕
             </button>
 
-            {activeTab === "przepisy" && selectedItem.grafika_url && (
-              <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: "220px", maxHeight: "40vh" }}>
-                <img src={selectedItem.grafika_url} alt={selectedItem.nazwa} className="w-full h-full object-contain max-h-[40vh]" />
-              </div>
-            )}
+            {/* Kontener zawartości z włączonym płynnym przewijaniem (overflow-y-auto) */}
+            <div className="overflow-y-auto p-6 sm:p-10 space-y-6 flex-1">
+              {activeTab === "przepisy" && selectedItem.grafika_url && (
+                <div className="w-full bg-slate-900 rounded-2xl relative flex justify-center items-center overflow-hidden mb-4" style={{ minHeight: "220px", maxHeight: "40vh" }}>
+                  <img src={selectedItem.grafika_url} alt={selectedItem.nazwa} className="w-full h-full object-contain max-h-[40vh]" />
+                </div>
+              )}
 
-            <div className="p-6 sm:p-10 space-y-6">
               <div className="text-center">
                 <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
                   {selectedItem.do_weryfikacji && (
@@ -940,7 +942,7 @@ export default function BazaWiedzyPage() {
                 </h2>
                 {activeTab === "przepisy" && (
                   <div className="text-xs text-slate-500 mt-1 font-medium">
-                    Dodane przez: <span className="font-bold text-slate-800">{selectedItem.autor_nazwa || selectedItem.autor_email || "Klubowicz"}</span>
+                    Dodane przez: <span className="font-bold text-slate-800">{selectedItem.autor_nazwa || "Klubowicz"}</span>
                   </div>
                 )}
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
@@ -991,7 +993,7 @@ export default function BazaWiedzyPage() {
 
               {/* PRZYCISKI AKCJI SPECJALNYCH DLA PRZEPISÓW */}
               {activeTab === "przepisy" && (
-                <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 pb-2">
                   <button
                     type="button"
                     onClick={() => handleZglosBlad(selectedItem.id)}
