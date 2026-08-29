@@ -38,6 +38,9 @@ interface Przepis {
   weglowodany?: number;
   grafika_url?: string | null;
   autor_email?: string;
+  autor_nazwa?: string;
+  do_weryfikacji?: boolean;
+  do_usuniecia?: boolean;
   created_at?: string;
 }
 
@@ -84,6 +87,7 @@ const KATEGORIE_PRZEPISY = [
 export default function BazaWiedzyPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [userImieNazwisko, setUserImieNazwisko] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>("suplementy");
 
@@ -122,10 +126,10 @@ export default function BazaWiedzyPage() {
     wskazowki: "",
     grafika_url: "" as string | null,
     skladniki: "",
-    kalorie: 0,
-    bialko: 0,
-    tluszcze: 0,
-    weglowodany: 0,
+    kalorie: "" as string | number,
+    bialko: "" as string | number,
+    tluszcze: "" as string | number,
+    weglowodany: "" as string | number,
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -151,6 +155,21 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
+    // Pobranie imienia i nazwiska zalogowanego użytkownika z tabeli klienci
+    if (email) {
+      const { data: klientRec } = await supabase
+        .from("klienci")
+        .select("imie, nazwisko")
+        .ilike("email", email.trim())
+        .maybeSingle();
+
+      if (klientRec) {
+        setUserImieNazwisko(`${klientRec.imie || ""} ${klientRec.nazwisko || ""}`.trim());
+      } else {
+        setUserImieNazwisko(email.split("@")[0]);
+      }
+    }
+
     // 1. Suplementy
     const { data: suplData } = await supabase
       .from("suplementy")
@@ -172,12 +191,18 @@ export default function BazaWiedzyPage() {
       .order("nazwa", { ascending: true });
     if (odzData) setOdzywianieWpisy(odzData);
 
-    // 4. Przepisy
+    // 4. Przepisy (sortowanie: najpierw do weryfikacji, potem alfabetycznie)
     const { data: przData } = await supabase
       .from("baza_przepisow")
-      .select("*")
-      .order("nazwa", { ascending: true });
-    if (przData) setPrzepisy(przData);
+      .select("*");
+    if (przData) {
+      const sortedPrzepisy = przData.sort((a, b) => {
+        if (a.do_weryfikacji && !b.do_weryfikacji) return -1;
+        if (!a.do_weryfikacji && b.do_weryfikacji) return 1;
+        return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
+      });
+      setPrzepisy(sortedPrzepisy);
+    }
 
     // 5. Propozycje
     const { data: sugData } = await supabase
@@ -234,7 +259,13 @@ export default function BazaWiedzyPage() {
           return matchesQuery && matchesKat;
         }
       })
-      .sort((a, b) => (a.nazwa || "").localeCompare(b.nazwa || "", "pl"));
+      .sort((a, b) => {
+        if (activeTab === "przepisy") {
+          if (a.do_weryfikacji && !b.do_weryfikacji) return -1;
+          if (!a.do_weryfikacji && b.do_weryfikacji) return 1;
+        }
+        return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
+      });
   }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria]);
 
   const handleWyslijSugestie = async (e: React.FormEvent) => {
@@ -288,10 +319,10 @@ export default function BazaWiedzyPage() {
       wskazowki: "",
       grafika_url: null,
       skladniki: "",
-      kalorie: 0,
-      bialko: 0,
-      tluszcze: 0,
-      weglowodany: 0,
+      kalorie: "",
+      bialko: "",
+      tluszcze: "",
+      weglowodany: "",
     });
     setIsAdminModalOpen(true);
   };
@@ -311,16 +342,22 @@ export default function BazaWiedzyPage() {
       wskazowki: "",
       grafika_url: null,
       skladniki: "",
-      kalorie: 0,
-      bialko: 0,
-      tluszcze: 0,
-      weglowodany: 0,
+      kalorie: "",
+      bialko: "",
+      tluszcze: "",
+      weglowodany: "",
     });
     setIsAdminModalOpen(true);
   };
 
   const handleOpenEdit = (item: any, e: React.MouseEvent) => {
     e.stopPropagation();
+    // Sprawdzenie uprawnień: tylko autor lub admin
+    if (activeTab === "przepisy" && item.autor_email && item.autor_email !== userEmail && !isAdmin) {
+      alert("Możesz edytować tylko przepisy dodane przez siebie!");
+      return;
+    }
+
     setEditingId(item.id);
     setOriginatingSugestiaId(null);
     setOriginatingSugestiaEmail(null);
@@ -334,10 +371,10 @@ export default function BazaWiedzyPage() {
       wskazowki: item.wskazowki || "",
       grafika_url: item.grafika_url || null,
       skladniki: item.skladniki || "",
-      kalorie: item.kalorie || 0,
-      bialko: item.bialko || 0,
-      tluszcze: item.tluszcze || 0,
-      weglowodany: item.weglowodany || 0,
+      kalorie: item.kalorie ?? "",
+      bialko: item.bialko ?? "",
+      tluszcze: item.tluszcze ?? "",
+      weglowodany: item.weglowodany ?? "",
     });
     setIsAdminModalOpen(true);
   };
@@ -356,7 +393,11 @@ export default function BazaWiedzyPage() {
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm("Czy na pewno chcesz usunąć ten wpis?")) return;
+    if (!isAdmin) {
+      alert("Tylko administrator może usuwać wpisy z bazy!");
+      return;
+    }
+    if (!window.confirm("Czy na pewno chcesz trwale usunąć ten wpis?")) return;
 
     let tableName = "suplementy";
     if (activeTab === "sport") tableName = "baza_sport";
@@ -370,6 +411,54 @@ export default function BazaWiedzyPage() {
       setSelectedItem(null);
     }
     fetchData();
+  };
+
+  // Klubowicz zgłasza chęć usunięcia (oznacza do usunięcia)
+  const handleZaznaczDoUsuniecia = async (id: number) => {
+    const { error } = await supabase
+      .from("baza_przepisow")
+      .update({ do_usuniecia: true })
+      .eq("id", id);
+
+    if (!error) {
+      alert("Przepis został zgłoszony do usunięcia przez administratora.");
+      setIsViewModalOpen(false);
+      fetchData();
+    } else {
+      alert("Błąd: " + error.message);
+    }
+  };
+
+  // Zgłoszenie błędu w przepisie
+  const handleZglosBlad = async (id: number) => {
+    const { error } = await supabase
+      .from("baza_przepisow")
+      .update({ do_weryfikacji: true })
+      .eq("id", id);
+
+    if (!error) {
+      alert("Zgłoszono błąd w przepisie. Otrzymał on status 'Do weryfikacji' i został przeniesiony na górę listy.");
+      setIsViewModalOpen(false);
+      fetchData();
+    } else {
+      alert("Błąd: " + error.message);
+    }
+  };
+
+  // Zatwierdzenie / weryfikacja przepisu przez Admina
+  const handleZweryfikuj = async (id: number) => {
+    const { error } = await supabase
+      .from("baza_przepisow")
+      .update({ do_weryfikacji: false, do_usuniecia: false })
+      .eq("id", id);
+
+    if (!error) {
+      alert("Przepis został zweryfikowany i zatwierdzony!");
+      setIsViewModalOpen(false);
+      fetchData();
+    } else {
+      alert("Błąd: " + error.message);
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -460,6 +549,7 @@ export default function BazaWiedzyPage() {
       payload.tluszcze = Number(form.tluszcze) || 0;
       payload.weglowodany = Number(form.weglowodany) || 0;
       payload.autor_email = userEmail || "klubowicz@formamarzen.pl";
+      payload.autor_nazwa = userImieNazwisko || userEmail || "Klubowicz";
     } else {
       payload.wskazowki = form.wskazowki;
     }
@@ -493,7 +583,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGłóWEK GŁÓWNY */}
+      {/* NAGłÓWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -681,7 +771,9 @@ export default function BazaWiedzyPage() {
                           setSelectedItem(item);
                           setIsViewModalOpen(true);
                         }}
-                        className="hover:bg-sky-50/40 transition-colors cursor-pointer group"
+                        className={`hover:bg-sky-50/40 transition-colors cursor-pointer group ${
+                          item.do_weryfikacji ? "bg-amber-50/60" : ""
+                        }`}
                       >
                         <td className="py-4 px-6">
                           <div className="flex items-center gap-4">
@@ -697,12 +789,24 @@ export default function BazaWiedzyPage() {
                               </div>
                             )}
                             <div>
-                              <div className="font-black text-sky-950 text-base group-hover:text-sky-700 transition-colors">
-                                {item.nazwa}
+                              <div className="flex items-center gap-2">
+                                <div className="font-black text-sky-950 text-base group-hover:text-sky-700 transition-colors">
+                                  {item.nazwa}
+                                </div>
+                                {item.do_weryfikacji && (
+                                  <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-md uppercase tracking-wider animate-pulse">
+                                    ⚠️ Do weryfikacji
+                                  </span>
+                                )}
+                                {item.do_usuniecia && (
+                                  <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-md uppercase tracking-wider">
+                                    🗑️ Do usunięcia
+                                  </span>
+                                )}
                               </div>
-                              {activeTab === "przepisy" && item.autor_email && (
-                                <div className="text-[11px] text-slate-400 mt-0.5">Autor: {item.autor_email}</div>
-                              )}
+                              <div className="text-[11px] text-slate-400 mt-0.5">
+                                Dodane przez: <span className="font-bold text-slate-600">{item.autor_nazwa || item.autor_email || "Klubowicz"}</span>
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -758,23 +862,23 @@ export default function BazaWiedzyPage() {
 
                         <td className="py-4 px-6 text-right">
                           <div className="flex items-center justify-end gap-2">
-                            {(isAdmin || (activeTab === "przepisy" && item.autor_email === userEmail)) && (
-                              <>
-                                <button
-                                  onClick={(e) => handleOpenEdit(item, e)}
-                                  className="w-8 h-8 flex items-center justify-center bg-sky-100 text-sky-800 rounded-lg hover:bg-sky-200 transition-colors cursor-pointer text-xs"
-                                  title="Edytuj"
-                                >
-                                  ✏️
-                                </button>
-                                <button
-                                  onClick={(e) => handleDelete(item.id, e)}
-                                  className="w-8 h-8 flex items-center justify-center bg-rose-100 text-rose-800 rounded-lg hover:bg-rose-200 transition-colors cursor-pointer text-xs"
-                                  title="Usuń"
-                                >
-                                  🗑️
-                                </button>
-                              </>
+                            {(isAdmin || (activeTab === "przepisy" && (item.autor_email === userEmail))) && (
+                              <button
+                                onClick={(e) => handleOpenEdit(item, e)}
+                                className="w-8 h-8 flex items-center justify-center bg-sky-100 text-sky-800 rounded-lg hover:bg-sky-200 transition-colors cursor-pointer text-xs"
+                                title="Edytuj"
+                              >
+                                ✏️
+                              </button>
+                            )}
+                            {isAdmin && (
+                              <button
+                                onClick={(e) => handleDelete(item.id, e)}
+                                className="w-8 h-8 flex items-center justify-center bg-rose-100 text-rose-800 rounded-lg hover:bg-rose-200 transition-colors cursor-pointer text-xs"
+                                title="Usuń"
+                              >
+                                🗑️
+                              </button>
                             )}
                             <div className="w-8 h-8 rounded-full bg-sky-50 text-sky-700 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-slate-900 transition-colors">
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -812,11 +916,25 @@ export default function BazaWiedzyPage() {
 
             <div className="p-6 sm:p-10 space-y-6">
               <div className="text-center">
+                <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
+                  {selectedItem.do_weryfikacji && (
+                    <span className="bg-amber-500 text-slate-950 font-black text-xs px-3 py-1 rounded-lg uppercase tracking-wider">
+                      ⚠️ Wymaga weryfikacji (Zgłoszono błąd)
+                    </span>
+                  )}
+                  {selectedItem.do_usuniecia && (
+                    <span className="bg-rose-500 text-white font-black text-xs px-3 py-1 rounded-lg uppercase tracking-wider">
+                      🗑️ Zgłoszono do usunięcia
+                    </span>
+                  )}
+                </div>
                 <h2 className="text-2xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tight">
                   {selectedItem.nazwa}
                 </h2>
-                {activeTab === "przepisy" && selectedItem.autor_email && (
-                  <div className="text-xs text-slate-400 mt-1">Autor: {selectedItem.autor_email}</div>
+                {activeTab === "przepisy" && (
+                  <div className="text-xs text-slate-500 mt-1 font-medium">
+                    Dodane przez: <span className="font-bold text-slate-800">{selectedItem.autor_nazwa || selectedItem.autor_email || "Klubowicz"}</span>
+                  </div>
                 )}
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
               </div>
@@ -834,11 +952,11 @@ export default function BazaWiedzyPage() {
                     </div>
                     <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / porcja</div>
-                      <div className="text-lg font-black text-emerald-950 mt-1">{selectedItem.weglowodany || 0}g</div>
+                      <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.weglowodany || 0}g</div>
                     </div>
                     <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-indigo-900">Kalorie / porcja</div>
-                      <div className="text-lg font-black text-indigo-950 mt-1">{selectedItem.kalorie || 0} kcal</div>
+                      <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.kalorie || 0} kcal</div>
                     </div>
                   </div>
 
@@ -863,6 +981,57 @@ export default function BazaWiedzyPage() {
                   {selectedItem.opis || "Brak opisu."}
                 </div>
               </div>
+
+              {/* PRZYCISKI AKCJI SPECJALNYCH DLA PRZEPISÓW */}
+              {activeTab === "przepisy" && (
+                <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                  {/* Czerwony przycisk zgłoszenia błędu */}
+                  <button
+                    type="button"
+                    onClick={() => handleZglosBlad(selectedItem.id)}
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-black text-xs px-5 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer flex items-center gap-2"
+                  >
+                    <span>🚨</span> BŁĄD W PRZEPISIE
+                  </button>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Panel Administratora: weryfikacja */}
+                    {isAdmin && selectedItem.do_weryfikacji && (
+                      <button
+                        type="button"
+                        onClick={() => handleZweryfikuj(selectedItem.id)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-5 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer flex items-center gap-2"
+                      >
+                        <span>✅</span> Zweryfikuj / Zatwierdź
+                      </button>
+                    )}
+
+                    {/* Przycisk zgłoszenia do usunięcia dla autora */}
+                    {selectedItem.autor_email === userEmail && !selectedItem.do_usuniecia && (
+                      <button
+                        type="button"
+                        onClick={() => handleZaznaczDoUsuniecia(selectedItem.id)}
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-black text-xs px-4 py-3 rounded-xl transition-colors cursor-pointer"
+                      >
+                        🗑️ Zaznacz do usunięcia
+                      </button>
+                    )}
+
+                    {/* Całkowite usunięcie dla Admina */}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          handleDelete(selectedItem.id, e);
+                        }}
+                        className="bg-rose-100 hover:bg-rose-200 text-rose-800 font-black text-xs px-4 py-3 rounded-xl transition-colors cursor-pointer"
+                      >
+                        🗑️ Usuń całkowicie
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -912,7 +1081,7 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* KATEGORIA (WYŚRODKOWANA) */}
+              {/* KATEGORIA */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider text-center sm:text-left">
                   Kategoria {activeTab === "przepisy" ? "(wybierz jedną)" : ""}
@@ -977,7 +1146,7 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* MAKRO NA PORCJĘ DLA PRZEPISÓW */}
+              {/* MAKRO NA PORCJĘ DLA PRZEPISÓW (CZYSZCZENIE POLA PO KLIKNIĘCIU) */}
               {activeTab === "przepisy" && (
                 <div className="space-y-4 bg-sky-50/60 p-4 rounded-2xl border border-sky-100">
                   <h4 className="font-black text-xs uppercase text-sky-900 tracking-wider">
@@ -990,7 +1159,8 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.bialko}
-                        onChange={(e) => setForm({ ...form, bialko: Number(e.target.value) })}
+                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, bialko: "" }); }}
+                        onChange={(e) => setForm({ ...form, bialko: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
@@ -1000,7 +1170,8 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.tluszcze}
-                        onChange={(e) => setForm({ ...form, tluszcze: Number(e.target.value) })}
+                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, tluszcze: "" }); }}
+                        onChange={(e) => setForm({ ...form, tluszcze: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
@@ -1010,7 +1181,8 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.weglowodany}
-                        onChange={(e) => setForm({ ...form, weglowodany: Number(e.target.value) })}
+                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, weglowodany: "" }); }}
+                        onChange={(e) => setForm({ ...form, weglowodany: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
@@ -1020,13 +1192,14 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.kalorie}
-                        onChange={(e) => setForm({ ...form, kalorie: Number(e.target.value) })}
+                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, kalorie: "" }); }}
+                        onChange={(e) => setForm({ ...form, kalorie: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
                   </div>
                   <p className="text-[11px] text-sky-900 font-medium">
-                    * System automatycznie weryfikuje poprawność (Białko×4 + Tłuszcz×9 + Węgle×4 = Kalorie).
+                    * System weryfikuje poprawność (Białko×4 + Tłuszcz×9 + Węgle×4 = Kalorie).
                   </p>
 
                   <div className="space-y-1 pt-2">
