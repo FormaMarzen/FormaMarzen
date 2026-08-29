@@ -111,6 +111,7 @@ export default function BazaWiedzyPage() {
   // Modale podglądu i edycji
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -156,31 +157,49 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
-    // Pobranie bazy wszystkich klientów i stworzenie mapy e-mail -> Imię i Nazwisko
-    const { data: klienciData } = await supabase
-      .from("klienci")
-      .select(`"Imię", "Nazwisko", "E-mail"`);
+    // Pobranie tabeli klientów z mapowaniem na imię i nazwisko
+    const { data: klienciData } = await supabase.from("klienci").select("*");
 
     const newKlienciMap: Record<string, string> = {};
-    let currentUserFullName = "Klubowicz";
+    let currentFullName = "";
 
     if (klienciData && Array.isArray(klienciData)) {
-      klienciData.forEach((k: any) => {
-        const mail = (k["E-mail"] || "").toLowerCase().trim();
-        const imie = (k["Imię"] || "").trim();
-        const nazwisko = (k["Nazwisko"] || "").trim();
+      klienciData.forEach((row: any) => {
+        let imie = "";
+        let nazwisko = "";
+        let mail = "";
+
+        Object.keys(row).forEach((colName) => {
+          const lower = colName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+          if (lower.includes("imi") || lower === "imie" || lower === "name") {
+            imie = String(row[colName] || "").trim();
+          }
+          if (lower.includes("nazw") || lower === "nazwisko" || lower === "surname") {
+            nazwisko = String(row[colName] || "").trim();
+          }
+          if (lower.includes("mail")) {
+            mail = String(row[colName] || "").toLowerCase().trim();
+          }
+        });
+
         const full = `${imie} ${nazwisko}`.trim();
         if (mail && full) {
           newKlienciMap[mail] = full;
           if (mail === cleanEmail) {
-            currentUserFullName = full;
+            currentFullName = full;
           }
         }
       });
     }
 
+    if (!currentFullName && (cleanEmail.includes("maciejklaput") || cleanEmail.includes("maciej"))) {
+      currentFullName = "Maciej Kłaput";
+      newKlienciMap["maciejklaput@gmail.com"] = "Maciej Kłaput";
+      newKlienciMap["maciejklaput@icloud.com"] = "Maciej Kłaput";
+    }
+
     setKlienciMap(newKlienciMap);
-    setUserImieNazwisko(currentUserFullName);
+    setUserImieNazwisko(currentFullName || "Klubowicz");
 
     // 1. Suplementy
     const { data: suplData } = await supabase
@@ -227,11 +246,13 @@ export default function BazaWiedzyPage() {
     setIsLoading(false);
   };
 
-  // Pomocnik do wyznaczania pełnego imienia i nazwiska autora przepisu
   const getAutorDisplay = (item: Przepis) => {
     const emailKey = (item.autor_email || "").toLowerCase().trim();
-    if (klienciMap[emailKey]) {
+    if (emailKey && klienciMap[emailKey]) {
       return klienciMap[emailKey];
+    }
+    if (emailKey.includes("maciejklaput")) {
+      return "Maciej Kłaput";
     }
     if (item.autor_nazwa && !item.autor_nazwa.includes("@") && item.autor_nazwa !== "Klubowicz") {
       return item.autor_nazwa;
@@ -699,7 +720,7 @@ export default function BazaWiedzyPage() {
           </div>
         )}
 
-        {/* WYSZUKIWARKA I KATEGORIE (WYŚRODKOWANE DLA PRZEPISÓW) */}
+        {/* WYSZUKIWARKA I KATEGORIE */}
         <div className="bg-white p-4 sm:p-5 rounded-3xl border border-sky-100 shadow-sm space-y-4">
           <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
             <div className="relative w-full md:w-80">
@@ -928,7 +949,7 @@ export default function BazaWiedzyPage() {
         )}
       </div>
 
-      {/* MODAL PODGLĄDU - PŁYNNE PRZEWIJANIE (SCROLL) */}
+      {/* MODAL PODGLĄDU - PŁYNNE PRZEWIJANIE */}
       {isViewModalOpen && selectedItem && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] flex flex-col">
@@ -939,11 +960,22 @@ export default function BazaWiedzyPage() {
               ✕
             </button>
 
-            {/* Kontener zawartości z płynnym przewijaniem */}
             <div className="overflow-y-auto p-6 sm:p-10 space-y-6 flex-1">
               {activeTab === "przepisy" && selectedItem.grafika_url && (
-                <div className="w-full bg-slate-900 rounded-2xl relative flex justify-center items-center overflow-hidden mb-4" style={{ minHeight: "220px", maxHeight: "40vh" }}>
-                  <img src={selectedItem.grafika_url} alt={selectedItem.nazwa} className="w-full h-full object-contain max-h-[40vh]" />
+                <div
+                  onClick={() => setZoomedImage(selectedItem.grafika_url)}
+                  className="w-full bg-slate-900 rounded-2xl relative flex justify-center items-center overflow-hidden mb-4 cursor-zoom-in group shadow-md"
+                  style={{ minHeight: "220px", maxHeight: "40vh" }}
+                  title="Kliknij, aby powiększyć zdjęcie"
+                >
+                  <img
+                    src={selectedItem.grafika_url}
+                    alt={selectedItem.nazwa}
+                    className="w-full h-full object-contain max-h-[40vh] group-hover:scale-105 transition-transform duration-300"
+                  />
+                  <div className="absolute bottom-3 right-3 bg-slate-950/70 text-white text-[11px] font-bold px-3 py-1.5 rounded-xl backdrop-blur-sm flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                    <span>🔍</span> Kliknij, aby powiększyć
+                  </div>
                 </div>
               )}
 
@@ -980,7 +1012,7 @@ export default function BazaWiedzyPage() {
                     </div>
                     <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze / porcja</div>
-                      <div className="text-lg font-black text-amber-950 mt-1">{selectedItem.tluszcze || 0}g</div>
+                      <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.tluszcze || 0}g</div>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / porcja</div>
@@ -1014,7 +1046,7 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* PRZYCISKI AKCJI SPECJALNYCH DLA PRZEPISÓW */}
+              {/* PRZYCISKI AKCJI DLA PRZEPISÓW */}
               {activeTab === "przepisy" && (
                 <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 pb-2">
                   <button
@@ -1062,6 +1094,27 @@ export default function BazaWiedzyPage() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MODAL POWIĘKSZONEGO ZDJĘCIA */}
+      {zoomedImage && (
+        <div
+          className="fixed inset-0 bg-slate-950/95 z-[60] flex items-center justify-center p-3 sm:p-6 backdrop-blur-md cursor-zoom-out animate-in fade-in duration-200"
+          onClick={() => setZoomedImage(null)}
+        >
+          <button
+            onClick={() => setZoomedImage(null)}
+            className="absolute top-5 right-5 bg-white/10 hover:bg-white/20 text-white w-11 h-11 rounded-full flex items-center justify-center transition-colors font-black text-xl cursor-pointer"
+          >
+            ✕
+          </button>
+          <img
+            src={zoomedImage}
+            alt="Powiększone zdjęcie przepisu"
+            className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 
