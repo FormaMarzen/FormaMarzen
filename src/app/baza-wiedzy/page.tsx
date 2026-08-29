@@ -606,6 +606,45 @@ export default function BazaWiedzyPage() {
     }
   };
 
+  // Automatyczne odczytywanie kodu kreskowego z wykonanego zdjęcia aparatem
+  const handleBarcodeImageCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!("BarcodeDetector" in window)) {
+      alert("Twoja przeglądarka nie obsługuje automatycznego skanowania kodów z aparatu. Wpisz kod ręcznie w pole tekstowe.");
+      return;
+    }
+
+    setIsScanning(true);
+    setProduktSuccessMsg("Analizuję zdjęcie z aparatu...");
+
+    try {
+      const bitmap = await createImageBitmap(file);
+      // @ts-ignore
+      const detector = new BarcodeDetector({
+        formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
+      });
+      const barcodes = await detector.detect(bitmap);
+
+      if (barcodes.length > 0) {
+        const detectedCode = barcodes[0].rawValue;
+        setBarcodeInput(detectedCode);
+        setProduktSuccessMsg(`Odczytano kod: ${detectedCode}`);
+        handleSearchBarcode(detectedCode);
+      } else {
+        alert("Nie udało się odczytać kodu kreskowego ze zdjęcia. Upewnij się, że kod jest ostry i dobrze oświetlony, lub wpisz go ręcznie.");
+        setProduktSuccessMsg("");
+      }
+    } catch (err) {
+      console.error("Błąd dekodowania kodu kreskowego:", err);
+      alert("Błąd podczas analizy obrazu z aparatu.");
+      setProduktSuccessMsg("");
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
   const handleSaveCustomProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!produktForm.nazwa.trim()) {
@@ -1381,7 +1420,7 @@ export default function BazaWiedzyPage() {
         </div>
       )}
 
-      {/* MODAL SKANERA KODÓW KRESKOWYCH I OPEN FOOD FACTS Z APARATEM */}
+      {/* MODAL SKANERA KODÓW KRESKOWYCH I OPEN FOOD FACTS Z AUTOMATYCZNYM DEKODOWANIEM APARATU */}
       {isProductModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-amber-400 my-8">
@@ -1397,12 +1436,11 @@ export default function BazaWiedzyPage() {
                 <span>📷</span> Skaner i Baza Produktów
               </h3>
               <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                Wpisz kod kreskowy, użyj aparatu telefonu lub skorzystaj z bazy **Open Food Facts**. Możesz w każdej chwili edytować makro i zapisać własny produkt.
+                Wpisz kod kreskowy, zeskanuj go aparatem lub skorzystaj z bazy **Open Food Facts**.
               </p>
             </div>
 
             <div className="space-y-5">
-              {/* NAPRAWIONY UKŁAD PRZYCISKÓW (BRAK WYSTAJANIA POZA RAMKĘ) */}
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
@@ -1427,12 +1465,7 @@ export default function BazaWiedzyPage() {
                       accept="image/*"
                       capture="environment"
                       className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          setProduktSuccessMsg("Zdjęcie z aparatu zrobione! Wprowadź dane lub nazwij produkt.");
-                        }
-                      }}
+                      onChange={handleBarcodeImageCapture}
                     />
                   </label>
                 </div>
