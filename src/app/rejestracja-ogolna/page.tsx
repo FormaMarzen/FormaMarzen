@@ -247,8 +247,8 @@ export default function GeneralRegistrationPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-start p-4 sm:p-8 font-sans antialiased text-slate-800">
-      <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-xl p-6 sm:p-8 space-y-6 my-auto">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-start py-12 px-4 sm:px-8 font-sans antialiased text-slate-800 overflow-y-auto">
+      <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-xl p-6 sm:p-8 space-y-6 mb-12">
         
         <div className="flex flex-col items-center space-y-3 text-center border-b border-slate-100 pb-6">
           <div className="w-16 h-16 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center p-2 overflow-hidden">
