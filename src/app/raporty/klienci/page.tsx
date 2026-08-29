@@ -1725,8 +1725,6 @@ export default function KlienciPage() {
     if (sortField === 'firstName') { valA = a.firstName || ''; valB = b.firstName || ''; }
     else if (sortField === 'lastName') { valA = a.lastName || ''; valB = b.lastName || ''; }
     else if (sortField === 'registered') { valA = a.registered || ''; valB = b.registered || ''; }
-    else if (sortField === 'email') { valA = a.email || ''; valB = b.email || ''; }
-    else if (sortField === 'phone') { valA = a.phone || ''; valB = b.phone || ''; }
     else if (sortField === 'pass') { 
       valA = a.karnetyKlubowicza?.[0]?.nazwa || ''; 
       valB = b.karnetyKlubowicza?.[0]?.nazwa || ''; 
@@ -1838,18 +1836,16 @@ export default function KlienciPage() {
         </div>
       </div>
 
-      {/* Tabela Klientów */}
+      {/* Tabela Klientów (bez kolumn Email i Telefon) */}
       <div className="bg-white border border-sky-200 rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto w-full">
-          <table className="w-full text-left text-xs min-w-[1100px]">
+          <table className="w-full text-left text-xs min-w-[900px]">
             <thead>
               <tr className="bg-sky-50/80 text-sky-900 uppercase text-[10px] tracking-wider border-b border-sky-200">
                 <th className="py-3 px-3 text-center w-10 whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></th>
                 <th onClick={() => handleSort('firstName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Imię {sortField === 'firstName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('lastName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Nazwisko {sortField === 'lastName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('registered')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Dołączył {sortField === 'registered' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('email')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Email {sortField === 'email' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('phone')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Telefon {sortField === 'phone' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('pass')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Karnet {sortField === 'pass' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('price')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Cena {sortField === 'price' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('expiresDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Wygasa {sortField === 'expiresDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
@@ -1886,16 +1882,14 @@ export default function KlienciPage() {
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
                     <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
-                    <td className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap">
+                    <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">
                       <div className="flex items-center gap-2">
                         {client.firstName}
                         {client.isTrainer && <span className="text-[10px]" title="Trener w zespole">⭐</span>}
                       </div>
                     </td>
-                    <td className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap">{client.lastName}</td>
+                    <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">{client.lastName}</td>
                     <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.registered}</td>
-                    <td onClick={() => openProfile(client)} className="py-3.5 px-3 text-sky-700 font-medium hover:underline cursor-pointer whitespace-nowrap">{client.email || '-'}</td>
-                    <td className="py-3.5 px-3 font-mono text-slate-600 whitespace-nowrap">{client.phone || '-'}</td>
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -2679,14 +2673,13 @@ export default function KlienciPage() {
                       );
                     })()}
 
-                    {/* 2. HISTORIA PRZESZŁYCH ZAJĘĆ (FILTROWANA OD DATY DOŁĄCZENIA) */}
+                    {/* 2. HISTORIA PRZESZŁYCH ZAJĘĆ */}
                     {activeZapisyTab === 'historia_zajec' && (() => {
                       const now = new Date();
                       const nowTime = now.getTime();
                       const pastClassesList: any[] = [];
                       const pastSignatures = new Set<string>();
 
-                      // Ustalenie dokładnego znacznika czasu daty dołączenia
                       const joinDateRaw = profileClient.registered || profileClient.Zarejestrowany || profileClient.activated || '';
                       let joinStartMs = 0;
                       if (joinDateRaw) {
@@ -2712,10 +2705,9 @@ export default function KlienciPage() {
 
                           const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(datePart, timeStr);
 
-                          // Sprawdzamy czy zajęcia odbyły się w przeszłości ORAZ czy nie są wcześniejsze niż data dołączenia klubowicza
                           if (classStartMs > 0 && classStartMs < nowTime) {
                             if (joinStartMs > 0 && classStartMs < joinStartMs) {
-                              return; // Pomijamy zajęcia sprzed daty dołączenia
+                              return;
                             }
 
                             const sig = normalizeClassSignature(displayDate, title);
@@ -2751,7 +2743,7 @@ export default function KlienciPage() {
                         const classItemMs = st || parseClassDate(item.data);
 
                         if (joinStartMs > 0 && classItemMs > 0 && classItemMs < joinStartMs) {
-                          return; // Pomijamy przeszłe zajęcia sprzed rejestracji
+                          return;
                         }
 
                         const sig = normalizeClassSignature(displayDate, item.zajecia || 'Trening');
