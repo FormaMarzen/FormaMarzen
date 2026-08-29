@@ -273,13 +273,24 @@ export default function OgloszeniaPage() {
     }
   };
 
+  // DZISIEJSZA DATA DO WERYFIKACJI WYGAŚNIĘCIA
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  const isExpired = (dateToStr: string) => {
+    if (!dateToStr) return false;
+    return dateToStr < todayStr;
+  };
+
   const filteredOgloszenia = ogloszenia.filter(o => 
     o.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
     o.target.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const aktywneOgloszenia = filteredOgloszenia.filter(o => o.isVisible !== false);
-  const niewidoczneOgloszenia = filteredOgloszenia.filter(o => o.isVisible === false);
+  // Aktywne = flaga isVisible !== false ORAZ data zakończenia >= dzisiejszej daty
+  const aktywneOgloszenia = filteredOgloszenia.filter(o => o.isVisible !== false && !isExpired(o.dateTo));
+  
+  // Niewidoczne = flaga isVisible === false LUB ogłoszenie wygasło czasowo
+  const niewidoczneOgloszenia = filteredOgloszenia.filter(o => o.isVisible === false || isExpired(o.dateTo));
 
   return (
     <div className="max-w-[1600px] mx-auto space-y-8 pb-24 relative font-sans antialiased">
@@ -371,47 +382,56 @@ export default function OgloszeniaPage() {
             <div className="space-y-4 pt-4">
               <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider">Niewidoczne ogłoszenia</h3>
               <div className="space-y-4">
-                {niewidoczneOgloszenia.map((ogloszenie) => (
-                  <div key={ogloszenie.id} className="bg-slate-200/80 border border-slate-300 rounded-2xl p-5 shadow-sm space-y-3 relative overflow-hidden">
-                    
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
-                      <span className="text-7xl">👁️‍🗨️</span>
-                    </div>
+                {niewidoczneOgloszenia.map((ogloszenie) => {
+                  const expired = isExpired(ogloszenie.dateTo);
+                  return (
+                    <div key={ogloszenie.id} className="bg-slate-200/80 border border-slate-300 rounded-2xl p-5 shadow-sm space-y-3 relative overflow-hidden">
+                      
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+                        <span className="text-7xl">👁️‍🗨️</span>
+                      </div>
 
-                    <div className="flex justify-between items-start border-b border-slate-300 pb-3 relative z-10">
-                      <div className="space-y-1 text-xs">
-                        <div className="font-bold text-slate-700">
-                          Widoczny od dnia: <span className="font-mono text-slate-900">{ogloszenie.dateFrom}</span> do dnia: <span className="font-mono text-slate-900">{ogloszenie.dateTo}</span>
+                      <div className="flex justify-between items-start border-b border-slate-300 pb-3 relative z-10">
+                        <div className="space-y-1 text-xs">
+                          <div className="font-bold text-slate-700">
+                            Widoczny od dnia: <span className="font-mono text-slate-900">{ogloszenie.dateFrom}</span> do dnia: <span className="font-mono text-slate-900">{ogloszenie.dateTo}</span>
+                          </div>
+                          <div className="text-slate-600">
+                            Widoczne dla: <strong className="text-slate-900">{ogloszenie.target}</strong>
+                          </div>
                         </div>
-                        <div className="text-slate-600">
-                          Widoczne dla: <strong className="text-slate-900">{ogloszenie.target}</strong>
+
+                        <div className="flex items-center gap-3">
+                          {expired && (
+                            <span className="bg-slate-300 text-slate-700 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                              WYGASŁE
+                            </span>
+                          )}
+
+                          <button 
+                            onClick={() => handleOpenEditModal(ogloszenie)}
+                            className="p-1.5 text-rose-900 hover:text-rose-950 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer"
+                            title="Edytuj i włącz wyświetlanie ogłoszenia"
+                          >
+                            👁️
+                          </button>
+
+                          <button 
+                            onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
+                            className="p-1.5 text-slate-500 hover:text-rose-700 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer"
+                            title="Usuń ogłoszenie"
+                          >
+                            🗑️
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3">
-                        <button 
-                          onClick={() => handleOpenEditModal(ogloszenie)}
-                          className="p-1.5 text-rose-900 hover:text-rose-950 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer"
-                          title="Edytuj i włącz wyświetlanie ogłoszenia"
-                        >
-                          👁️
-                        </button>
-
-                        <button 
-                          onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
-                          className="p-1.5 text-slate-500 hover:text-rose-700 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer"
-                          title="Usuń ogłoszenie"
-                        >
-                          🗑️
-                        </button>
+                      <div className="text-xs text-slate-800 whitespace-pre-wrap bg-white/60 p-3.5 rounded-xl border border-slate-300/60 leading-relaxed relative z-10">
+                        {ogloszenie.content}
                       </div>
                     </div>
-
-                    <div className="text-xs text-slate-800 whitespace-pre-wrap bg-white/60 p-3.5 rounded-xl border border-slate-300/60 leading-relaxed relative z-10">
-                      {ogloszenie.content}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
