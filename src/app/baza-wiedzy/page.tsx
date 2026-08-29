@@ -28,25 +28,17 @@ interface ArtykulWiedzy {
 interface Przepis {
   id: number;
   nazwa: string;
-  kategoria: string | string[];
+  kategoria: string;
   skladniki: string;
   przygotowanie: string;
+  opis: string;
   kalorie?: number;
   bialko?: number;
   tluszcze?: number;
   weglowodany?: number;
+  grafika_url?: string | null;
   autor_email?: string;
   created_at?: string;
-}
-
-interface ProduktSpozywczy {
-  id?: number;
-  kod_kreskowy?: string;
-  nazwa: string;
-  kalorie_100g: number;
-  bialko_100g: number;
-  tluszcze_100g: number;
-  weglowodany_100g: number;
 }
 
 interface Sugestia {
@@ -123,6 +115,7 @@ export default function BazaWiedzyPage() {
   const [form, setForm] = useState({
     nazwa: "",
     kategorie: ["witaminy"] as string[],
+    kategoriaPojedyncza: "sniadanie",
     opis: "",
     dawkowanie_podstawowe: "",
     dawkowanie_wyzsze: "",
@@ -134,19 +127,6 @@ export default function BazaWiedzyPage() {
     tluszcze: 0,
     weglowodany: 0,
   });
-
-  // Stan dla Skanera Kodów i Produktów / Open Food Facts
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-  const [barcodeInput, setBarcodeInput] = useState("");
-  const [isScanning, setIsScanning] = useState(false);
-  const [produktForm, setProduktForm] = useState<ProduktSpozywczy>({
-    nazwa: "",
-    kalorie_100g: 0,
-    bialko_100g: 0,
-    tluszcze_100g: 0,
-    weglowodany_100g: 0,
-  });
-  const [produktSuccessMsg, setProduktSuccessMsg] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -243,10 +223,16 @@ export default function BazaWiedzyPage() {
 
     return sourceList
       .filter((item) => {
-        const itemCats = parseCategories(item.kategoria);
-        const matchesQuery = !cleanQuery || (item.nazwa && item.nazwa.toLowerCase().includes(cleanQuery));
-        const matchesKat = selectedKategoria === "wszystkie" || itemCats.includes(selectedKategoria);
-        return matchesQuery && matchesKat;
+        if (activeTab === "przepisy") {
+          const matchesQuery = !cleanQuery || (item.nazwa && item.nazwa.toLowerCase().includes(cleanQuery));
+          const matchesKat = selectedKategoria === "wszystkie" || item.kategoria === selectedKategoria;
+          return matchesQuery && matchesKat;
+        } else {
+          const itemCats = parseCategories(item.kategoria);
+          const matchesQuery = !cleanQuery || (item.nazwa && item.nazwa.toLowerCase().includes(cleanQuery));
+          const matchesKat = selectedKategoria === "wszystkie" || itemCats.includes(selectedKategoria);
+          return matchesQuery && matchesKat;
+        }
       })
       .sort((a, b) => (a.nazwa || "").localeCompare(b.nazwa || "", "pl"));
   }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria]);
@@ -269,35 +255,6 @@ export default function BazaWiedzyPage() {
       ]);
 
       if (!error) {
-        try {
-          await fetch("/api/push/send", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: "📬 Nowa propozycja w Bazie Wiedzy",
-              body: `Klubowicz (${zglaszajacyEmail}) poprosił o dodanie: ${nazwaWpisu}`,
-              url: "/baza-wiedzy",
-              target: "admin",
-              target_group: "admin",
-            }),
-          });
-        } catch (pushErr) {
-          console.error("Błąd wysyłki powiadomienia push:", pushErr);
-        }
-
-        try {
-          await supabase.from("historia_powiadomien").insert([
-            {
-              odbiorca: "Administratorzy (1 urządz.)",
-              tytul: "Nowa propozycja suplementu",
-              tresc: `Klubowicz (${zglaszajacyEmail}) zgłosił propozycję: ${nazwaWpisu}`,
-              created_at: new Date().toISOString(),
-            },
-          ]);
-        } catch (hErr) {
-          console.error("Błąd zapisu w historii powiadomień:", hErr);
-        }
-
         setNowaSugestiaNazwa("");
         setSugestiaSuccess(true);
         setTimeout(() => setSugestiaSuccess(false), 5000);
@@ -324,6 +281,7 @@ export default function BazaWiedzyPage() {
     setForm({
       nazwa: sugestia.nazwa,
       kategorie: ["suplementy"],
+      kategoriaPojedyncza: "sniadanie",
       opis: "",
       dawkowanie_podstawowe: "",
       dawkowanie_wyzsze: "",
@@ -342,10 +300,11 @@ export default function BazaWiedzyPage() {
     setEditingId(null);
     setOriginatingSugestiaId(null);
     setOriginatingSugestiaEmail(null);
-    const domyslnaKategoria = currentCategoryList[0]?.id || "ogolne";
+    const domyslnaKategoria = currentCategoryList[0]?.id || "witaminy";
     setForm({
       nazwa: "",
       kategorie: [domyslnaKategoria],
+      kategoriaPojedyncza: domyslnaKategoria,
       opis: "",
       dawkowanie_podstawowe: "",
       dawkowanie_wyzsze: "",
@@ -368,6 +327,7 @@ export default function BazaWiedzyPage() {
     setForm({
       nazwa: item.nazwa,
       kategorie: parseCategories(item.kategoria),
+      kategoriaPojedyncza: item.kategoria || "sniadanie",
       opis: item.opis || "",
       dawkowanie_podstawowe: item.dawkowanie_podstawowe || item.dawkowanie || "",
       dawkowanie_wyzsze: item.dawkowanie_wyzsze || "",
@@ -396,7 +356,7 @@ export default function BazaWiedzyPage() {
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm("Czy na pewno chcesz usunąć ten wpis z bazy wiedzy?")) return;
+    if (!window.confirm("Czy na pewno chcesz usunąć ten wpis?")) return;
 
     let tableName = "suplementy";
     if (activeTab === "sport") tableName = "baza_sport";
@@ -455,8 +415,27 @@ export default function BazaWiedzyPage() {
     e.preventDefault();
 
     if (activeTab === "przepisy") {
-      if (!form.nazwa.trim() || !form.skladniki.trim() || !form.opis.trim()) {
-        alert("Wypełnij wymagane pola: Nazwa, Składniki oraz Sposób przygotowania!");
+      if (!form.nazwa.trim()) {
+        alert("Podaj nazwę przepisu!");
+        return;
+      }
+      // Weryfikacja makroskładników i kalorii na 100g
+      const b = Number(form.bialko) || 0;
+      const t = Number(form.tluszcze) || 0;
+      const w = Number(form.weglowodany) || 0;
+      const k = Number(form.kalorie) || 0;
+
+      const wyliczoneKcal = Math.round(b * 4 + t * 9 + w * 4);
+      if (Math.abs(wyliczoneKcal - k) > 15) {
+        alert(`Wpisane kalorie (${k} kcal) nie zgadzają się z wyliczonymi z makroskładników na 100g (${wyliczoneKcal} kcal: białko*4 + tłuszcz*9 + węgle*4). Sprawdź poprawność danych!`);
+        return;
+      }
+
+      // Sprawdzenie czy podano składniki i sposób przygotowania LUB zdjęcie
+      const maTekst = form.skladniki.trim().length > 0 && form.opis.trim().length > 0;
+      const maZdjecie = Boolean(form.grafika_url);
+      if (!maTekst && !maZdjecie) {
+        alert("Musisz uzupełnić listę składników i sposób przygotowania LUB dodać zdjęcie przepisu!");
         return;
       }
     }
@@ -468,7 +447,7 @@ export default function BazaWiedzyPage() {
 
     let payload: any = {
       nazwa: form.nazwa,
-      kategoria: form.kategorie.join(","),
+      kategoria: activeTab === "przepisy" ? form.kategoriaPojedyncza : form.kategorie.join(","),
       opis: form.opis,
       grafika_url: form.grafika_url,
     };
@@ -491,187 +470,10 @@ export default function BazaWiedzyPage() {
       await supabase.from(tableName).update(payload).eq("id", editingId);
     } else {
       await supabase.from(tableName).insert([payload]);
-
-      if (originatingSugestiaId && activeTab === "suplementy") {
-        await supabase.from("sugestie_suplementow").delete().eq("id", originatingSugestiaId);
-
-        if (originatingSugestiaEmail && !originatingSugestiaEmail.includes("anonim")) {
-          try {
-            const { data: klientData } = await supabase
-              .from("klienci")
-              .select("id, imie, email")
-              .ilike("email", originatingSugestiaEmail.trim())
-              .maybeSingle();
-
-            const wiadomoscTresc = `Cześć! Informacje o suplemencie, o który pytałeś (${form.nazwa}), zostały właśnie opracowane i dodane do Bazy Wiedzy. Sprawdź szczegóły, działanie i dawkowanie w zakładce Baza Wiedzy! 💊`;
-
-            await supabase.from("czat_wiadomosci").insert([
-              {
-                odbiorca_id: klientData?.id || null,
-                nadawca_id: null,
-                nadawca_nazwa: "Administrator (Forma Marzeń)",
-                nadawca_avatar: null,
-                tresc: wiadomoscTresc,
-                przeczytana: false,
-                created_at: new Date().toISOString(),
-              },
-            ]);
-
-            await fetch("/api/push/send", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                title: "📚 Baza Wiedzy uzupełniona!",
-                body: `Dodano informacje o suplemencie: ${form.nazwa}`,
-                url: "/baza-wiedzy",
-                user_email: originatingSugestiaEmail,
-                klient_id: klientData?.id || null,
-              }),
-            });
-          } catch (chatErr) {
-            console.error("Błąd powiadamiania na czacie:", chatErr);
-          }
-        }
-      }
     }
 
     setIsAdminModalOpen(false);
     fetchData();
-  };
-
-  const handleSearchBarcode = async (barcodeToSearch?: string) => {
-    const code = barcodeToSearch || barcodeInput;
-    if (!code.trim()) return;
-
-    setIsScanning(true);
-    setProduktSuccessMsg("");
-
-    try {
-      const { data: localProd } = await supabase
-        .from("produkty_spozywcze")
-        .select("*")
-        .eq("kod_kreskowy", code.trim())
-        .maybeSingle();
-
-      if (localProd) {
-        setProduktForm({
-          kod_kreskowy: localProd.kod_kreskowy,
-          nazwa: localProd.nazwa,
-          kalorie_100g: localProd.kalorie_100g || 0,
-          bialko_100g: localProd.bialko_100g || 0,
-          tluszcze_100g: localProd.tluszcze_100g || 0,
-          weglowodany_100g: localProd.weglowodany_100g || 0,
-        });
-        setProduktSuccessMsg("Znaleziono produkt w lokalnej bazie!");
-        setIsScanning(false);
-        return;
-      }
-
-      const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${code.trim()}.json`);
-      const data = await res.json();
-
-      if (data && data.status === 1 && data.product) {
-        const p = data.product;
-        const nut = p.nutriments || {};
-        const kcal = nut["energy-kcal_100g"] || nut["energy-kcal"] || 0;
-        const prot = nut["proteins_100g"] || 0;
-        const fat = nut["fat_100g"] || 0;
-        const carb = nut["carbohydrates_100g"] || 0;
-
-        setProduktForm({
-          kod_kreskowy: code.trim(),
-          nazwa: p.product_name || p.brands || "Produkt z Open Food Facts",
-          kalorie_100g: Number(kcal) || 0,
-          bialko_100g: Number(prot) || 0,
-          tluszcze_100g: Number(fat) || 0,
-          weglowodany_100g: Number(carb) || 0,
-        });
-        setProduktSuccessMsg("Pobrano dane z Open Food Facts! Możesz edytować makro i zapisać.");
-      } else {
-        alert("Nie znaleziono produktu o kodzie: " + code + ". Wprowadź dane ręcznie.");
-        setProduktForm({
-          kod_kreskowy: code.trim(),
-          nazwa: "",
-          kalorie_100g: 0,
-          bialko_100g: 0,
-          tluszcze_100g: 0,
-          weglowodany_100g: 0,
-        });
-      }
-    } catch (err) {
-      console.error("Błąd pobierania produktu:", err);
-      alert("Błąd połączenia z bazą produktów.");
-    } finally {
-      setIsScanning(false);
-    }
-  };
-
-  // Automatyczne odczytywanie kodu kreskowego z wykonanego zdjęcia aparatem
-  const handleBarcodeImageCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!("BarcodeDetector" in window)) {
-      alert("Twoja przeglądarka nie obsługuje automatycznego skanowania kodów z aparatu. Wpisz kod ręcznie w pole tekstowe.");
-      return;
-    }
-
-    setIsScanning(true);
-    setProduktSuccessMsg("Analizuję zdjęcie z aparatu...");
-
-    try {
-      const bitmap = await createImageBitmap(file);
-      // @ts-ignore
-      const detector = new BarcodeDetector({
-        formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
-      });
-      const barcodes = await detector.detect(bitmap);
-
-      if (barcodes.length > 0) {
-        const detectedCode = barcodes[0].rawValue;
-        setBarcodeInput(detectedCode);
-        setProduktSuccessMsg(`Odczytano kod: ${detectedCode}`);
-        handleSearchBarcode(detectedCode);
-      } else {
-        alert("Nie udało się odczytać kodu kreskowego ze zdjęcia. Upewnij się, że kod jest ostry i dobrze oświetlony, lub wpisz go ręcznie.");
-        setProduktSuccessMsg("");
-      }
-    } catch (err) {
-      console.error("Błąd dekodowania kodu kreskowego:", err);
-      alert("Błąd podczas analizy obrazu z aparatu.");
-      setProduktSuccessMsg("");
-    } finally {
-      setIsScanning(false);
-    }
-  };
-
-  const handleSaveCustomProduct = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!produktForm.nazwa.trim()) {
-      alert("Podaj nazwę produktu!");
-      return;
-    }
-
-    try {
-      const payload = {
-        kod_kreskowy: produktForm.kod_kreskowy || null,
-        nazwa: produktForm.nazwa,
-        kalorie_100g: Number(produktForm.kalorie_100g) || 0,
-        bialko_100g: Number(produktForm.bialko_100g) || 0,
-        tluszcze_100g: Number(produktForm.tluszcze_100g) || 0,
-        weglowodany_100g: Number(produktForm.weglowodany_100g) || 0,
-      };
-
-      const { error } = await supabase.from("produkty_spozywcze").insert([payload]);
-      if (!error) {
-        alert("Produkt został pomyślnie zapisany w bazie!");
-        setIsProductModalOpen(false);
-      } else {
-        alert("Błąd zapisu produktu: " + error.message);
-      }
-    } catch (err) {
-      console.error("Błąd zapisu:", err);
-    }
   };
 
   const getKategoriaBadge = (kategoria: string) => {
@@ -705,33 +507,17 @@ export default function BazaWiedzyPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* PRZYCISK SKANUJ / PRODUKTY WIDOCZNY TYLKO W ZAKŁADCE PRZEPISY */}
-          {activeTab === "przepisy" && (
-            <button
-              onClick={() => {
-                setBarcodeInput("");
-                setProduktForm({ nazwa: "", kalorie_100g: 0, bialko_100g: 0, tluszcze_100g: 0, weglowodany_100g: 0 });
-                setIsProductModalOpen(true);
-              }}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
-            >
-              <span>📷</span> Skanuj / Produkty
-            </button>
-          )}
-
-          {(isAdmin || activeTab === "przepisy") && (
-            <button
-              onClick={handleOpenAdd}
-              className="bg-sky-900 hover:bg-sky-950 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
-            >
-              <span>+</span> DODAJ {activeTab === "przepisy" ? "PRZEPIS" : "WPIS"}
-            </button>
-          )}
-        </div>
+        {(isAdmin || activeTab === "przepisy") && (
+          <button
+            onClick={handleOpenAdd}
+            className="bg-sky-900 hover:bg-sky-950 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <span>+</span> DODAJ {activeTab === "przepisy" ? "PRZEPIS" : "WPIS"}
+          </button>
+        )}
       </div>
 
-      {/* SYSTEM 4 ZAKŁADEK - ZAWIJANY (FLEX-WRAP) NA JEDNYM WIDOKU */}
+      {/* SYSTEM 4 ZAKŁADEK */}
       <div className="flex items-center gap-2 flex-wrap border-b border-slate-200 pb-4">
         <button
           onClick={() => setActiveTab("suplementy")}
@@ -780,7 +566,6 @@ export default function BazaWiedzyPage() {
 
       {/* ZAWARTOŚĆ STRONY */}
       <div className="space-y-6">
-        {/* KLAUZULA MEDYCZNA */}
         {activeTab === "suplementy" && (
           <div className="bg-amber-50 border-2 border-amber-300/80 rounded-3xl p-5 sm:p-6 shadow-sm flex items-start gap-4">
             <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm">
@@ -792,61 +577,9 @@ export default function BazaWiedzyPage() {
               </h4>
               <p className="font-medium text-slate-700">
                 Informacje publikowane w Bazie Wiedzy mają charakter{" "}
-                <strong className="font-bold text-slate-900">wyłącznie edukacyjny i informacyjny</strong> i nie
-                stanowią porady medycznej.
+                <strong className="font-bold text-slate-900">wyłącznie edukacyjny i informacyjny</strong> i nie stanowią porady medycznej.
               </p>
             </div>
-          </div>
-        )}
-
-        {/* SEKCJA PROPOZYCJI DLA ADMINA */}
-        {isAdmin && activeTab === "suplementy" && (
-          <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300 rounded-3xl p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <span className="text-xl">📬</span>
-                <h3 className="font-black text-sky-950 text-sm sm:text-base uppercase tracking-tight">
-                  Propozycje od Klubowiczów ({sugestie.length})
-                </h3>
-              </div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 bg-amber-200/70 px-2.5 py-1 rounded-lg">
-                Panel Administratora
-              </span>
-            </div>
-
-            {sugestie.length === 0 ? (
-              <p className="text-xs text-slate-500 font-medium">Brak oczekujących propozycji.</p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
-                {sugestie.map((sug) => (
-                  <div
-                    key={sug.id}
-                    className="bg-white p-3.5 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-between gap-3"
-                  >
-                    <div>
-                      <div className="font-black text-slate-900 text-sm">{sug.nazwa}</div>
-                      <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-                        <span>👤</span> {sug.klient_email || "Klubowicz"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                      <button
-                        onClick={() => handleQuickAddFromSugestia(sug)}
-                        className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] py-1.5 px-3 rounded-lg transition-colors flex items-center justify-center gap-1 shadow-sm cursor-pointer"
-                      >
-                        <span>+</span> Dodaj do bazy
-                      </button>
-                      <button
-                        onClick={() => handleUsunSugestie(sug.id)}
-                        className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-700 rounded-lg transition-colors cursor-pointer text-xs"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
 
@@ -909,7 +642,7 @@ export default function BazaWiedzyPage() {
           </div>
         </div>
 
-        {/* TABELA DANYCH */}
+        {/* TABELA DANYCH (ZABEZPIECZONA PRZED OBCINANIEM) */}
         {currentFilteredList.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-3xl border border-sky-100 border-dashed">
             <div className="text-5xl mb-4">
@@ -920,8 +653,8 @@ export default function BazaWiedzyPage() {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-sky-100 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-left border-collapse min-w-[650px]">
                 <thead>
                   <tr className="bg-sky-50/60 border-b border-sky-100 text-[11px] font-black uppercase tracking-wider text-sky-900">
                     <th className="py-4 px-6">{activeTab === "przepisy" ? "Nazwa przepisu" : "Nazwa / Tytuł"}</th>
@@ -930,7 +663,7 @@ export default function BazaWiedzyPage() {
                       {activeTab === "suplementy"
                         ? "Dawkowanie"
                         : activeTab === "przepisy"
-                        ? "Makroskładniki (B / T / W / Kcal)"
+                        ? "Makro na 100g (B / T / W / Kcal)"
                         : "Kluczowe wskazówki"}
                     </th>
                     <th className="py-4 px-6 text-right">Akcja</th>
@@ -972,37 +705,30 @@ export default function BazaWiedzyPage() {
                               {activeTab === "przepisy" && item.autor_email && (
                                 <div className="text-[11px] text-slate-400 mt-0.5">Autor: {item.autor_email}</div>
                               )}
-                              <div className="sm:hidden mt-1.5 flex flex-wrap gap-1">
-                                {itemCats.map((catKey) => {
-                                  const b = getKategoriaBadge(catKey);
-                                  return (
-                                    <span
-                                      key={catKey}
-                                      className={`inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-lg border ${b.color}`}
-                                    >
-                                      <span>{b.icon}</span> {b.label}
-                                    </span>
-                                  );
-                                })}
-                              </div>
                             </div>
                           </div>
                         </td>
 
                         <td className="py-4 px-6 hidden sm:table-cell">
-                          <div className="flex flex-wrap gap-1.5 max-w-xs">
-                            {itemCats.map((catKey) => {
-                              const badge = getKategoriaBadge(catKey);
-                              return (
-                                <span
-                                  key={catKey}
-                                  className={`inline-flex items-center gap-1 text-xs font-black px-2.5 py-1 rounded-xl border ${badge.color}`}
-                                >
-                                  <span>{badge.icon}</span> {badge.label}
-                                </span>
-                              );
-                            })}
-                          </div>
+                          {activeTab === "przepisy" ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-black px-2.5 py-1 rounded-xl border bg-sky-50 text-sky-900 border-sky-200">
+                              {getKategoriaBadge(item.kategoria).label}
+                            </span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5 max-w-xs">
+                              {itemCats.map((catKey) => {
+                                const badge = getKategoriaBadge(catKey);
+                                return (
+                                  <span
+                                    key={catKey}
+                                    className={`inline-flex items-center gap-1 text-xs font-black px-2.5 py-1 rounded-xl border ${badge.color}`}
+                                  >
+                                    <span>{badge.icon}</span> {badge.label}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
                         </td>
 
                         <td className="py-4 px-6 hidden md:table-cell">
@@ -1017,9 +743,6 @@ export default function BazaWiedzyPage() {
                                   <span className="text-slate-400">—</span>
                                 )}
                               </div>
-                              {wyzsze && (
-                                <div className="text-[11px] text-amber-700 font-bold truncate">⚡ Wyższe: {wyzsze}</div>
-                              )}
                             </div>
                           ) : activeTab === "przepisy" ? (
                             <div className="text-xs font-bold text-slate-700">
@@ -1072,7 +795,7 @@ export default function BazaWiedzyPage() {
         )}
       </div>
 
-      {/* MODAL PODGLĄDU WPISU / PRZEPISU */}
+      {/* MODAL PODGLĄDU */}
       {isViewModalOpen && selectedItem && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-start justify-center p-2 sm:p-4 md:py-10 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto">
@@ -1083,101 +806,63 @@ export default function BazaWiedzyPage() {
               ✕
             </button>
 
-            {activeTab !== "przepisy" && (
-              <div
-                className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden"
-                style={{ minHeight: "260px", maxHeight: "50vh" }}
-              >
-                {selectedItem.grafika_url ? (
-                  <>
-                    <div
-                      className="absolute inset-0 opacity-35 blur-2xl bg-cover bg-center scale-110"
-                      style={{ backgroundImage: `url(${selectedItem.grafika_url})` }}
-                    ></div>
-                    <img
-                      src={selectedItem.grafika_url}
-                      alt={selectedItem.nazwa}
-                      className="relative z-10 w-full h-full object-contain max-h-[50vh] drop-shadow-2xl"
-                    />
-                  </>
-                ) : (
-                  <div className="w-full h-full min-h-[260px] bg-gradient-to-br from-sky-900 to-slate-800 flex flex-col items-center justify-center text-sky-100">
-                    <span className="text-7xl mb-3 drop-shadow-lg">
-                      {activeTab === "suplementy" ? "💊" : activeTab === "sport" ? "🏋️" : "🥗"}
-                    </span>
-                    <span className="font-black text-lg tracking-widest uppercase opacity-40">Baza Wiedzy</span>
-                  </div>
-                )}
+            {activeTab === "przepisy" && selectedItem.grafika_url && (
+              <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden" style={{ minHeight: "220px", maxHeight: "40vh" }}>
+                <img src={selectedItem.grafika_url} alt={selectedItem.nazwa} className="w-full h-full object-contain max-h-[40vh]" />
               </div>
             )}
 
             <div className="p-6 sm:p-10 space-y-6">
               <div className="text-center">
-                <div className="flex flex-wrap justify-center gap-1.5 mb-3">
-                  {parseCategories(selectedItem.kategoria).map((catKey) => {
-                    const badge = getKategoriaBadge(catKey);
-                    return (
-                      <span
-                        key={catKey}
-                        className={`inline-flex items-center gap-1.5 text-xs font-black px-4 py-1.5 rounded-full border ${badge.color}`}
-                      >
-                        <span>{badge.icon}</span> {badge.label}
-                      </span>
-                    );
-                  })}
-                </div>
                 <h2 className="text-2xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tight">
                   {selectedItem.nazwa}
                 </h2>
                 {activeTab === "przepisy" && selectedItem.autor_email && (
-                  <div className="text-xs text-slate-400 mt-1">Autor przepisu: {selectedItem.autor_email}</div>
+                  <div className="text-xs text-slate-400 mt-1">Autor: {selectedItem.autor_email}</div>
                 )}
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
               </div>
 
               {activeTab === "przepisy" && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-center">
-                    <div className="text-[11px] font-black uppercase text-sky-900">Białko</div>
-                    <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.bialko || 0}g</div>
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-center">
+                      <div className="text-[11px] font-black uppercase text-sky-900">Białko / 100g</div>
+                      <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.bialko || 0}g</div>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-center">
+                      <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze / 100g</div>
+                      <div className="text-lg font-black text-amber-950 mt-1">{selectedItem.tluszcze || 0}g</div>
+                    </div>
+                    <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
+                      <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / 100g</div>
+                      <div className="text-lg font-black text-emerald-950 mt-1">{selectedItem.weglowodany || 0}g</div>
+                    </div>
+                    <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl text-center">
+                      <div className="text-[11px] font-black uppercase text-indigo-900">Kalorie / 100g</div>
+                      <div className="text-lg font-black text-indigo-950 mt-1">{selectedItem.kalorie || 0} kcal</div>
+                    </div>
                   </div>
-                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-center">
-                    <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze</div>
-                    <div className="text-lg font-black text-amber-950 mt-1">{selectedItem.tluszcze || 0}g</div>
-                  </div>
-                  <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
-                    <div className="text-[11px] font-black uppercase text-emerald-900">Węglowodany</div>
-                    <div className="text-lg font-black text-emerald-950 mt-1">{selectedItem.weglowodany || 0}g</div>
-                  </div>
-                  <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl text-center">
-                    <div className="text-[11px] font-black uppercase text-indigo-900">Kalorie</div>
-                    <div className="text-lg font-black text-indigo-950 mt-1">{selectedItem.kalorie || 0} kcal</div>
-                  </div>
-                </div>
-              )}
 
-              {activeTab === "przepisy" && selectedItem.skladniki && (
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                  <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <span>🛒</span> Składniki
-                  </h3>
-                  <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                    {selectedItem.skladniki}
-                  </div>
-                </div>
+                  {selectedItem.skladniki && (
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                      <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                        <span>🛒</span> Składniki
+                      </h3>
+                      <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                        {selectedItem.skladniki}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
                 <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <span>📝</span>{" "}
-                  {activeTab === "suplementy"
-                    ? "Działanie i właściwości"
-                    : activeTab === "przepisy"
-                    ? "Sposób przygotowania"
-                    : "Szczegółowy opis i metodyka"}
+                  <span>📝</span> {activeTab === "przepisy" ? "Sposób przygotowania" : "Opis"}
                 </h3>
                 <div className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium">
-                  {selectedItem.opis || "Brak szczegółowego opisu."}
+                  {selectedItem.opis || "Brak opisu."}
                 </div>
               </div>
             </div>
@@ -1200,73 +885,89 @@ export default function BazaWiedzyPage() {
               <h3 className="font-black text-2xl text-sky-950 leading-tight">
                 {editingId ? "Edytuj wpis" : "Nowy wpis"}: {activeTab.toUpperCase()}
               </h3>
-              <p className="text-sm font-medium text-slate-500 mt-1">
-                {activeTab === "przepisy"
-                  ? "Podaj wymagane informacje o przepisie, aby zachować porządek w bazie."
-                  : "Uzupełnij informacje, kategorie i treść artykułu."}
-              </p>
             </div>
 
             <form onSubmit={handleSaveItem} className="space-y-5">
-              {activeTab !== "przepisy" && (
-                <div className="space-y-2">
-                  <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                    Zdjęcie / Grafika
-                  </label>
-                  <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full h-36 bg-sky-50 border-2 border-dashed border-sky-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-sky-100 transition-colors overflow-hidden relative"
-                  >
-                    {form.grafika_url ? (
-                      <>
-                        <img src={form.grafika_url} className="w-full h-full object-cover opacity-60" alt="Preview" />
-                        <div className="absolute inset-0 flex items-center justify-center font-bold text-sky-900 drop-shadow-md">
-                          Kliknij, aby zmienić zdjęcie
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-3xl mb-1">📸</span>
-                        <span className="text-xs font-bold text-sky-700">Wybierz zdjęcie z dysku</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-
+              {/* ZDJĘCIE (DLA PRZEPISÓW OPCJONALNIE ZAMIAST TEKSTU) */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                    Kategoria {activeTab === "przepisy" ? "(wybierz posiłek)" : "(możesz wybrać kilka)"}
-                  </label>
-                  <span className="text-[11px] text-slate-400 font-bold">Wybrano: {form.kategorie.length}</span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                  {currentCategoryList.map((kat) => {
-                    const isSelected = form.kategorie.includes(kat.id);
-                    return (
-                      <button
-                        type="button"
-                        key={kat.id}
-                        onClick={() => handleToggleCategory(kat.id)}
-                        className={`py-3 px-3 rounded-2xl border-2 font-black text-xs transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                          isSelected
-                            ? "border-amber-500 bg-amber-50 text-amber-950 shadow-sm"
-                            : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"
-                        }`}
-                      >
-                        <span>{kat.label}</span>
-                        {isSelected && <span className="text-amber-600">✓</span>}
-                      </button>
-                    );
-                  })}
+                <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
+                  Zdjęcie / Grafika {activeTab === "przepisy" ? "(opcjonalnie zamiast tekstu składników/przygotowania)" : ""}
+                </label>
+                <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full h-36 bg-sky-50 border-2 border-dashed border-sky-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-sky-100 transition-colors overflow-hidden relative"
+                >
+                  {form.grafika_url ? (
+                    <>
+                      <img src={form.grafika_url} className="w-full h-full object-cover opacity-60" alt="Preview" />
+                      <div className="absolute inset-0 flex items-center justify-center font-bold text-sky-900 drop-shadow-md">
+                        Kliknij, aby zmienić zdjęcie
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-3xl mb-1">📸</span>
+                      <span className="text-xs font-bold text-sky-700">Wybierz zdjęcie z dysku</span>
+                    </>
+                  )}
                 </div>
               </div>
 
+              {/* KATEGORIA (JEDNA DLA PRZEPISÓW) */}
+              <div className="space-y-2">
+                <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
+                  Kategoria {activeTab === "przepisy" ? "(wybierz jedną)" : ""}
+                </label>
+                {activeTab === "przepisy" ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {KATEGORIE_PRZEPISY.map((kat) => {
+                      const isSelected = form.kategoriaPojedyncza === kat.id;
+                      return (
+                        <button
+                          type="button"
+                          key={kat.id}
+                          onClick={() => setForm({ ...form, kategoriaPojedyncza: kat.id })}
+                          className={`py-3 px-3 rounded-2xl border-2 font-black text-xs transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                            isSelected
+                              ? "border-amber-500 bg-amber-50 text-amber-950 shadow-sm"
+                              : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"
+                          }`}
+                        >
+                          <span>{kat.label}</span>
+                          {isSelected && <span className="text-amber-600">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {currentCategoryList.map((kat) => {
+                      const isSelected = form.kategorie.includes(kat.id);
+                      return (
+                        <button
+                          type="button"
+                          key={kat.id}
+                          onClick={() => handleToggleCategory(kat.id)}
+                          className={`py-3 px-3 rounded-2xl border-2 font-black text-xs transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                            isSelected
+                              ? "border-amber-500 bg-amber-50 text-amber-950 shadow-sm"
+                              : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300"
+                          }`}
+                        >
+                          <span>{kat.label}</span>
+                          {isSelected && <span className="text-amber-600">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* NAZWA */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                  Tytuł / Nazwa {activeTab === "przepisy" ? "przepisu *" : "wpisu *"}
+                  Tytuł / Nazwa *
                 </label>
                 <input
                   type="text"
@@ -1278,60 +979,67 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
+              {/* MAKRO NA 100G DLA PRZEPISÓW */}
               {activeTab === "przepisy" && (
                 <div className="space-y-4 bg-sky-50/60 p-4 rounded-2xl border border-sky-100">
                   <h4 className="font-black text-xs uppercase text-sky-900 tracking-wider">
-                    Makroskładniki i kalorie (szacunkowe na całość porcji)
+                    Makroskładniki i kalorie (wartości podawane na 100g)
                   </h4>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Białko (g)</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Białko (g) / 100g</label>
                       <input
                         type="number"
+                        step="0.1"
                         value={form.bialko}
                         onChange={(e) => setForm({ ...form, bialko: Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Tłuszcze (g)</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Tłuszcze (g) / 100g</label>
                       <input
                         type="number"
+                        step="0.1"
                         value={form.tluszcze}
                         onChange={(e) => setForm({ ...form, tluszcze: Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Węglowodany (g)</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Węgle (g) / 100g</label>
                       <input
                         type="number"
+                        step="0.1"
                         value={form.weglowodany}
                         onChange={(e) => setForm({ ...form, weglowodany: Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Kalorie (kcal)</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Kalorie (kcal) / 100g</label>
                       <input
                         type="number"
+                        step="0.1"
                         value={form.kalorie}
                         onChange={(e) => setForm({ ...form, kalorie: Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
                     </div>
                   </div>
+                  <p className="text-[11px] text-sky-900 font-medium">
+                    * System automatycznie weryfikuje poprawność (Białko×4 + Tłuszcz×9 + Węgle×4 = Kalorie).
+                  </p>
 
                   <div className="space-y-1 pt-2">
                     <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                      Lista składników *
+                      Lista składników (lub zdjęcie powyżej)
                     </label>
                     <textarea
-                      required
                       value={form.skladniki}
                       onChange={(e) => setForm({ ...form, skladniki: e.target.value })}
-                      placeholder="- 50g płatków owsianych&#10;- 30g odżywki białkowej&#10;- 150ml mleka..."
-                      rows={4}
+                      placeholder="- 50g płatków owsianych&#10;- 30g odżywki białkowej..."
+                      rows={3}
                       className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-800 focus:outline-none focus:border-sky-500"
                     />
                   </div>
@@ -1384,10 +1092,10 @@ export default function BazaWiedzyPage() {
 
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                  {activeTab === "przepisy" ? "Sposób przygotowania *" : "Treść artykułu / Opis szczegółowy *"}
+                  {activeTab === "przepisy" ? "Sposób przygotowania (lub zdjęcie powyżej)" : "Treść artykułu / Opis szczegółowy *"}
                 </label>
                 <textarea
-                  required
+                  required={activeTab !== "przepisy"}
                   value={form.opis}
                   onChange={(e) => setForm({ ...form, opis: e.target.value })}
                   placeholder={
@@ -1395,7 +1103,7 @@ export default function BazaWiedzyPage() {
                       ? "Opisz krok po kroku jak przygotować posiłek..."
                       : "Wpisz pełny opis, badania i wskazówki..."
                   }
-                  rows={8}
+                  rows={6}
                   className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
@@ -1416,142 +1124,6 @@ export default function BazaWiedzyPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL SKANERA KODÓW KRESKOWYCH I OPEN FOOD FACTS Z AUTOMATYCZNYM DEKODOWANIEM APARATU */}
-      {isProductModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-amber-400 my-8">
-            <button
-              onClick={() => setIsProductModalOpen(false)}
-              className="absolute top-5 right-5 text-slate-400 hover:text-slate-700 font-bold cursor-pointer text-lg"
-            >
-              ✕
-            </button>
-
-            <div className="mb-6">
-              <h3 className="font-black text-xl sm:text-2xl text-sky-950 flex items-center gap-2">
-                <span>📷</span> Skaner i Baza Produktów
-              </h3>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                Wpisz kod kreskowy, zeskanuj go aparatem lub skorzystaj z bazy **Open Food Facts**.
-              </p>
-            </div>
-
-            <div className="space-y-5">
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  placeholder="Wpisz kod kreskowy..."
-                  value={barcodeInput}
-                  onChange={(e) => setBarcodeInput(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
-                />
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    type="button"
-                    disabled={isScanning}
-                    onClick={() => handleSearchBarcode()}
-                    className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer"
-                  >
-                    {isScanning ? "Szukanie..." : "Szukaj"}
-                  </button>
-                  <label className="flex-1 sm:flex-none bg-sky-900 hover:bg-sky-950 text-white font-black text-xs px-4 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer flex items-center justify-center gap-1.5">
-                    <span>📸</span> Aparat
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="hidden"
-                      onChange={handleBarcodeImageCapture}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {produktSuccessMsg && (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl">
-                  {produktSuccessMsg}
-                </div>
-              )}
-
-              <form onSubmit={handleSaveCustomProduct} className="space-y-4 pt-2 border-t border-slate-100">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                    Nazwa produktu *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={produktForm.nazwa}
-                    onChange={(e) => setProduktForm({ ...produktForm, nazwa: e.target.value })}
-                    placeholder="np. Serek wiejski Piątnica"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Białko / 100g</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={produktForm.bialko_100g}
-                      onChange={(e) => setProduktForm({ ...produktForm, bialko_100g: Number(e.target.value) })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Tłuszcze / 100g</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={produktForm.tluszcze_100g}
-                      onChange={(e) => setProduktForm({ ...produktForm, tluszcze_100g: Number(e.target.value) })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Węgle / 100g</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={produktForm.weglowodany_100g}
-                      onChange={(e) => setProduktForm({ ...produktForm, weglowodany_100g: Number(e.target.value) })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-600 block mb-1">Kalorie / 100g</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={produktForm.kalorie_100g}
-                      onChange={(e) => setProduktForm({ ...produktForm, kalorie_100g: Number(e.target.value) })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold"
-                    />
-                  </div>
-                </div>
-
-                <div className="pt-3 flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setIsProductModalOpen(false)}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer text-sm"
-                  >
-                    Zamknij
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 bg-sky-900 hover:bg-sky-950 text-white font-black px-4 py-3 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm"
-                  >
-                    💾 Zapisz produkt w bazie
-                  </button>
-                </div>
-              </form>
-            </div>
           </div>
         </div>
       )}
