@@ -159,7 +159,6 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
-    // Pobranie tabeli klientów z mapowaniem na imię i nazwisko
     const { data: klienciData } = await supabase.from("klienci").select("*");
 
     const newKlienciMap: Record<string, string> = {};
@@ -203,28 +202,24 @@ export default function BazaWiedzyPage() {
     setKlienciMap(newKlienciMap);
     setUserImieNazwisko(currentFullName || "Klubowicz");
 
-    // 1. Suplementy
     const { data: suplData } = await supabase
       .from("suplementy")
       .select("*")
       .order("nazwa", { ascending: true });
     if (suplData) setSuplementy(suplData);
 
-    // 2. Sport
     const { data: sportData } = await supabase
       .from("baza_sport")
       .select("*")
       .order("nazwa", { ascending: true });
     if (sportData) setSportWpisy(sportData);
 
-    // 3. Odżywianie
     const { data: odzData } = await supabase
       .from("baza_odzywianie")
       .select("*")
       .order("nazwa", { ascending: true });
     if (odzData) setOdzywianieWpisy(odzData);
 
-    // 4. Przepisy
     const { data: przData } = await supabase.from("baza_przepisow").select("*");
     if (przData) {
       const sortedPrzepisy = przData.sort((a, b) => {
@@ -235,7 +230,6 @@ export default function BazaWiedzyPage() {
       setPrzepisy(sortedPrzepisy);
     }
 
-    // 5. Propozycje oczekujące
     const { data: sugData } = await supabase
       .from("sugestie_suplementow")
       .select("*")
@@ -320,7 +314,6 @@ export default function BazaWiedzyPage() {
     try {
       const cleanTargetEmail = email.toLowerCase().trim();
 
-      // 1. Zapis powiadomienia w tabeli bazy Supabase
       await supabase.from("powiadomienia").insert([
         {
           odbiorca_email: cleanTargetEmail,
@@ -332,7 +325,6 @@ export default function BazaWiedzyPage() {
         },
       ]);
 
-      // 2. Wysłanie push przez webhook/endpoint API aplikacji (jeśli aktywny WebPush)
       await fetch("/api/push/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -540,8 +532,8 @@ export default function BazaWiedzyPage() {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement("canvas");
-          const MAX_WIDTH = 800;
-          const MAX_HEIGHT = 800;
+          const MAX_WIDTH = 1200;
+          const MAX_HEIGHT = 1200;
           let width = img.width;
           let height = img.height;
 
@@ -552,7 +544,7 @@ export default function BazaWiedzyPage() {
             }
           } else {
             if (height > MAX_HEIGHT) {
-              height *= MAX_HEIGHT / height;
+              width *= MAX_HEIGHT / height;
               height = MAX_HEIGHT;
             }
           }
@@ -561,7 +553,7 @@ export default function BazaWiedzyPage() {
           canvas.height = height;
           const ctx = canvas.getContext("2d");
           ctx?.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL("image/jpeg", 0.75);
+          const compressed = canvas.toDataURL("image/jpeg", 0.85);
 
           setForm((prev) => ({ ...prev, grafika_url: compressed }));
         };
@@ -641,7 +633,6 @@ export default function BazaWiedzyPage() {
       return;
     }
 
-    // JEŚLI DODANO WPIS Z PROPOZYCJI KLUBOWICZA -> WYŚLIJ POWIADOMIENIE I ZMIEŃ STATUS
     if (originatingSugestiaId && originatingSugestiaEmail) {
       await supabase
         .from("sugestie_suplementow")
@@ -944,8 +935,6 @@ export default function BazaWiedzyPage() {
                   {currentFilteredList.map((item) => {
                     const itemCats = parseCategories(item.kategoria);
                     const podstawowe = item.dawkowanie_podstawowe || item.dawkowanie || "";
-                    const wyzsze = item.dawkowanie_wyzsze || "";
-                    const wskazowki = item.wskazowki || "";
                     const autorWyswietlany = activeTab === "przepisy" ? getAutorDisplay(item) : "";
 
                     return (
@@ -1041,7 +1030,7 @@ export default function BazaWiedzyPage() {
                             </div>
                           ) : (
                             <div className="text-xs font-medium text-slate-600 line-clamp-2 max-w-xs">
-                              {wskazowki || "—"}
+                              {item.wskazowki || "—"}
                             </div>
                           )}
                         </td>
@@ -1083,29 +1072,31 @@ export default function BazaWiedzyPage() {
         )}
       </div>
 
-      {/* MODAL PODGLĄDU */}
+      {/* MODAL PODGLĄDU - STYL INFOGRAFIKI ZE ZDJĘCIEM I KARTAMI DAWKOWANIA */}
       {isViewModalOpen && selectedItem && (
-        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-md overflow-y-auto">
-          <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-md overflow-y-auto">
+          <div className="bg-white rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-200 my-auto max-h-[92vh] flex flex-col border border-slate-100">
+            {/* PRZYCISK ZAMKNIĘCIA */}
             <button
               onClick={() => setIsViewModalOpen(false)}
-              className="absolute top-4 right-4 z-30 bg-white hover:bg-slate-100 text-slate-900 w-10 h-10 rounded-full flex items-center justify-center transition-colors shadow-lg cursor-pointer font-black text-lg"
+              className="absolute top-4 right-4 z-30 bg-white/90 hover:bg-white text-slate-800 w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-md cursor-pointer font-black text-base border border-slate-200 hover:scale-105"
             >
               ✕
             </button>
 
-            <div className="overflow-y-auto p-6 sm:p-10 space-y-6 flex-1">
-              {activeTab === "przepisy" && selectedItem.grafika_url && (
+            <div className="overflow-y-auto space-y-6 flex-1 pb-8">
+              {/* DUŻY BANER / ZDJĘCIE INFOGRAFIKI */}
+              {selectedItem.grafika_url && (
                 <div
                   onClick={() => setZoomedImage(selectedItem.grafika_url)}
-                  className="w-full bg-slate-900 rounded-2xl relative flex justify-center items-center overflow-hidden mb-4 cursor-zoom-in group shadow-md"
-                  style={{ minHeight: "220px", maxHeight: "40vh" }}
+                  className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden cursor-zoom-in group"
+                  style={{ maxHeight: "48vh", minHeight: "220px" }}
                   title="Kliknij, aby powiększyć zdjęcie"
                 >
                   <img
                     src={selectedItem.grafika_url}
                     alt={selectedItem.nazwa}
-                    className="w-full h-full object-contain max-h-[40vh] group-hover:scale-105 transition-transform duration-300"
+                    className="w-full h-full object-contain max-h-[48vh] group-hover:scale-[1.02] transition-transform duration-300"
                   />
                   <div className="absolute bottom-3 right-3 bg-slate-950/70 text-white text-[11px] font-bold px-3 py-1.5 rounded-xl backdrop-blur-sm flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
                     <span>🔍</span> Kliknij, aby powiększyć
@@ -1113,11 +1104,13 @@ export default function BazaWiedzyPage() {
                 </div>
               )}
 
-              <div className="text-center">
-                <div className="flex flex-wrap items-center justify-center gap-2 mb-2">
+              {/* NAGŁÓWEK KARTY: KATEGORIE, TYTUŁ I AKCENT */}
+              <div className="px-6 sm:px-10 text-center pt-2 space-y-3">
+                {/* KATEGORIE / STATUSY */}
+                <div className="flex flex-wrap items-center justify-center gap-2">
                   {selectedItem.do_weryfikacji && (
-                    <span className="bg-amber-500 text-slate-950 font-black text-xs px-3 py-1 rounded-lg uppercase tracking-wider">
-                      ⚠️ Wymaga weryfikacji (Zgłoszono błąd)
+                    <span className="bg-amber-500 text-slate-950 font-black text-xs px-3 py-1 rounded-lg uppercase tracking-wider animate-pulse">
+                      ⚠️ Wymaga weryfikacji
                     </span>
                   )}
                   {selectedItem.do_usuniecia && (
@@ -1125,20 +1118,71 @@ export default function BazaWiedzyPage() {
                       🗑️ Zgłoszono do usunięcia
                     </span>
                   )}
+                  {parseCategories(selectedItem.kategoria).map((catKey) => {
+                    const badge = getKategoriaBadge(catKey);
+                    return (
+                      <span
+                        key={catKey}
+                        className="inline-flex items-center gap-1 text-xs font-black px-3.5 py-1 rounded-full border bg-sky-50 text-sky-900 border-sky-200/80 shadow-xs"
+                      >
+                        <span>{badge.icon}</span> {badge.label}
+                      </span>
+                    );
+                  })}
                 </div>
+
                 <h2 className="text-2xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tight">
                   {selectedItem.nazwa}
                 </h2>
+
                 {activeTab === "przepisy" && (
-                  <div className="text-xs text-slate-500 mt-1 font-medium">
+                  <div className="text-xs text-slate-500 font-medium">
                     Dodane przez: <span className="font-bold text-slate-800">{getAutorDisplay(selectedItem)}</span>
                   </div>
                 )}
-                <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
+
+                {/* POMARAŃCZOWY AKCENT POD TYTUŁEM */}
+                <div className="w-14 h-1.5 bg-amber-500 mx-auto rounded-full mt-2"></div>
               </div>
 
+              {/* DEDYKOWANY BLOK DAWKOWANIA DLA SUPLEMENTÓW */}
+              {activeTab === "suplementy" && (
+                <div className="px-6 sm:px-10 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* KARTA 1: DAWKOWANIE PODSTAWOWE */}
+                  <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 sm:p-5 flex items-start gap-4 shadow-sm">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-200 text-emerald-800 flex items-center justify-center text-xl shrink-0">
+                      🌱
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-emerald-900">
+                        1. Dawkowanie Podstawowe
+                      </div>
+                      <div className="text-sm sm:text-base font-black text-slate-900 mt-0.5 whitespace-pre-line">
+                        {selectedItem.dawkowanie_podstawowe || selectedItem.dawkowanie || "Brak zdefiniowanego dawkowania"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* KARTA 2: DAWKOWANIE WYŻSZE */}
+                  <div className="bg-amber-50/60 border border-amber-200/80 rounded-2xl p-4 sm:p-5 flex items-start gap-4 shadow-sm">
+                    <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 text-amber-800 flex items-center justify-center text-xl shrink-0">
+                      ⚡
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-amber-900">
+                        2. Dawkowanie Wyższe
+                      </div>
+                      <div className="text-sm sm:text-base font-black text-slate-900 mt-0.5 whitespace-pre-line">
+                        {selectedItem.dawkowanie_wyzsze || "Wg indywidualnych potrzeb / brak wyższego dawkowania"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* DEDYKOWANY BLOK DLA PRZEPISÓW (MAKRO I SKŁADNIKI) */}
               {activeTab === "przepisy" && (
-                <>
+                <div className="px-6 sm:px-10 space-y-4">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-sky-900">Białko / porcja</div>
@@ -1159,30 +1203,50 @@ export default function BazaWiedzyPage() {
                   </div>
 
                   {selectedItem.skladniki && (
-                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                      <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                      <h3 className="font-black text-xs text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
                         <span>🛒</span> Składniki
                       </h3>
-                      <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                      <div className="text-slate-800 text-sm leading-relaxed whitespace-pre-wrap font-medium">
                         {selectedItem.skladniki}
                       </div>
                     </div>
                   )}
-                </>
+                </div>
               )}
 
-              <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-200">
-                <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <span>📝</span> {activeTab === "przepisy" ? "Sposób przygotowania" : "Opis"}
-                </h3>
-                <div className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium">
-                  {selectedItem.opis || "Brak opisu."}
+              {/* DLA SPORTU / ODŻYWIANIA - WSKAZÓWKI */}
+              {(activeTab === "sport" || activeTab === "odzywianie") && selectedItem.wskazowki && (
+                <div className="px-6 sm:px-10">
+                  <div className="bg-sky-50/70 border border-sky-200 rounded-2xl p-5 flex items-start gap-3.5">
+                    <span className="text-xl shrink-0">💡</span>
+                    <div>
+                      <div className="text-[11px] font-black uppercase tracking-wider text-sky-900">
+                        Kluczowe Wskazówki
+                      </div>
+                      <div className="text-sm font-bold text-slate-800 mt-0.5">{selectedItem.wskazowki}</div>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* PRZYCISKI AKCJI DLA PRZEPISÓW */}
+              {/* TREŚĆ SZCZEGÓŁOWA / OPIS */}
+              {selectedItem.opis && (
+                <div className="px-6 sm:px-10">
+                  <div className="bg-slate-50 p-6 sm:p-8 rounded-3xl border border-slate-200">
+                    <h3 className="font-black text-xs text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                      <span>📝</span> {activeTab === "przepisy" ? "Sposób przygotowania" : "Szczegółowy Opis i Działanie"}
+                    </h3>
+                    <div className="text-slate-800 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium">
+                      {selectedItem.opis}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* PRZYCISKI AKCJI W MODALU PRZEPISÓW */}
               {activeTab === "przepisy" && (
-                <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 pb-2">
+                <div className="px-6 sm:px-10 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
                   <button
                     type="button"
                     onClick={() => handleZglosBlad(selectedItem.id)}
@@ -1243,7 +1307,7 @@ export default function BazaWiedzyPage() {
           </button>
           <img
             src={zoomedImage}
-            alt="Powiększone zdjęcie przepisu"
+            alt="Powiększone zdjęcie"
             className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
@@ -1275,7 +1339,7 @@ export default function BazaWiedzyPage() {
             <form onSubmit={handleSaveItem} className="space-y-5">
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider">
-                  Zdjęcie / Grafika {activeTab === "przepisy" ? "(opcjonalnie zamiast tekstu składników/przygotowania)" : ""}
+                  Zdjęcie / Grafika {activeTab === "przepisy" ? "(opcjonalnie)" : ""}
                 </label>
                 <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
                 <div
@@ -1356,7 +1420,7 @@ export default function BazaWiedzyPage() {
                   required
                   value={form.nazwa}
                   onChange={(e) => setForm({ ...form, nazwa: e.target.value })}
-                  placeholder={activeTab === "przepisy" ? "np. Owsianka wysokobiałkowa z bananem" : "np. Kreatyna Monohydrat"}
+                  placeholder={activeTab === "przepisy" ? "np. Owsianka wysokobiałkowa z bananem" : "np. GABA"}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
@@ -1449,7 +1513,7 @@ export default function BazaWiedzyPage() {
                       type="text"
                       value={form.dawkowanie_podstawowe}
                       onChange={(e) => setForm({ ...form, dawkowanie_podstawowe: e.target.value })}
-                      placeholder="np. 1 kapsułka rano"
+                      placeholder="np. 500-1000 mg"
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800"
                     />
                   </div>
@@ -1461,7 +1525,7 @@ export default function BazaWiedzyPage() {
                       type="text"
                       value={form.dawkowanie_wyzsze}
                       onChange={(e) => setForm({ ...form, dawkowanie_wyzsze: e.target.value })}
-                      placeholder="np. 10g w dni treningowe"
+                      placeholder="np. 1500-3000 mg"
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800"
                     />
                   </div>
