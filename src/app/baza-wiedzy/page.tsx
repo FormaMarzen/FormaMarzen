@@ -745,17 +745,20 @@ export default function BazaWiedzyPage() {
       <div className="space-y-6">
         {activeTab === "suplementy" && (
           <>
+            {/* OFICJALNA KLAUZULA PRAWNO-MEDYCZNA (POLSKIE PRZEPISY / GIS / USTAWA O BEZPIECZEŃSTWIE ŻYWNOŚCI I ŻYWIENIA) */}
             <div className="bg-amber-50 border-2 border-amber-300/80 rounded-3xl p-5 sm:p-6 shadow-sm flex items-start gap-4">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm mt-0.5">
                 ⚠️
               </div>
-              <div className="space-y-1.5 text-xs text-amber-950 leading-relaxed">
+              <div className="space-y-2 text-xs text-amber-950 leading-relaxed">
                 <h4 className="font-black uppercase tracking-wider text-[11px] text-amber-900 flex items-center gap-1.5">
                   Ważna informacja prawno-medyczna
                 </h4>
                 <p className="font-medium text-slate-700">
-                  Informacje publikowane w Bazie Wiedzy mają charakter{" "}
-                  <strong className="font-bold text-slate-900">wyłącznie edukacyjny i informacyjny</strong> i nie stanowią porady medycznej.
+                  <strong className="font-bold text-slate-900">Suplement diety jest środkiem spożywczym</strong>, którego celem jest uzupełnienie normalnej diety. Suplement diety nie ma właściwości leczniczych i <strong className="font-bold text-slate-900">nie może być stosowany jako substytut (zamiennik) zróżnicowanej diety</strong>. Zrównoważony sposób żywienia oraz zdrowy tryb życia są podstawą prawidłowego funkcjonowania organizmu.
+                </p>
+                <p className="font-medium text-slate-700 text-[11px]">
+                  Informacje publikowane w Bazie Wiedzy mają charakter <strong className="font-bold text-slate-900">wyłącznie edukacyjny i informacyjny</strong>, nie stanowią porady lekarskiej ani dietetycznej i nie zastępują bezpośredniej konsultacji ze specjalistą. Nie należy przekraczać zalecanej porcji do spożycia w ciągu dnia.
                 </p>
               </div>
             </div>
