@@ -40,13 +40,16 @@ export default function ClubChat() {
   // Menu opcji w nagłówku aktywnej rozmowy (...)
   const [showChatOptionsMenu, setShowChatOptionsMenu] = useState(false);
 
-  // Stan archiwizacji rozmów (direct_{id} lub group_{id})
+  // Stan archiwizacji rozmów (tylko dla Admina)
   const [archivedChatIds, setArchivedChatIds] = useState<string[]>([]);
   const [showArchivedDirect, setShowArchivedDirect] = useState(false);
   const [showArchivedGroups, setShowArchivedGroups] = useState(false);
 
   // Stan przypiętych czatów i grup (direct_{id} lub group_{id})
   const [pinnedChatIds, setPinnedChatIds] = useState<string[]>([]);
+
+  // Znaczniki czasu usunięcia czatu 1:1 przez użytkownika (ukrywa do nowej wiadomości)
+  const [deletedDirectChatTimestamps, setDeletedDirectChatTimestamps] = useState<Record<string, number>>({});
 
   // Kolejność i zarządzanie kategoriami grup
   const [categoriesOrder, setCategoriesOrder] = useState<string[]>(DEFAULT_GROUP_CATEGORIES);
@@ -132,7 +135,7 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab]);
 
-  // Wczytywanie zarchiwizowanych, przypiętych rozmów oraz kolejności kategorii
+  // Wczytywanie zarchiwizowanych, przypiętych i usuniętych rozmów
   useEffect(() => {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
@@ -155,6 +158,15 @@ export default function ClubChat() {
       }
     }
 
+    const savedDeleted = localStorage.getItem(`chat_deleted_${uid}`);
+    if (savedDeleted) {
+      try {
+        setDeletedDirectChatTimestamps(JSON.parse(savedDeleted));
+      } catch {
+        setDeletedDirectChatTimestamps({});
+      }
+    }
+
     const savedOrder = localStorage.getItem("group_categories_order");
     if (savedOrder) {
       try {
@@ -165,9 +177,10 @@ export default function ClubChat() {
     }
   }, [currentUserId, secondaryUserId]);
 
-  // Przełączanie statusu archiwizacji
+  // Przełączanie statusu archiwizacji (Tylko Admin)
   const toggleArchiveChat = (id: string | number, type: "direct" | "group", e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (!isAdmin) return;
     const key = `${type}_${id}`;
     const uid = secondaryUserId || currentUserId;
     const isCurrentlyArchived = archivedChatIds.includes(key);
@@ -180,6 +193,30 @@ export default function ClubChat() {
     if (uid) {
       localStorage.setItem(`chat_archived_${uid}`, JSON.stringify(updated));
     }
+  };
+
+  // Usuwanie czatu 1:1 z widoku (pojawi się ponownie po nowej wiadomości)
+  const handleDeleteDirectChat = (targetUserId: string | number, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const confirmed = confirm("Czy na pewno chcesz usunąć tę rozmowę z listy? Wątek pojawi się ponownie, gdy pojawi się nowa wiadomość.");
+    if (!confirmed) return;
+
+    const uid = secondaryUserId || currentUserId;
+    const targetKey = String(targetUserId);
+    const updated = {
+      ...deletedDirectChatTimestamps,
+      [targetKey]: Date.now(),
+    };
+
+    setDeletedDirectChatTimestamps(updated);
+    if (uid) {
+      localStorage.setItem(`chat_deleted_${uid}`, JSON.stringify(updated));
+    }
+
+    if (selectedUserRef.current && String(selectedUserRef.current.id) === targetKey) {
+      handleExitCurrentChat();
+    }
+    setShowChatOptionsMenu(false);
   };
 
   // Przełączanie statusu przypięcia
@@ -1097,6 +1134,17 @@ export default function ClubChat() {
         console.error("Błąd bazy danych przy wysyłce 1-na-1:", error);
         alert("Nie udało się wysłać wiadomości: " + error.message);
       } else {
+        const targetKey = String(selectedUser.id);
+        if (deletedDirectChatTimestamps[targetKey]) {
+          const updatedDeleted = { ...deletedDirectChatTimestamps };
+          delete updatedDeleted[targetKey];
+          setDeletedDirectChatTimestamps(updatedDeleted);
+          const uid = secondaryUserId || currentUserId;
+          if (uid) {
+            localStorage.setItem(`chat_deleted_${uid}`, JSON.stringify(updatedDeleted));
+          }
+        }
+
         setNewMessage("");
         setSelectedFile(null);
         setFilePreview(null);
@@ -1608,17 +1656,29 @@ export default function ClubChat() {
     groupPendingRequestIds.includes(String(k.id))
   );
 
+  // Mapowanie czasu i treści ostatniej wiadomości 1-na-1
   const latestMessageMap = new Map();
   const latestMessageTextMap = new Map();
 
-  messages.forEach((m: any) => {
-    let otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
-    if (otherId === null || otherId === undefined) otherId = SYSTEM_ID;
+  // Mapowanie czasu ostatniej wiadomości w czacie grupowym
+  const latestGroupMessageTimeMap = new Map<string, number>();
 
+  messages.forEach((m: any) => {
     const msgTime = new Date(m.created_at).getTime();
-    if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
-      latestMessageMap.set(otherId, msgTime);
-      latestMessageTextMap.set(otherId, m.tresc || (m.attachment_url ? "📎 Załącznik" : ""));
+
+    if (m.grupa_id) {
+      const gId = String(m.grupa_id);
+      if (!latestGroupMessageTimeMap.has(gId) || msgTime > latestGroupMessageTimeMap.get(gId)!) {
+        latestGroupMessageTimeMap.set(gId, msgTime);
+      }
+    } else {
+      let otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
+      if (otherId === null || otherId === undefined) otherId = SYSTEM_ID;
+
+      if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
+        latestMessageMap.set(otherId, msgTime);
+        latestMessageTextMap.set(otherId, m.tresc || (m.attachment_url ? "📎 Załącznik" : ""));
+      }
     }
   });
 
@@ -1638,6 +1698,12 @@ export default function ClubChat() {
 
       const q = searchQuery.trim().toLowerCase();
       if (!q) {
+        const deletedTimestamp = deletedDirectChatTimestamps[String(k.id)];
+        const lastMsgTime = latestMessageMap.get(k.id) || 0;
+        if (deletedTimestamp && lastMsgTime <= deletedTimestamp) {
+          return false;
+        }
+
         return chattedUserIds.has(k.id);
       }
 
@@ -1666,7 +1732,7 @@ export default function ClubChat() {
   const activeDirectUsers = displayedUsers.filter((u) => !archivedChatIds.includes(`direct_${u.id}`));
   const pinnedDirectUsers = activeDirectUsers.filter((u) => pinnedChatIds.includes(`direct_${u.id}`));
   const regularDirectUsers = activeDirectUsers.filter((u) => !pinnedChatIds.includes(`direct_${u.id}`));
-  const archivedDirectUsers = displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`));
+  const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
 
   const formatLastSeen = (lastSeenString: string | null) => {
     if (!lastSeenString) return "Brak danych o aktywności";
@@ -1900,16 +1966,35 @@ export default function ClubChat() {
   });
 
   const activeMyGroups = allMyGroups.filter((g) => !archivedChatIds.includes(`group_${g.id}`));
-  const pinnedMyGroups = activeMyGroups.filter((g) => pinnedChatIds.includes(`group_${g.id}`));
-  const unpinnedMyGroups = activeMyGroups.filter((g) => !pinnedChatIds.includes(`group_${g.id}`));
-  const archivedMyGroups = allMyGroups.filter((g) => archivedChatIds.includes(`group_${g.id}`));
+  
+  // Sortowanie przypiętych grup po czasie ostatniej wiadomości
+  const pinnedMyGroups = activeMyGroups
+    .filter((g) => pinnedChatIds.includes(`group_${g.id}`))
+    .sort((a, b) => {
+      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
+      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
 
+  const unpinnedMyGroups = activeMyGroups.filter((g) => !pinnedChatIds.includes(`group_${g.id}`));
+  const archivedMyGroups = isAdmin ? allMyGroups.filter((g) => archivedChatIds.includes(`group_${g.id}`)) : [];
+
+  // Podział na kategorie z automatycznym sortowaniem grup wg najnowszej wiadomości wewnątrz każdej kategorii
   const myGroupsByCategory = unpinnedMyGroups.reduce((acc: Record<string, any[]>, group: any) => {
     const cat = group.kategoria?.trim() || group.category?.trim() || "Ogólne";
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(group);
     return acc;
   }, {});
+
+  // Sortujemy grupy wewnątrz każdej kategorii: najnowsza wiadomość wskakuje na samą górę kategorii
+  Object.keys(myGroupsByCategory).forEach((cat) => {
+    myGroupsByCategory[cat].sort((a, b) => {
+      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
+      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+  });
 
   const sortedCategoryNames = Array.from(
     new Set([
@@ -2075,14 +2160,25 @@ export default function ClubChat() {
           >
             📌
           </button>
-          <button
-            type="button"
-            onClick={(e) => toggleArchiveChat(user.id, "direct", e)}
-            className="text-slate-300 hover:text-slate-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
-            title="Zarchiwizuj rozmowę"
-          >
-            📦
-          </button>
+          {isAdmin ? (
+            <button
+              type="button"
+              onClick={(e) => toggleArchiveChat(user.id, "direct", e)}
+              className="text-slate-300 hover:text-slate-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
+              title="Zarchiwizuj rozmowę"
+            >
+              📦
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => handleDeleteDirectChat(user.id, e)}
+              className="text-slate-300 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
+              title="Usuń rozmowę z listy"
+            >
+              🗑️
+            </button>
+          )}
         </div>
       </div>
     );
@@ -2150,14 +2246,16 @@ export default function ClubChat() {
           >
             📌
           </button>
-          <button
-            type="button"
-            onClick={(e) => toggleArchiveChat(group.id, "group", e)}
-            className="text-slate-300 hover:text-slate-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
-            title="Zarchiwizuj grupę"
-          >
-            📦
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={(e) => toggleArchiveChat(group.id, "group", e)}
+              className="text-slate-300 hover:text-slate-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
+              title="Zarchiwizuj grupę"
+            >
+              📦
+            </button>
+          )}
           {isAdmin && group.typ !== "trening" && (
             <button
               type="button"
@@ -2305,8 +2403,8 @@ export default function ClubChat() {
                         <span>{isCurrentChatPinned ? "Odepnij z góry" : "Przypnij na górze"}</span>
                       </button>
 
-                      {/* Zarchiwizuj / Przywróć */}
-                      {(!selectedGroup || selectedGroup.typ !== "trening") && (
+                      {/* Zarchiwizuj / Przywróć (Tylko Admin) */}
+                      {isAdmin && (!selectedGroup || selectedGroup.typ !== "trening") && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -2318,6 +2416,18 @@ export default function ClubChat() {
                         >
                           <span className="text-sm">📦</span>
                           <span>{isCurrentChatArchived ? "Przywróć z archiwum" : "Zarchiwizuj"}</span>
+                        </button>
+                      )}
+
+                      {/* Usuń rozmowę 1:1 (dla klubowicza) */}
+                      {selectedUser && !isAdmin && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteDirectChat(selectedUser.id, e)}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                        >
+                          <span className="text-sm">🗑️</span>
+                          <span>Usuń rozmowę</span>
                         </button>
                       )}
 
@@ -2605,7 +2715,8 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {archivedDirectUsers.length > 0 && (
+                    {/* SEKCJA ARCHIWUM TYLKO DLA ADMINA */}
+                    {isAdmin && archivedDirectUsers.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
                           type="button"
@@ -2730,7 +2841,8 @@ export default function ClubChat() {
                           </div>
                         )}
 
-                        {archivedMyGroups.length > 0 && (
+                        {/* ARCHIWUM GRUP TYLKO DLA ADMINA */}
+                        {isAdmin && archivedMyGroups.length > 0 && (
                           <div className="mt-4 pt-3 border-t border-slate-200">
                             <button
                               type="button"
@@ -2775,7 +2887,7 @@ export default function ClubChat() {
                                     >
                                       Przywróć ↩
                                     </button>
-                                    {isAdmin && group.typ !== "trening" && (
+                                    {group.typ !== "trening" && (
                                       <button
                                         type="button"
                                         onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
@@ -3140,7 +3252,7 @@ export default function ClubChat() {
             /* WIDOK AKTYWNEJ ROZMOWY (WIADOMOŚCI) */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
               
-              {isCurrentChatArchived && (
+              {isAdmin && isCurrentChatArchived && (
                 <div className="bg-slate-200/90 border-b border-slate-300 px-3 py-1.5 flex items-center justify-between text-[11px] font-medium text-slate-700 shadow-inner">
                   <div className="flex items-center gap-1.5 truncate">
                     <span>📦</span>
@@ -3353,7 +3465,6 @@ export default function ClubChat() {
                   </button>
                 </div>
 
-                {/* Dodawanie nowej kategorii */}
                 <div className="flex gap-1.5">
                   <input
                     type="text"
@@ -3372,7 +3483,6 @@ export default function ClubChat() {
                   </button>
                 </div>
 
-                {/* Lista kategorii do ustalania kolejności i edycji */}
                 <div className="max-h-56 overflow-y-auto space-y-1.5 bg-slate-50 p-2 rounded-xl border border-slate-200">
                   {categoriesOrder.map((catName, index) => {
                     const isEditing = editingCategoryOldName === catName;
