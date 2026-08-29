@@ -654,7 +654,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGłóWEK GŁÓWNY */}
+      {/* NAGŁÓWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -667,16 +667,19 @@ export default function BazaWiedzyPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setBarcodeInput("");
-              setProduktForm({ nazwa: "", kalorie_100g: 0, bialko_100g: 0, tluszcze_100g: 0, weglowodany_100g: 0 });
-              setIsProductModalOpen(true);
-            }}
-            className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
-          >
-            <span>📷</span> Skanuj / Produkty
-          </button>
+          {/* PRZYCISK SKANUJ / PRODUKTY WIDOCZNY TYLKO W ZAKŁADCE PRZEPISY */}
+          {activeTab === "przepisy" && (
+            <button
+              onClick={() => {
+                setBarcodeInput("");
+                setProduktForm({ nazwa: "", kalorie_100g: 0, bialko_100g: 0, tluszcze_100g: 0, weglowodany_100g: 0 });
+                setIsProductModalOpen(true);
+              }}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+            >
+              <span>📷</span> Skanuj / Produkty
+            </button>
+          )}
 
           {(isAdmin || activeTab === "przepisy") && (
             <button
@@ -1378,7 +1381,7 @@ export default function BazaWiedzyPage() {
         </div>
       )}
 
-      {/* MODAL SKANERA KODÓW KRESKOWYCH I OPEN FOOD FACTS */}
+      {/* MODAL SKANERA KODÓW KRESKOWYCH I OPEN FOOD FACTS Z APARATEM */}
       {isProductModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-amber-400 my-8">
@@ -1394,27 +1397,45 @@ export default function BazaWiedzyPage() {
                 <span>📷</span> Skaner i Baza Produktów
               </h3>
               <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                Wpisz lub zeskanuj kod kreskowy produktu. System przeszuka Twoją bazę oraz globalną bazę **Open Food Facts**. Możesz w każdej chwili zmodyfikować makro lub dodać własny produkt.
+                Wpisz kod kreskowy, użyj aparatu telefonu lub skorzystaj z bazy **Open Food Facts**. Możesz w każdej chwili edytować makro i zapisać własny produkt.
               </p>
             </div>
 
             <div className="space-y-5">
-              <div className="flex gap-2">
+              {/* NAPRAWIONY UKŁAD PRZYCISKÓW (BRAK WYSTAJANIA POZA RAMKĘ) */}
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
-                  placeholder="Wpisz kod kreskowy (np. 5900512...)"
+                  placeholder="Wpisz kod kreskowy..."
                   value={barcodeInput}
                   onChange={(e) => setBarcodeInput(e.target.value)}
-                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
                 />
-                <button
-                  type="button"
-                  disabled={isScanning}
-                  onClick={() => handleSearchBarcode()}
-                  className="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-slate-950 font-black text-xs px-5 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer shrink-0"
-                >
-                  {isScanning ? "Szukanie..." : "Szukaj produktu"}
-                </button>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={isScanning}
+                    onClick={() => handleSearchBarcode()}
+                    className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer"
+                  >
+                    {isScanning ? "Szukanie..." : "Szukaj"}
+                  </button>
+                  <label className="flex-1 sm:flex-none bg-sky-900 hover:bg-sky-950 text-white font-black text-xs px-4 py-3 rounded-xl transition-all shadow-sm uppercase tracking-wider cursor-pointer flex items-center justify-center gap-1.5">
+                    <span>📸</span> Aparat
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setProduktSuccessMsg("Zdjęcie z aparatu zrobione! Wprowadź dane lub nazwij produkt.");
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
               </div>
 
               {produktSuccessMsg && (
