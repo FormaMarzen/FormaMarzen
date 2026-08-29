@@ -89,6 +89,7 @@ export default function ClubChat() {
   const [newGroupType, setNewGroupType] = useState<"publiczna" | "zamknieta">("zamknieta");
   const [newGroupIcon, setNewGroupIcon] = useState("🏋️‍♂️");
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<(number | string)[]>([]);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
 
   // Modal edycji grupy
   const [showEditGroupModal, setShowEditGroupModal] = useState(false);
@@ -887,6 +888,9 @@ export default function ClubChat() {
     const signups = getSignupsForTraining(training);
     const signedClientIds = signups.map((z: any) => String(z.klient_id));
 
+    const rawSenderId = secondaryUserId || currentUserId;
+    const parsedCreatorId = !isNaN(Number(rawSenderId)) ? Number(rawSenderId) : null;
+
     const myClientId = String(secondaryUserId || currentUserId);
     const adminIds = klienci
       .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
@@ -915,7 +919,7 @@ export default function ClubChat() {
         {
           nazwa: groupName,
           kategoria: "Treningi",
-          tworca_id: secondaryUserId || currentUserId,
+          tworca_id: parsedCreatorId,
           czlonkowie_ids: allMembers,
           typ: "trening",
           ikona: "🏋️‍♂️",
@@ -1340,42 +1344,65 @@ export default function ClubChat() {
     setIsSendingBroadcast(false);
   };
 
-  // Tworzenie nowej grupy
+  // Tworzenie nowej grupy (Zabezpieczenie typów i obsługa bazy)
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newGroupName.trim()) return;
+    if (!newGroupName.trim() || isCreatingGroup) return;
 
-    const senderId = secondaryUserId || currentUserId;
-    const allMembers = newGroupType === "publiczna"
-      ? [senderId]
-      : Array.from(new Set([...selectedGroupMembers, senderId]));
+    setIsCreatingGroup(true);
+    try {
+      const rawSenderId = secondaryUserId || currentUserId;
+      const parsedCreatorId = !isNaN(Number(rawSenderId)) ? Number(rawSenderId) : null;
+      const allMembers = newGroupType === "publiczna"
+        ? [rawSenderId]
+        : Array.from(new Set([...selectedGroupMembers, rawSenderId]));
 
-    const { data, error } = await supabase
-      .from("czat_grupy")
-      .insert([
-        {
-          nazwa: newGroupName.trim(),
-          kategoria: newGroupCategory.trim() || "Ogólne",
-          tworca_id: senderId,
-          czlonkowie_ids: allMembers,
-          typ: newGroupType,
-          ikona: newGroupIcon,
-          zbanowani_ids: [],
-          prosby_ids: [],
-        },
-      ])
-      .select();
+      const payload: any = {
+        nazwa: newGroupName.trim(),
+        kategoria: newGroupCategory.trim() || "Ogólne",
+        tworca_id: parsedCreatorId,
+        czlonkowie_ids: allMembers,
+        typ: newGroupType,
+        ikona: newGroupIcon,
+      };
 
-    if (!error && data && data.length > 0) {
-      setNewGroupName("");
-      setNewGroupCategory("Ogólne");
-      setNewGroupType("zamknieta");
-      setNewGroupIcon("🏋️‍♂️");
-      setSelectedGroupMembers([]);
-      setShowCreateGroupModal(false);
-      fetchGroupsAndTrainings();
-      selectedGroupRef.current = data[0];
-      setSelectedGroup(data[0]);
+      let { data, error } = await supabase
+        .from("czat_grupy")
+        .insert([payload])
+        .select();
+
+      // Automatyczny fallback w razie braku kolumny kategoria w starszej wersji bazy
+      if (error && (error.message?.includes("kategoria") || error.code === "PGRST204" || error.code === "42703")) {
+        delete payload.kategoria;
+        const retry = await supabase.from("czat_grupy").insert([payload]).select();
+        data = retry.data;
+        error = retry.error;
+      }
+
+      if (error) {
+        console.error("Błąd tworzenia grupy w Supabase:", error);
+        alert("Nie udało się stworzyć grupy: " + (error.message || "Błąd zapisu w bazie danych"));
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const createdGroup = data[0];
+        setNewGroupName("");
+        setNewGroupCategory("Ogólne");
+        setNewGroupType("zamknieta");
+        setNewGroupIcon("🏋️‍♂️");
+        setSelectedGroupMembers([]);
+        setShowCreateGroupModal(false);
+        await fetchGroupsAndTrainings();
+        selectedGroupRef.current = createdGroup;
+        setSelectedGroup(createdGroup);
+        setChatInsideTab("messages");
+      }
+    } catch (err: any) {
+      console.error("Błąd krytyczny tworzenia grupy:", err);
+      alert("Wystąpił błąd: " + (err.message || err));
+    } finally {
+      setIsCreatingGroup(false);
     }
   };
 
@@ -1384,18 +1411,33 @@ export default function ClubChat() {
     e.preventDefault();
     if (!selectedGroup || !editGroupName.trim()) return;
 
-    const { error } = await supabase
-      .from("czat_grupy")
-      .update({
+    try {
+      const payload: any = {
         nazwa: editGroupName.trim(),
         kategoria: editGroupCategory.trim() || "Ogólne",
         ikona: editGroupIcon,
-      })
-      .eq("id", selectedGroup.id);
+      };
 
-    if (!error) {
+      let { error } = await supabase
+        .from("czat_grupy")
+        .update(payload)
+        .eq("id", selectedGroup.id);
+
+      if (error && (error.message?.includes("kategoria") || error.code === "42703")) {
+        delete payload.kategoria;
+        const retry = await supabase.from("czat_grupy").update(payload).eq("id", selectedGroup.id);
+        error = retry.error;
+      }
+
+      if (error) {
+        alert("Nie udało się zaktualizować grupy: " + error.message);
+        return;
+      }
+
       setShowEditGroupModal(false);
       fetchGroupsAndTrainings();
+    } catch (err: any) {
+      console.error("Błąd aktualizacji grupy:", err);
     }
   };
 
@@ -2356,7 +2398,6 @@ export default function ClubChat() {
                 {/* MAŁE PRZYCISKI PLUSÓW DLA ADMINA */}
                 {isAdmin && (
                   <div className="flex items-center gap-1 shrink-0">
-                    {/* ŻÓŁTY PLUS - WIADOMOŚĆ DO WSZYSTKICH */}
                     <button
                       type="button"
                       onClick={() => setShowBroadcastModal(true)}
@@ -2366,7 +2407,6 @@ export default function ClubChat() {
                       +
                     </button>
 
-                    {/* NIEBIESKI PLUS - NOWA GRUPA */}
                     <button
                       type="button"
                       onClick={() => setShowCreateGroupModal(true)}
@@ -3550,10 +3590,10 @@ export default function ClubChat() {
                     </button>
                     <button
                       type="submit"
-                      disabled={!newGroupName.trim()}
+                      disabled={!newGroupName.trim() || isCreatingGroup}
                       className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-slate-900 hover:bg-slate-800 shadow-md disabled:opacity-50 cursor-pointer"
                     >
-                      Stwórz grupę
+                      {isCreatingGroup ? "Tworzenie..." : "Stwórz grupę"}
                     </button>
                   </div>
                 </form>
