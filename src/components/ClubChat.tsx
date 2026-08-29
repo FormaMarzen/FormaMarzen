@@ -160,6 +160,21 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab]);
 
+  // Pomocnicza funkcja parsująca i zliczająca uczestników grupy
+  const getGroupMembersCount = (group: any): number => {
+    if (!group) return 0;
+    let raw = group.czlonkowie_ids;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = [];
+      }
+    }
+    if (!Array.isArray(raw)) raw = [];
+    return new Set(raw.map(String)).size;
+  };
+
   // Wczytywanie zarchiwizowanych, przypiętych, usuniętych rozmów oraz zapamiętanej zakładki
   useEffect(() => {
     if (!currentUserId) return;
@@ -602,7 +617,11 @@ export default function ClubChat() {
           .single();
 
         if (groupData) {
-          const members = Array.isArray(groupData.czlonkowie_ids) ? groupData.czlonkowie_ids.map(String) : [];
+          let rawMembers = groupData.czlonkowie_ids;
+          if (typeof rawMembers === "string") {
+            try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+          }
+          const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
           const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
           const banned = Array.isArray(groupData.zbanowani_ids) ? groupData.zbanowani_ids.map(String) : [];
           recipientIds = members.filter((id) => !muted.includes(id) && !banned.includes(id));
@@ -1069,7 +1088,11 @@ export default function ClubChat() {
 
     const existing = groups.find((g: any) => g.nazwa === groupName || (g.typ === "trening" && g.nazwa?.includes(training.title) && g.nazwa?.includes(training.start)));
     if (existing) {
-      const currentStored = Array.isArray(existing.czlonkowie_ids) ? existing.czlonkowie_ids.map(String) : [];
+      let currentStoredRaw = existing.czlonkowie_ids;
+      if (typeof currentStoredRaw === "string") {
+        try { currentStoredRaw = JSON.parse(currentStoredRaw); } catch { currentStoredRaw = []; }
+      }
+      const currentStored = Array.isArray(currentStoredRaw) ? currentStoredRaw.map(String) : [];
       const newCalculated = allMembers.map(String);
 
       if (currentStored.length !== newCalculated.length || !newCalculated.every((id) => currentStored.includes(id))) {
@@ -1302,12 +1325,16 @@ export default function ClubChat() {
     setActiveMessageMenuId(null);
   };
 
-  // Dołączanie / Opuszczanie grupy publicznej
+  // Dołączanie / Opuszczanie grupy publicznej (z natychmiastową optymistyczną aktualizacją UI)
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
     const myId = secondaryUserId || currentUserId;
     if (!myId) return;
 
-    let currentMembers: any[] = Array.isArray(group.czlonkowie_ids) ? [...group.czlonkowie_ids] : [];
+    let rawMembers = group.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    let currentMembers: any[] = Array.isArray(rawMembers) ? [...rawMembers] : [];
 
     if (shouldJoin) {
       if (!currentMembers.map(String).includes(String(myId))) {
@@ -1317,21 +1344,29 @@ export default function ClubChat() {
       currentMembers = currentMembers.filter((m) => String(m) !== String(myId));
     }
 
+    // 1. Optymistyczna natychmiastowa aktualizacja stanu UI
+    setGroups((prev) =>
+      prev.map((g) => (g.id === group.id ? { ...g, czlonkowie_ids: currentMembers } : g))
+    );
+
+    if (selectedGroup && selectedGroup.id === group.id) {
+      if (!shouldJoin && !isAdmin) {
+        handleExitCurrentChat();
+      } else {
+        setSelectedGroup({ ...selectedGroup, czlonkowie_ids: currentMembers });
+      }
+    }
+
+    // 2. Wysłanie aktualizacji do bazy Supabase
     const { error } = await supabase
       .from("czat_grupy")
       .update({ czlonkowie_ids: currentMembers })
       .eq("id", group.id);
 
-    if (!error) {
-      fetchGroupsAndTrainings();
-      if (selectedGroup && selectedGroup.id === group.id) {
-        if (!shouldJoin && !isAdmin) {
-          handleExitCurrentChat();
-        } else {
-          setSelectedGroup({ ...selectedGroup, czlonkowie_ids: currentMembers });
-        }
-      }
+    if (error) {
+      console.error("Błąd zapisu członkostwa w grupie:", error);
     }
+    fetchGroupsAndTrainings();
   };
 
   // Wyciszenie powiadomień grupy
@@ -1379,7 +1414,11 @@ export default function ClubChat() {
 
   // Akceptacja prośby o dołączenie do grupy
   const handleAcceptJoinRequest = async (group: any, targetUserId: string | number) => {
-    let currentMembers: any[] = Array.isArray(group.czlonkowie_ids) ? [...group.czlonkowie_ids] : [];
+    let rawMembers = group.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    let currentMembers: any[] = Array.isArray(rawMembers) ? [...rawMembers] : [];
     let pendingRequests: any[] = Array.isArray(group.prosby_ids) ? [...group.prosby_ids] : [];
 
     const uIdStr = String(targetUserId);
@@ -1387,6 +1426,12 @@ export default function ClubChat() {
       currentMembers.push(targetUserId);
     }
     pendingRequests = pendingRequests.filter((id) => String(id) !== uIdStr);
+
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === group.id ? { ...g, czlonkowie_ids: currentMembers, prosby_ids: pendingRequests } : g
+      )
+    );
 
     const { error } = await supabase
       .from("czat_grupy")
@@ -1420,7 +1465,11 @@ export default function ClubChat() {
   const handleAddMembersToGroup = async () => {
     if (!selectedGroup || selectedInviteMembers.length === 0) return;
 
-    let currentMembers = Array.isArray(selectedGroup.czlonkowie_ids) ? [...selectedGroup.czlonkowie_ids] : [];
+    let rawMembers = selectedGroup.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    let currentMembers = Array.isArray(rawMembers) ? [...rawMembers] : [];
     let currentBanned = Array.isArray(selectedGroup.zbanowani_ids) ? [...selectedGroup.zbanowani_ids] : [];
 
     selectedInviteMembers.forEach((id) => {
@@ -1429,6 +1478,12 @@ export default function ClubChat() {
       }
       currentBanned = currentBanned.filter((bId) => String(bId) !== String(id));
     });
+
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === selectedGroup.id ? { ...g, czlonkowie_ids: currentMembers, zbanowani_ids: currentBanned } : g
+      )
+    );
 
     const { error } = await supabase
       .from("czat_grupy")
@@ -1451,8 +1506,16 @@ export default function ClubChat() {
     const confirmRemove = confirm("Czy na pewno chcesz usunąć tego użytkownika z grupy?");
     if (!confirmRemove) return;
 
-    let currentMembers = Array.isArray(selectedGroup.czlonkowie_ids) ? [...selectedGroup.czlonkowie_ids] : [];
+    let rawMembers = selectedGroup.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    let currentMembers = Array.isArray(rawMembers) ? [...rawMembers] : [];
     currentMembers = currentMembers.filter((m) => String(m) !== String(memberId));
+
+    setGroups((prev) =>
+      prev.map((g) => (g.id === selectedGroup.id ? { ...g, czlonkowie_ids: currentMembers } : g))
+    );
 
     const { error } = await supabase
       .from("czat_grupy")
@@ -1470,7 +1533,11 @@ export default function ClubChat() {
     const confirmBan = confirm("Czy na pewno chcesz zbanować tego użytkownika w grupie? Zostanie usunięty i zablokowany przed dołączeniem.");
     if (!confirmBan) return;
 
-    let currentMembers = Array.isArray(selectedGroup.czlonkowie_ids) ? [...selectedGroup.czlonkowie_ids] : [];
+    let rawMembers = selectedGroup.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    let currentMembers = Array.isArray(rawMembers) ? [...rawMembers] : [];
     let currentBanned = Array.isArray(selectedGroup.zbanowani_ids) ? [...selectedGroup.zbanowani_ids] : [];
 
     currentMembers = currentMembers.filter((m) => String(m) !== String(memberId));
@@ -1724,10 +1791,18 @@ export default function ClubChat() {
         const creatorAndMe = [String(selectedGroup.tworca_id), String(secondaryUserId || currentUserId), "999999999", String(SYSTEM_ID)];
         groupMemberIds = Array.from(new Set([...signedClientIds, ...adminIds, ...creatorAndMe]));
       } else {
-        groupMemberIds = Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.map(String) : [];
+        let rawMembers = selectedGroup.czlonkowie_ids;
+        if (typeof rawMembers === "string") {
+          try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+        }
+        groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
       }
     } else {
-      groupMemberIds = Array.isArray(selectedGroup.czlonkowie_ids) ? selectedGroup.czlonkowie_ids.map(String) : [];
+      let rawMembers = selectedGroup.czlonkowie_ids;
+      if (typeof rawMembers === "string") {
+        try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+      }
+      groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     }
   }
 
@@ -2134,7 +2209,11 @@ export default function ClubChat() {
     if (isTraining) return false;
 
     if (isAdmin) return true;
-    const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
+    let rawMembers = g.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     return members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
   });
 
@@ -2189,7 +2268,11 @@ export default function ClubChat() {
     if (isTraining) return false;
 
     const isPublic = g.typ === "publiczna";
-    const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
+    let rawMembers = g.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
     return isPublic && !isAlreadyMember;
   });
@@ -2199,7 +2282,11 @@ export default function ClubChat() {
     if (isTraining) return false;
 
     const isClosed = g.typ === "zamknieta" || !g.typ;
-    const members = Array.isArray(g.czlonkowie_ids) ? g.czlonkowie_ids.map(String) : [];
+    let rawMembers = g.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+    }
+    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
     return isClosed && !isAlreadyMember;
   });
@@ -2344,12 +2431,14 @@ export default function ClubChat() {
     );
   };
 
-  // Czysty render kafelka grupy
+  // Czysty render kafelka grupy z zawsze dokładnym licznikiem uczestników
   const renderGroupItem = (group: any, isPinnedItem: boolean = false) => {
     const isPublic = group.typ === "publiczna";
     const groupUnread = messages.filter(
       (m: any) => String(m.grupa_id) === String(group.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
     ).length;
+
+    const count = getGroupMembersCount(group);
 
     return (
       <div
@@ -2385,7 +2474,7 @@ export default function ClubChat() {
                 {isPublic ? "Publiczna" : "Zamknięta"}
               </span>
               <span>•</span>
-              <span>{Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0} osób</span>
+              <span>{count} {count === 1 ? "osoba" : "osób"}</span>
             </div>
           </div>
         </button>
@@ -2452,7 +2541,7 @@ export default function ClubChat() {
                         </div>
                         <div className="text-[9px] text-amber-400 font-medium truncate">
                           {selectedGroup.kategoria ? `${selectedGroup.kategoria} • ` : ""}
-                          {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {groupMembersList.length} os.
+                          {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {getGroupMembersCount(selectedGroup)} os.
                         </div>
                       </div>
                     </>
@@ -2817,7 +2906,6 @@ export default function ClubChat() {
                         className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
                       />
                     </div>
-                    {/* Przycisk tworzenia czatu grupowego dla każdego klubowicza */}
                     <button
                       type="button"
                       onClick={() => handleOpenCreateGroupModal("Czaty grupowe")}
@@ -3076,32 +3164,35 @@ export default function ClubChat() {
 
                     {groupFilterTab === "public" && (
                       <>
-                        {publicDiscoverGroups.map((group: any) => (
-                          <div
-                            key={group.id}
-                            className="w-full p-2.5 rounded-2xl border bg-white border-amber-200 flex items-center justify-between shadow-sm gap-2"
-                          >
-                            <div className="flex items-center gap-2.5 overflow-hidden min-w-0 flex-1">
-                              <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden">
-                                {renderGroupIcon(group.ikona, group.typ)}
-                              </div>
-                              <div className="overflow-hidden min-w-0 flex-1">
-                                <div className="font-bold text-xs text-slate-900 truncate">{group.nazwa}</div>
-                                <div className="text-[10px] text-amber-700 truncate">
-                                  {group.kategoria ? `${group.kategoria} • ` : ""}
-                                  {Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0} uczestników
+                        {publicDiscoverGroups.map((group: any) => {
+                          const count = getGroupMembersCount(group);
+                          return (
+                            <div
+                              key={group.id}
+                              className="w-full p-2.5 rounded-2xl border bg-white border-amber-200 flex items-center justify-between shadow-sm gap-2"
+                            >
+                              <div className="flex items-center gap-2.5 overflow-hidden min-w-0 flex-1">
+                                <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden">
+                                  {renderGroupIcon(group.ikona, group.typ)}
+                                </div>
+                                <div className="overflow-hidden min-w-0 flex-1">
+                                  <div className="font-bold text-xs text-slate-900 truncate">{group.nazwa}</div>
+                                  <div className="text-[10px] text-amber-700 truncate">
+                                    {group.kategoria ? `${group.kategoria} • ` : ""}
+                                    {count} {count === 1 ? "uczestnik" : "uczestników"}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
 
-                            <button
-                              onClick={() => handleToggleGroupMembership(group, true)}
-                              className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[10px] px-3 py-1.5 rounded-xl shadow-sm transition-all shrink-0 cursor-pointer whitespace-nowrap"
-                            >
-                              + Dołącz
-                            </button>
-                          </div>
-                        ))}
+                              <button
+                                onClick={() => handleToggleGroupMembership(group, true)}
+                                className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[10px] px-3 py-1.5 rounded-xl shadow-sm transition-all shrink-0 cursor-pointer whitespace-nowrap"
+                              >
+                                + Dołącz
+                              </button>
+                            </div>
+                          );
+                        })}
 
                         {publicDiscoverGroups.length === 0 && (
                           <div className="py-12 text-center text-slate-400 text-xs space-y-1">
@@ -3119,6 +3210,7 @@ export default function ClubChat() {
                           const myIdStr = String(secondaryUserId || currentUserId);
                           const pendingList = Array.isArray(group.prosby_ids) ? group.prosby_ids.map(String) : [];
                           const hasRequested = pendingList.includes(myIdStr);
+                          const count = getGroupMembersCount(group);
 
                           return (
                             <div
@@ -3135,7 +3227,7 @@ export default function ClubChat() {
                                     <span className="truncate">{group.nazwa}</span>
                                   </div>
                                   <div className="text-[10px] text-slate-500 truncate">
-                                    {group.kategoria ? `${group.kategoria} • ` : ""}Zamknięta • {Array.isArray(group.czlonkowie_ids) ? group.czlonkowie_ids.length : 0} osób
+                                    {group.kategoria ? `${group.kategoria} • ` : ""}Zamknięta • {count} {count === 1 ? "osoba" : "osób"}
                                   </div>
                                 </div>
                               </div>
@@ -4049,7 +4141,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* MODAL TWORZENIA GRUPY Z DYNAMICZNĄ WYSZUKIWARKĄ I CHIPSAMI */}
+          {/* MODAL TWORZENIA GRUPY */}
           {showCreateGroupModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
               <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
@@ -4161,7 +4253,7 @@ export default function ClubChat() {
                     </div>
                   )}
 
-                  {/* WYBÓR UCZESTNIKÓW Z DYNAMICZNĄ WYSZUKIWARKĄ I CHIPSAMI */}
+                  {/* WYBÓR UCZESTNIKÓW Z WYSZUKIWARKĄ I CHIPSAMI */}
                   <div>
                     <div className="text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
                       <span>Wybierz uczestników grupy:</span>
