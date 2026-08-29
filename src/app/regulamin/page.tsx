@@ -42,6 +42,9 @@ export default function RegulaminPage() {
   // Stan wyszukiwarki historii dla administratora
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
 
+  // Stan zwijania / rozwijania historii (limit domyślny: 10 pozycji)
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
+
   // Stan Modala edycji/tworzenia
   const [selectedRegulation, setSelectedRegulation] = useState<Regulation | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -175,7 +178,7 @@ export default function RegulaminPage() {
       const payload: any = { 
         slug: newSlug, 
         title: editTitle, 
-        content: editContent,
+        content: editContent, 
         checkbox_text: editCheckboxText 
       };
 
@@ -307,6 +310,9 @@ export default function RegulaminPage() {
     return clientName.includes(query) || (item.user_email && item.user_email.toLowerCase().includes(query));
   });
 
+  // Lista przycięta do 10 elementów, jeśli historia nie jest rozwinięta
+  const displayedHistory = isHistoryExpanded ? filteredHistory : filteredHistory.slice(0, 10);
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64 w-full">
@@ -381,10 +387,17 @@ export default function RegulaminPage() {
       {/* SEKCJA HISTORIA AKCEPTACJI */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-            <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            {isAdmin ? 'Historia akceptacji wszystkich klubowiczów' : 'Historia akceptacji'}
-          </h2>
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              {isAdmin ? 'Historia akceptacji wszystkich klubowiczów' : 'Historia akceptacji'}
+            </h2>
+            {filteredHistory.length > 0 && (
+              <p className="text-xs text-slate-400 mt-1">
+                Liczba wpisów: {filteredHistory.length}
+              </p>
+            )}
+          </div>
 
           {/* Wyszukiwarka dla administratora */}
           {isAdmin && (
@@ -393,7 +406,10 @@ export default function RegulaminPage() {
                 type="text"
                 placeholder="🔍 Szukaj imię i nazwisko..."
                 value={adminSearchQuery}
-                onChange={(e) => setAdminSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setAdminSearchQuery(e.target.value);
+                  setIsHistoryExpanded(false);
+                }}
                 className="w-full px-4 py-2 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:outline-none focus:border-orange-500 text-slate-800 font-medium"
               />
             </div>
@@ -405,50 +421,76 @@ export default function RegulaminPage() {
             {adminSearchQuery ? 'Brak wyników pasujących do wyszukiwanego klubowicza.' : 'Brak historii akceptacji regulaminów w naszym systemie.'}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50">
-                <tr>
-                  {isAdmin && <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Klubowicz</th>}
-                  <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Nazwa dokumentu</th>
-                  <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Data akceptacji</th>
-                  <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500 text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredHistory.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                    {isAdmin && (
-                      <td className="py-4 px-6 text-sm text-slate-800 font-bold">
-                        {getClientNameByEmail(item.user_email)}
-                      </td>
-                    )}
-                    <td className="py-4 px-6 text-sm text-slate-800 font-medium">
-                      {item.regulations?.title || item.regulation_slug}
-                    </td>
-                    <td className="py-4 px-6 text-sm text-slate-500">
-                      <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                        {new Date(item.accepted_at).toLocaleString('pl-PL', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </div>
-                    </td>
-                    <td className="py-4 px-6 text-sm text-right">
-                      <span className="inline-flex items-center gap-1.5 text-green-700 bg-green-50 px-3 py-1 rounded-full text-xs font-bold border border-green-200">
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                        ZAAKCEPTOWANY
-                      </span>
-                    </td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-slate-50">
+                  <tr>
+                    {isAdmin && <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Klubowicz</th>}
+                    <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Nazwa dokumentu</th>
+                    <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500">Data akceptacji</th>
+                    <th className="py-4 px-6 text-xs uppercase tracking-wider font-semibold text-slate-500 text-right">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {displayedHistory.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                      {isAdmin && (
+                        <td className="py-4 px-6 text-sm text-slate-800 font-bold">
+                          {getClientNameByEmail(item.user_email)}
+                        </td>
+                      )}
+                      <td className="py-4 px-6 text-sm text-slate-800 font-medium">
+                        {item.regulations?.title || item.regulation_slug}
+                      </td>
+                      <td className="py-4 px-6 text-sm text-slate-500">
+                        <div className="flex items-center gap-2">
+                          <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                          {new Date(item.accepted_at).toLocaleString('pl-PL', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </div>
+                      </td>
+                      <td className="py-4 px-6 text-sm text-right">
+                        <span className="inline-flex items-center gap-1.5 text-green-700 bg-green-50 px-3 py-1 rounded-full text-xs font-bold border border-green-200">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                          ZAAKCEPTOWANY
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Przycisk rozwijania / zwijania listy od 10 pozycji */}
+            {filteredHistory.length > 10 && (
+              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-center">
+                <button
+                  onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
+                  className="px-5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  <span>
+                    {isHistoryExpanded
+                      ? 'Zwiń listę do 10 pozycji'
+                      : `Pokaż wszystkie (${filteredHistory.length} pozycji)`}
+                  </span>
+                  <svg
+                    className={`w-4 h-4 transition-transform duration-200 ${isHistoryExpanded ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
+                  </svg>
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
