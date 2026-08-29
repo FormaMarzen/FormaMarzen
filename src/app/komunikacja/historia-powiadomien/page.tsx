@@ -165,20 +165,20 @@ export default function HistoriaPowiadomienPage() {
     }
   };
 
-  // Logika podziału powiadomień:
-  // Administrator: rekordy bez odbiorcy lub jawnie oznaczone jako Administrator / admin
-  const powiadomieniaAdmin = historia.filter(item => {
+  // Precyzyjne rozpoznawanie powiadomień skierowanych do administratora
+  const isAdminNotification = (item: PowiadomienieItem) => {
     if (!item.odbiorca) return true;
     const lower = item.odbiorca.toLowerCase().trim();
-    return lower === 'administrator' || lower === 'admin' || lower === 'admin_device';
-  });
+    return (
+      lower.includes('admin') ||
+      lower.includes('administrator') ||
+      lower.includes('administratorzy')
+    );
+  };
 
-  // Klubowicze: rekordy przypisane do konkretnych osób
-  const powiadomieniaKlubowicze = historia.filter(item => {
-    if (!item.odbiorca) return false;
-    const lower = item.odbiorca.toLowerCase().trim();
-    return lower !== 'administrator' && lower !== 'admin' && lower !== 'admin_device';
-  });
+  // Podział na koszyki
+  const powiadomieniaAdmin = historia.filter(item => isAdminNotification(item));
+  const powiadomieniaKlubowicze = historia.filter(item => !isAdminNotification(item));
 
   const currentDataset = activeTab === 'admin' ? powiadomieniaAdmin : powiadomieniaKlubowicze;
 
@@ -255,7 +255,9 @@ export default function HistoriaPowiadomienPage() {
           }`}
         >
           <span>🛡️ ADMINISTRATOR</span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+            activeTab === 'admin' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600'
+          }`}>
             {powiadomieniaAdmin.length}
           </span>
         </button>
@@ -269,7 +271,9 @@ export default function HistoriaPowiadomienPage() {
           }`}
         >
           <span>👥 KLUBOWICZE</span>
-          <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+            activeTab === 'klubowicze' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-600'
+          }`}>
             {powiadomieniaKlubowicze.length}
           </span>
         </button>
@@ -303,7 +307,7 @@ export default function HistoriaPowiadomienPage() {
                       {new Date(item.created_at).toLocaleString('pl-PL')}
                     </td>
                     <td className="py-3.5 px-4 font-bold text-slate-900 whitespace-nowrap">
-                      {item.odbiorca || (activeTab === 'admin' ? 'Administrator' : 'Klubowicz')}
+                      {item.odbiorca || (activeTab === 'admin' ? 'Administratorzy' : 'Klubowicz')}
                     </td>
                     <td className="py-3.5 px-4 font-semibold text-sky-700 whitespace-nowrap">
                       {item.tytul}
