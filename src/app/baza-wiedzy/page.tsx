@@ -166,22 +166,9 @@ export default function BazaWiedzyPage() {
 
     if (klienciData && Array.isArray(klienciData)) {
       klienciData.forEach((row: any) => {
-        let imie = "";
-        let nazwisko = "";
-        let mail = "";
-
-        Object.keys(row).forEach((colName) => {
-          const lower = colName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-          if (lower.includes("imi") || lower === "imie" || lower === "name") {
-            imie = String(row[colName] || "").trim();
-          }
-          if (lower.includes("nazw") || lower === "nazwisko" || lower === "surname") {
-            nazwisko = String(row[colName] || "").trim();
-          }
-          if (lower.includes("mail")) {
-            mail = String(row[colName] || "").toLowerCase().trim();
-          }
-        });
+        const imie = String(row["Imię"] || row["imie"] || row["Imie"] || "").trim();
+        const nazwisko = String(row["Nazwisko"] || row["nazwisko"] || "").trim();
+        const mail = String(row["E-mail"] || row["email"] || row["mail"] || "").toLowerCase().trim();
 
         const full = `${imie} ${nazwisko}`.trim();
         if (mail && full) {
@@ -319,6 +306,7 @@ export default function BazaWiedzyPage() {
       await supabase.from("powiadomienia").insert([
         {
           odbiorca_email: cleanEmail,
+          odbiorca: recipientName,
           tytul: title,
           tresc: body,
           przeczytane: false,
@@ -327,10 +315,11 @@ export default function BazaWiedzyPage() {
         },
       ]);
 
-      // 2. Wysłanie bezpośrednio do endpointu /api/push/send z adresem e-mail
+      // 2. Wysłanie push do endpointu z pełnym imieniem i nazwiskiem odbiorcy
       const pushPayload = {
         targetEmail: cleanEmail,
         email: cleanEmail,
+        targetName: recipientName,
         payload: {
           title,
           body,
@@ -1572,7 +1561,7 @@ export default function BazaWiedzyPage() {
                   onChange={(e) => setForm({ ...form, opis: e.target.value })}
                   placeholder={
                     activeTab === "przepisy"
-                      ? "Opisz krok po roku jak przygotować posiłek..."
+                      ? "Opisz krok po kroku jak przygotować posiłek..."
                       : "Wpisz pełny opis, badania i wskazówki..."
                   }
                   rows={6}

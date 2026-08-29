@@ -27,16 +27,54 @@ export async function POST(request: Request) {
     webpush.setVapidDetails(subject, publicKey, privateKey);
 
     const bodyData = await request.json();
-    let { subscriptions, payload, targetEmail, email } = bodyData;
+    let { subscriptions, payload, targetEmail, email, targetName } = bodyData;
 
     const recipientEmail = (targetEmail || email || '').toLowerCase().trim();
+    let resolvedRecipientName = targetName || payload?.odbiorca || '';
+    let clientDbId: number | null = null;
 
-    // Jeśli nie przekazano tablicy subscriptions, pobieramy ją po stronie serwera z bazy Supabase (omija RLS)
+    // Pobranie danych klienta (Imię i Nazwisko) z tabeli klienci
+    if (recipientEmail) {
+      const { data: clientRows } = await supabase.from('klienci').select('*');
+      if (clientRows && Array.isArray(clientRows)) {
+        const found = clientRows.find((c: any) => {
+          let cMail = '';
+          Object.keys(c).forEach((k) => {
+            const kl = k.toLowerCase().replace(/[\s\-_]/g, '');
+            if (kl.includes('mail') || kl === 'email') {
+              cMail = String(c[k] || '').toLowerCase().trim();
+            }
+          });
+          return cMail === recipientEmail;
+        });
+
+        if (found) {
+          clientDbId = found.id ? Number(found.id) : null;
+          if (!resolvedRecipientName) {
+            let imie = found['Imię'] || found['imie'] || found['Imie'] || '';
+            let nazwisko = found['Nazwisko'] || found['nazwisko'] || '';
+            const full = `${imie} ${nazwisko}`.trim();
+            if (full) resolvedRecipientName = full;
+          }
+        }
+      }
+    }
+
+    if (!resolvedRecipientName) {
+      resolvedRecipientName = recipientEmail || 'Klubowicz';
+    }
+
+    // Pobranie subskrypcji po stronie serwera
     if ((!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) && recipientEmail) {
+      const searchQueries = [`user_id.ilike.%${recipientEmail}%`, `user_id.eq.${recipientEmail}`];
+      if (clientDbId !== null) {
+        searchQueries.push(`user_id.eq.${clientDbId}`);
+      }
+
       const { data: dbSubs, error: dbError } = await supabase
         .from('push_subscriptions')
         .select('*')
-        .or(`user_id.ilike.%${recipientEmail}%,user_id.eq.${recipientEmail}`);
+        .or(searchQueries.join(','));
 
       if (dbError) {
         console.error('Błąd pobierania subskrypcji z push_subscriptions:', dbError);
@@ -47,16 +85,29 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) {
-      return NextResponse.json(
-        { success: false, error: 'Brak aktywnych subskrypcji dla podanego użytkownika' },
-        { status: 400 }
-      );
-    }
-
     const tytulPowiadomienia = payload?.title || 'FORMA MARZEŃ';
     const trescPowiadomienia = payload?.body || '';
     const typPowiadomienia = payload?.typ || payload?.type || 'PUSH';
+
+    if (!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) {
+      // Zapis do historia_powiadomien informacji o braku zarejestrowanego urządzenia
+      await supabase.from('historia_powiadomien').insert([
+        {
+          odbiorca: resolvedRecipientName,
+          odbiorca_id: clientDbId,
+          tytul: tytulPowiadomienia,
+          tresc: trescPowiadomienia,
+          typ: typPowiadomienia,
+          status: 'Brak aktywnej subskrypcji urządzenia (Klubowicz nie aktywował Push)',
+        },
+      ]);
+
+      return NextResponse.json({
+        success: false,
+        warning: 'Powiadomienie zapisano w bazie, ale klubowicz nie ma jeszcze zarejestrowanego urządzenia w push_subscriptions.',
+        recipient: resolvedRecipientName,
+      });
+    }
 
     const notificationPayload = JSON.stringify({
       title: tytulPowiadomienia,
@@ -66,16 +117,16 @@ export async function POST(request: Request) {
       badge: payload?.badge || '/logo.png',
       data: {
         url: payload?.url || '/baza-wiedzy',
-        dateOfArrival: Date.now()
-      }
+        dateOfArrival: Date.now(),
+      },
     });
 
     const pushOptions = {
       TTL: 86400,
       urgency: 'high' as const,
       headers: {
-        Urgency: 'high'
-      }
+        Urgency: 'high',
+      },
     };
 
     const logEntries: Array<{
@@ -90,16 +141,12 @@ export async function POST(request: Request) {
     const results = await Promise.allSettled(
       subscriptions.map(async (rawSub: any) => {
         let subObj = rawSub;
-        let recipientName = rawSub?.odbiorca || rawSub?.imie_nazwisko || payload?.odbiorca || recipientEmail || '';
-        let recipientIdRaw = rawSub?.odbiorca_id || rawSub?.klient_id || rawSub?.user_id || payload?.odbiorca_id || null;
-        
+        let recipientName = rawSub?.odbiorca || rawSub?.imie_nazwisko || resolvedRecipientName;
+        let recipientIdRaw = rawSub?.odbiorca_id || rawSub?.klient_id || clientDbId || payload?.odbiorca_id || null;
+
         let recipientId: number | null = null;
         if (recipientIdRaw !== null && recipientIdRaw !== undefined && !isNaN(Number(recipientIdRaw))) {
           recipientId = Number(recipientIdRaw);
-        }
-
-        if (!recipientName) {
-          recipientName = rawSub?.role === 'admin' || rawSub?.user_id === 'admin_device' ? 'Administrator' : 'Klubowicz';
         }
 
         if (typeof subObj === 'string') {
@@ -113,7 +160,7 @@ export async function POST(request: Request) {
               tytul: tytulPowiadomienia,
               tresc: trescPowiadomienia,
               typ: typPowiadomienia,
-              status: 'Błąd: Niepoprawny format JSON'
+              status: 'Błąd: Niepoprawny format JSON',
             });
             throw new Error('Niepoprawny format subskrypcji');
           }
@@ -131,34 +178,34 @@ export async function POST(request: Request) {
             tytul: tytulPowiadomienia,
             tresc: trescPowiadomienia,
             typ: typPowiadomienia,
-            status: 'Błąd: Brak kluczy push'
+            status: 'Błąd: Brak kluczy push',
           });
-          throw new Error('Brak wymaganych kluczy subskrypcji (endpoint/p256dh/auth)');
+          throw new Error('Brak wymaganych kluczy subskrypcji');
         }
 
         try {
           const response = await webpush.sendNotification(subObj, notificationPayload, pushOptions);
-          
+
           logEntries.push({
             odbiorca: recipientName,
             odbiorca_id: recipientId,
             tytul: tytulPowiadomienia,
             tresc: trescPowiadomienia,
             typ: typPowiadomienia,
-            status: 'Wysłano'
+            status: 'Wysłano',
           });
 
           return {
             success: true,
             statusCode: response.statusCode,
-            endpoint: subObj.endpoint
+            endpoint: subObj.endpoint,
           };
         } catch (err: any) {
           console.error('Błąd bramki push (FCM/APNs):', {
             message: err.message,
             statusCode: err.statusCode,
             body: err.body,
-            endpoint: subObj.endpoint
+            endpoint: subObj.endpoint,
           });
 
           const isExpired = err.statusCode === 404 || err.statusCode === 410;
@@ -170,7 +217,7 @@ export async function POST(request: Request) {
             tytul: tytulPowiadomienia,
             tresc: trescPowiadomienia,
             typ: typPowiadomienia,
-            status: statusDesc
+            status: statusDesc,
           });
 
           return Promise.reject({
@@ -178,7 +225,7 @@ export async function POST(request: Request) {
             statusCode: err.statusCode,
             isExpired,
             message: err.message,
-            endpoint: subObj.endpoint
+            endpoint: subObj.endpoint,
           });
         }
       })
@@ -194,14 +241,14 @@ export async function POST(request: Request) {
       }
     }
 
-    const delivered = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
+    const delivered = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.filter((r) => r.status === 'rejected').length;
 
     return NextResponse.json({
       success: true,
       delivered,
       failed,
-      total: subscriptions.length
+      total: subscriptions.length,
     });
   } catch (error: any) {
     console.error('Błąd krytyczny endpointu /api/push/send:', error);
