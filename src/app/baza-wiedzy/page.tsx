@@ -426,7 +426,7 @@ export default function BazaWiedzyPage() {
 
       const wyliczoneKcal = Math.round(b * 4 + t * 9 + w * 4);
       if (Math.abs(wyliczoneKcal - k) > 15) {
-        alert(`Wpisane kalorie (${k} kcal) nie zgadzają się z wyliczonymi z makroskładników na 100g (${wyliczoneKcal} kcal: białko*4 + tłuszcz*9 + węgle*4). Sprawdź poprawność danych!`);
+        alert(`Wpisane kalorie (${k} kcal) nie zgadzają się z wyliczonymi z makroskładników na porcję (${wyliczoneKcal} kcal: białko*4 + tłuszcz*9 + węgle*4). Sprawdź poprawność danych!`);
         return;
       }
 
@@ -493,7 +493,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGŁÓWEK GŁÓWNY */}
+      {/* NAGłóWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -661,7 +661,7 @@ export default function BazaWiedzyPage() {
                       {activeTab === "suplementy"
                         ? "Dawkowanie"
                         : activeTab === "przepisy"
-                        ? "Makro na 100g (B / T / W / Kcal)"
+                        ? "Makro na porcję (B / T / W / Kcal)"
                         : "Kluczowe wskazówki"}
                     </th>
                     <th className="py-4 px-6 text-right">Akcja</th>
@@ -825,19 +825,19 @@ export default function BazaWiedzyPage() {
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-center">
-                      <div className="text-[11px] font-black uppercase text-sky-900">Białko / 100g</div>
+                      <div className="text-[11px] font-black uppercase text-sky-900">Białko / porcja</div>
                       <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.bialko || 0}g</div>
                     </div>
                     <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-center">
-                      <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze / 100g</div>
+                      <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze / porcja</div>
                       <div className="text-lg font-black text-amber-950 mt-1">{selectedItem.tluszcze || 0}g</div>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
-                      <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / 100g</div>
+                      <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / porcja</div>
                       <div className="text-lg font-black text-emerald-950 mt-1">{selectedItem.weglowodany || 0}g</div>
                     </div>
                     <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl text-center">
-                      <div className="text-[11px] font-black uppercase text-indigo-900">Kalorie / 100g</div>
+                      <div className="text-[11px] font-black uppercase text-indigo-900">Kalorie / porcja</div>
                       <div className="text-lg font-black text-indigo-950 mt-1">{selectedItem.kalorie || 0} kcal</div>
                     </div>
                   </div>
@@ -912,7 +912,7 @@ export default function BazaWiedzyPage() {
                 </div>
               </div>
 
-              {/* KATEGORIA */}
+              {/* KATEGORIA (WYŚRODKOWANA) */}
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase tracking-wider text-center sm:text-left">
                   Kategoria {activeTab === "przepisy" ? "(wybierz jedną)" : ""}
@@ -977,15 +977,15 @@ export default function BazaWiedzyPage() {
                 />
               </div>
 
-              {/* MAKRO NA 100G DLA PRZEPISÓW */}
+              {/* MAKRO NA PORCJĘ DLA PRZEPISÓW */}
               {activeTab === "przepisy" && (
                 <div className="space-y-4 bg-sky-50/60 p-4 rounded-2xl border border-sky-100">
                   <h4 className="font-black text-xs uppercase text-sky-900 tracking-wider">
-                    Makroskładniki i kalorie (wartości podawane na 100g)
+                    Makroskładniki i kalorie (wartości podawane na porcję)
                   </h4>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Białko (g) / 100g</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Białko (g) / porcja</label>
                       <input
                         type="number"
                         step="0.1"
@@ -995,7 +995,7 @@ export default function BazaWiedzyPage() {
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Tłuszcze (g) / 100g</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Tłuszcze (g) / porcja</label>
                       <input
                         type="number"
                         step="0.1"
@@ -1005,7 +1005,7 @@ export default function BazaWiedzyPage() {
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Węgle (g) / 100g</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Węgle (g) / porcja</label>
                       <input
                         type="number"
                         step="0.1"
@@ -1015,7 +1015,7 @@ export default function BazaWiedzyPage() {
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Kalorie (kcal) / 100g</label>
+                      <label className="text-[11px] font-bold text-slate-600 block mb-1">Kalorie (kcal) / porcja</label>
                       <input
                         type="number"
                         step="0.1"
