@@ -172,7 +172,6 @@ export default function BazaWiedzyPage() {
     return KATEGORIE_ODZYWIANIE;
   }, [activeTab]);
 
-  // Wyszukiwanie w czasie rzeczywistym po nazwie pozycji
   const currentFilteredList = useMemo(() => {
     let sourceList: any[] = [];
     if (activeTab === "suplementy") sourceList = suplementy;
@@ -197,26 +196,26 @@ export default function BazaWiedzyPage() {
     if (!nazwaWpisu) return;
 
     setIsSendingSugestia(true);
-    const zgłaszajacyEmail = userEmail || "anonim@klubowicz.pl";
+    const zglaszajacyEmail = userEmail || "anonim@klubowicz.pl";
 
     try {
       const { error } = await supabase.from("sugestie_suplementow").insert([
         {
           nazwa: nazwaWpisu,
-          klient_email: zgłaszajacyEmail,
+          klient_email: zglaszajacyEmail,
           status: "oczekujace",
         },
       ]);
 
       if (!error) {
-        // 1. WYSYŁKA POWIADOMIENIA PUSH DO ADMINISTRATORA
+        // Powiadomienie push do Administratora
         try {
           await fetch("/api/push/send", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               title: "📬 Nowa propozycja w Bazie Wiedzy",
-              body: `Klubowicz (${zgłaszajacyEmail}) poprosił o dodanie: ${nazwaWpisu}`,
+              body: `Klubowicz (${zglaszajacyEmail}) poprosił o dodanie: ${nazwaWpisu}`,
               url: "/baza-wiedzy",
               target: "admin",
               target_group: "admin",
@@ -226,13 +225,13 @@ export default function BazaWiedzyPage() {
           console.error("Błąd wysyłki powiadomienia push:", pushErr);
         }
 
-        // 2. Zapis w historii powiadomień
+        // Zapis w historii powiadomień
         try {
           await supabase.from("historia_powiadomien").insert([
             {
-              odbiorca: "Administratorzy",
+              odbiorca: "Administratorzy (1 urządz.)",
               tytul: "Nowa propozycja suplementu",
-              tresc: `Klubowicz (${zgłaszajacyEmail}) zgłosił propozycję: ${nazwaWpisu}`,
+              tresc: `Klubowicz (${zglaszajacyEmail}) zgłosił propozycję: ${nazwaWpisu}`,
               created_at: new Date().toISOString(),
             },
           ]);
@@ -399,35 +398,35 @@ export default function BazaWiedzyPage() {
     } else {
       await supabase.from(tableName).insert([payload]);
 
-      // JEŻELI WPIS POWSTAŁ Z PROPOZYCJI KLUBOWICZA:
+      // Obsługa propozycji i automatyczna wiadomość na czacie
       if (originatingSugestiaId && activeTab === "suplementy") {
         await supabase.from("sugestie_suplementow").delete().eq("id", originatingSugestiaId);
 
-        // Automatyczna wiadomość na czacie dla klubowicza
         if (originatingSugestiaEmail && !originatingSugestiaEmail.includes("anonim")) {
           try {
-            // Pobieramy ID klienta z bazy po adresie e-mail
+            // Pobranie ID klubowicza po emailu
             const { data: klientData } = await supabase
               .from("klienci")
               .select("id, imie, email")
               .ilike("email", originatingSugestiaEmail.trim())
               .maybeSingle();
 
-            const wiadomoscTresc = `Cześć! Informacje o suplemencie, o który pytałeś (${form.nazwa}), zostały właśnie opracowane i dodane do Bazy Wiedzy. Sprawdź szczegóły, działanie i dawkowanie w aplikacji! 💊`;
+            const wiadomoscTresc = `Cześć! Informacje o suplemencie, o który pytałeś (${form.nazwa}), zostały właśnie opracowane i dodane do Bazy Wiedzy. Sprawdź szczegóły, działanie i dawkowanie w zakładce Baza Wiedzy! 💊`;
 
+            // Zapis do tabeli czat_wiadomosci zgodnie ze strukturą kolumn w Supabase
             await supabase.from("czat_wiadomosci").insert([
               {
-                klient_id: klientData?.id || null,
-                klient_email: originatingSugestiaEmail,
-                nadawca: "Administrator",
+                odbiorca_id: klientData?.id || null,
+                nadawca_id: null,
+                nadawca_nazwa: "Administrator (Forma Marzeń)",
+                nadawca_avatar: null,
                 tresc: wiadomoscTresc,
+                przeczytana: false,
                 created_at: new Date().toISOString(),
-                is_admin: true,
-                czy_przeczytana: false,
               },
             ]);
 
-            // Powiadomienie push bezpośrednio do klubowicza
+            // Wysłanie bezpośredniego powiadomienia Push do pytającego klubowicza
             await fetch("/api/push/send", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -440,7 +439,7 @@ export default function BazaWiedzyPage() {
               }),
             });
           } catch (chatErr) {
-            console.error("Błąd podczas automatycznego powiadamiania klubowicza na czacie:", chatErr);
+            console.error("Błąd powiadamiania na czacie:", chatErr);
           }
         }
       }
