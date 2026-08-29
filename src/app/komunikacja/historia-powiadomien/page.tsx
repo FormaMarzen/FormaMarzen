@@ -11,7 +11,7 @@ interface PowiadomienieItem {
   id: number;
   created_at: string;
   odbiorca: string;
-  odbiorca_id?: number;
+  odbiorca_id?: number | string;
   tytul: string;
   tresc: string;
   typ: string;
@@ -33,6 +33,7 @@ export default function HistoriaPowiadomienPage() {
   const [historia, setHistoria] = useState<PowiadomienieItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterQuery, setFilterQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'admin' | 'klubowicze'>('admin');
   
   // Status subskrypcji push na bieżącym urządzeniu administratora
   const [pushStatus, setPushStatus] = useState<'prompt' | 'granted' | 'denied' | 'unsupported'>('prompt');
@@ -164,10 +165,28 @@ export default function HistoriaPowiadomienPage() {
     }
   };
 
-  const filteredHistoria = historia.filter(item => 
+  // Logika podziału powiadomień:
+  // Administrator: rekordy bez odbiorcy lub jawnie oznaczone jako Administrator / admin
+  const powiadomieniaAdmin = historia.filter(item => {
+    if (!item.odbiorca) return true;
+    const lower = item.odbiorca.toLowerCase().trim();
+    return lower === 'administrator' || lower === 'admin' || lower === 'admin_device';
+  });
+
+  // Klubowicze: rekordy przypisane do konkretnych osób
+  const powiadomieniaKlubowicze = historia.filter(item => {
+    if (!item.odbiorca) return false;
+    const lower = item.odbiorca.toLowerCase().trim();
+    return lower !== 'administrator' && lower !== 'admin' && lower !== 'admin_device';
+  });
+
+  const currentDataset = activeTab === 'admin' ? powiadomieniaAdmin : powiadomieniaKlubowicze;
+
+  const filteredHistoria = currentDataset.filter(item => 
     (item.tytul && item.tytul.toLowerCase().includes(filterQuery.toLowerCase())) ||
     (item.tresc && item.tresc.toLowerCase().includes(filterQuery.toLowerCase())) ||
-    (item.odbiorca && item.odbiorca.toLowerCase().includes(filterQuery.toLowerCase()))
+    (item.odbiorca && item.odbiorca.toLowerCase().includes(filterQuery.toLowerCase())) ||
+    (item.typ && item.typ.toLowerCase().includes(filterQuery.toLowerCase()))
   );
 
   return (
@@ -205,24 +224,55 @@ export default function HistoriaPowiadomienPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-2xl font-black text-slate-900">Historia powiadomień</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Wszystkie wysłane powiadomienia do klubowiczów i administratorów</p>
+          <p className="text-xs text-slate-500 mt-0.5">Dziennik powiadomień wysłanych do administratorów i klubowiczów</p>
         </div>
         
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <input
             type="text"
-            placeholder="Szukaj powiadomienia..."
+            placeholder="Szukaj (odbiorca, treść, tytuł)..."
             value={filterQuery}
             onChange={(e) => setFilterQuery(e.target.value)}
-            className="w-full sm:w-64 bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
+            className="w-full sm:w-72 bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
           />
           <button
             onClick={fetchHistoria}
-            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer whitespace-nowrap"
           >
             Odśwież
           </button>
         </div>
+      </div>
+
+      {/* Zakładki: ADMINISTRATOR i KLUBOWICZE */}
+      <div className="flex gap-2 border-b border-slate-200">
+        <button
+          onClick={() => { setActiveTab('admin'); setFilterQuery(''); }}
+          className={`flex items-center gap-2 pb-3 px-4 font-bold text-xs sm:text-sm border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'admin'
+              ? 'border-sky-600 text-sky-600'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <span>🛡️ ADMINISTRATOR</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+            {powiadomieniaAdmin.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => { setActiveTab('klubowicze'); setFilterQuery(''); }}
+          className={`flex items-center gap-2 pb-3 px-4 font-bold text-xs sm:text-sm border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'klubowicze'
+              ? 'border-sky-600 text-sky-600'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <span>👥 KLUBOWICZE</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600 font-bold">
+            {powiadomieniaKlubowicze.length}
+          </span>
+        </button>
       </div>
 
       {/* Tabela historii powiadomień */}
@@ -232,10 +282,10 @@ export default function HistoriaPowiadomienPage() {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 <th className="py-3.5 px-4">Data i godzina</th>
-                <th className="py-3.5 px-4">Odbiorca</th>
+                <th className="py-3.5 px-4">{activeTab === 'klubowicze' ? 'Klubowicz (Odbiorca)' : 'Odbiorca'}</th>
                 <th className="py-3.5 px-4">Tytuł</th>
                 <th className="py-3.5 px-4">Treść wiadomości</th>
-                <th className="py-3.5 px-4">Kanał</th>
+                <th className="py-3.5 px-4">Typ</th>
                 <th className="py-3.5 px-4 text-center">Status</th>
               </tr>
             </thead>
@@ -253,7 +303,7 @@ export default function HistoriaPowiadomienPage() {
                       {new Date(item.created_at).toLocaleString('pl-PL')}
                     </td>
                     <td className="py-3.5 px-4 font-bold text-slate-900 whitespace-nowrap">
-                      {item.odbiorca || 'Administrator'}
+                      {item.odbiorca || (activeTab === 'admin' ? 'Administrator' : 'Klubowicz')}
                     </td>
                     <td className="py-3.5 px-4 font-semibold text-sky-700 whitespace-nowrap">
                       {item.tytul}
@@ -268,7 +318,7 @@ export default function HistoriaPowiadomienPage() {
                     </td>
                     <td className="py-3.5 px-4 text-center whitespace-nowrap">
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
-                        item.status?.toLowerCase().includes('brak')
+                        item.status?.toLowerCase().includes('brak') || item.status?.toLowerCase().includes('błąd')
                           ? 'bg-amber-50 text-amber-800 border border-amber-200'
                           : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       }`}>
@@ -280,7 +330,9 @@ export default function HistoriaPowiadomienPage() {
               ) : (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-400">
-                    Brak zarejestrowanych powiadomień w historii.
+                    {activeTab === 'admin' 
+                      ? 'Brak zarejestrowanych powiadomień dla administratora.'
+                      : 'Brak zarejestrowanych powiadomień wysłanych do klubowiczów.'}
                   </td>
                 </tr>
               )}
