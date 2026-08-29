@@ -155,6 +155,7 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
+    // Pobranie imienia i nazwiska z tabeli klienci na podstawie emaila
     if (email) {
       const { data: klientRec } = await supabase
         .from("klienci")
@@ -162,7 +163,7 @@ export default function BazaWiedzyPage() {
         .ilike("email", email.trim())
         .maybeSingle();
 
-      if (klientRec) {
+      if (klientRec && (klientRec.imie || klientRec.nazwisko)) {
         setUserImieNazwisko(`${klientRec.imie || ""} ${klientRec.nazwisko || ""}`.trim());
       } else {
         setUserImieNazwisko(email.split("@")[0]);
@@ -586,7 +587,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGŁÓWEK GŁÓWNY */}
+      {/* NAGłÓWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
