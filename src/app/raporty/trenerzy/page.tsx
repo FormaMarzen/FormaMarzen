@@ -91,12 +91,28 @@ export default function CoachesReportPage() {
         supabase.from('nadpisania_zajec').select('*'),
         supabase.from('zajecia_jednorazowe').select('*'),
         supabase.from('zapisy_zajec').select('*'),
-        supabase.from('klienci').select('id, pass, karnetyKlubowicza')
+        supabase.from('klienci').select('*')
       ]);
 
       const grafik = dbGrafik || [];
       const jednorazowe = dbJednorazowe || [];
       const trenerzyLista = dbTrenerzy || [];
+      const klienciLista = dbKlienci || [];
+
+      // Mapa awatarów klubowiczów powiązana po imieniu i nazwisku oraz adresie e-mail
+      const clientAvatarMap: { [key: string]: string } = {};
+      klienciLista.forEach((c: any) => {
+        const cImie = (c['Imię'] || c.Imię || c.imie || '').trim();
+        const cNazwisko = (c['Nazwisko'] || c.Nazwisko || c.nazwisko || '').trim();
+        const cFullName = `${cImie} ${cNazwisko}`.trim().toLowerCase();
+        const cEmail = (c['E-mail'] || c.email || '').trim().toLowerCase();
+        const avatar = c.avatarUrl || c.avatar_url || null;
+
+        if (avatar) {
+          if (cFullName) clientAvatarMap[cFullName] = avatar;
+          if (cEmail) clientAvatarMap[cEmail] = avatar;
+        }
+      });
 
       const nadpisania: { [key: string]: any } = {};
       dbNadpisania?.forEach((n: any) => {
@@ -104,7 +120,7 @@ export default function CoachesReportPage() {
       });
 
       const klienciMap: { [key: number]: string } = {};
-      dbKlienci?.forEach((c: any) => {
+      klienciLista.forEach((c: any) => {
         klienciMap[c.id] = c.pass || (c.karnetyKlubowicza && c.karnetyKlubowicza.length > 0 ? c.karnetyKlubowicza[0].nazwa : 'OPEN');
       });
 
@@ -216,16 +232,20 @@ export default function CoachesReportPage() {
         });
       });
 
-      // Mapujemy tylko faktycznych trenerów z bazy danych
+      // Mapujemy tylko faktycznych trenerów z bazy danych z ich awatarami
       const formattedCoaches = trenerzyLista.map((t: any, index: number) => {
         const trainerName = t.imie_nazwisko || `${t.imie || ''} ${t.nazwisko || ''}`.trim();
+        const trainerEmail = (t.email || '').trim().toLowerCase();
+        const trainerAvatarUrl = t.avatar_url || t.avatarUrl || clientAvatarMap[trainerName.toLowerCase()] || clientAvatarMap[trainerEmail] || null;
+
         const data = stats[trainerName] || { totalClasses: 0, classesCount: {}, attendanceTotal: 0, capacityTotal: 0, classAttendance: {}, passesCount: {} };
         const attendancePercent = data.capacityTotal > 0 ? Math.round((data.attendanceTotal / data.capacityTotal) * 100) : 0;
         
         return {
           id: t.id || index + 1,
           name: trainerName,
-          avatar: index % 2 === 0 ? '👨‍💼' : '👩‍💼',
+          avatarUrl: trainerAvatarUrl,
+          avatarFallback: index % 2 === 0 ? '👨‍💼' : '👩‍💼',
           totalClasses: data.totalClasses,
           classList: Object.entries(data.classesCount).map(([name, count]) => ({ name, count })),
           attendancePercent: `${attendancePercent}%`,
@@ -292,8 +312,9 @@ export default function CoachesReportPage() {
   }
 
   return (
-    <div className="max-w-[1700px] mx-auto space-y-8 pb-24 relative">
+    <div className="max-w-[1700px] mx-auto space-y-8 pb-24 relative font-sans antialiased">
       
+      {/* GÓRNY PASEK Z TYTUŁEM I PRZYCISKIEM DODAWANIA */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-sky-200 pb-4 gap-4">
         <div>
           <h1 className="text-xl font-bold uppercase tracking-wider text-sky-950">
@@ -308,22 +329,21 @@ export default function CoachesReportPage() {
           >
             <span>➕</span> DODAJ
           </button>
-          <button className="px-4 py-2 bg-rose-800 hover:bg-rose-700 text-white text-xs font-bold rounded-xl uppercase tracking-wider shadow-sm transition-all flex items-center gap-2 cursor-pointer">
-            <span>⚙️</span> Pokaż filtry
-          </button>
-          <button className="px-4 py-2 bg-sky-100 hover:bg-sky-200 text-sky-800 border border-sky-200 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer">
-            <span>❓</span> Dowiedz się więcej
-          </button>
         </div>
       </div>
 
+      {/* KARTY TRENERÓW */}
       <div className="space-y-8">
         {coachesData.length > 0 ? coachesData.map((coach) => (
           <div key={coach.id} className="bg-white border border-sky-200 rounded-2xl p-6 space-y-6 shadow-sm">
             <div className="flex justify-between items-center border-b border-sky-100 pb-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-sky-100 border border-sky-200 rounded-full flex items-center justify-center text-2xl">
-                  {coach.avatar}
+                <div className="w-12 h-12 bg-sky-100 border border-sky-200 rounded-full flex items-center justify-center text-2xl overflow-hidden shrink-0 shadow-xs">
+                  {coach.avatarUrl ? (
+                    <img src={coach.avatarUrl} alt={coach.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <span>{coach.avatarFallback}</span>
+                  )}
                 </div>
                 <h2 className="text-lg font-black text-slate-900">{coach.name}</h2>
               </div>
