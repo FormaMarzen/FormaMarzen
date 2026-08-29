@@ -586,7 +586,7 @@ export default function BazaWiedzyPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
-      {/* NAGłÓWEK GŁÓWNY */}
+      {/* NAGŁÓWEK GŁÓWNY */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-sky-200 pb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
@@ -737,7 +737,7 @@ export default function BazaWiedzyPage() {
         {currentFilteredList.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-3xl border border-sky-100 border-dashed">
             <div className="text-5xl mb-4">
-              {activeTab === "suplementy" ? "🧪" : activeTab === "sport" ? "🏋️" : activeTab === "odzywianie" ? "🥗" : "🍳"}
+              {activeTab === "suplementy" ? "🧪" : activeTab === "sport" ? "🏋️" : "🥗"}
             </div>
             <h3 className="text-lg font-black text-sky-950 mb-1">Brak wyników</h3>
             <p className="text-slate-500 text-sm">Nie znaleziono pozycji spełniających podane kryteria.</p>
@@ -951,7 +951,7 @@ export default function BazaWiedzyPage() {
                     </div>
                     <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-amber-900">Tłuszcze / porcja</div>
-                      <div className="text-lg font-black text-amber-950 mt-1">{selectedItem.tluszcze || 0}g</div>
+                      <div className="text-lg font-black text-sky-950 mt-1">{selectedItem.tluszcze || 0}g</div>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
                       <div className="text-[11px] font-black uppercase text-emerald-900">Węgle / porcja</div>
@@ -1270,7 +1270,7 @@ export default function BazaWiedzyPage() {
                       : "Wpisz pełny opis, badania i wskazówki..."
                   }
                   rows={6}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-sky-500"
                 />
               </div>
 
