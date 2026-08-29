@@ -126,6 +126,7 @@ export default function ClubChat() {
   const [newGroupType, setNewGroupType] = useState<"publiczna" | "zamknieta">("zamknieta");
   const [newGroupIcon, setNewGroupIcon] = useState("🏋️‍♂️");
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<(number | string)[]>([]);
+  const [groupMemberSearchQuery, setGroupMemberSearchQuery] = useState("");
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
 
   // Modal edycji grupy
@@ -1138,7 +1139,7 @@ export default function ClubChat() {
       przeczytana_at: null,
       przypinana: false,
       reakcje: {},
-      reply_to_id: replyingToMessage?.id || null,
+      reply_to_id: replyingToMessage?.id ? String(replyingToMessage.id) : null,
       reply_to_text: replyingToMessage ? (replyingToMessage.tresc || (replyingToMessage.attachment_url ? "📎 Załącznik" : "Wiadomość")) : null,
       reply_to_sender: replyingToMessage?.nadawca_nazwa || null,
     };
@@ -1150,8 +1151,7 @@ export default function ClubChat() {
       payload.odbiorca_id = null;
 
       let { error } = await supabase.from("czat_wiadomosci").insert([payload]);
-      
-      // Fallback jeśli kolumny reply_to nie zostały jeszcze dodane do bazy Supabase
+
       if (error && (error.message?.includes("reply_to") || error.code === "PGRST204" || error.code === "42703")) {
         delete payload.reply_to_id;
         delete payload.reply_to_text;
@@ -1179,10 +1179,8 @@ export default function ClubChat() {
             grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
         }
 
-        // Standardowy Push grupowy
         sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik", matchedTraining);
-        
-        // Specjalne powiadomienie Push o odpowiedzi do autora oryginalnej wiadomości
+
         if (targetReplyAuthorId && String(targetReplyAuthorId) !== String(senderId)) {
           sendChatPushNotification(targetReplyAuthorId, currentUserName, `↩ Odpowiedział(a) na Twoją wiadomość w grupie "${selectedGroup.nazwa}": "${messageText || "📎 Załącznik"}"`);
         }
@@ -1193,7 +1191,6 @@ export default function ClubChat() {
 
       let { error } = await supabase.from("czat_wiadomosci").insert([payload]);
 
-      // Fallback jeśli kolumny reply_to nie zostały jeszcze dodane
       if (error && (error.message?.includes("reply_to") || error.code === "PGRST204" || error.code === "42703")) {
         delete payload.reply_to_id;
         delete payload.reply_to_text;
@@ -1568,6 +1565,7 @@ export default function ClubChat() {
     setNewGroupType("zamknieta");
     setNewGroupIcon("🏋️‍♂️");
     setSelectedGroupMembers([]);
+    setGroupMemberSearchQuery("");
     setShowCreateGroupModal(true);
   };
 
@@ -1618,6 +1616,7 @@ export default function ClubChat() {
         setNewGroupType("zamknieta");
         setNewGroupIcon("🏋️‍♂️");
         setSelectedGroupMembers([]);
+        setGroupMemberSearchQuery("");
         setShowCreateGroupModal(false);
         await fetchGroupsAndTrainings();
         selectedGroupRef.current = createdGroup;
@@ -1886,7 +1885,6 @@ export default function ClubChat() {
     const reactionsObj = msg.reakcje || {};
     const myIdStr = String(secondaryUserId || currentUserId);
 
-    // Gest Swipe-to-Reply
     const [dragOffset, setDragOffset] = useState(0);
     const touchStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const isSwipingMessage = useRef(false);
@@ -1903,7 +1901,6 @@ export default function ClubChat() {
       const deltaY = e.touches[0].clientY - touchStartPos.current.y;
 
       if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
-        // Pozwalamy na przesunięcie w lewo lub w prawo do max 65px
         const bounded = Math.max(-65, Math.min(65, deltaX));
         setDragOffset(bounded);
       }
@@ -2006,7 +2003,6 @@ export default function ClubChat() {
         style={{ transform: `translateX(${dragOffset}px)` }}
         className="relative group flex flex-col transition-transform duration-75"
       >
-        {/* Wizualna ikona strzałki odpowiedzi pojawiająca się przy przeciąganiu */}
         {Math.abs(dragOffset) > 20 && (
           <div
             className={`absolute top-1/2 -translate-y-1/2 text-amber-400 text-base font-bold transition-opacity ${
@@ -2026,7 +2022,6 @@ export default function ClubChat() {
               : "bg-white text-slate-800 border border-slate-200 rounded-bl-none mr-auto"
           }`}
         >
-          {/* SEKCJA CYTATU / ODPOWIEDZI W TLE WIADOMOŚCI */}
           {msg.reply_to_sender && (
             <div
               className={`mb-1.5 p-2 rounded-xl border-l-2 text-[10px] leading-tight select-none ${
@@ -2073,7 +2068,7 @@ export default function ClubChat() {
                 </button>
               ))}
             </div>
-            
+
             <div className="pt-1 border-t border-slate-100 flex flex-col gap-1">
               <button
                 type="button"
@@ -2144,7 +2139,7 @@ export default function ClubChat() {
   });
 
   const activeMyGroups = allMyGroups.filter((g) => !archivedChatIds.includes(`group_${g.id}`));
-  
+
   // Czaty grupowe użytkowników w zakładce Prywatne
   const directTabGroupChats = activeMyGroups
     .filter((g) => g.kategoria === "Czaty grupowe")
@@ -2259,7 +2254,7 @@ export default function ClubChat() {
   };
 
   const isCurrentGroupMuted = selectedGroup && Array.isArray(selectedGroup.wyciszeni_ids) && selectedGroup.wyciszeni_ids.map(String).includes(String(secondaryUserId || currentUserId));
-  
+
   const isCurrentChatArchived = selectedGroup
     ? archivedChatIds.includes(`group_${selectedGroup.id}`)
     : selectedUser
@@ -3117,7 +3112,7 @@ export default function ClubChat() {
                       </>
                     )}
 
-                    {/* ZOPTYMALIZOWANY UKŁAD ZAKŁADKI ZAMKNIĘTE */}
+                    {/* ZAKŁADKA ZAMKNIĘTE */}
                     {groupFilterTab === "closed" && (
                       <>
                         {closedDiscoverGroups.map((group: any) => {
@@ -3430,7 +3425,6 @@ export default function ClubChat() {
             /* WIDOK AKTYWNEJ ROZMOWY (WIADOMOŚCI) */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
               
-              {/* Baner archiwalny (Tylko Admin) */}
               {isAdmin && isCurrentChatArchived && (
                 <div className="bg-slate-200/90 border-b border-slate-300 px-3 py-1.5 flex items-center justify-between text-[11px] font-medium text-slate-700 shadow-inner">
                   <div className="flex items-center gap-1.5 truncate">
@@ -4055,6 +4049,7 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* MODAL TWORZENIA GRUPY Z DYNAMICZNĄ WYSZUKIWARKĄ I CHIPSAMI */}
           {showCreateGroupModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
               <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-200 space-y-3">
@@ -4166,29 +4161,97 @@ export default function ClubChat() {
                     </div>
                   )}
 
+                  {/* WYBÓR UCZESTNIKÓW Z DYNAMICZNĄ WYSZUKIWARKĄ I CHIPSAMI */}
                   <div>
-                    <div className="text-[11px] font-bold text-slate-700 mb-1">Wybierz uczestników grupy:</div>
+                    <div className="text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                      <span>Wybierz uczestników grupy:</span>
+                      {selectedGroupMembers.length > 0 && (
+                        <span className="text-[10px] text-amber-600 font-bold">
+                          Wybrano: {selectedGroupMembers.length}
+                        </span>
+                      )}
+                    </div>
+
+                    {selectedGroupMembers.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mb-2 max-h-16 overflow-y-auto p-1.5 bg-amber-50/70 border border-amber-200 rounded-xl">
+                        {selectedGroupMembers.map((memberId) => {
+                          const client = klienci.find((k) => String(k.id) === String(memberId));
+                          if (!client) return null;
+                          return (
+                            <span
+                              key={memberId}
+                              className="inline-flex items-center gap-1 text-[10px] bg-slate-900 text-white font-bold px-2 py-0.5 rounded-lg shadow-2xs"
+                            >
+                              <span className="truncate max-w-[120px]">{client.name}</span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedGroupMembers((prev) => prev.filter((id) => id !== memberId))}
+                                className="hover:text-rose-400 font-black cursor-pointer ml-0.5"
+                                title="Usuń"
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="relative mb-1.5">
+                      <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400 text-xs">🔍</span>
+                      <input
+                        type="text"
+                        placeholder="Szukaj klubowicza: imię, nazwisko, email..."
+                        value={groupMemberSearchQuery}
+                        onChange={(e) => setGroupMemberSearchQuery(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-7 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+
                     <div className="max-h-28 overflow-y-auto space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                       {klienci
-                        .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId))
+                        .filter((k) => Number(k.id) !== SYSTEM_ID && String(k.id) !== String(currentUserId) && String(k.id) !== String(secondaryUserId))
+                        .filter((k) => {
+                          const q = groupMemberSearchQuery.trim().toLowerCase();
+                          if (!q) return true;
+                          const fName = (k.firstName || "").toLowerCase();
+                          const lName = (k.lastName || "").toLowerCase();
+                          if (lName.startsWith(q) || fName.startsWith(q)) return true;
+                          const parts = q.split(/\s+/);
+                          if (parts.length >= 2) {
+                            const typedFirst = parts[0];
+                            const typedLastInitial = parts[1];
+                            if (fName.startsWith(typedFirst) && lName.startsWith(typedLastInitial)) return true;
+                          }
+                          return k.name?.toLowerCase().includes(q) || k.email?.toLowerCase().includes(q);
+                        })
                         .map((user) => {
                           const isSelected = selectedGroupMembers.includes(user.id);
                           return (
                             <label
                               key={user.id}
-                              className="flex items-center gap-2 p-1.5 hover:bg-white rounded-lg cursor-pointer text-xs select-none"
+                              className={`flex items-center justify-between p-1.5 rounded-lg cursor-pointer text-xs select-none transition-colors ${
+                                isSelected ? "bg-amber-100/70 text-amber-950 font-bold" : "hover:bg-white text-slate-800"
+                              }`}
                             >
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => {
-                                  setSelectedGroupMembers((prev) =>
-                                    isSelected ? prev.filter((id) => id !== user.id) : [...prev, user.id]
-                                  );
-                                }}
-                                className="rounded text-amber-500 focus:ring-0"
-                              />
-                              <span className="font-medium text-slate-800">{user.name}</span>
+                              <div className="flex items-center gap-2 overflow-hidden">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {
+                                    setSelectedGroupMembers((prev) =>
+                                      isSelected ? prev.filter((id) => id !== user.id) : [...prev, user.id]
+                                    );
+                                  }}
+                                  className="rounded text-amber-500 focus:ring-0 cursor-pointer"
+                                />
+                                <span className="truncate">{user.name}</span>
+                              </div>
+                              {user.email && (
+                                <span className="text-[9px] text-slate-400 truncate max-w-[110px] ml-1 font-normal">
+                                  {user.email}
+                                </span>
+                              )}
                             </label>
                           );
                         })}
