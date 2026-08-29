@@ -136,7 +136,6 @@ export default function PublicSchedulePage() {
   const loadPublicData = async () => {
     setIsLoading(true);
 
-    // 1. Nadrzędne reguły autoodwoływania
     try {
       const { data: rulesData } = await supabase
         .from('club_booking_rules')
@@ -157,7 +156,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania reguł:", e);
     }
 
-    // 2. Szablony grafiku stałego
     try {
       const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
       if (szablonyData) {
@@ -178,7 +176,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania szablonów grafiku:", e);
     }
 
-    // 3. Zajęcia jednorazowe
     try {
       const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
       if (jednorazoweData) {
@@ -201,7 +198,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania zajęć jednorazowych:", e);
     }
 
-    // 4. Nadpisania dni
     try {
       const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
       if (nadpisaniaData) {
@@ -223,7 +219,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania nadpisań:", e);
     }
 
-    // 5. Zapisy na zajęcia
     try {
       const { data: zapisyData } = await supabase.from('zapisy_zajec').select('class_key, status');
       if (zapisyData) {
@@ -238,7 +233,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania zapisów:", e);
     }
 
-    // 6. Wydarzenia kilkudniowe
     try {
       const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
       if (wydarzeniaData) {
@@ -253,7 +247,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania wydarzeń:", e);
     }
 
-    // 7. Rodzaje zajęć
     try {
       const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
       if (rodzajeData) {
@@ -263,7 +256,6 @@ export default function PublicSchedulePage() {
       console.error("Błąd ładowania rodzajów zajęć:", e);
     }
 
-    // 8. Katalog karnetów (Niezależny blok z fallbackiem)
     try {
       const { data: karnetyData, error: karnetyError } = await supabase
         .from('katalog_karnetow')
@@ -429,19 +421,27 @@ export default function PublicSchedulePage() {
             </button>
           </div>
 
+          {/* PRZYCISKI AKCJI: ZAPISZ / BEZPŁATNA APLIKACJA / ZALOGUJ */}
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-center">
             <button
               onClick={() => setIsSignupModalOpen(true)}
-              className="flex-1 sm:flex-initial bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black px-6 py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 text-center flex items-center justify-center gap-2 cursor-pointer border border-amber-400"
+              className="flex-1 sm:flex-initial bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black px-5 py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 text-center flex items-center justify-center gap-2 cursor-pointer border border-amber-400"
             >
               <span>🔥</span> ZAPISZ NA TRENING
             </button>
 
             <Link
-              href="/login"
-              className="flex-1 sm:flex-initial bg-sky-950 hover:bg-sky-900 text-white font-black px-6 py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 text-center flex items-center justify-center gap-2 cursor-pointer border border-sky-900"
+              href="/rejestracja-ogolna"
+              className="flex-1 sm:flex-initial bg-emerald-600 hover:bg-emerald-700 text-white font-black px-5 py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 text-center flex items-center justify-center gap-2 cursor-pointer border border-emerald-500"
             >
-              <span>👤</span> ZALOGUJ SIĘ DO PANELU ↗
+              <span>📱</span> BEZPŁATNA APLIKACJA
+            </Link>
+
+            <Link
+              href="/login"
+              className="flex-1 sm:flex-initial bg-sky-950 hover:bg-sky-900 text-white font-black px-5 py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 text-center flex items-center justify-center gap-2 cursor-pointer border border-sky-900"
+            >
+              <span>👤</span> ZALOGUJ SIĘ ↗
             </Link>
           </div>
         </header>
