@@ -148,7 +148,9 @@ export default function BazaWiedzyPage() {
   const fetchData = async () => {
     setIsLoading(true);
 
-    const { data: { session } } = await supabase.auth.getSession();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
     const email = session?.user?.email || "";
     setUserEmail(email);
 
@@ -223,9 +225,7 @@ export default function BazaWiedzyPage() {
     if (odzData) setOdzywianieWpisy(odzData);
 
     // 4. Przepisy
-    const { data: przData } = await supabase
-      .from("baza_przepisow")
-      .select("*");
+    const { data: przData } = await supabase.from("baza_przepisow").select("*");
     if (przData) {
       const sortedPrzepisy = przData.sort((a, b) => {
         if (a.do_weryfikacji && !b.do_weryfikacji) return -1;
@@ -235,7 +235,7 @@ export default function BazaWiedzyPage() {
       setPrzepisy(sortedPrzepisy);
     }
 
-    // 5. Propozycje
+    // 5. Propozycje oczekujące
     const { data: sugData } = await supabase
       .from("sugestie_suplementow")
       .select("*")
@@ -270,7 +270,10 @@ export default function BazaWiedzyPage() {
           if (Array.isArray(parsed)) return parsed;
         }
       } catch (e) {}
-      return kategoria.split(",").map((k) => k.trim()).filter(Boolean);
+      return kategoria
+        .split(",")
+        .map((k) => k.trim())
+        .filter(Boolean);
     }
     return [];
   };
@@ -313,6 +316,38 @@ export default function BazaWiedzyPage() {
       });
   }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria]);
 
+  const sendPushNotification = async (email: string, title: string, body: string, url: string = "/baza-wiedzy") => {
+    try {
+      const cleanTargetEmail = email.toLowerCase().trim();
+
+      // 1. Zapis powiadomienia w tabeli bazy Supabase
+      await supabase.from("powiadomienia").insert([
+        {
+          odbiorca_email: cleanTargetEmail,
+          tytul: title,
+          tresc: body,
+          przeczytane: false,
+          typ: "suplement_dodany",
+          link: url,
+        },
+      ]);
+
+      // 2. Wysłanie push przez webhook/endpoint API aplikacji (jeśli aktywny WebPush)
+      await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: cleanTargetEmail,
+          title,
+          body,
+          url,
+        }),
+      }).catch(() => {});
+    } catch (e) {
+      console.error("Błąd wysyłania powiadomienia:", e);
+    }
+  };
+
   const handleWyslijSugestie = async (e: React.FormEvent) => {
     e.preventDefault();
     const nazwaWpisu = nowaSugestiaNazwa.trim();
@@ -346,6 +381,7 @@ export default function BazaWiedzyPage() {
   };
 
   const handleUsunSugestie = async (id: number) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć tę propozycję?")) return;
     await supabase.from("sugestie_suplementow").delete().eq("id", id);
     setSugestie((prev) => prev.filter((s) => s.id !== id));
   };
@@ -458,10 +494,7 @@ export default function BazaWiedzyPage() {
   };
 
   const handleZaznaczDoUsuniecia = async (id: number) => {
-    const { error } = await supabase
-      .from("baza_przepisow")
-      .update({ do_usuniecia: true })
-      .eq("id", id);
+    const { error } = await supabase.from("baza_przepisow").update({ do_usuniecia: true }).eq("id", id);
 
     if (!error) {
       alert("Przepis został zgłoszony do usunięcia przez administratora.");
@@ -473,10 +506,7 @@ export default function BazaWiedzyPage() {
   };
 
   const handleZglosBlad = async (id: number) => {
-    const { error } = await supabase
-      .from("baza_przepisow")
-      .update({ do_weryfikacji: true })
-      .eq("id", id);
+    const { error } = await supabase.from("baza_przepisow").update({ do_weryfikacji: true }).eq("id", id);
 
     if (!error) {
       alert("Zgłoszono błąd w przepisie. Otrzymał on status 'Do weryfikacji' i został przeniesiony na górę listy.");
@@ -522,7 +552,7 @@ export default function BazaWiedzyPage() {
             }
           } else {
             if (height > MAX_HEIGHT) {
-              width *= MAX_HEIGHT / height;
+              height *= MAX_HEIGHT / height;
               height = MAX_HEIGHT;
             }
           }
@@ -556,7 +586,9 @@ export default function BazaWiedzyPage() {
 
       const wyliczoneKcal = Math.round(b * 4 + t * 9 + w * 4);
       if (Math.abs(wyliczoneKcal - k) > 15) {
-        alert(`Wpisane kalorie (${k} kcal) nie zgadzają się z wyliczonymi z makroskładników na porcję (${wyliczoneKcal} kcal: białko*4 + tłuszcz*9 + węgle*4). Sprawdź poprawność danych!`);
+        alert(
+          `Wpisane kalorie (${k} kcal) nie zgadzają się z wyliczonymi z makroskładników na porcję (${wyliczoneKcal} kcal: białko*4 + tłuszcz*9 + węgle*4). Sprawdź poprawność danych!`
+        );
         return;
       }
 
@@ -607,6 +639,23 @@ export default function BazaWiedzyPage() {
     if (error) {
       alert("Błąd zapisu do bazy Supabase: " + error.message);
       return;
+    }
+
+    // JEŚLI DODANO WPIS Z PROPOZYCJI KLUBOWICZA -> WYŚLIJ POWIADOMIENIE I ZMIEŃ STATUS
+    if (originatingSugestiaId && originatingSugestiaEmail) {
+      await supabase
+        .from("sugestie_suplementow")
+        .update({ status: "zaakceptowane" })
+        .eq("id", originatingSugestiaId);
+
+      await sendPushNotification(
+        originatingSugestiaEmail,
+        "Twój suplement został dodany! 💊",
+        `Proponowany przez Ciebie suplement "${form.nazwa}" został zweryfikowany i dodany do Bazy Wiedzy!`
+      );
+
+      setOriginatingSugestiaId(null);
+      setOriginatingSugestiaEmail(null);
     }
 
     setIsAdminModalOpen(false);
@@ -675,7 +724,7 @@ export default function BazaWiedzyPage() {
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
           }`}
         >
-          <span>🏃</span> Sport i Trening
+          <span>🏋️</span> Sport i Trening
         </button>
 
         <button
@@ -704,20 +753,105 @@ export default function BazaWiedzyPage() {
       {/* ZAWARTOŚĆ STRONY */}
       <div className="space-y-6">
         {activeTab === "suplementy" && (
-          <div className="bg-amber-50 border-2 border-amber-300/80 rounded-3xl p-5 sm:p-6 shadow-sm flex items-start gap-4">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm">
-              ⚠️
+          <>
+            <div className="bg-amber-50 border-2 border-amber-300/80 rounded-3xl p-5 sm:p-6 shadow-sm flex items-start gap-4">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center text-xl shrink-0 shadow-sm">
+                ⚠️
+              </div>
+              <div className="space-y-1.5 text-xs text-amber-950 leading-relaxed">
+                <h4 className="font-black uppercase tracking-wider text-[11px] text-amber-900 flex items-center gap-1.5">
+                  Ważna informacja prawno-medyczna
+                </h4>
+                <p className="font-medium text-slate-700">
+                  Informacje publikowane w Bazie Wiedzy mają charakter{" "}
+                  <strong className="font-bold text-slate-900">wyłącznie edukacyjny i informacyjny</strong> i nie stanowią porady medycznej.
+                </p>
+              </div>
             </div>
-            <div className="space-y-1.5 text-xs text-amber-950 leading-relaxed">
-              <h4 className="font-black uppercase tracking-wider text-[11px] text-amber-900 flex items-center gap-1.5">
-                Ważna informacja prawno-medyczna
-              </h4>
-              <p className="font-medium text-slate-700">
-                Informacje publikowane w Bazie Wiedzy mają charakter{" "}
-                <strong className="font-bold text-slate-900">wyłącznie edukacyjny i informacyjny</strong> i nie stanowią porady medycznej.
-              </p>
+
+            {/* PANEL DLA ADMINISTRATORA - OCZEKUJĄCE PROPOZYCJE */}
+            {isAdmin && sugestie.length > 0 && (
+              <div className="bg-sky-950 text-white rounded-3xl p-5 sm:p-6 shadow-md space-y-4 border border-sky-800">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🔔</span>
+                    <h3 className="font-black text-sm sm:text-base uppercase tracking-wider text-amber-400">
+                      Oczekujące propozycje suplementów od Klubowiczów ({sugestie.length})
+                    </h3>
+                  </div>
+                  <span className="text-xs text-slate-300">Po kliknięciu „Dodaj” klubowicz otrzyma Push!</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {sugestie.map((sug) => {
+                    const cleanMail = (sug.klient_email || "").toLowerCase().trim();
+                    const zglaszajacy = klienciMap[cleanMail] || sug.klient_email || "Klubowicz";
+                    return (
+                      <div
+                        key={sug.id}
+                        className="bg-slate-900/90 border border-sky-800/80 p-4 rounded-2xl flex flex-col justify-between gap-3 shadow-inner"
+                      >
+                        <div>
+                          <div className="font-black text-amber-400 text-base">{sug.nazwa}</div>
+                          <div className="text-[11px] text-slate-400 mt-1">
+                            Zgłosił: <span className="text-slate-200 font-bold">{zglaszajacy}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 pt-2 border-t border-sky-900">
+                          <button
+                            onClick={() => handleQuickAddFromSugestia(sug)}
+                            className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs py-2 px-3 rounded-xl transition-all shadow-sm cursor-pointer text-center"
+                          >
+                            + Dodaj do bazy
+                          </button>
+                          <button
+                            onClick={() => handleUsunSugestie(sug.id)}
+                            className="bg-rose-900/50 hover:bg-rose-900 text-rose-300 p-2 rounded-xl text-xs transition-colors cursor-pointer"
+                            title="Odrzuć propozycję"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* FORMULARZ ZGŁASZANIA DLA KLUBOWICZÓW */}
+            <div className="bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-200/80 rounded-3xl p-5 sm:p-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="space-y-1 text-center md:text-left">
+                <h4 className="font-black text-sky-950 text-sm uppercase tracking-wide flex items-center justify-center md:justify-start gap-2">
+                  <span>💡</span> Nie znalazłeś suplementu na liście?
+                </h4>
+                <p className="text-xs text-slate-600 font-medium">
+                  Zaproponuj nazwę – po dodaniu przez trenera otrzymasz natychmiastowe powiadomienie Push!
+                </p>
+              </div>
+              <form onSubmit={handleWyslijSugestie} className="flex items-center gap-2 w-full md:w-auto">
+                <input
+                  type="text"
+                  required
+                  placeholder="Wpisz nazwę suplementu..."
+                  value={nowaSugestiaNazwa}
+                  onChange={(e) => setNowaSugestiaNazwa(e.target.value)}
+                  className="bg-white border border-sky-300 rounded-xl px-4 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-sky-600 w-full md:w-64"
+                />
+                <button
+                  type="submit"
+                  disabled={isSendingSugestia}
+                  className="bg-sky-900 hover:bg-sky-950 text-white text-xs font-black px-4 py-2 rounded-xl transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
+                >
+                  {isSendingSugestia ? "Wysyłanie..." : "Zaproponuj"}
+                </button>
+              </form>
             </div>
-          </div>
+            {sugestiaSuccess && (
+              <div className="p-3 bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-bold rounded-2xl text-center animate-in fade-in">
+                ✅ Dziękujemy! Twoja propozycja została przesłana. Otrzymasz powiadomienie, gdy tylko pojawi się w Bazie Wiedzy.
+              </div>
+            )}
+          </>
         )}
 
         {/* WYSZUKIWARKA I KATEGORIE */}
@@ -914,7 +1048,7 @@ export default function BazaWiedzyPage() {
 
                         <td className="py-4 px-6 text-right">
                           <div className="flex items-center justify-end gap-2">
-                            {(isAdmin || (activeTab === "przepisy" && (item.autor_email === userEmail))) && (
+                            {(isAdmin || (activeTab === "przepisy" && item.autor_email === userEmail)) && (
                               <button
                                 onClick={(e) => handleOpenEdit(item, e)}
                                 className="w-8 h-8 flex items-center justify-center bg-sky-100 text-sky-800 rounded-lg hover:bg-sky-200 transition-colors cursor-pointer text-xs"
@@ -949,7 +1083,7 @@ export default function BazaWiedzyPage() {
         )}
       </div>
 
-      {/* MODAL PODGLĄDU - PŁYNNE PRZEWIJANIE */}
+      {/* MODAL PODGLĄDU */}
       {isViewModalOpen && selectedItem && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-3 sm:p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-slate-50 rounded-[2rem] max-w-3xl w-full shadow-2xl relative overflow-hidden animate-in zoom-in-95 duration-300 my-auto max-h-[90vh] flex flex-col">
@@ -1081,9 +1215,7 @@ export default function BazaWiedzyPage() {
                     {isAdmin && (
                       <button
                         type="button"
-                        onClick={(e) => {
-                          handleDelete(selectedItem.id, e);
-                        }}
+                        onClick={(e) => handleDelete(selectedItem.id, e)}
                         className="bg-rose-100 hover:bg-rose-200 text-rose-800 font-black text-xs px-4 py-3 rounded-xl transition-colors cursor-pointer"
                       >
                         🗑️ Usuń całkowicie
@@ -1133,6 +1265,11 @@ export default function BazaWiedzyPage() {
               <h3 className="font-black text-2xl text-sky-950 leading-tight">
                 {editingId ? "Edytuj wpis" : "Nowy wpis"}: {activeTab.toUpperCase()}
               </h3>
+              {originatingSugestiaEmail && (
+                <p className="text-xs text-amber-700 font-bold mt-1">
+                  💡 Dodajesz pozycję z propozycji klubowicza ({originatingSugestiaEmail}). Po zapisaniu otrzyma on powiadomienie push.
+                </p>
+              )}
             </div>
 
             <form onSubmit={handleSaveItem} className="space-y-5">
@@ -1236,7 +1373,9 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.bialko}
-                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, bialko: "" }); }}
+                        onFocus={(e) => {
+                          if (e.target.value === "0") setForm({ ...form, bialko: "" });
+                        }}
                         onChange={(e) => setForm({ ...form, bialko: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
@@ -1247,7 +1386,9 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.tluszcze}
-                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, tluszcze: "" }); }}
+                        onFocus={(e) => {
+                          if (e.target.value === "0") setForm({ ...form, tluszcze: "" });
+                        }}
                         onChange={(e) => setForm({ ...form, tluszcze: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
@@ -1258,7 +1399,9 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.weglowodany}
-                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, weglowodany: "" }); }}
+                        onFocus={(e) => {
+                          if (e.target.value === "0") setForm({ ...form, weglowodany: "" });
+                        }}
                         onChange={(e) => setForm({ ...form, weglowodany: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
@@ -1269,7 +1412,9 @@ export default function BazaWiedzyPage() {
                         type="number"
                         step="0.1"
                         value={form.kalorie}
-                        onFocus={(e) => { if (e.target.value === "0") setForm({ ...form, kalorie: "" }); }}
+                        onFocus={(e) => {
+                          if (e.target.value === "0") setForm({ ...form, kalorie: "" });
+                        }}
                         onChange={(e) => setForm({ ...form, kalorie: e.target.value === "" ? "" : Number(e.target.value) })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
                       />
