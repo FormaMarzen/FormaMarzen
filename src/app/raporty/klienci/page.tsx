@@ -105,9 +105,8 @@ const isDateMatchingScheduleDays = (dateObj: Date, scheduleClass: any): boolean 
   if (!rawDays) return true;
 
   const parsedDays = safeJsonParse(rawDays, rawDays);
-  const dayIndex = dateObj.getDay(); // 0 = Niedziela, 1 = Poniedziałek, ..., 6 = Sobota
+  const dayIndex = dateObj.getDay();
 
-  // Obsługa struktury obiektu JSONB z Supabase: {"pon": true, "wt": false, "sr": true, ...}
   if (typeof parsedDays === 'object' && parsedDays !== null && !Array.isArray(parsedDays)) {
     const dayKeys: { [key: number]: string[] } = {
       0: ['nd', 'niedziela', 'nie', 'sun', 'sunday', '7'],
@@ -122,7 +121,6 @@ const isDateMatchingScheduleDays = (dateObj: Date, scheduleClass: any): boolean 
     return possibleKeys.some(k => Boolean(parsedDays[k]) === true);
   }
 
-  // Obsługa tablicy ['pon', 'śr', 'pt']
   if (Array.isArray(parsedDays)) {
     const dayKeys: { [key: number]: string[] } = {
       0: ['nd', 'niedziela', 'nie', 'sun', 'sunday', '0', '7'],
@@ -137,7 +135,6 @@ const isDateMatchingScheduleDays = (dateObj: Date, scheduleClass: any): boolean 
     return parsedDays.some((d: any) => validNames.includes(String(d).trim().toLowerCase()));
   }
 
-  // Obsługa tekstu "Poniedziałek, Środa"
   if (typeof parsedDays === 'string') {
     const str = parsedDays.trim().toLowerCase();
     const dayKeys: { [key: number]: string[] } = {
@@ -1874,6 +1871,18 @@ export default function KlienciPage() {
                 const daysUntilExp = getDaysUntilExpiry(dataWygasnieciaKarnetu);
                 const isPassExpiringSoon = maKarnet && daysUntilExp !== null && daysUntilExp <= 5;
 
+                // WERYFIKACJA CENY REGULARNEJ KARNETU Z ZAKŁADKI KARNETY
+                const aktywnyKarnetObj = maKarnet ? client.karnetyKlubowicza[0] : null;
+                const pasujacyKarnetDef = aktywnyKarnetObj ? dostepneKarnety.find(k => k.nazwa === aktywnyKarnetObj.nazwa) : null;
+                const cenaRegularnaKatalog = pasujacyKarnetDef ? (parseFloat(String(pasujacyKarnetDef.cena).replace(/[^0-9.]/g, '')) || 0) : null;
+                const cenaKlientaNum = parseFloat(String(client.price || '').replace(/[^0-9.]/g, '')) || 0;
+                
+                const isPriceDifferent = Boolean(
+                  maKarnet && 
+                  cenaRegularnaKatalog !== null && 
+                  Math.abs(cenaKlientaNum - cenaRegularnaKatalog) > 0.01
+                );
+
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
                     <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
@@ -1909,7 +1918,15 @@ export default function KlienciPage() {
                         )}
                       </div>
                     </td>
-                    <td className="py-3.5 px-3 font-medium text-slate-800 whitespace-nowrap">{client.price}</td>
+                    <td className="py-3.5 px-3 whitespace-nowrap font-medium">
+                      {isPriceDifferent ? (
+                        <span className="bg-pink-100 text-pink-800 border border-pink-300 font-bold px-2 py-1 rounded-lg inline-block shadow-sm">
+                          {client.price}
+                        </span>
+                      ) : (
+                        <span className="text-slate-800">{client.price}</span>
+                      )}
+                    </td>
                     <td className="py-3.5 px-3 font-mono whitespace-nowrap">
                       {maKarnet && dataWygasnieciaKarnetu !== '-' ? (
                         isPassExpiringSoon ? (
@@ -2037,7 +2054,6 @@ export default function KlienciPage() {
                 </button>
               </div>
             </div>
-
             <div className="space-y-2 pt-2 border-t border-slate-100">
               <div className="text-[10px] font-black text-rose-500 uppercase tracking-wider flex items-center gap-1"><span>⚠️</span> DANGER ZONE</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-bold text-rose-800 text-center">
@@ -2471,12 +2487,10 @@ export default function KlienciPage() {
                       const upcomingMap = new Map<string, any>();
                       const seenSignatures = new Set<string>();
 
-                      // Lista automatycznych zapisów tego klienta
                       const clientAutoEnrollments = (automatyczneZapisy || []).filter(
                         (az: any) => String(az.klient_id) === String(profileClient.id)
                       );
 
-                      // A. Zapisy z globalnej tabeli 'zapisy_zajec'
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
                         .forEach((z: any) => {
@@ -2490,7 +2504,6 @@ export default function KlienciPage() {
                           const override = nadpisaneZajeciaDni[z.class_key];
                           const classInfo = override ? { ...stdClass, ...jednorazClass, ...override } : (stdClass || jednorazClass);
                           
-                          // Pomijaj zajęcia oznaczone jako odwołane lub usunięte
                           if (classInfo?.is_odwolane || classInfo?.is_usuniete) return;
 
                           const title = classInfo?.title || classInfo?.nazwa || z.class_title || 'Trening';
@@ -2498,11 +2511,10 @@ export default function KlienciPage() {
 
                           const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(datePart, timeStr);
                           
-                          // WERYFIKACJA DNI TYGODNIA: Filtrujemy tylko rzeczywiste dni wg szablonu grafiku
                           if (classStartMs > 0 && stdClass && !jednorazClass) {
                             const classDateObj = new Date(classStartMs);
                             if (!isDateMatchingScheduleDays(classDateObj, stdClass)) {
-                              return; // Odrzucamy dni poza harmonogramem
+                              return;
                             }
                           }
 
@@ -2510,7 +2522,6 @@ export default function KlienciPage() {
                             const uniqueKey = z.class_key || `${z.id}`;
                             const sig = normalizeClassSignature(displayDate, title);
                             
-                            // Weryfikacja reguły zapisu automatycznego
                             const isAutoEnrolled = clientAutoEnrollments.some((az: any) => {
                               const matchId = String(az.grafik_id) === String(classId);
                               const matchTitle = az.class_title && title && az.class_title.trim().toLowerCase() === title.trim().toLowerCase();
@@ -2543,7 +2554,6 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // B. Dodatkowe nadchodzące zapisy z profilu klienta
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(item.data);
                         if (classStartMs >= nowTime) {
@@ -2575,7 +2585,6 @@ export default function KlienciPage() {
                         }
                       });
 
-                      // C. Fallback dla szablonu z automatycznych zapisów
                       if (upcomingMap.size === 0) {
                         clientAutoEnrollments.forEach((az: any) => {
                           const stdClass = zapisaneZajecia.find(zc => String(zc.id) === String(az.grafik_id));
@@ -2670,12 +2679,21 @@ export default function KlienciPage() {
                       );
                     })()}
 
-                    {/* 2. HISTORIA PRZESZŁYCH ZAJĘĆ */}
+                    {/* 2. HISTORIA PRZESZŁYCH ZAJĘĆ (FILTROWANA OD DATY DOŁĄCZENIA) */}
                     {activeZapisyTab === 'historia_zajec' && (() => {
                       const now = new Date();
                       const nowTime = now.getTime();
                       const pastClassesList: any[] = [];
                       const pastSignatures = new Set<string>();
+
+                      // Ustalenie dokładnego znacznika czasu daty dołączenia
+                      const joinDateRaw = profileClient.registered || profileClient.Zarejestrowany || profileClient.activated || '';
+                      let joinStartMs = 0;
+                      if (joinDateRaw) {
+                        const jD = new Date(joinDateRaw);
+                        jD.setHours(0, 0, 0, 0);
+                        joinStartMs = !isNaN(jD.getTime()) ? jD.getTime() : parseClassDate(joinDateRaw);
+                      }
 
                       (wszystkieZapisy || [])
                         .filter((z: any) => String(z.klient_id) === String(profileClient.id))
@@ -2694,7 +2712,12 @@ export default function KlienciPage() {
 
                           const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(datePart, timeStr);
 
+                          // Sprawdzamy czy zajęcia odbyły się w przeszłości ORAZ czy nie są wcześniejsze niż data dołączenia klubowicza
                           if (classStartMs > 0 && classStartMs < nowTime) {
+                            if (joinStartMs > 0 && classStartMs < joinStartMs) {
+                              return; // Pomijamy zajęcia sprzed daty dołączenia
+                            }
+
                             const sig = normalizeClassSignature(displayDate, title);
                             pastSignatures.add(sig);
 
@@ -2725,6 +2748,12 @@ export default function KlienciPage() {
 
                       (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
                         const { display: displayDate, sortTime: st } = formatDisplayClassDate(item.data);
+                        const classItemMs = st || parseClassDate(item.data);
+
+                        if (joinStartMs > 0 && classItemMs > 0 && classItemMs < joinStartMs) {
+                          return; // Pomijamy przeszłe zajęcia sprzed rejestracji
+                        }
+
                         const sig = normalizeClassSignature(displayDate, item.zajecia || 'Trening');
                         
                         if (!pastSignatures.has(sig)) {
@@ -2745,7 +2774,7 @@ export default function KlienciPage() {
                             obecnoscKlasa: obecnoscKlasa,
                             zapisujacy: authorInfo.label,
                             isClientSignup: authorInfo.isClient,
-                            _sortTime: st || nowTime - 1000
+                            _sortTime: classItemMs || nowTime - 1000
                           });
                         }
                       });
@@ -2786,7 +2815,7 @@ export default function KlienciPage() {
                               </tr>
                             )) : (
                               <tr>
-                                <td colSpan={5} className="p-8 text-center text-slate-400 text-xs">Brak historii odbytych przeszłych zajęć.</td>
+                                <td colSpan={5} className="p-8 text-center text-slate-400 text-xs">Brak historii odbytych przeszłych zajęć od daty dołączenia.</td>
                               </tr>
                             )}
                           </tbody>
