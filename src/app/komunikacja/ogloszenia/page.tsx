@@ -273,7 +273,7 @@ export default function OgloszeniaPage() {
     }
   };
 
-  // DZISIEJSZA DATA DO WERYFIKACJI WYGAŚNIĘCIA
+  // WERYFIKACJA WYGAŚNIĘCIA WG DZISIEJSZEJ DATY
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
   const isExpired = (dateToStr: string) => {
@@ -286,10 +286,7 @@ export default function OgloszeniaPage() {
     o.target.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Aktywne = flaga isVisible !== false ORAZ data zakończenia >= dzisiejszej daty
   const aktywneOgloszenia = filteredOgloszenia.filter(o => o.isVisible !== false && !isExpired(o.dateTo));
-  
-  // Niewidoczne = flaga isVisible === false LUB ogłoszenie wygasło czasowo
   const niewidoczneOgloszenia = filteredOgloszenia.filter(o => o.isVisible === false || isExpired(o.dateTo));
 
   return (
@@ -345,22 +342,33 @@ export default function OgloszeniaPage() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3">
-                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                      <div className="flex items-center gap-2">
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase mr-1">
                           AKTYWNE NA GÓRZE
                         </span>
                         
+                        {/* EDYTUJ OGŁOSZENIE */}
+                        <button 
+                          onClick={() => handleOpenEditModal(ogloszenie)}
+                          className="p-1.5 text-sky-700 hover:text-sky-900 rounded-lg hover:bg-sky-50 transition-colors cursor-pointer text-sm"
+                          title="Edytuj ogłoszenie"
+                        >
+                          ✏️
+                        </button>
+
+                        {/* UKRYJ OGŁOSZENIE */}
                         <button 
                           onClick={() => handleToggleVisibility(ogloszenie)}
-                          className="p-1.5 text-slate-500 hover:text-amber-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                          className="p-1.5 text-slate-500 hover:text-amber-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer text-sm"
                           title="Ukryj ogłoszenie"
                         >
                           👁️‍🗨️
                         </button>
 
+                        {/* USUŃ OGŁOSZENIE */}
                         <button 
                           onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer text-sm"
                           title="Usuń ogłoszenie"
                         >
                           🗑️
@@ -401,24 +409,35 @@ export default function OgloszeniaPage() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
                           {expired && (
-                            <span className="bg-slate-300 text-slate-700 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                            <span className="bg-slate-300 text-slate-700 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase mr-1">
                               WYGASŁE
                             </span>
                           )}
 
+                          {/* EDYTUJ OGŁOSZENIE */}
                           <button 
                             onClick={() => handleOpenEditModal(ogloszenie)}
-                            className="p-1.5 text-rose-900 hover:text-rose-950 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer"
-                            title="Edytuj i włącz wyświetlanie ogłoszenia"
+                            className="p-1.5 text-sky-800 hover:text-sky-950 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer text-sm"
+                            title="Edytuj ogłoszenie"
                           >
-                            👁️
+                            ✏️
                           </button>
 
+                          {/* PRZEŁĄCZ WIDOCZNOŚĆ */}
+                          <button 
+                            onClick={() => handleToggleVisibility(ogloszenie)}
+                            className="p-1.5 text-slate-600 hover:text-emerald-700 rounded-lg hover:bg-slate-300/60 transition-colors cursor-pointer text-sm"
+                            title={ogloszenie.isVisible ? "Ukryj" : "Włącz wyświetlanie"}
+                          >
+                            {ogloszenie.isVisible ? '👁️‍🗨️' : '👁️'}
+                          </button>
+
+                          {/* USUŃ OGŁOSZENIE */}
                           <button 
                             onClick={() => handleDeleteOgloszenie(ogloszenie.id)}
-                            className="p-1.5 text-slate-500 hover:text-rose-700 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer"
+                            className="p-1.5 text-slate-500 hover:text-rose-700 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer text-sm"
                             title="Usuń ogłoszenie"
                           >
                             🗑️
