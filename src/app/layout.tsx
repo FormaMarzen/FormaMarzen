@@ -421,7 +421,6 @@ export default function RootLayout({
         { href: '/ustawienia/karnety', label: 'Karnety', icon: '🎟️' },
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
-        { href: '/ustawienia/integracja-www', label: 'Integracja WWW', icon: '🌐' },
         { href: '/ustawienia/kody-rabatowe', label: 'Kody rabatowe', icon: '🏷️' },
         { href: '/ustawienia/program-ambasador', label: 'Program ambasador', icon: '⭐' },
         { href: '/ustawienia/zespol', label: 'Zespół', icon: '👨‍👧‍👦' },
