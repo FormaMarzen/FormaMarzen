@@ -155,16 +155,19 @@ export default function BazaWiedzyPage() {
       setIsAdmin(true);
     }
 
-    // Pobranie imienia i nazwiska z tabeli klienci na podstawie emaila
+    // Pobranie imienia i nazwiska z uwzględnieniem dokładnych nazw kolumn z Supabase ("Imię", "Nazwisko", "E-mail")
     if (email) {
       const { data: klientRec } = await supabase
         .from("klienci")
-        .select("imie, nazwisko")
-        .ilike("email", email.trim())
+        .select(`"Imię", "Nazwisko"`)
+        .ilike('"E-mail"', email.trim())
         .maybeSingle();
 
-      if (klientRec && (klientRec.imie || klientRec.nazwisko)) {
-        setUserImieNazwisko(`${klientRec.imie || ""} ${klientRec.nazwisko || ""}`.trim());
+      if (klientRec) {
+        const imie = (klientRec as any)["Imię"] || "";
+        const nazwisko = (klientRec as any)["Nazwisko"] || "";
+        const pelneImie = `${imie} ${nazwisko}`.trim();
+        setUserImieNazwisko(pelneImie || email.split("@")[0]);
       } else {
         setUserImieNazwisko(email.split("@")[0]);
       }
