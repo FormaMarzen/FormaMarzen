@@ -99,7 +99,6 @@ export interface SuplementTrenera {
 }
 
 export interface SuplementKlubowicza {
-  producent: string;
   produkt: string;
   dawka: string;
   jednostka: string;
@@ -636,7 +635,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Pomocnicza funkcja konwertująca suplementy trenera do formatu { nazwa, dawka }
   const normalizeCoachSupplements = (items: any): SuplementTrenera[] => {
     if (!items || !Array.isArray(items) || items.length === 0) {
       return [{ nazwa: '', dawka: '' }];
@@ -678,7 +676,11 @@ export default function AnalizaFormyPage() {
       interpretacja: badanie.interpretacja || '',
       zalecenia: badanie.zalecenia || '',
       suplementacja_trener: normalizeCoachSupplements(badanie.suplementacja_trener),
-      suplementacja_klubowicz: badanie.suplementacja_klubowicz || []
+      suplementacja_klubowicz: (badanie.suplementacja_klubowicz || []).map((k: any) => ({
+        produkt: k.produkt || k.nazwa || '',
+        dawka: k.dawka || '',
+        jednostka: k.jednostka || 'mg'
+      }))
     });
     setIsBadaniaModalOpen(true);
   };
@@ -800,7 +802,7 @@ export default function AnalizaFormyPage() {
       ...prev,
       suplementacja_klubowicz: [
         ...prev.suplementacja_klubowicz,
-        { producent: '', produkt: '', dawka: '', jednostka: 'mg' }
+        { produkt: '', dawka: '', jednostka: 'mg' }
       ]
     }));
   };
@@ -828,14 +830,17 @@ export default function AnalizaFormyPage() {
 
     setIsSavingBadanie(true);
 
+    const isTrainerOrAdmin = appRole === 'admin' || appRole === 'trener';
+    
+    // Filtrowanie suplementów
     const filteredCoachSupplements = badanieFormData.suplementacja_trener
       .filter(s => s.nazwa.trim() !== '' || s.dawka.trim() !== '');
 
     const filteredMemberSupplements = badanieFormData.suplementacja_klubowicz
-      .filter(s => s.produkt.trim() !== '' || s.producent.trim() !== '');
+      .filter(s => s.produkt.trim() !== '' || s.dawka.trim() !== '');
 
-    const isTrainerOrAdmin = appRole === 'admin' || appRole === 'trener';
-    const hasInterpretationContent = Boolean(badanieFormData.interpretacja && badanieFormData.interpretacja.trim().length > 0);
+    // Jeśli edytuje klubowicz, nie nadpisujemy pustymi wartościami zaleceń trenera
+    const existingBadanie = editingBadanieId ? badaniaList.find(b => b.id === editingBadanieId) : null;
 
     const payload = {
       klient_id: tKlientId,
@@ -843,12 +848,12 @@ export default function AnalizaFormyPage() {
       data_badania: badanieFormData.data_badania,
       plik_pdf_url: badanieFormData.plik_pdf_url || null,
       plik_pdf_nazwa: badanieFormData.plik_pdf_nazwa || null,
-      zdjecia: badanieFormData.zdjecia || [],
-      interpretacja: badanieFormData.interpretacja || null,
-      zalecenia: badanieFormData.zalecenia || null,
-      suplementacja_trener: filteredCoachSupplements,
+      zdjecia: isTrainerOrAdmin ? (badanieFormData.zdjecia || []) : (existingBadanie?.zdjecia || []),
+      interpretacja: isTrainerOrAdmin ? (badanieFormData.interpretacja || null) : (existingBadanie?.interpretacja || null),
+      zalecenia: isTrainerOrAdmin ? (badanieFormData.zalecenia || null) : (existingBadanie?.zalecenia || null),
+      suplementacja_trener: isTrainerOrAdmin ? filteredCoachSupplements : (existingBadanie?.suplementacja_trener || []),
       suplementacja_klubowicz: filteredMemberSupplements,
-      nowa_interpretacja: isTrainerOrAdmin && hasInterpretationContent ? true : false,
+      nowa_interpretacja: isTrainerOrAdmin && Boolean(badanieFormData.interpretacja && badanieFormData.interpretacja.trim().length > 0),
       updated_at: new Date().toISOString()
     };
 
@@ -863,7 +868,7 @@ export default function AnalizaFormyPage() {
       }
 
       if (!error) {
-        alert(editingBadanieId ? "Wpis badań został zaktualizowany!" : "Nowe badanie zostało zapisane!");
+        alert(editingBadanieId ? "Wpis badań został zaktualizowany!" : "Nowy wpis badań został zapisany!");
         setIsBadaniaModalOpen(false);
         setEditingBadanieId(null);
         await fetchBadaniaKrwi(tKlientId, tEmail);
@@ -1587,7 +1592,7 @@ export default function AnalizaFormyPage() {
               onClick={handleOpenNewBadanieModal}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
             >
-              <span>+</span> Dodaj Wyniki / Analizę Krwi
+              <span>+</span> {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wyniki / Analizę Krwi'}
             </button>
           )}
 
@@ -2332,7 +2337,7 @@ export default function AnalizaFormyPage() {
                           ? 'bg-slate-800 text-slate-300 border-slate-700' 
                           : activeEdycjaObj.status === 'anulowane' 
                             ? 'bg-rose-950/80 text-rose-300 border-rose-800' 
-                            : activeEdycjaObj.status === 'zapisy'
+                            : activeEdycjaObj.status === 'zapisy' 
                               ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
                               : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
                       }`}>
@@ -2937,21 +2942,21 @@ export default function AnalizaFormyPage() {
             </p>
           </div>
 
-          {/* KAFEL INFORMACYJNY DLA KLUBOWICZA */}
+          {/* KAFEL INFORMACYJNY */}
           <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="space-y-1">
               <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
                 <span>💬</span> Instrukcja dla Klubowicza
               </div>
               <p className="text-xs text-sky-200 font-medium">
-                Po dodaniu lub zaktualizowaniu wyników badań krwi (PDF/zdjęcia), <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o interpretację oraz przygotowanie zaleceń.
+                Po dodaniu pliku PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
               </p>
             </div>
             <button
               onClick={handleOpenNewBadanieModal}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer"
             >
-              + Dodaj wpis badań
+              + {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wpis Badań'}
             </button>
           </div>
 
@@ -3065,7 +3070,7 @@ export default function AnalizaFormyPage() {
                   ) : (
                     <tr>
                       <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
-                        Brak zarejestrowanych badań krwi dla wybranego profilu. Kliknij "+ Dodaj Wyniki / Analizę Krwi" powyżej.
+                        Brak zarejestrowanych badań krwi dla wybranego profilu.
                       </td>
                     </tr>
                   )}
@@ -3077,7 +3082,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL 1: FORMULARZ DODAWANIA / EDYCJI BADANIA KRWI */}
+      {/* MODAL 1: FORMULARZ BADAŃ KRWI */}
       {isBadaniaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 max-h-[90vh] overflow-y-auto">
@@ -3119,7 +3124,7 @@ export default function AnalizaFormyPage() {
               {/* PLIK PDF */}
               <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
                 <label className="font-black text-sky-950 uppercase tracking-wider block">
-                  📄 Wyniki Badań w Pliku PDF
+                  📄 Wyniki Badań w Pliku PDF (Wgrywane przez Klubowicza)
                 </label>
                 
                 {badanieFormData.plik_pdf_url ? (
@@ -3145,119 +3150,126 @@ export default function AnalizaFormyPage() {
                 )}
               </div>
 
-              {/* SKANY / ZDJĘCIA */}
-              <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="font-black text-sky-950 uppercase tracking-wider">
-                    📷 Zdjęcia / Skany Wyników (Dla Trenera i Klubowicza)
-                  </label>
-                  <label className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">
-                    + Dodaj zdjęcia
-                    <input type="file" accept="image/*" multiple disabled={isUploadingImages} onChange={handleUploadImages} className="hidden" />
-                  </label>
-                </div>
+              {/* SEKCJE DLA TRENERA / ADMINA (UKRYTE DLA KLUBOWICZA) */}
+              {(appRole === 'admin' || appRole === 'trener') && (
+                <>
+                  {/* SKANY / ZDJĘCIA */}
+                  <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="font-black text-sky-950 uppercase tracking-wider">
+                        📷 Zdjęcia / Skany Wyników (Trener)
+                      </label>
+                      <label className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">
+                        + Dodaj zdjęcia
+                        <input type="file" accept="image/*" multiple disabled={isUploadingImages} onChange={handleUploadImages} className="hidden" />
+                      </label>
+                    </div>
 
-                {badanieFormData.zdjecia.length > 0 ? (
-                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                    {badanieFormData.zdjecia.map((imgUrl, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-sky-200 bg-slate-100 group">
-                        <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => setBadanieFormData(prev => ({ ...prev, zdjecia: prev.zdjecia.filter((_, i) => i !== idx) }))}
-                          className="absolute top-1 right-1 bg-rose-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          ✕
-                        </button>
+                    {badanieFormData.zdjecia.length > 0 ? (
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        {badanieFormData.zdjecia.map((imgUrl, idx) => (
+                          <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-sky-200 bg-slate-100 group">
+                            <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => setBadanieFormData(prev => ({ ...prev, zdjecia: prev.zdjecia.filter((_, i) => i !== idx) }))}
+                              className="absolute top-1 right-1 bg-rose-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    ) : (
+                      <div className="text-slate-400 italic text-[11px]">Brak dodanych zdjęć.</div>
+                    )}
                   </div>
-                ) : (
-                  <div className="text-slate-400 italic text-[11px]">Brak dodanych zdjęć.</div>
-                )}
-              </div>
 
-              {/* INTERPRETACJA */}
-              <div className="space-y-1.5">
-                <label className="font-black text-sky-950 uppercase tracking-wider block">
-                  INTERPRETACJA WYNIKÓW BADAŃ{" "}
-                  <span className="text-[10px] text-slate-500 font-normal normal-case">
-                    (są to rzeczy, które powtarzają się w różnych wynikach, ale nie musi to oznaczać, że to występuje)
-                  </span>
-                </label>
-                <textarea
-                  rows={4}
-                  placeholder="Wpisz interpretację wskaźników krwi..."
-                  value={badanieFormData.interpretacja}
-                  onChange={(e) => setBadanieFormData({...badanieFormData, interpretacja: e.target.value})}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-2xl p-3.5 text-slate-800 font-medium focus:outline-none"
-                />
-              </div>
-
-              {/* ZALECENIA */}
-              <div className="space-y-1.5">
-                <label className="font-black text-sky-950 uppercase tracking-wider block">
-                  OGÓLNE ZALECENIA DIETETYCZNE I STYLU ŻYCIA
-                </label>
-                <textarea
-                  rows={3}
-                  placeholder="Wpisz zalecenia dotyczące diety, nawodnienia, regeneracji, snu itp..."
-                  value={badanieFormData.zalecenia}
-                  onChange={(e) => setBadanieFormData({...badanieFormData, zalecenia: e.target.value})}
-                  className="w-full bg-sky-50/40 border border-sky-200 rounded-2xl p-3.5 text-slate-800 font-medium focus:outline-none"
-                />
-              </div>
-
-              {/* SEKCJA SUPLEMENTACJI DWUKOLUMNOWA: TRENER + KLUBOWICZ */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-sky-100">
-                
-                {/* 1. PROTOKÓŁ TRENERA (Z MAŁYM OKIENKIEM DAWKI) */}
-                <div className="bg-amber-50/40 p-4 rounded-2xl border border-amber-200 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="font-black text-amber-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-                      <span>💊</span> Dedykowany Protokół Suplementacyjny (Trener)
+                  {/* INTERPRETACJA */}
+                  <div className="space-y-1.5">
+                    <label className="font-black text-sky-950 uppercase tracking-wider block">
+                      INTERPRETACJA WYNIKÓW BADAŃ{" "}
+                      <span className="text-[10px] text-slate-500 font-normal normal-case">
+                        (są to rzeczy, które powtarzają się w różnych wynikach, ale nie musi to oznaczać, że to występuje)
+                      </span>
                     </label>
-                    <button
-                      type="button"
-                      onClick={handleAddCoachSupplementRow}
-                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-2.5 py-1 rounded-xl text-[10px] uppercase cursor-pointer shadow-xs"
-                    >
-                      + Dodaj suplement
-                    </button>
+                    <textarea
+                      rows={4}
+                      placeholder="Wpisz interpretację wskaźników krwi..."
+                      value={badanieFormData.interpretacja}
+                      onChange={(e) => setBadanieFormData({...badanieFormData, interpretacja: e.target.value})}
+                      className="w-full bg-sky-50/40 border border-sky-200 rounded-2xl p-3.5 text-slate-800 font-medium focus:outline-none"
+                    />
                   </div>
 
-                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                    {badanieFormData.suplementacja_trener.map((sup, sIdx) => (
-                      <div key={sIdx} className="flex items-center gap-2 bg-white p-2 rounded-xl border border-amber-200 shadow-xs">
-                        <span className="font-black text-amber-900 text-xs w-4">{sIdx + 1}.</span>
-                        <input
-                          type="text"
-                          placeholder="Nazwa suplementu (np. B-complex)"
-                          value={sup.nazwa}
-                          onChange={(e) => handleUpdateCoachSupplementRow(sIdx, 'nazwa', e.target.value)}
-                          className="flex-1 bg-slate-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-bold text-slate-800 focus:outline-none text-xs"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Dawka (np. 1 kaps. rano)"
-                          value={sup.dawka}
-                          onChange={(e) => handleUpdateCoachSupplementRow(sIdx, 'dawka', e.target.value)}
-                          className="w-32 bg-slate-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-bold text-amber-700 focus:outline-none text-xs"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveCoachSupplementRow(sIdx)}
-                          className="text-rose-500 hover:text-rose-700 font-bold p-1 cursor-pointer"
-                          title="Usuń pozycję"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
+                  {/* ZALECENIA */}
+                  <div className="space-y-1.5">
+                    <label className="font-black text-sky-950 uppercase tracking-wider block">
+                      OGÓLNE ZALECENIA DIETETYCZNE I STYLU ŻYCIA
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Wpisz zalecenia dotyczące diety, nawodnienia, regeneracji, snu itp..."
+                      value={badanieFormData.zalecenia}
+                      onChange={(e) => setBadanieFormData({...badanieFormData, zalecenia: e.target.value})}
+                      className="w-full bg-sky-50/40 border border-sky-200 rounded-2xl p-3.5 text-slate-800 font-medium focus:outline-none"
+                    />
                   </div>
-                </div>
+                </>
+              )}
 
-                {/* 2. SUPLEMENTACJA KLUBOWICZA */}
+              {/* SEKCJA SUPLEMENTACJI */}
+              <div className={`grid grid-cols-1 ${appRole === 'klubowicz' ? 'lg:grid-cols-1' : 'lg:grid-cols-2'} gap-4 pt-2 border-t border-sky-100`}>
+                
+                {/* 1. PROTOKÓŁ TRENERA (WIDOCZNY TYLKO DLA TRENERA / ADMINA) */}
+                {(appRole === 'admin' || appRole === 'trener') && (
+                  <div className="bg-amber-50/40 p-4 rounded-2xl border border-amber-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="font-black text-amber-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                        <span>💊</span> Dedykowany Protokół Suplementacyjny (Trener)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleAddCoachSupplementRow}
+                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-2.5 py-1 rounded-xl text-[10px] uppercase cursor-pointer shadow-xs"
+                      >
+                        + Dodaj suplement
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {badanieFormData.suplementacja_trener.map((sup, sIdx) => (
+                        <div key={sIdx} className="flex items-center gap-2 bg-white p-2 rounded-xl border border-amber-200 shadow-xs">
+                          <span className="font-black text-amber-900 text-xs w-4">{sIdx + 1}.</span>
+                          <input
+                            type="text"
+                            placeholder="Nazwa suplementu (np. B-complex)"
+                            value={sup.nazwa}
+                            onChange={(e) => handleUpdateCoachSupplementRow(sIdx, 'nazwa', e.target.value)}
+                            className="flex-1 bg-slate-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-bold text-slate-800 focus:outline-none text-xs"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Dawka (np. 500 mg)"
+                            value={sup.dawka}
+                            onChange={(e) => handleUpdateCoachSupplementRow(sIdx, 'dawka', e.target.value)}
+                            className="w-32 bg-slate-50 border border-amber-200 rounded-lg px-2.5 py-1.5 font-bold text-amber-700 focus:outline-none text-xs"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCoachSupplementRow(sIdx)}
+                            className="text-rose-500 hover:text-rose-700 font-bold p-1 cursor-pointer"
+                            title="Usuń pozycję"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. SUPLEMENTACJA KLUBOWICZA (DOSTĘPNA DLA KAŻDEGO) */}
                 <div className="bg-sky-50/50 p-4 rounded-2xl border border-sky-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-black text-sky-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
@@ -3276,35 +3288,23 @@ export default function AnalizaFormyPage() {
                     <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
                       {badanieFormData.suplementacja_klubowicz.map((item, mIdx) => (
                         <div key={mIdx} className="bg-white p-2.5 rounded-xl border border-sky-200 space-y-2 relative group shadow-xs">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Producent</span>
-                              <input
-                                type="text"
-                                placeholder="np. Aliness / Swanson"
-                                value={item.producent}
-                                onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'producent', e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs"
-                              />
-                            </div>
-                            <div>
-                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Nazwa Produktu</span>
-                              <input
-                                type="text"
-                                placeholder="np. Maślan Sodu / Magnez"
-                                value={item.produkt}
-                                onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'produkt', e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs"
-                              />
-                            </div>
+                          <div>
+                            <span className="text-[9px] font-bold text-slate-400 block uppercase">Nazwa Suplementu / Substancji</span>
+                            <input
+                              type="text"
+                              placeholder="np. Magnez Cytrynian / Witamina D3"
+                              value={item.produkt}
+                              onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'produkt', e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-bold text-slate-800 text-xs"
+                            />
                           </div>
 
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Dawka dzienna</span>
+                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Dawka dzienna (wartość)</span>
                               <input
                                 type="text"
-                                placeholder="np. 500"
+                                placeholder="np. 400"
                                 value={item.dawka}
                                 onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'dawka', e.target.value)}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs"
@@ -3321,10 +3321,7 @@ export default function AnalizaFormyPage() {
                                 <option value="g">gramy (g)</option>
                                 <option value="mcg (µg)">mcg (µg)</option>
                                 <option value="IU">IU (j.m.)</option>
-                                <option value="kaps.">kapsułek (kaps.)</option>
-                                <option value="tabl.">tabletek (tabl.)</option>
                                 <option value="ml">ml</option>
-                                <option value="miarka">miarka</option>
                               </select>
                             </div>
                           </div>
@@ -3342,12 +3339,18 @@ export default function AnalizaFormyPage() {
                     </div>
                   ) : (
                     <div className="text-slate-400 italic text-[11px] p-3 bg-white rounded-xl text-center border border-sky-100">
-                      Klubowicz nie dodał jeszcze swoich suplementów.
+                      Brak wpisanych suplementów przez klubowicza.
                     </div>
                   )}
                 </div>
 
               </div>
+
+              {appRole === 'klubowicz' && (
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900 font-medium">
+                  ℹ️ Trener po zapoznaniu się z wynikami z dokumentu PDF przygotuje dla Ciebie szczegółową interpretację, zalecenia oraz dedykowany protokół suplementacyjny.
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-sky-100">
                 <button
@@ -3372,12 +3375,11 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL 2: OKNO PODGLĄDU SZCZEGÓŁÓW BADANIA */}
+      {/* MODAL 2: PODGLĄD SZCZEGÓŁÓW BADANIA */}
       {isDetailViewOpen && selectedBadanieDetail && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 md:p-8 shadow-2xl space-y-6 my-8 border border-sky-100 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
             
-            {/* GŁÓWKA KARTY */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-sky-100 gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center text-2xl shadow-sm">
@@ -3412,7 +3414,6 @@ export default function AnalizaFormyPage() {
               </div>
             </div>
 
-            {/* DOKUMENT PDF I SKANY */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-sky-50/70 p-4 rounded-2xl border border-sky-200 flex items-center justify-between">
                 <div>
@@ -3531,15 +3532,13 @@ export default function AnalizaFormyPage() {
                     <table className="w-full text-xs text-left">
                       <thead>
                         <tr className="text-[10px] font-black uppercase text-slate-400 border-b border-sky-100">
-                          <th className="pb-1.5">Producent</th>
-                          <th className="pb-1.5">Produkt</th>
-                          <th className="pb-1.5 text-right">Dawka / Dzień</th>
+                          <th className="pb-1.5">Nazwa Suplementu</th>
+                          <th className="pb-1.5 text-right">Dawka Dzienna</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-sky-100">
                         {selectedBadanieDetail.suplementacja_klubowicz?.map((item, mIdx) => (
                           <tr key={mIdx}>
-                            <td className="py-2 font-semibold text-slate-600">{item.producent || '-'}</td>
                             <td className="py-2 font-black text-slate-900">{item.produkt}</td>
                             <td className="py-2 text-right font-black text-amber-600">{item.dawka} {item.jednostka}</td>
                           </tr>
@@ -3558,7 +3557,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* LIGHTBOX POWIĘKSZANIA ZDJĘĆ */}
+      {/* LIGHTBOX ZDJĘĆ */}
       {enlargedImage && (
         <div 
           className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-md cursor-pointer"
