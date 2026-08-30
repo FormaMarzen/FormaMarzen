@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -89,6 +89,9 @@ const getClientEmail = (client: any): string => {
 
 export default function AutomatyczneZapisyPage() {
   const [loading, setLoading] = useState<boolean>(true);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isDeletingId, setIsDeletingId] = useState<number | null>(null);
+
   const [klienciList, setKlienciList] = useState<any[]>([]);
   const [grafikItems, setGrafikItems] = useState<any[]>([]);
   const [autoBookingsList, setAutoBookingsList] = useState<any[]>([]);
@@ -109,13 +112,14 @@ export default function AutomatyczneZapisyPage() {
 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA I RACE CONDITIONS
+  // Refy chroniące przed nieskończoną pętlą zapytań
   const isFetchingRef = useRef(false);
+  const realtimeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+  const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 4000);
-  };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -128,7 +132,7 @@ export default function AutomatyczneZapisyPage() {
   }, []);
 
   // Funkcja wyliczająca aktywny karnet i rzeczywistą datę ważności karnetu
-  const getClientPassDetails = (client: any): { passExpiry: string | null; passName: string | null } => {
+  const getClientPassDetails = useCallback((client: any): { passExpiry: string | null; passName: string | null } => {
     if (!client) return { passExpiry: null, passName: null };
     
     let parsedKarnety: any[] = [];
@@ -165,10 +169,10 @@ export default function AutomatyczneZapisyPage() {
     }
 
     return { passExpiry: null, passName: null };
-  };
+  }, []);
 
   // Wyliczenie efektywnej daty granicznej z uwzględnieniem tabeli club_booking_rules
-  const getEffectivePassExpiry = (
+  const getEffectivePassExpiry = useCallback((
     client: any, 
     rules: BookingRules
   ): { 
@@ -198,10 +202,10 @@ export default function AutomatyczneZapisyPage() {
     const hasActiveOrGracePass = effectiveDate >= now;
 
     return { effectiveDate, rawExpiry, passName, graceDays, hasActiveOrGracePass };
-  };
+  }, [getClientPassDetails]);
 
   // Kalkulacja liczby wyłącznie przyszłych treningów dla danej reguły
-  const getFutureBookingsCount = (rule: any, bookings: any[], grafik: any[]): number => {
+  const getFutureBookingsCount = useCallback((rule: any, bookings: any[], grafik: any[]): number => {
     const now = new Date();
     const currentYear = now.getFullYear();
     const classObj = grafik.find(c => String(c.id) === String(rule.grafik_id));
@@ -235,95 +239,10 @@ export default function AutomatyczneZapisyPage() {
       const classDateTime = new Date(yr, m - 1, d, parseInt(sh, 10), parseInt(sm, 10), 0);
       return classDateTime > now && (b.status === 'zapisany' || !b.status);
     }).length;
-  };
-
-  const loadData = async () => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-
-    try {
-      setLoading(true);
-
-      // 1. Pobierz zasady zapisów
-      let activeRules = DEFAULT_RULES;
-      const { data: rulesData, error: rulesErr } = await supabase
-        .from('club_booking_rules')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!rulesErr && rulesData) {
-        activeRules = {
-          ...DEFAULT_RULES,
-          ...rulesData,
-          cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
-          booking_cutoff_per_class: rulesData.booking_cutoff_per_class || {},
-          booking_window_per_pass: rulesData.booking_window_per_pass || {},
-          expired_pass_grace_per_pass: rulesData.expired_pass_grace_per_pass || {},
-          min_participants_per_class: rulesData.min_participants_per_class || {},
-          auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
-        };
-      }
-      setClubRules(activeRules);
-
-      // 2. Pobierz wszystkich klientów bezpiecznym select('*')
-      const klienciData = await fetchAllFromSupabase('klienci', '*', 'id', true, 10);
-      
-      let enrichedClients: any[] = [];
-      if (klienciData && klienciData.length > 0) {
-        enrichedClients = klienciData.map((c: any) => {
-          const passDetails = getEffectivePassExpiry(c, activeRules);
-          return {
-            ...c,
-            fullName: getClientFullName(c),
-            email: getClientEmail(c),
-            calculatedPassExpiry: passDetails.rawExpiry,
-            displayPassExpiry: passDetails.rawExpiry || 'Brak',
-            passName: passDetails.passName,
-            effectiveEndDate: passDetails.effectiveDate,
-            graceDays: passDetails.graceDays,
-            hasActiveOrGracePass: passDetails.hasActiveOrGracePass
-          };
-        });
-        setKlienciList(enrichedClients);
-      }
-
-      // 3. Pobierz grafik cykliczny
-      const cykliczne = await fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 2);
-
-      const combinedGrafik = (cykliczne || []).map(c => ({
-        ...c,
-        title: c.title || c.nazwa,
-        time: c.start || c.start_time || c.godzina,
-        trainer: c.trainer || c.prowadzacy
-      }));
-      setGrafikItems(combinedGrafik);
-
-      // 4. Pobierz zapisy
-      const zapisyData = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
-      if (zapisyData) setZapisyList(zapisyData);
-
-      // 5. Pobierz aktywne automatyczne zapisy i zsynchronizuj
-      const autoData = await fetchAllFromSupabase('automatyczne_zapisy', '*', 'id', false, 5);
-      if (autoData) {
-        setAutoBookingsList(autoData);
-        await syncAutoBookings(autoData, enrichedClients, combinedGrafik, activeRules);
-        
-        const refreshedZapisy = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
-        if (refreshedZapisy) setZapisyList(refreshedZapisy);
-      }
-
-    } catch (err) {
-      console.error('Błąd ładowania danych:', err);
-    } finally {
-      setLoading(false);
-      isFetchingRef.current = false;
-    }
-  };
+  }, []);
 
   // Automatyczna synchronizacja reguł z uwzględnieniem karencji
-  const syncAutoBookings = async (rules: any[], clients: any[], grafik: any[], clubRuleObj: BookingRules) => {
+  const syncAutoBookings = useCallback(async (rules: any[], clients: any[], grafik: any[], clubRuleObj: BookingRules) => {
     const now = new Date();
     const currentYear = now.getFullYear();
 
@@ -463,38 +382,147 @@ export default function AutomatyczneZapisyPage() {
           .eq('id', Number(rule.klient_id));
       }
     }
-  };
+  }, [getEffectivePassExpiry]);
 
-  // Subskrypcja Realtime
+  // Zoptymalizowane, w pełni równoległe pobieranie danych
+  const loadData = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
+    try {
+      setLoading(true);
+
+      // Pobieranie wszystkich tabel równolegle
+      const [
+        rulesRes,
+        klienciData,
+        cykliczne,
+        zapisyData,
+        autoData
+      ] = await Promise.all([
+        supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        fetchAllFromSupabase('klienci', '*', 'id', true, 10),
+        fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 2),
+        fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10),
+        fetchAllFromSupabase('automatyczne_zapisy', '*', 'id', false, 5)
+      ]);
+
+      // 1. Ustawienie reguł
+      let activeRules = DEFAULT_RULES;
+      if (!rulesRes.error && rulesRes.data) {
+        activeRules = {
+          ...DEFAULT_RULES,
+          ...rulesRes.data,
+          cancel_deadline_per_class: rulesRes.data.cancel_deadline_per_class || {},
+          booking_cutoff_per_class: rulesRes.data.booking_cutoff_per_class || {},
+          booking_window_per_pass: rulesRes.data.booking_window_per_pass || {},
+          expired_pass_grace_per_pass: rulesRes.data.expired_pass_grace_per_pass || {},
+          min_participants_per_class: rulesRes.data.min_participants_per_class || {},
+          auto_cancel_deadline_per_class: rulesRes.data.auto_cancel_deadline_per_class || {},
+        };
+      }
+      setClubRules(activeRules);
+
+      // 2. Wzbogacenie klientów
+      let enrichedClients: any[] = [];
+      if (klienciData && klienciData.length > 0) {
+        enrichedClients = klienciData.map((c: any) => {
+          const passDetails = getEffectivePassExpiry(c, activeRules);
+          return {
+            ...c,
+            fullName: getClientFullName(c),
+            email: getClientEmail(c),
+            calculatedPassExpiry: passDetails.rawExpiry,
+            displayPassExpiry: passDetails.rawExpiry || 'Brak',
+            passName: passDetails.passName,
+            effectiveEndDate: passDetails.effectiveDate,
+            graceDays: passDetails.graceDays,
+            hasActiveOrGracePass: passDetails.hasActiveOrGracePass
+          };
+        });
+        setKlienciList(enrichedClients);
+      }
+
+      // 3. Połączenie grafiku
+      const combinedGrafik = (cykliczne || []).map(c => ({
+        ...c,
+        title: c.title || c.nazwa,
+        time: c.start || c.start_time || c.godzina,
+        trainer: c.trainer || c.prowadzacy
+      }));
+      setGrafikItems(combinedGrafik);
+
+      // 4. Zapisy
+      if (zapisyData) setZapisyList(zapisyData);
+
+      // 5. Automatyczne reguły i synchronizacja
+      if (autoData) {
+        setAutoBookingsList(autoData);
+        await syncAutoBookings(autoData, enrichedClients, combinedGrafik, activeRules);
+        
+        const refreshedZapisy = await fetchAllFromSupabase('zapisy_zajec', '*', 'id', false, 10);
+        if (refreshedZapisy) setZapisyList(refreshedZapisy);
+      }
+
+    } catch (err) {
+      console.error('Błąd ładowania danych:', err);
+    } finally {
+      setLoading(false);
+      isFetchingRef.current = false;
+    }
+  }, [getEffectivePassExpiry, syncAutoBookings]);
+
+  // Subskrypcja Realtime z zabezpieczeniem przed spamowaniem wywołań
   useEffect(() => {
     loadData();
 
+    const triggerDebouncedReload = () => {
+      if (realtimeTimeoutRef.current) clearTimeout(realtimeTimeoutRef.current);
+      realtimeTimeoutRef.current = setTimeout(() => {
+        loadData();
+      }, 500);
+    };
+
     const channel = supabase
       .channel('realtime-auto-zapisy')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'club_booking_rules' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, triggerDebouncedReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, triggerDebouncedReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, triggerDebouncedReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'club_booking_rules' }, triggerDebouncedReload)
       .subscribe();
 
     return () => {
+      if (realtimeTimeoutRef.current) clearTimeout(realtimeTimeoutRef.current);
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [loadData]);
 
   const handleCreateAutoBooking = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     if (!selectedClientId || !selectedClassId) {
       showToast('Wybierz klubowicza oraz zajęcia z grafiku!', 'error');
       return;
     }
 
+    setIsSubmitting(true);
     try {
       const clientObj = klienciList.find(k => String(k.id) === String(selectedClientId));
       const classObj = grafikItems.find(c => String(c.id) === String(selectedClassId));
 
       if (!clientObj || !classObj) {
         showToast('Nie znaleziono wybranego klienta lub zajęć.', 'error');
+        return;
+      }
+
+      // Sprawdzenie czy taka reguła już nie istnieje
+      const alreadyExists = autoBookingsList.some(
+        r => String(r.klient_id) === String(selectedClientId) && String(r.grafik_id) === String(selectedClassId)
+      );
+
+      if (alreadyExists) {
+        showToast('Ten klubowicz posiada już aktywną regułę na te zajęcia!', 'error');
         return;
       }
 
@@ -529,10 +557,14 @@ export default function AutomatyczneZapisyPage() {
     } catch (err: any) {
       console.error('Błąd tworzenia automatycznego zapisu:', err);
       showToast('Błąd: ' + (err.message || ''), 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleRemoveAutoBooking = async (id: number) => {
+    if (isDeletingId !== null) return;
+
     try {
       const ruleToDelete = autoBookingsList.find(r => r.id === id);
       if (!ruleToDelete) {
@@ -543,6 +575,8 @@ export default function AutomatyczneZapisyPage() {
       if (!confirm(`Czy na pewno chcesz usunąć regułę automatycznego zapisu dla: ${ruleToDelete.client_name}? Klubowicz zostanie automatycznie wypisany ze wszystkich przyszłych terminów tych zajęć.`)) {
         return;
       }
+
+      setIsDeletingId(id);
 
       const klientId = Number(ruleToDelete.klient_id);
       const grafikId = String(ruleToDelete.grafik_id);
@@ -650,30 +684,47 @@ export default function AutomatyczneZapisyPage() {
     } catch (err: any) {
       console.error('Błąd usuwania reguły:', err);
       showToast('Nie udało się usunąć reguły: ' + (err.message || ''), 'error');
+    } finally {
+      setIsDeletingId(null);
     }
   };
 
   // Wyszukiwarka z obsługą różnych wariantów nazw pól w obiekcie klienta
-  const filteredClients = klienciList.filter((k) => {
+  const filteredClients = useMemo(() => {
     const query = clientSearchQuery.toLowerCase().trim();
-    if (!query) return true;
+    if (!query) return klienciList;
     
-    const fullName = (k.fullName || getClientFullName(k)).toLowerCase();
-    const email = (k.email || getClientEmail(k)).toLowerCase();
-    const phone = String(k.Telefon || k.telefon || k.phone || '').toLowerCase();
-    
-    return fullName.includes(query) || email.includes(query) || phone.includes(query);
-  });
+    return klienciList.filter((k) => {
+      const fullName = (k.fullName || getClientFullName(k)).toLowerCase();
+      const email = (k.email || getClientEmail(k)).toLowerCase();
+      const phone = String(k.Telefon || k.telefon || k.phone || '').toLowerCase();
+      
+      return fullName.includes(query) || email.includes(query) || phone.includes(query);
+    });
+  }, [klienciList, clientSearchQuery]);
 
-  const selectedClientObject = klienciList.find(k => String(k.id) === String(selectedClientId));
+  const selectedClientObject = useMemo(() => {
+    return klienciList.find(k => String(k.id) === String(selectedClientId));
+  }, [klienciList, selectedClientId]);
 
-  const filteredAutoBookings = autoBookingsList.filter((item) => {
+  const filteredAutoBookings = useMemo(() => {
     const query = rulesSearchQuery.toLowerCase().trim();
-    if (!query) return true;
-    const clientName = (item.client_name || '').toLowerCase();
-    const classTitle = (item.class_title || '').toLowerCase();
-    return clientName.includes(query) || classTitle.includes(query);
-  });
+    if (!query) return autoBookingsList;
+    return autoBookingsList.filter((item) => {
+      const clientName = (item.client_name || '').toLowerCase();
+      const classTitle = (item.class_title || '').toLowerCase();
+      return clientName.includes(query) || classTitle.includes(query);
+    });
+  }, [autoBookingsList, rulesSearchQuery]);
+
+  // Wstępne wyliczenie liczby przyszłych rezerwacji dla każdej reguły
+  const futureBookingsMap = useMemo(() => {
+    const map = new Map<number, number>();
+    autoBookingsList.forEach((rule) => {
+      map.set(rule.id, getFutureBookingsCount(rule, zapisyList, grafikItems));
+    });
+    return map;
+  }, [autoBookingsList, zapisyList, grafikItems, getFutureBookingsCount]);
 
   if (loading && klienciList.length === 0) {
     return (
@@ -825,9 +876,12 @@ export default function AutomatyczneZapisyPage() {
           <div>
             <button
               type="submit"
-              className="w-full bg-sky-900 hover:bg-sky-800 text-white font-bold text-xs py-3 px-6 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer"
+              disabled={isSubmitting}
+              className={`w-full bg-sky-900 hover:bg-sky-800 text-white font-bold text-xs py-3 px-6 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-2 ${
+                isSubmitting ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
             >
-              ⚡ Ustaw Automatyczny Zapis
+              <span>⚡</span> {isSubmitting ? 'Ustawianie...' : 'Ustaw Automatyczny Zapis'}
             </button>
           </div>
 
@@ -880,7 +934,8 @@ export default function AutomatyczneZapisyPage() {
               const livePassExpiry = matchedClient ? matchedClient.displayPassExpiry : (item.pass_expiry || 'Brak');
               const hasActiveOrGrace = matchedClient ? matchedClient.hasActiveOrGracePass : (item.pass_expiry && item.pass_expiry !== 'Brak');
               const graceDays = matchedClient?.graceDays ?? clubRules.expired_pass_grace_days ?? 15;
-              const futureBookingsCount = getFutureBookingsCount(item, zapisyList, grafikItems);
+              const futureBookingsCount = futureBookingsMap.get(item.id) ?? 0;
+              const isDeletingThis = isDeletingId === item.id;
 
               return (
                 <div
@@ -917,9 +972,12 @@ export default function AutomatyczneZapisyPage() {
 
                   <button
                     onClick={() => handleRemoveAutoBooking(item.id)}
-                    className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs px-4 py-2.5 rounded-xl border border-rose-200 transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                    disabled={isDeletingThis}
+                    className={`bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs px-4 py-2.5 rounded-xl border border-rose-200 transition-colors cursor-pointer shrink-0 self-start sm:self-center ${
+                      isDeletingThis ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
                   >
-                    Usuń regułę
+                    {isDeletingThis ? 'Usuwanie...' : 'Usuń regułę'}
                   </button>
                 </div>
               );

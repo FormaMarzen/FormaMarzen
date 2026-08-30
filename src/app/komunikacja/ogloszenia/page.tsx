@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
@@ -22,6 +22,7 @@ export default function OgloszeniaPage() {
   const [karnetyBaza, setKarnetyBaza] = useState<string[]>([]);
   const [klienciBaza, setKlienciBaza] = useState<KlientItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Stan modalu dodawania / edycji ogłoszenia
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -37,27 +38,28 @@ export default function OgloszeniaPage() {
   // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
     setTimeout(() => {
       setToast(null);
     }, 4000);
-  };
+  }, []);
 
-  // POBIERANIE DANYCH Z SUPABASE
-  const loadData = async () => {
+  // POBIERANIE DANYCH Z SUPABASE (RÓWNOLEGLE)
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 1. Pobieranie ogłoszeń z Supabase
-      const { data: ogloszeniaData, error: ogloszeniaError } = await supabase
-        .from('ogloszenia')
-        .select('*')
-        .order('id', { ascending: false });
+      const [ogloszeniaRes, karnetyRes, klienciRes] = await Promise.all([
+        supabase.from('ogloszenia').select('*').order('id', { ascending: false }),
+        supabase.from('karnety').select('nazwa').order('nazwa', { ascending: true }),
+        supabase.from('klienci').select('*')
+      ]);
 
-      if (ogloszeniaError) {
-        console.error("Błąd pobierania ogłoszeń:", ogloszeniaError);
-      } else if (ogloszeniaData) {
-        const parsedOgloszenia = ogloszeniaData.map((o: any) => {
+      // 1. Przetwarzanie ogłoszeń
+      if (ogloszeniaRes.error) {
+        console.error("Błąd pobierania ogłoszeń:", ogloszeniaRes.error);
+      } else if (ogloszeniaRes.data) {
+        const parsedOgloszenia = ogloszeniaRes.data.map((o: any) => {
           let tArray = ['Wszystkich'];
           if (Array.isArray(o.target_array)) {
             tArray = o.target_array;
@@ -81,14 +83,9 @@ export default function OgloszeniaPage() {
         setOgloszenia(parsedOgloszenia);
       }
 
-      // 2. Pobieranie listy karnetów z bazy cennika
-      const { data: karnetyData } = await supabase
-        .from('karnety')
-        .select('nazwa')
-        .order('nazwa', { ascending: true });
-
-      if (karnetyData && karnetyData.length > 0) {
-        setKarnetyBaza(karnetyData.map((k: any) => k.nazwa));
+      // 2. Przetwarzanie listy karnetów
+      if (karnetyRes.data && karnetyRes.data.length > 0) {
+        setKarnetyBaza(karnetyRes.data.map((k: any) => k.nazwa));
       } else {
         setKarnetyBaza([
           'OPEN',
@@ -100,15 +97,11 @@ export default function OgloszeniaPage() {
         ]);
       }
 
-      // 3. Bezpieczne pobieranie listy klubowiczów z tabeli klienci
-      const { data: klienciData, error: klienciError } = await supabase
-        .from('klienci')
-        .select('*');
-
-      if (klienciError) {
-        console.error("Błąd pobierania listy klientów:", klienciError);
-      } else if (klienciData && klienciData.length > 0) {
-        const mappedClients: KlientItem[] = klienciData
+      // 3. Przetwarzanie bazy klientów
+      if (klienciRes.error) {
+        console.error("Błąd pobierania listy klientów:", klienciRes.error);
+      } else if (klienciRes.data && klienciRes.data.length > 0) {
+        const mappedClients: KlientItem[] = klienciRes.data
           .map((k: any) => ({
             id: k.id,
             imie: k['Imię'] || k.Imię || k.imie || '',
@@ -126,11 +119,11 @@ export default function OgloszeniaPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   const handleOpenAddModal = () => {
     setEditingId(null);
@@ -182,6 +175,8 @@ export default function OgloszeniaPage() {
 
   const handleSaveOgloszenie = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+
     if (!content.trim()) {
       showToast("Treść ogłoszenia nie może być pusta!", 'error');
       return;
@@ -214,6 +209,7 @@ export default function OgloszeniaPage() {
       is_visible: true
     };
 
+    setIsSaving(true);
     try {
       if (editingId !== null) {
         const { error } = await supabase
@@ -222,26 +218,64 @@ export default function OgloszeniaPage() {
           .eq('id', editingId);
 
         if (error) throw error;
+
+        // Aktualizacja lokalnego stanu bez pełnego re-fetchu
+        setOgloszenia(prev => prev.map(o => o.id === editingId ? {
+          ...o,
+          dateFrom: payload.date_from,
+          dateTo: payload.date_to,
+          target: payload.target,
+          targetArray: payload.target_array,
+          content: payload.content,
+          isVisible: true
+        } : o));
+
         showToast("Zaktualizowano ogłoszenie!", 'success');
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('ogloszenia')
-          .insert([payload]);
+          .insert([payload])
+          .select();
 
         if (error) throw error;
+
+        if (data && data[0]) {
+          const newEntry = {
+            id: data[0].id,
+            dateFrom: data[0].date_from || payload.date_from,
+            dateTo: data[0].date_to || payload.date_to,
+            target: data[0].target || payload.target,
+            targetArray: payload.target_array,
+            content: data[0].content || payload.content,
+            isVisible: true,
+            createdAt: data[0].created_at || new Date().toISOString()
+          };
+          setOgloszenia(prev => [newEntry, ...prev]);
+        } else {
+          loadData();
+        }
+
         showToast("Dodano nowe ogłoszenie!", 'success');
       }
 
       setIsModalOpen(false);
-      loadData();
     } catch (error: any) {
       console.error("Błąd zapisu ogłoszenia:", error);
       showToast(`Błąd zapisu: ${error.message || ''}`, 'error');
+    } finally {
+      setIsSaving(false);
     }
   };
 
+  // Optymistyczna zmiana widoczności ogłoszenia (natychmiastowy feedback UI)
   const handleToggleVisibility = async (ogloszenie: any) => {
-    const newVisibility = !ogloszenie.isVisible;
+    const previousVisibility = ogloszenie.isVisible;
+    const newVisibility = !previousVisibility;
+
+    // Natychmiastowa aktualizacja w UI
+    setOgloszenia(prev => prev.map(o => o.id === ogloszenie.id ? { ...o, isVisible: newVisibility } : o));
+    showToast(newVisibility ? "Ogłoszenie jest teraz widoczne" : "Ukryto ogłoszenie", 'info');
+
     try {
       const { error } = await supabase
         .from('ogloszenia')
@@ -249,45 +283,60 @@ export default function OgloszeniaPage() {
         .eq('id', ogloszenie.id);
 
       if (error) throw error;
-      showToast(newVisibility ? "Ogłoszenie jest teraz widoczne" : "Ukryto ogłoszenie", 'info');
-      loadData();
     } catch (error: any) {
+      // Przywrócenie stanu w przypadku błędu
+      setOgloszenia(prev => prev.map(o => o.id === ogloszenie.id ? { ...o, isVisible: previousVisibility } : o));
       showToast(`Błąd zmiany widoczności: ${error.message}`, 'error');
     }
   };
 
+  // Optymistyczne usuwanie ogłoszenia
   const handleDeleteOgloszenie = async (id: number | string) => {
-    if (confirm("Czy na pewno chcesz usunąć to ogłoszenie?")) {
-      try {
-        const { error } = await supabase
-          .from('ogloszenia')
-          .delete()
-          .eq('id', id);
+    if (!confirm("Czy na pewno chcesz usunąć to ogłoszenie?")) return;
 
-        if (error) throw error;
-        showToast("Usunięto ogłoszenie!", 'success');
-        loadData();
-      } catch (error: any) {
-        showToast(`Błąd usuwania: ${error.message}`, 'error');
-      }
+    const previousList = [...ogloszenia];
+    // Natychmiastowe usunięcie z UI
+    setOgloszenia(prev => prev.filter(o => o.id !== id));
+    showToast("Usunięto ogłoszenie!", 'success');
+
+    try {
+      const { error } = await supabase
+        .from('ogloszenia')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error: any) {
+      // Rollback w przypadku błędu
+      setOgloszenia(previousList);
+      showToast(`Błąd usuwania: ${error.message}`, 'error');
     }
   };
 
   // WERYFIKACJA WYGAŚNIĘCIA WG DZISIEJSZEJ DATY
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  const isExpired = (dateToStr: string) => {
+  const isExpired = useCallback((dateToStr: string) => {
     if (!dateToStr) return false;
     return dateToStr < todayStr;
-  };
+  }, [todayStr]);
 
-  const filteredOgloszenia = ogloszenia.filter(o => 
-    o.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    o.target.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredOgloszenia = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return ogloszenia;
+    return ogloszenia.filter(o => 
+      o.content.toLowerCase().includes(q) ||
+      o.target.toLowerCase().includes(q)
+    );
+  }, [ogloszenia, searchQuery]);
 
-  const aktywneOgloszenia = filteredOgloszenia.filter(o => o.isVisible !== false && !isExpired(o.dateTo));
-  const niewidoczneOgloszenia = filteredOgloszenia.filter(o => o.isVisible === false || isExpired(o.dateTo));
+  const aktywneOgloszenia = useMemo(() => {
+    return filteredOgloszenia.filter(o => o.isVisible !== false && !isExpired(o.dateTo));
+  }, [filteredOgloszenia, isExpired]);
+
+  const niewidoczneOgloszenia = useMemo(() => {
+    return filteredOgloszenia.filter(o => o.isVisible === false || isExpired(o.dateTo));
+  }, [filteredOgloszenia, isExpired]);
 
   return (
     <div className="max-w-[1600px] mx-auto space-y-8 pb-24 relative font-sans antialiased">
@@ -667,10 +716,11 @@ export default function OgloszeniaPage() {
               </button>
               <button 
                 type="button" 
+                disabled={isSaving}
                 onClick={handleSaveOgloszenie}
-                className="bg-rose-900 hover:bg-rose-800 text-white font-black px-8 py-3 rounded-xl uppercase tracking-wider text-xs shadow-md cursor-pointer"
+                className={`bg-rose-900 hover:bg-rose-800 text-white font-black px-8 py-3 rounded-xl uppercase tracking-wider text-xs shadow-md cursor-pointer flex items-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                {editingId !== null ? 'Zaktualizuj ogłoszenie' : 'Zapisz ogłoszenie'}
+                {isSaving ? "Zapisywanie..." : (editingId !== null ? 'Zaktualizuj ogłoszenie' : 'Zapisz ogłoszenie')}
               </button>
             </div>
 

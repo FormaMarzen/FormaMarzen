@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
@@ -35,7 +35,7 @@ export default function PublicSchedulePage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  const getMonday = (d: Date) => {
+  const getMonday = useCallback((d: Date) => {
     const dCopy = new Date(d);
     const day = dCopy.getDay();
     if (day === 6) {
@@ -46,9 +46,9 @@ export default function PublicSchedulePage() {
     const currentDayOfWeek = dCopy.getDay();
     const diff = dCopy.getDate() - currentDayOfWeek + (currentDayOfWeek === 0 ? -6 : 1);
     return new Date(dCopy.setDate(diff));
-  };
+  }, []);
 
-  const calculateDuration = (start: string, end: string) => {
+  const calculateDuration = useCallback((start: string, end: string) => {
     if (!start || !end) return "60 min";
     try {
       const [sh, sm] = start.split(":").map(Number);
@@ -57,9 +57,9 @@ export default function PublicSchedulePage() {
       if (diffMins > 0) return `${diffMins} min`;
     } catch (e) {}
     return "60 min";
-  };
+  }, []);
 
-  const getTopBorderColor = (title: string, isOdwolane: boolean, isUsuniete: boolean) => {
+  const getTopBorderColor = useCallback((title: string, isOdwolane: boolean, isUsuniete: boolean) => {
     if (isOdwolane || isUsuniete) return '#fda4af';
     if (!title) return '#0284c7';
     const found = rodzajeZajec.find(r => r.nazwa?.trim().toLowerCase() === title?.trim().toLowerCase());
@@ -68,9 +68,9 @@ export default function PublicSchedulePage() {
     let hash = 0;
     for (let i = 0; i < title.length; i++) hash = title.charCodeAt(i) + ((hash << 5) - hash);
     return colorPalette[Math.abs(hash) % colorPalette.length];
-  };
+  }, [rodzajeZajec]);
 
-  const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
+  const checkClassAutoCancellation = useCallback((classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     
     const trainingName = classItem.title || '';
@@ -101,9 +101,9 @@ export default function PublicSchedulePage() {
       }
     }
     return { isAutoCancelled: false, reason: '' };
-  };
+  }, [bookingRules, currentDate]);
 
-  const findOverride = (item: any, col: any) => {
+  const findOverride = useCallback((item: any, col: any) => {
     const keysToCheck = [
       `${item.id}_${col.date}`,
       `${item.id}_${col.isoDate}`,
@@ -116,9 +116,9 @@ export default function PublicSchedulePage() {
       if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
     }
     return null;
-  };
+  }, [nadpisaneZajeciaDni]);
 
-  const getSignups = (item: any, col: any) => {
+  const getSignups = useCallback((item: any, col: any) => {
     const keysToCheck = [
       `${item.id}_${col.date}`,
       `${item.id}_${col.isoDate}`,
@@ -131,20 +131,36 @@ export default function PublicSchedulePage() {
       if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
     }
     return [];
-  };
+  }, [zapisyNaZajecia]);
 
-  const loadPublicData = async () => {
+  // Zoptymalizowane, w pełni równoległe pobieranie danych publicznych
+  const loadPublicData = useCallback(async () => {
     setIsLoading(true);
 
     try {
-      const { data: rulesData } = await supabase
-        .from('club_booking_rules')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const [
+        rulesRes,
+        szablonyRes,
+        jednorazoweRes,
+        nadpisaniaRes,
+        zapisyRes,
+        wydarzeniaRes,
+        rodzajeRes,
+        karnetyRes
+      ] = await Promise.allSettled([
+        supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('grafik_zajec').select('*'),
+        supabase.from('zajecia_jednorazowe').select('*'),
+        supabase.from('nadpisania_zajec').select('*'),
+        supabase.from('zapisy_zajec').select('class_key, status'),
+        supabase.from('wydarzenia_kilkudniowe').select('*'),
+        supabase.from('rodzaje_zajec').select('*'),
+        supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true })
+      ]);
 
-      if (rulesData) {
+      // 1. Reguły rezerwacji
+      if (rulesRes.status === 'fulfilled' && rulesRes.value.data) {
+        const rulesData = rulesRes.value.data;
         setBookingRules({
           min_participants: rulesData.min_participants ?? null,
           auto_cancel_deadline_minutes: rulesData.auto_cancel_deadline_minutes ?? null,
@@ -152,14 +168,10 @@ export default function PublicSchedulePage() {
           auto_cancel_deadline_per_class: rulesData.auto_cancel_deadline_per_class || {},
         });
       }
-    } catch (e) {
-      console.error("Błąd ładowania reguł:", e);
-    }
 
-    try {
-      const { data: szablonyData } = await supabase.from('grafik_zajec').select('*');
-      if (szablonyData) {
-        setZapisaneZajecia(szablonyData.map((s: any) => ({
+      // 2. Szablony grafiku
+      if (szablonyRes.status === 'fulfilled' && szablonyRes.value.data) {
+        setZapisaneZajecia(szablonyRes.value.data.map((s: any) => ({
           id: s.id,
           title: s.title || s.nazwa,
           start: s.start || s.start_time,
@@ -172,14 +184,10 @@ export default function PublicSchedulePage() {
           powodOdwolania: s.powod_odwolania || s.powod || ''
         })));
       }
-    } catch (e) {
-      console.error("Błąd ładowania szablonów grafiku:", e);
-    }
 
-    try {
-      const { data: jednorazoweData } = await supabase.from('zajecia_jednorazowe').select('*');
-      if (jednorazoweData) {
-        setJednorazoweZajecia(jednorazoweData.map((j: any) => ({
+      // 3. Zajęcia jednorazowe
+      if (jednorazoweRes.status === 'fulfilled' && jednorazoweRes.value.data) {
+        setJednorazoweZajecia(jednorazoweRes.value.data.map((j: any) => ({
           id: j.id,
           title: j.title || j.nazwa,
           start: j.start_time || j.start,
@@ -194,15 +202,11 @@ export default function PublicSchedulePage() {
           powodOdwolania: j.powod_odwolania || j.powod || ''
         })));
       }
-    } catch (e) {
-      console.error("Błąd ładowania zajęć jednorazowych:", e);
-    }
 
-    try {
-      const { data: nadpisaniaData } = await supabase.from('nadpisania_zajec').select('*');
-      if (nadpisaniaData) {
+      // 4. Nadpisania zajęć
+      if (nadpisaniaRes.status === 'fulfilled' && nadpisaniaRes.value.data) {
         const nadpisaniaMap: { [key: string]: any } = {};
-        nadpisaniaData.forEach((n: any) => {
+        nadpisaniaRes.value.data.forEach((n: any) => {
           nadpisaniaMap[n.class_key] = {
             start: n.start,
             end: n.end,
@@ -215,68 +219,44 @@ export default function PublicSchedulePage() {
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
-    } catch (e) {
-      console.error("Błąd ładowania nadpisań:", e);
-    }
 
-    try {
-      const { data: zapisyData } = await supabase.from('zapisy_zajec').select('class_key, status');
-      if (zapisyData) {
+      // 5. Zapisy na zajęcia
+      if (zapisyRes.status === 'fulfilled' && zapisyRes.value.data) {
         const grouped: { [key: string]: any[] } = {};
-        zapisyData.forEach((z: any) => {
+        zapisyRes.value.data.forEach((z: any) => {
           if (!grouped[z.class_key]) grouped[z.class_key] = [];
           grouped[z.class_key].push(z);
         });
         setZapisyNaZajecia(grouped);
       }
-    } catch (e) {
-      console.error("Błąd ładowania zapisów:", e);
-    }
 
-    try {
-      const { data: wydarzeniaData } = await supabase.from('wydarzenia_kilkudniowe').select('*');
-      if (wydarzeniaData) {
-        setWydarzeniaKilkudniowe(wydarzeniaData.map((w: any) => ({
+      // 6. Wydarzenia kilkudniowe
+      if (wydarzeniaRes.status === 'fulfilled' && wydarzeniaRes.value.data) {
+        setWydarzeniaKilkudniowe(wydarzeniaRes.value.data.map((w: any) => ({
           id: w.id,
           title: w.title,
           dateFrom: w.date_from,
           dateTo: w.date_to
         })));
       }
-    } catch (e) {
-      console.error("Błąd ładowania wydarzeń:", e);
-    }
 
-    try {
-      const { data: rodzajeData } = await supabase.from('rodzaje_zajec').select('*');
-      if (rodzajeData) {
-        setRodzajeZajec(rodzajeData);
+      // 7. Rodzaje zajęć
+      if (rodzajeRes.status === 'fulfilled' && rodzajeRes.value.data) {
+        setRodzajeZajec(rodzajeRes.value.data);
       }
-    } catch (e) {
-      console.error("Błąd ładowania rodzajów zajęć:", e);
-    }
 
-    try {
-      const { data: karnetyData, error: karnetyError } = await supabase
-        .from('katalog_karnetow')
-        .select('*')
-        .order('kolejnosc', { ascending: true });
-
-      if (karnetyData && karnetyData.length > 0) {
-        setKatalogKarnetow(karnetyData.filter((k: any) => k.aktywny !== false));
+      // 8. Katalog karnetów
+      if (karnetyRes.status === 'fulfilled' && karnetyRes.value.data) {
+        setKatalogKarnetow(karnetyRes.value.data.filter((k: any) => k.aktywny !== false));
       } else {
-        if (karnetyError) {
-          console.error("Błąd tabeli katalog_karnetow:", karnetyError);
-        }
         setKatalogKarnetow([]);
       }
     } catch (err) {
-      console.error("Błąd podczas pobierania katalogu karnetów:", err);
-      setKatalogKarnetow([]);
+      console.error("Błąd podczas pobierania danych publicznych:", err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     setIsMounted(true);
@@ -288,6 +268,99 @@ export default function PublicSchedulePage() {
     setCurrentDate(now);
     setCalendarViewDate(now);
     loadPublicData();
+  }, [loadPublicData]);
+
+  const currentMonday = useMemo(() => {
+    if (!currentDate) return new Date();
+    return getMonday(currentDate);
+  }, [currentDate, getMonday]);
+
+  const today = useMemo(() => new Date(), []);
+  const todayStr = useMemo(() => {
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  }, [today]);
+
+  const currentTimeStr = useMemo(() => {
+    return `${String(today.getHours()).padStart(2, '0')}:${String(today.getMinutes()).padStart(2, '0')}`;
+  }, [today]);
+
+  const daysList = useMemo(() => {
+    return Array.from({ length: 5 }).map((_, index) => {
+      const dayDate = new Date(currentMonday);
+      dayDate.setDate(currentMonday.getDate() + index);
+
+      const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
+      const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
+
+      const dayStr = String(dayDate.getDate()).padStart(2, '0');
+      const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
+      const isoDateStr = `${dayDate.getFullYear()}-${monthStr}-${dayStr}`;
+
+      const isToday =
+        dayDate.getDate() === today.getDate() &&
+        dayDate.getMonth() === today.getMonth() &&
+        dayDate.getFullYear() === today.getFullYear();
+
+      return {
+        day: dayNames[index],
+        key: keys[index],
+        date: `${dayStr}/${monthStr}`,
+        isoDate: isoDateStr,
+        fullDate: dayDate,
+        isToday
+      };
+    });
+  }, [currentMonday, today]);
+
+  const handlePrevWeek = () => {
+    if (!currentDate) return;
+    const newDate = new Date(currentDate);
+    newDate.setDate(currentDate.getDate() - 7);
+    setCurrentDate(newDate);
+  };
+
+  const handleNextWeek = () => {
+    if (!currentDate) return;
+    const newDate = new Date(currentDate);
+    newDate.setDate(currentDate.getDate() + 7);
+    setCurrentDate(newDate);
+  };
+
+  const nextMonth = () => {
+    if (!calendarViewDate) return;
+    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
+  };
+
+  const prevMonth = () => {
+    if (!calendarViewDate) return;
+    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1));
+  };
+
+  const calendarMeta = useMemo(() => {
+    if (!calendarViewDate) return { year: 2026, month: 0, firstDayIndex: 0, totalDays: 31 };
+    const year = calendarViewDate.getFullYear();
+    const month = calendarViewDate.getMonth();
+    const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7;
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    return { year, month, firstDayIndex, totalDays };
+  }, [calendarViewDate]);
+
+  const monthNames = useMemo(() => [
+    "Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec",
+    "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"
+  ], []);
+
+  const parseDostepZajecia = useCallback((dostep: any): string[] => {
+    if (!dostep) return [];
+    if (Array.isArray(dostep)) return dostep;
+    if (typeof dostep === 'string') {
+      try {
+        const parsed = JSON.parse(dostep);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+      return dostep.includes(',') ? dostep.split(',').map((s: string) => s.trim()) : [dostep];
+    }
+    return [];
   }, []);
 
   if (!isMounted || !currentDate || !calendarViewDate) {
@@ -299,76 +372,6 @@ export default function PublicSchedulePage() {
       </div>
     );
   }
-
-  const currentMonday = getMonday(currentDate);
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const currentTimeStr = `${String(today.getHours()).padStart(2, '0')}:${String(today.getMinutes()).padStart(2, '0')}`;
-
-  const daysList = Array.from({ length: 5 }).map((_, index) => {
-    const dayDate = new Date(currentMonday);
-    dayDate.setDate(currentMonday.getDate() + index);
-
-    const dayNames = ['PONIEDZIAŁEK', 'WTOREK', 'ŚRODA', 'CZWARTEK', 'PIĄTEK'];
-    const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
-
-    const dayStr = String(dayDate.getDate()).padStart(2, '0');
-    const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-    const isoDateStr = `${dayDate.getFullYear()}-${monthStr}-${dayStr}`;
-
-    const isToday =
-      dayDate.getDate() === today.getDate() &&
-      dayDate.getMonth() === today.getMonth() &&
-      dayDate.getFullYear() === today.getFullYear();
-
-    return {
-      day: dayNames[index],
-      key: keys[index],
-      date: `${dayStr}/${monthStr}`,
-      isoDate: isoDateStr,
-      fullDate: dayDate,
-      isToday
-    };
-  });
-
-  const handlePrevWeek = () => {
-    const newDate = new Date(currentDate);
-    newDate.setDate(currentDate.getDate() - 7);
-    setCurrentDate(newDate);
-  };
-
-  const handleNextWeek = () => {
-    const newDate = new Date(currentDate);
-    newDate.setDate(currentDate.getDate() + 7);
-    setCurrentDate(newDate);
-  };
-
-  const nextMonth = () => {
-    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
-  };
-
-  const prevMonth = () => {
-    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1));
-  };
-
-  const year = calendarViewDate.getFullYear();
-  const month = calendarViewDate.getMonth();
-  const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7;
-  const totalDays = new Date(year, month + 1, 0).getDate();
-  const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"];
-
-  const parseDostepZajecia = (dostep: any): string[] => {
-    if (!dostep) return [];
-    if (Array.isArray(dostep)) return dostep;
-    if (typeof dostep === 'string') {
-      try {
-        const parsed = JSON.parse(dostep);
-        if (Array.isArray(parsed)) return parsed;
-      } catch (e) {}
-      return dostep.includes(',') ? dostep.split(',').map((s: string) => s.trim()) : [dostep];
-    }
-    return [];
-  };
 
   return (
     <div className="min-h-screen bg-slate-100/60 pt-6 sm:pt-8 pb-32 px-3 sm:px-6 font-sans antialiased text-slate-800">
@@ -566,7 +569,7 @@ export default function PublicSchedulePage() {
               <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-2xl max-w-md mx-auto space-y-4 animate-in fade-in zoom-in-95 duration-150">
                 <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                   <button onClick={prevMonth} className="w-8 h-8 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-xl font-bold cursor-pointer">◀</button>
-                  <h3 className="font-black text-sm text-sky-950 uppercase">{monthNames[month]} {year}</h3>
+                  <h3 className="font-black text-sm text-sky-950 uppercase">{monthNames[calendarMeta.month]} {calendarMeta.year}</h3>
                   <button onClick={nextMonth} className="w-8 h-8 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-xl font-bold cursor-pointer">▶</button>
                 </div>
 
@@ -575,14 +578,14 @@ export default function PublicSchedulePage() {
                     <div key={idx} className="font-bold text-sky-900 py-1 text-[11px]">{mName}</div>
                   ))}
 
-                  {Array.from({ length: firstDayIndex }).map((_, idx) => (
+                  {Array.from({ length: calendarMeta.firstDayIndex }).map((_, idx) => (
                     <div key={`empty-${idx}`} />
                   ))}
 
-                  {Array.from({ length: totalDays }).map((_, idx) => {
+                  {Array.from({ length: calendarMeta.totalDays }).map((_, idx) => {
                     const dayNum = idx + 1;
-                    const thisDate = new Date(year, month, dayNum);
-                    const isSelected = currentDate ? currentDate.getDate() === dayNum && currentDate.getMonth() === month && currentDate.getFullYear() === year : false;
+                    const thisDate = new Date(calendarMeta.year, calendarMeta.month, dayNum);
+                    const isSelected = currentDate ? currentDate.getDate() === dayNum && currentDate.getMonth() === calendarMeta.month && currentDate.getFullYear() === calendarMeta.year : false;
 
                     return (
                       <button

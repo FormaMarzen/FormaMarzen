@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 // --- INTERFEJSY ---
@@ -32,6 +32,7 @@ export default function MojeWynikiPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   // ZAKŁADKI: moje wyniki vs ranking globalny
   const [aktywnaZakladka, setAktywnaZakladka] = useState<"moje" | "rankingi">("moje");
@@ -39,7 +40,6 @@ export default function MojeWynikiPage() {
   // Dane z bazy
   const [definicjeCwiczen, setDefinicjeCwiczen] = useState<CwiczenieDefinicja[]>([]);
   const [wszystkieWyniki, setWszystkieWyniki] = useState<WynikUzytkownika[]>([]);
-  const [wynikiUzytkownika, setWynikiUzytkownika] = useState<WynikUzytkownika[]>([]);
   const [klienciList, setKlienciList] = useState<KlientInfo[]>([]);
   
   const [aktywnaKategoria, setAktywnaKategoria] = useState<string>("Wszystkie");
@@ -48,7 +48,7 @@ export default function MojeWynikiPage() {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [wybraneCwiczenie, setWybraneCwiczenie] = useState<CwiczenieDefinicja | null>(null);
   const [nowyWynikWartosc, setNowyWynikWartosc] = useState<string>("");
-  const [nowyWynikData, setNowyWynikData] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [nowyWynikData, setNowyWynikData] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
   const [editingCwiczenieId, setEditingCwiczenieId] = useState<number | null>(null);
@@ -59,79 +59,93 @@ export default function MojeWynikiPage() {
     typ: "waga" as "waga" | "czas" | "ilosc"
   });
 
-  // --- INICJALIZACJA DANYCH ---
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  // --- RÓWNOLEGŁA INICJALIZACJA DANYCH ---
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     
-    // 1. Sprawdzenie sesji i roli
-    const { data: { session } } = await supabase.auth.getSession();
-    const email = session?.user?.email || "";
-    setUserEmail(email);
-    
-    if (email === "maciejklaput@gmail.com") {
-      setIsAdmin(true);
-    }
+    try {
+      const [sessionRes, cwiczeniaRes, klienciRes, wynikiRes] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.from('cwiczenia_slownik').select('*').order('id', { ascending: true }),
+        supabase.from('klienci').select('id, "Imię", "Nazwisko", "E-mail", avatarUrl'),
+        supabase.from('wyniki_klubowiczow').select('*')
+      ]);
 
-    // 2. Pobranie definicji ćwiczeń
-    const { data: cwiczeniaData, error: cwiczeniaError } = await supabase
-      .from('cwiczenia_slownik')
-      .select('*')
-      .order('id', { ascending: true });
-
-    if (!cwiczeniaError && cwiczeniaData) {
-      setDefinicjeCwiczen(cwiczeniaData);
-    }
-
-    // 3. Pobranie listy klientów (do imion, nazwisk i awatarów)
-    const { data: klienciData } = await supabase
-      .from('klienci')
-      .select('*');
-
-    if (klienciData) {
-      setKlienciList(klienciData);
-    }
-
-    // 4. Pobranie WSZYSTKICH wyników z bazy
-    const { data: wynikiData, error: wynikiError } = await supabase
-      .from('wyniki_klubowiczow')
-      .select('*');
-
-    if (!wynikiError && wynikiData) {
-      setWszystkieWyniki(wynikiData);
-      if (email) {
-        setWynikiUzytkownika(wynikiData.filter(w => w.email_klienta === email));
+      const email = sessionRes.data.session?.user?.email || "";
+      setUserEmail(email);
+      
+      if (email === "maciejklaput@gmail.com") {
+        setIsAdmin(true);
       }
-    }
 
-    setIsLoading(false);
-  };
+      if (!cwiczeniaRes.error && cwiczeniaRes.data) {
+        setDefinicjeCwiczen(cwiczeniaRes.data);
+      }
+
+      if (!klienciRes.error && klienciRes.data) {
+        setKlienciList(klienciRes.data);
+      }
+
+      if (!wynikiRes.error && wynikiRes.data) {
+        setWszystkieWyniki(wynikiRes.data);
+      }
+    } catch (err) {
+      console.error("Błąd podczas pobierania danych:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Mapa szybkiego wyszukiwania klubowiczów O(1)
+  const klienciMap = useMemo(() => {
+    const map = new Map<string, KlientInfo>();
+    klienciList.forEach(k => {
+      const email = (k['E-mail'] || k.email || '').toLowerCase().trim();
+      if (email) map.set(email, k);
+    });
+    return map;
+  }, [klienciList]);
 
   // Formatowanie nazwy klubowicza oraz pobieranie awatara
-  const pobierzDaneKlubowicza = (email: string) => {
-    const klient = klienciList.find(k => k['E-mail'] === email);
+  const pobierzDaneKlubowicza = useCallback((email: string) => {
+    const cleanEmail = email.toLowerCase().trim();
+    const klient = klienciMap.get(cleanEmail);
     let nazwa = email.split('@')[0];
     let avatar = null;
 
     if (klient) {
-      const imie = klient['Imię'] || '';
-      const nazwisko = klient['Nazwisko'] ? ` ${klient['Nazwisko'].charAt(0)}.` : '';
+      const imie = (klient['Imię'] || klient.imie || '').trim();
+      const nazwiskoRaw = (klient['Nazwisko'] || klient.nazwisko || '').trim();
+      const nazwisko = nazwiskoRaw ? ` ${nazwiskoRaw.charAt(0)}.` : '';
       if (imie) nazwa = `${imie}${nazwisko}`;
       if (klient.avatarUrl) avatar = klient.avatarUrl;
     }
 
     return { nazwa, avatar };
-  };
+  }, [klienciMap]);
 
-  const dostepneKategorie = Array.from(new Set(definicjeCwiczen.map(c => c.kategoria)));
-  const wygenerowaneKategorie = ["Wszystkie", ...dostepneKategorie];
+  const wynikiUzytkownika = useMemo(() => {
+    if (!userEmail) return [];
+    return wszystkieWyniki.filter(w => w.email_klienta.toLowerCase() === userEmail.toLowerCase());
+  }, [wszystkieWyniki, userEmail]);
 
-  const widoczneWyniki = aktywnaKategoria === "Wszystkie" 
-    ? definicjeCwiczen 
-    : definicjeCwiczen.filter((w) => w.kategoria === aktywnaKategoria);
+  const dostepneKategorie = useMemo(() => {
+    return Array.from(new Set(definicjeCwiczen.map(c => c.kategoria)));
+  }, [definicjeCwiczen]);
+
+  const wygenerowaneKategorie = useMemo(() => {
+    return ["Wszystkie", ...dostepneKategorie];
+  }, [dostepneKategorie]);
+
+  const widoczneWyniki = useMemo(() => {
+    return aktywnaKategoria === "Wszystkie" 
+      ? definicjeCwiczen 
+      : definicjeCwiczen.filter((w) => w.kategoria === aktywnaKategoria);
+  }, [aktywnaKategoria, definicjeCwiczen]);
 
   // --- OBSŁUGA KLUBOWICZA ---
   const handleOpenModal = (cwiczenie: CwiczenieDefinicja) => {
@@ -145,44 +159,54 @@ export default function MojeWynikiPage() {
 
   const handleSaveZapis = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!wybraneCwiczenie || !nowyWynikWartosc || !userEmail) {
+    if (isSaving) return;
+
+    if (!wybraneCwiczenie || !nowyWynikWartosc.trim() || !userEmail) {
       alert("Błąd: Upewnij się, że jesteś zalogowany i uzupełniłeś wynik.");
       return;
     }
 
+    setIsSaving(true);
     const istniejacyWynik = wynikiUzytkownika.find(w => w.cwiczenie_id === wybraneCwiczenie.id);
 
     const payload = {
       email_klienta: userEmail,
       cwiczenie_id: wybraneCwiczenie.id,
-      najlepszy_wynik: nowyWynikWartosc,
+      najlepszy_wynik: nowyWynikWartosc.trim(),
       data_rekordu: nowyWynikData
     };
 
-    if (istniejacyWynik) {
-      const { error } = await supabase
-        .from('wyniki_klubowiczow')
-        .update(payload)
-        .eq('id', istniejacyWynik.id);
+    try {
+      if (istniejacyWynik && istniejacyWynik.id) {
+        const { error } = await supabase
+          .from('wyniki_klubowiczow')
+          .update(payload)
+          .eq('id', istniejacyWynik.id);
 
-      if (error) {
-        alert("Błąd bazy danych podczas aktualizacji: " + error.message);
-        return;
+        if (error) throw error;
+
+        setWszystkieWyniki(prev => prev.map(w => w.id === istniejacyWynik.id ? { ...w, ...payload } : w));
+      } else {
+        const { data, error } = await supabase
+          .from('wyniki_klubowiczow')
+          .insert([payload])
+          .select();
+
+        if (error) throw error;
+        if (data && data[0]) {
+          setWszystkieWyniki(prev => [...prev, data[0]]);
+        } else {
+          await fetchData();
+        }
       }
-    } else {
-      const { error } = await supabase
-        .from('wyniki_klubowiczow')
-        .insert([payload]);
-        
-      if (error) {
-        alert("Błąd bazy danych podczas zapisu: " + error.message);
-        return;
-      }
+
+      setIsModalOpen(false);
+      alert("Wynik został pomyślnie zaktualizowany!");
+    } catch (error: any) {
+      alert("Błąd bazy danych podczas zapisu: " + (error.message || ""));
+    } finally {
+      setIsSaving(false);
     }
-
-    await fetchData(); 
-    setIsModalOpen(false);
-    alert("Wynik został pomyślnie zaktualizowany!");
   };
 
   // --- OBSŁUGA ADMINA ---
@@ -205,78 +229,98 @@ export default function MojeWynikiPage() {
 
   const handleAdminSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (editingCwiczenieId) {
-      const { error } = await supabase
-        .from('cwiczenia_slownik')
-        .update({
-          nazwa: adminForm.nazwa,
-          kategoria: adminForm.kategoria,
-          jednostka: adminForm.jednostka,
-          typ: adminForm.typ
-        })
-        .eq('id', editingCwiczenieId);
+    if (isSaving) return;
 
-      if (error) {
-        alert("Błąd podczas edycji ćwiczenia: " + error.message);
-        return;
-      }
-      alert("Kafelek został pomyślnie zaktualizowany!");
-    } else {
-      const { error } = await supabase
-        .from('cwiczenia_slownik')
-        .insert([{
-          nazwa: adminForm.nazwa,
-          kategoria: adminForm.kategoria,
-          jednostka: adminForm.jednostka,
-          typ: adminForm.typ
-        }]);
+    setIsSaving(true);
+    try {
+      if (editingCwiczenieId) {
+        const { error } = await supabase
+          .from('cwiczenia_slownik')
+          .update({
+            nazwa: adminForm.nazwa.trim(),
+            kategoria: adminForm.kategoria.trim(),
+            jednostka: adminForm.jednostka.trim(),
+            typ: adminForm.typ
+          })
+          .eq('id', editingCwiczenieId);
 
-      if (error) {
-        alert("Błąd podczas dodawania ćwiczenia: " + error.message);
-        return;
+        if (error) throw error;
+        
+        setDefinicjeCwiczen(prev => prev.map(c => c.id === editingCwiczenieId ? {
+          ...c,
+          nazwa: adminForm.nazwa.trim(),
+          kategoria: adminForm.kategoria.trim(),
+          jednostka: adminForm.jednostka.trim(),
+          typ: adminForm.typ
+        } : c));
+
+        alert("Kafelek został pomyślnie zaktualizowany!");
+      } else {
+        const { data, error } = await supabase
+          .from('cwiczenia_slownik')
+          .insert([{
+            nazwa: adminForm.nazwa.trim(),
+            kategoria: adminForm.kategoria.trim(),
+            jednostka: adminForm.jednostka.trim(),
+            typ: adminForm.typ
+          }])
+          .select();
+
+        if (error) throw error;
+        if (data && data[0]) {
+          setDefinicjeCwiczen(prev => [...prev, data[0]]);
+        } else {
+          await fetchData();
+        }
+
+        alert("Nowy kafelek ćwiczenia został dodany do bazy!");
       }
-      alert("Nowy kafelek ćwiczenia został dodany do bazy!");
+
+      setIsAdminModalOpen(false);
+    } catch (error: any) {
+      alert("Błąd podczas zapisywania ćwiczenia: " + (error.message || ""));
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsAdminModalOpen(false);
-    await fetchData();
   };
 
   const handleDeleteCwiczenie = async (id: number) => {
     const isConfirmed = window.confirm("Czy na pewno chcesz usunąć ten kafelek z ćwiczeniem? Ta operacja usunie go wszystkim klubowiczom.");
-    
-    if (isConfirmed) {
-      const { error } = await supabase
-        .from('cwiczenia_slownik')
-        .delete()
-        .eq('id', id);
+    if (!isConfirmed) return;
 
-      if (error) {
-        alert("Błąd podczas usuwania: " + error.message);
-      } else {
-        alert("Ćwiczenie zostało usunięte z bazy!");
-        await fetchData(); 
-      }
+    setDefinicjeCwiczen(prev => prev.filter(c => c.id !== id));
+    setWszystkieWyniki(prev => prev.filter(w => w.cwiczenie_id !== id));
+
+    const { error } = await supabase
+      .from('cwiczenia_slownik')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      alert("Błąd podczas usuwania: " + error.message);
+      await fetchData();
+    } else {
+      alert("Ćwiczenie zostało usunięte z bazy!");
     }
   };
 
   // Usuwanie pojedynczego wyniku klubowicza przez admina (Zabezpieczenie przed fałszywymi wynikami)
   const handleDeleteWynikKlubowicza = async (wynikId: number) => {
     const isConfirmed = window.confirm("Czy na pewno chcesz usunąć ten wynik klubowicza? (Zabezpieczenie przed fałszywym wynikiem)");
-    
-    if (isConfirmed) {
-      const { error } = await supabase
-        .from('wyniki_klubowiczow')
-        .delete()
-        .eq('id', wynikId);
+    if (!isConfirmed) return;
 
-      if (error) {
-        alert("Błąd podczas usuwania wyniku: " + error.message);
-      } else {
-        alert("Wynik został pomyślnie usunięty!");
-        await fetchData();
-      }
+    setWszystkieWyniki(prev => prev.filter(w => w.id !== wynikId));
+
+    const { error } = await supabase
+      .from('wyniki_klubowiczow')
+      .delete()
+      .eq('id', wynikId);
+
+    if (error) {
+      alert("Błąd podczas usuwania wyniku: " + error.message);
+      await fetchData();
+    } else {
+      alert("Wynik został pomyślnie usunięty!");
     }
   };
 
@@ -317,7 +361,7 @@ export default function MojeWynikiPage() {
         <div className="flex p-1.5 bg-sky-100/50 rounded-2xl w-fit">
           <button
             onClick={() => setAktywnaZakladka("moje")}
-            className={`px-6 py-2.5 rounded-xl text-sm font-black uppercase tracking-wider transition-all duration-300 ${
+            className={`px-6 py-2.5 rounded-xl text-sm font-black uppercase tracking-wider transition-all duration-300 cursor-pointer ${
               aktywnaZakladka === "moje" 
                 ? "bg-white text-sky-950 shadow-sm" 
                 : "text-sky-600/70 hover:text-sky-900"
@@ -327,7 +371,7 @@ export default function MojeWynikiPage() {
           </button>
           <button
             onClick={() => setAktywnaZakladka("rankingi")}
-            className={`px-6 py-2.5 rounded-xl text-sm font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${
+            className={`px-6 py-2.5 rounded-xl text-sm font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 cursor-pointer ${
               aktywnaZakladka === "rankingi" 
                 ? "bg-white text-sky-950 shadow-sm" 
                 : "text-sky-600/70 hover:text-sky-900"
@@ -471,7 +515,7 @@ export default function MojeWynikiPage() {
                     const isTop2 = index === 1;
                     const isTop3 = index === 2;
                     const isPodium = isTop1 || isTop2 || isTop3;
-                    const isMoje = wynik.email_klienta === userEmail;
+                    const isMoje = wynik.email_klienta.toLowerCase() === userEmail.toLowerCase();
                     
                     const { nazwa: nazwaUzytkownika, avatar } = pobierzDaneKlubowicza(wynik.email_klienta);
 
@@ -505,7 +549,7 @@ export default function MojeWynikiPage() {
                     if (isTop3) Pozycja = <span className="text-3xl drop-shadow-sm">🥉</span>;
 
                     return (
-                      <div key={wynik.id} className={wrapperClasses}>
+                      <div key={wynik.id || `${wynik.email_klienta}_${index}`} className={wrapperClasses}>
                         <div className="flex items-center gap-3">
                           <div className="w-8 flex justify-center shrink-0">{Pozycja}</div>
                           
@@ -578,7 +622,7 @@ export default function MojeWynikiPage() {
 
       {/* MODAL KLUBOWICZA: AKTUALIZACJA WYNIKU */}
       {isModalOpen && wybraneCwiczenie && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200">
             <button 
               onClick={() => setIsModalOpen(false)} 
@@ -615,9 +659,13 @@ export default function MojeWynikiPage() {
                 />
               </div>
               <div className="pt-2">
-                <button type="submit" className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-4 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2">
+                <button 
+                  type="submit" 
+                  disabled={isSaving}
+                  className={`w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-4 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" /></svg>
-                  Zapisz wynik
+                  {isSaving ? "Zapisywanie..." : "Zapisz wynik"}
                 </button>
               </div>
             </form>
@@ -627,7 +675,7 @@ export default function MojeWynikiPage() {
 
       {/* MODAL ADMINA: DODAWANIE / EDYCJA KAFELKA */}
       {isAdminModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200 border-2 border-sky-900">
             <button 
               onClick={() => setIsAdminModalOpen(false)} 
@@ -689,8 +737,12 @@ export default function MojeWynikiPage() {
                 </div>
               </div>
               <div className="pt-4">
-                <button type="submit" className="w-full bg-sky-900 hover:bg-sky-950 text-white font-black px-6 py-3.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer">
-                  Zapisz do bazy
+                <button 
+                  type="submit" 
+                  disabled={isSaving}
+                  className={`w-full bg-sky-900 hover:bg-sky-950 text-white font-black px-6 py-3.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {isSaving ? "Zapisywanie..." : "Zapisz do bazy"}
                 </button>
               </div>
             </form>

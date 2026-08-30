@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../raporty/klienci/supabase';
 
@@ -22,61 +22,88 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Wsparcie dla dynamicznego logotypu z localStorage
-    const savedLogo = localStorage.getItem('forma_marzen_logo');
-    if (savedLogo) {
-      setCustomLogo(savedLogo);
+    // Bezpieczny odczyt dynamicznego logotypu z localStorage
+    try {
+      const savedLogo = typeof window !== 'undefined' ? localStorage.getItem('forma_marzen_logo') : null;
+      if (savedLogo) {
+        setCustomLogo(savedLogo);
+      }
+    } catch (e) {
+      console.warn('Brak dostępu do localStorage:', e);
     }
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password;
+
+    if (!cleanEmail || !cleanPassword) {
+      setErrorMsg('Wprowadź adres e-mail i hasło.');
+      return;
+    }
+
     setIsLoading(true);
     setErrorMsg('');
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password,
-    });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: cleanPassword,
+      });
 
-    if (error) {
-      setErrorMsg('Nieprawidłowy e-mail lub hasło.');
-      setIsLoading(false);
-    } else if (data.user) {
-      try {
-        // Inkrementacja licznika logowań w metadanych konta
-        const currentCount = Number(data.user.user_metadata?.sign_in_count || 0) + 1;
-        await supabase.auth.updateUser({
-          data: { sign_in_count: currentCount }
-        });
-      } catch (err) {
-        console.error('Błąd aktualizacji licznika logowań:', err);
+      if (error) {
+        setErrorMsg('Nieprawidłowy e-mail lub hasło.');
+        setIsLoading(false);
+        return;
       }
 
-      window.location.href = '/'; 
+      if (data.user) {
+        // Asynchroniczna inkrementacja licznika logowań bez blokowania nawigacji
+        const currentCount = Number(data.user.user_metadata?.sign_in_count || 0) + 1;
+        supabase.auth.updateUser({
+          data: { sign_in_count: currentCount }
+        }).catch((err) => console.error('Błąd aktualizacji licznika logowań:', err));
+
+        window.location.href = '/';
+      }
+    } catch (err: any) {
+      console.error('Nieoczekiwany błąd logowania:', err);
+      setErrorMsg('Wystąpił nieoczekiwany błąd. Spróbuj ponownie.');
+      setIsLoading(false);
     }
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resetEmail.trim()) {
+    const cleanResetEmail = resetEmail.trim().toLowerCase();
+
+    if (!cleanResetEmail) {
       alert("Wpisz adres e-mail.");
       return;
     }
     
     setIsResetLoading(true);
     
-    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-      redirectTo: `${window.location.origin}/update-password`,
-    });
-    
-    setIsResetLoading(false);
-    if (error) {
-      alert("Błąd: " + error.message);
-    } else {
-      alert("Sprawdź skrzynkę e-mail. Wysłaliśmy link do zresetowania hasła.");
-      setIsResetModalOpen(false);
-      setResetEmail('');
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanResetEmail, {
+        redirectTo: `${window.location.origin}/update-password`,
+      });
+      
+      if (error) {
+        alert("Błąd: " + error.message);
+      } else {
+        alert("Sprawdź skrzynkę e-mail. Wysłaliśmy link do zresetowania hasła.");
+        setIsResetModalOpen(false);
+        setResetEmail('');
+      }
+    } catch (err: any) {
+      console.error('Błąd resetowania hasła:', err);
+      alert("Wystąpił błąd podczas wysyłania linku.");
+    } finally {
+      setIsResetLoading(false);
     }
   };
 

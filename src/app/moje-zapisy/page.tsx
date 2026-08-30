@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
@@ -13,6 +13,7 @@ export default function MojeZapisyPage() {
   const [isOnlyRanking, setIsOnlyRanking] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isUnregistering, setIsUnregistering] = useState(false);
   
   // Zapisy i interakcje
   const [zapisyNadchodzace, setZapisyNadchodzace] = useState<any[]>([]);
@@ -52,7 +53,7 @@ export default function MojeZapisyPage() {
   });
 
   // Pomocnicza funkcja do bezpiecznego parsowania daty z class_key
-  const parseDateFromClassKey = (classKey: string) => {
+  const parseDateFromClassKey = useCallback((classKey: string) => {
     const parts = classKey ? String(classKey).split('_') : [];
     const datePart = parts[1] || '';
     const currentYear = new Date().getFullYear();
@@ -73,47 +74,44 @@ export default function MojeZapisyPage() {
       const segments = datePart.split('-');
       if (segments.length === 3) {
         if (segments[0].length === 4) {
-          // Format YYYY-MM-DD
           const [y, m, d] = segments;
           return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
         } else {
-          // Format DD-MM-YYYY
           const [d, m, y] = segments;
           return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
         }
       } else if (segments.length === 2) {
-        // Format DD-MM
         const [d, m] = segments;
         return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
       }
     }
     return new Date();
-  };
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const path = window.location.pathname.toLowerCase();
-      if (params.get('ranking') === 'true' || path.includes('admin') || path.includes('ranking')) {
-        setIsOnlyRanking(true);
-        setActiveTab('ranking');
-      }
-    }
-    loadData();
   }, []);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 1. Pobranie zasad rezerwacji
-      const { data: rulesData } = await supabase
-        .from('club_booking_rules')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const [
+        sessionRes,
+        rulesRes,
+        szablonyRes,
+        jednorazoweRes,
+        nadpisaniaRes,
+        allZapisyRes,
+        allKlienciRes
+      ] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('grafik_zajec').select('*'),
+        supabase.from('zajecia_jednorazowe').select('*'),
+        supabase.from('nadpisania_zajec').select('*'),
+        supabase.from('zapisy_zajec').select('*'),
+        supabase.from('klienci').select('*')
+      ]);
 
-      if (rulesData) {
+      // 1. Zapisanie reguł rezerwacji
+      if (rulesRes.data) {
+        const rulesData = rulesRes.data;
         setBookingRules({
           cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
           cancel_deadline_per_class: rulesData.cancel_deadline_per_class || {},
@@ -128,174 +126,172 @@ export default function MojeZapisyPage() {
         });
       }
 
-      // 2. Pobranie danych zalogowanego użytkownika oraz jego zapisów
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const userEmail = session?.user?.email;
+      const allClients = allKlienciRes.data || [];
+      const allRecords = allZapisyRes.data || [];
+      const szablonyData = szablonyRes.data || [];
+      const jednorazoweData = jednorazoweRes.data || [];
+      const nadpisaniaData = nadpisaniaRes.data || [];
 
-        if (userEmail) {
-          const { data: klientData } = await supabase
-            .from('klienci')
-            .select('*')
-            .ilike('E-mail', userEmail.trim())
-            .maybeSingle();
-            
-          if (klientData) {
-            const rawClient = klientData as any;
-            let parsedKarnety = [];
-            if (Array.isArray(rawClient.karnetyKlubowicza)) {
-              parsedKarnety = rawClient.karnetyKlubowicza;
-            } else if (typeof rawClient.karnetyKlubowicza === 'string') {
-              try { parsedKarnety = JSON.parse(rawClient.karnetyKlubowicza); } catch(e) {}
-            }
+      // Mapy szybkiego dostępu O(1)
+      const szablonyMap = new Map<string, any>();
+      szablonyData.forEach((s: any) => szablonyMap.set(String(s.id), s));
 
-            const parsedClient = {
-              ...rawClient,
-              firstName: rawClient['Imię'] || rawClient.Imię || rawClient.firstName || '',
-              lastName: rawClient['Nazwisko'] || rawClient.Nazwisko || rawClient.lastName || '',
-              karnetyKlubowicza: parsedKarnety
-            };
-            setCurrentUser(parsedClient);
+      const jednorazoweMap = new Map<string, any>();
+      jednorazoweData.forEach((j: any) => jednorazoweMap.set(String(j.id), j));
 
-            const [{ data: szablonyData }, { data: jednorazoweData }, { data: nadpisaniaData }, { data: zData }] = await Promise.all([
-              supabase.from('grafik_zajec').select('*'),
-              supabase.from('zajecia_jednorazowe').select('*'),
-              supabase.from('nadpisania_zajec').select('*'),
-              supabase.from('zapisy_zajec').select('*').eq('klient_id', rawClient.id)
-            ]);
+      const nadpisaniaMap = new Map<string, any>();
+      nadpisaniaData.forEach((n: any) => nadpisaniaMap.set(n.class_key, n));
 
-            if (zData) {
-              const nadchodzace: any[] = [];
-              const przeszle: any[] = [];
-              const dzis = new Date();
-              dzis.setHours(0, 0, 0, 0);
+      const clientMap = new Map<string, any>();
+      allClients.forEach((c: any) => clientMap.set(String(c.id), c));
 
-              zData.forEach((z: any) => {
-                const parts = z.class_key ? String(z.class_key).split('_') : [];
-                const classId = parts[0];
-                let znalezionaNazwa = z.tytul || z.zajecia || null;
-                let znalezionaGodzina = '';
-                let limitMiejsc = 12;
+      // 2. Obsługa zalogowanego użytkownika
+      const userEmail = sessionRes.data.session?.user?.email;
+      if (userEmail) {
+        const cleanEmail = userEmail.toLowerCase().trim();
+        const rawClient = allClients.find((c: any) => (c['E-mail'] || c.email || '').toLowerCase().trim() === cleanEmail);
 
-                const override = nadpisaniaData?.find((n: any) => n.class_key === z.class_key);
-                if (override) {
-                  if (override.start) znalezionaGodzina = override.start;
-                  if (override.limit) limitMiejsc = override.limit;
-                }
-
-                if (classId) {
-                  const szablon = szablonyData?.find((s: any) => String(s.id) === String(classId));
-                  if (szablon) {
-                    if (!znalezionaNazwa) znalezionaNazwa = szablon.title || szablon.nazwa;
-                    if (!znalezionaGodzina) znalezionaGodzina = szablon.start || szablon.start_time;
-                    if (szablon.limit || szablon.limit_miejsc) limitMiejsc = szablon.limit || szablon.limit_miejsc;
-                  } else {
-                    const jednorazowe = jednorazoweData?.find((j: any) => String(j.id) === String(classId));
-                    if (jednorazowe) {
-                      if (!znalezionaNazwa) znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
-                      if (!znalezionaGodzina) znalezionaGodzina = jednorazowe.start_time || jednorazowe.start;
-                      if (jednorazowe.limit || jednorazowe.limit_miejsc) limitMiejsc = jednorazowe.limit || jednorazowe.limit_miejsc;
-                    }
-                  }
-                }
-
-                const dataObj = parseDateFromClassKey(z.class_key);
-                const [sh = '00', sm = '00'] = (znalezionaGodzina || '00:00').split(':');
-                const fullStartDateTime = new Date(dataObj.getFullYear(), dataObj.getMonth(), dataObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
-
-                const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
-                const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
-                const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
-
-                const isPresent = z.obecny === true || z.obecny === 1 || String(z.obecny).toLowerCase() === 'true';
-                const isAbsent = z.nieobecny === true || z.nieobecny === 1 || String(z.nieobecny).toLowerCase() === 'true';
-                const obecnoscText = isPresent ? 'Obecny' : (isAbsent ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
-
-                const itemObj = {
-                  id: z.id,
-                  classKey: z.class_key,
-                  rawClassTitle: znalezionaNazwa || 'Trening',
-                  limit: limitMiejsc,
-                  data: formatDataPL,
-                  dzienTygodnia: dzienTygodniaPL.charAt(0).toUpperCase() + dzienTygodniaPL.slice(1),
-                  rawDate: dataObj,
-                  fullStartDateTime,
-                  zajecia: nazwaZGodzina,
-                  statusZapisu: z.status,
-                  karnet: parsedClient.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
-                  obecnosc: obecnoscText
-                };
-
-                if (fullStartDateTime >= new Date()) {
-                  nadchodzace.push(itemObj);
-                } else {
-                  przeszle.push(itemObj);
-                }
-              });
-
-              nadchodzace.sort((a, b) => a.fullStartDateTime.getTime() - b.fullStartDateTime.getTime());
-              przeszle.sort((a, b) => b.fullStartDateTime.getTime() - a.fullStartDateTime.getTime());
-
-              setZapisyNadchodzace(nadchodzace);
-              setZapisyPrzeszle(przeszle);
-            }
+        if (rawClient) {
+          let parsedKarnety = [];
+          if (Array.isArray(rawClient.karnetyKlubowicza)) {
+            parsedKarnety = rawClient.karnetyKlubowicza;
+          } else if (typeof rawClient.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(rawClient.karnetyKlubowicza); } catch(e) {}
           }
-        }
-      } catch (userErr) {
-        console.error("Błąd ładowania profilu użytkownika:", userErr);
-      }
 
-      // 3. Pobieranie danych do globalnego rankingu klubowiczów (niezależnie od sesji)
-      try {
-        const [{ data: allRecords, error: errRecords }, { data: allClients, error: errClients }] = await Promise.all([
-          supabase.from('zapisy_zajec').select('*'),
-          supabase.from('klienci').select('*')
-        ]);
+          const parsedClient = {
+            ...rawClient,
+            firstName: rawClient['Imię'] || rawClient.Imię || rawClient.firstName || '',
+            lastName: rawClient['Nazwisko'] || rawClient.Nazwisko || rawClient.lastName || '',
+            karnetyKlubowicza: parsedKarnety
+          };
+          setCurrentUser(parsedClient);
 
-        if (errRecords) console.error("Błąd pobierania zapisy_zajec do rankingu:", errRecords);
-        if (errClients) console.error("Błąd pobierania klienci do rankingu:", errClients);
+          const userZapisy = allRecords.filter((z: any) => z.klient_id === rawClient.id);
+          const nadchodzace: any[] = [];
+          const przeszle: any[] = [];
+          const now = new Date();
 
-        if (allRecords && allClients) {
-          const rankingMap: Record<string, any> = {};
+          userZapisy.forEach((z: any) => {
+            const parts = z.class_key ? String(z.class_key).split('_') : [];
+            const classId = parts[0];
+            let znalezionaNazwa = z.tytul || z.zajecia || null;
+            let znalezionaGodzina = '';
+            let limitMiejsc = 12;
 
-          allRecords.forEach((r: any) => {
-            const isPresent = r.obecny === true || r.obecny === 1 || String(r.obecny).toLowerCase() === 'true';
-            if (!isPresent) return;
-
-            const kIdStr = String(r.klient_id);
-
-            if (!rankingMap[kIdStr]) {
-              const client = allClients.find((c: any) => String(c.id) === kIdStr) as any;
-              const imie = client ? (client['Imię'] || client.Imię || client.firstName || '') : '';
-              const nazwisko = client ? (client['Nazwisko'] || client.Nazwisko || client.lastName || '') : '';
-              const fullName = `${imie} ${nazwisko}`.trim();
-
-              rankingMap[kIdStr] = {
-                id: kIdStr,
-                name: fullName || `Klubowicz ID: ${kIdStr}`,
-                records: []
-              };
+            const override = nadpisaniaMap.get(z.class_key);
+            if (override) {
+              if (override.start) znalezionaGodzina = override.start;
+              if (override.limit) limitMiejsc = override.limit;
             }
 
-            const dateObj = parseDateFromClassKey(r.class_key);
-            rankingMap[kIdStr].records.push({ date: dateObj });
+            if (classId) {
+              const szablon = szablonyMap.get(classId);
+              if (szablon) {
+                if (!znalezionaNazwa) znalezionaNazwa = szablon.title || szablon.nazwa;
+                if (!znalezionaGodzina) znalezionaGodzina = szablon.start || szablon.start_time;
+                if (szablon.limit || szablon.limit_miejsc) limitMiejsc = szablon.limit || szablon.limit_miejsc;
+              } else {
+                const jednorazowe = jednorazoweMap.get(classId);
+                if (jednorazowe) {
+                  if (!znalezionaNazwa) znalezionaNazwa = jednorazowe.title || jednorazowe.nazwa;
+                  if (!znalezionaGodzina) znalezionaGodzina = jednorazowe.start_time || jednorazowe.start;
+                  if (jednorazowe.limit || jednorazowe.limit_miejsc) limitMiejsc = jednorazowe.limit || jednorazowe.limit_miejsc;
+                }
+              }
+            }
+
+            const dataObj = parseDateFromClassKey(z.class_key);
+            const [sh = '00', sm = '00'] = (znalezionaGodzina || '00:00').split(':');
+            const fullStartDateTime = new Date(dataObj.getFullYear(), dataObj.getMonth(), dataObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
+
+            const formatDataPL = dataObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+            const dzienTygodniaPL = dataObj.toLocaleDateString('pl-PL', { weekday: 'long' });
+            const nazwaZGodzina = znalezionaGodzina ? `${znalezionaNazwa || 'Trening klubowy'} ${znalezionaGodzina}` : (znalezionaNazwa || 'Trening klubowy');
+
+            const isPresent = z.obecny === true || z.obecny === 1 || String(z.obecny).toLowerCase() === 'true';
+            const isAbsent = z.nieobecny === true || z.nieobecny === 1 || String(z.nieobecny).toLowerCase() === 'true';
+            const obecnoscText = isPresent ? 'Obecny' : (isAbsent ? 'Nieobecny' : (z.status === 'krzesełko' ? 'Lista rezerwowa' : 'Zapisany'));
+
+            const itemObj = {
+              id: z.id,
+              classKey: z.class_key,
+              rawClassTitle: znalezionaNazwa || 'Trening',
+              limit: limitMiejsc,
+              data: formatDataPL,
+              dzienTygodnia: dzienTygodniaPL.charAt(0).toUpperCase() + dzienTygodniaPL.slice(1),
+              rawDate: dataObj,
+              fullStartDateTime,
+              zajecia: nazwaZGodzina,
+              statusZapisu: z.status,
+              karnet: parsedClient.karnetyKlubowicza?.[0]?.nazwa || 'OPEN',
+              obecnosc: obecnoscText
+            };
+
+            if (fullStartDateTime >= now) {
+              nadchodzace.push(itemObj);
+            } else {
+              przeszle.push(itemObj);
+            }
           });
 
-          setAllUsersAttendance(Object.values(rankingMap));
+          nadchodzace.sort((a, b) => a.fullStartDateTime.getTime() - b.fullStartDateTime.getTime());
+          przeszle.sort((a, b) => b.fullStartDateTime.getTime() - a.fullStartDateTime.getTime());
+
+          setZapisyNadchodzace(nadchodzace);
+          setZapisyPrzeszle(przeszle);
         }
-      } catch (rankingErr) {
-        console.error("Błąd przetwarzania rankingu:", rankingErr);
       }
+
+      // 3. Budowanie globalnego rankingu klubowiczów O(1) per wpis
+      const rankingMap: Record<string, any> = {};
+
+      allRecords.forEach((r: any) => {
+        const isPresent = r.obecny === true || r.obecny === 1 || String(r.obecny).toLowerCase() === 'true';
+        if (!isPresent) return;
+
+        const kIdStr = String(r.klient_id);
+
+        if (!rankingMap[kIdStr]) {
+          const client = clientMap.get(kIdStr);
+          const imie = client ? (client['Imię'] || client.Imię || client.firstName || '') : '';
+          const nazwisko = client ? (client['Nazwisko'] || client.Nazwisko || client.lastName || '') : '';
+          const fullName = `${imie} ${nazwisko}`.trim();
+
+          rankingMap[kIdStr] = {
+            id: kIdStr,
+            name: fullName || `Klubowicz ID: ${kIdStr}`,
+            records: []
+          };
+        }
+
+        const dateObj = parseDateFromClassKey(r.class_key);
+        rankingMap[kIdStr].records.push({ date: dateObj });
+      });
+
+      setAllUsersAttendance(Object.values(rankingMap));
 
     } catch (err) {
       console.error("Ogólny błąd loadData:", err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [parseDateFromClassKey]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const path = window.location.pathname.toLowerCase();
+      if (params.get('ranking') === 'true' || path.includes('admin') || path.includes('ranking')) {
+        setIsOnlyRanking(true);
+        setActiveTab('ranking');
+      }
+    }
+    loadData();
+  }, [loadData]);
 
   const handleConfirmWypisanie = async () => {
-    if (!currentUser || !itemToUnregister) return;
+    if (!currentUser || !itemToUnregister || isUnregistering) return;
 
     const trainingName = itemToUnregister.rawClassTitle || '';
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[trainingName] ?? bookingRules.cancel_deadline_minutes ?? 90;
@@ -308,99 +304,112 @@ export default function MojeZapisyPage() {
       }
     }
 
+    setIsUnregistering(true);
     const classKey = itemToUnregister.classKey;
     const limitZajec = itemToUnregister.limit || 12;
 
-    const { data: allParticipants } = await supabase
-      .from('zapisy_zajec')
-      .select('*')
-      .eq('class_key', classKey);
+    try {
+      const { data: allParticipants } = await supabase
+        .from('zapisy_zajec')
+        .select('*')
+        .eq('class_key', classKey);
 
-    const { error } = await supabase
-      .from('zapisy_zajec')
-      .delete()
-      .eq('class_key', classKey)
-      .eq('klient_id', currentUser.id);
+      const { error } = await supabase
+        .from('zapisy_zajec')
+        .delete()
+        .eq('class_key', classKey)
+        .eq('klient_id', currentUser.id);
 
-    if (error) {
-      alert(`Błąd podczas wypisywania: ${error.message}`);
-      return;
-    }
-
-    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-    if (passIndex !== -1) {
-      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-      const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
-      if (!isNaN(currentRemaining)) {
-        updatedKarnety[passIndex] = {
-          ...updatedKarnety[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
-        };
-        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+      if (error) {
+        alert(`Błąd podczas wypisywania: ${error.message}`);
+        return;
       }
-    }
 
-    await supabase.from('transakcje').insert([{
-      klient_id: currentUser.id,
-      typ_operacji: 'zajecia_wypis',
-      class_key: classKey,
-      opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${itemToUnregister.zajecia} (${itemToUnregister.data}). Zwrócono 1 wejście.`
-    }]);
+      // Zwrot wejścia na karnet
+      let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+      const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+        if (!isNaN(currentRemaining)) {
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+        }
+      }
 
-    await supabase.from('booking_logs').insert([{
-      action_type: 'CANCEL_SUCCESS',
-      status: 'SUCCESS',
-      reason: `${currentUser.firstName || 'Klubowicz'} wypisał się z ${classKey} w widoku Moje Zapisy`,
-      rule_applied: 'USER_CANCEL',
-      payload: { klient_id: currentUser.id, class_key: classKey }
-    }]);
-
-    if (allParticipants) {
-      const pozostali = allParticipants.filter((p: any) => p.klient_id !== currentUser.id);
-      const mainList = pozostali.filter((p: any) => p.status === 'zapisany');
-      const firstWaitlist = pozostali.find((p: any) => p.status === 'krzesełko');
-
-      if (mainList.length < limitZajec && firstWaitlist) {
-        await supabase
-          .from('zapisy_zajec')
-          .update({ status: 'zapisany' })
-          .eq('class_key', classKey)
-          .eq('klient_id', firstWaitlist.klient_id);
-
-        const { data: promotedClient } = await supabase
-          .from('klienci')
-          .select('*')
-          .eq('id', firstWaitlist.klient_id)
-          .single();
-
-        const pClient = promotedClient as any;
-        const imieP = pClient ? (pClient['Imię'] || pClient.Imię || pClient.firstName || '') : '';
-        const nazwiskoP = pClient ? (pClient['Nazwisko'] || pClient.Nazwisko || pClient.lastName || '') : '';
-        const name = `${imieP} ${nazwiskoP}`.trim() || `ID: ${firstWaitlist.klient_id}`;
-
-        await supabase.from('transakcje').insert([{
-          klient_id: firstWaitlist.klient_id,
-          typ_operacji: 'zajecia_awans_rezerwa',
+      // Logi transakcyjne
+      await Promise.allSettled([
+        supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: 'zajecia_wypis',
           class_key: classKey,
-          opis: `Automatyczny awans: ${name} przepisany z listy rezerwowej (krzesełka) na listę główną.`
-        }]);
-
-        await supabase.from('booking_logs').insert([{
-          action_type: 'WAITLIST_PROMOTED',
+          opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${itemToUnregister.zajecia} (${itemToUnregister.data}). Zwrócono 1 wejście.`
+        }]),
+        supabase.from('booking_logs').insert([{
+          action_type: 'CANCEL_SUCCESS',
           status: 'SUCCESS',
-          reason: `${name} awansował na listę główną w ${classKey}`,
-          rule_applied: 'waitlist_auto_promote',
-          payload: { klient_id: firstWaitlist.klient_id, class_key: classKey }
-        }]);
-      }
-    }
+          reason: `${currentUser.firstName || 'Klubowicz'} wypisał się z ${classKey} w widoku Moje Zapisy`,
+          rule_applied: 'USER_CANCEL',
+          payload: { klient_id: currentUser.id, class_key: classKey }
+        }])
+      ]);
 
-    setItemToUnregister(null);
-    loadData();
+      // Awansowanie pierwszej osoby z listy rezerwowej (krzesełka)
+      if (allParticipants) {
+        const pozostali = allParticipants.filter((p: any) => p.klient_id !== currentUser.id);
+        const mainList = pozostali.filter((p: any) => p.status === 'zapisany');
+        const firstWaitlist = pozostali.find((p: any) => p.status === 'krzesełko');
+
+        if (mainList.length < limitZajec && firstWaitlist) {
+          await supabase
+            .from('zapisy_zajec')
+            .update({ status: 'zapisany' })
+            .eq('class_key', classKey)
+            .eq('klient_id', firstWaitlist.klient_id);
+
+          const { data: promotedClient } = await supabase
+            .from('klienci')
+            .select('*')
+            .eq('id', firstWaitlist.klient_id)
+            .single();
+
+          const pClient = promotedClient as any;
+          const imieP = pClient ? (pClient['Imię'] || pClient.Imię || pClient.firstName || '') : '';
+          const nazwiskoP = pClient ? (pClient['Nazwisko'] || pClient.Nazwisko || pClient.lastName || '') : '';
+          const name = `${imieP} ${nazwiskoP}`.trim() || `ID: ${firstWaitlist.klient_id}`;
+
+          await Promise.allSettled([
+            supabase.from('transakcje').insert([{
+              klient_id: firstWaitlist.klient_id,
+              typ_operacji: 'zajecia_awans_rezerwa',
+              class_key: classKey,
+              opis: `Automatyczny awans: ${name} przepisany z listy rezerwowej (krzesełka) na listę główną.`
+            }]),
+            supabase.from('booking_logs').insert([{
+              action_type: 'WAITLIST_PROMOTED',
+              status: 'SUCCESS',
+              reason: `${name} awansował na listę główną w ${classKey}`,
+              rule_applied: 'waitlist_auto_promote',
+              payload: { klient_id: firstWaitlist.klient_id, class_key: classKey }
+            }])
+          ]);
+        }
+      }
+
+      setItemToUnregister(null);
+      await loadData();
+    } catch (err: any) {
+      console.error("Błąd procedury wypisywania:", err);
+      alert("Wystąpił błąd podczas wypisywania z zajęć.");
+    } finally {
+      setIsUnregistering(false);
+    }
   };
 
-  const getUserStatsForRange = (isYear: boolean, year: number, month?: number) => {
+  const getUserStatsForRange = useCallback((isYear: boolean, year: number, month?: number) => {
     const filtered = zapisyPrzeszle.filter(item => {
       const d = item.fullStartDateTime;
       if (d.getFullYear() !== year) return false;
@@ -415,12 +424,12 @@ export default function MojeZapisyPage() {
       breakdown[type] = (breakdown[type] || 0) + 1;
     });
     return { count, breakdown };
-  };
+  }, [zapisyPrzeszle]);
 
-  const userStatsMonth = useMemo(() => getUserStatsForRange(false, statsYear, statsMonth), [zapisyPrzeszle, statsYear, statsMonth]);
-  const userStatsYear = useMemo(() => getUserStatsForRange(true, statsYear), [zapisyPrzeszle, statsYear]);
+  const userStatsMonth = useMemo(() => getUserStatsForRange(false, statsYear, statsMonth), [getUserStatsForRange, statsYear, statsMonth]);
+  const userStatsYear = useMemo(() => getUserStatsForRange(true, statsYear), [getUserStatsForRange, statsYear]);
 
-  const getGlobalRanking = (isYear: boolean, year: number, month?: number) => {
+  const getGlobalRanking = useCallback((isYear: boolean, year: number, month?: number) => {
     const results: Record<string, number> = {};
     allUsersAttendance.forEach(u => {
       const validRecords = u.records.filter((r: any) => {
@@ -433,9 +442,9 @@ export default function MojeZapisyPage() {
       }
     });
     return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
-  };
+  }, [allUsersAttendance]);
 
-  const getGlobalRankingQuarter = (year: number, quarter: number) => {
+  const getGlobalRankingQuarter = useCallback((year: number, quarter: number) => {
     const startMonth = (quarter - 1) * 3;
     const endMonth = startMonth + 2;
     const results: Record<string, number> = {};
@@ -451,34 +460,37 @@ export default function MojeZapisyPage() {
       }
     });
     return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
-  };
+  }, [allUsersAttendance]);
 
-  const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [allUsersAttendance, rankingFilterYear, rankingFilterMonth]);
-  const rankingQuarterData = useMemo(() => getGlobalRankingQuarter(rankingFilterYear, rankingFilterQuarter), [allUsersAttendance, rankingFilterYear, rankingFilterQuarter]);
-  const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [allUsersAttendance, rankingFilterYear]);
+  const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [getGlobalRanking, rankingFilterYear, rankingFilterMonth]);
+  const rankingQuarterData = useMemo(() => getGlobalRankingQuarter(rankingFilterYear, rankingFilterQuarter), [getGlobalRankingQuarter, rankingFilterYear, rankingFilterQuarter]);
+  const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [getGlobalRanking, rankingFilterYear]);
 
   const filteredRankingMonth = useMemo(() => {
+    const q = rankingSearchMonth.toLowerCase().trim();
     return rankingMonthData.map(([name, count], idx) => ({
       name,
       count,
       position: idx + 1
-    })).filter(item => item.name.toLowerCase().includes(rankingSearchMonth.toLowerCase()));
+    })).filter(item => item.name.toLowerCase().includes(q));
   }, [rankingMonthData, rankingSearchMonth]);
 
   const filteredRankingQuarter = useMemo(() => {
+    const q = rankingSearchQuarter.toLowerCase().trim();
     return rankingQuarterData.map(([name, count], idx) => ({
       name,
       count,
       position: idx + 1
-    })).filter(item => item.name.toLowerCase().includes(rankingSearchQuarter.toLowerCase()));
+    })).filter(item => item.name.toLowerCase().includes(q));
   }, [rankingQuarterData, rankingSearchQuarter]);
 
   const filteredRankingYear = useMemo(() => {
+    const q = rankingSearchYear.toLowerCase().trim();
     return rankingYearData.map(([name, count], idx) => ({
       name,
       count,
       position: idx + 1
-    })).filter(item => item.name.toLowerCase().includes(rankingSearchYear.toLowerCase()));
+    })).filter(item => item.name.toLowerCase().includes(q));
   }, [rankingYearData, rankingSearchYear]);
 
   if (isLoading) {
@@ -996,9 +1008,10 @@ export default function MojeZapisyPage() {
               </button>
               <button 
                 onClick={handleConfirmWypisanie} 
-                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer"
+                disabled={isUnregistering}
+                className={`bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer ${isUnregistering ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                Tak, wypisz się
+                {isUnregistering ? 'Wypisywanie...' : 'Tak, wypisz się'}
               </button>
             </div>
           </div>
