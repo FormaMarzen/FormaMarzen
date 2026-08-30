@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 interface Klient {
@@ -181,6 +181,9 @@ export default function AnalizaFormyPage() {
   const [manualAddOplacone, setManualAddOplacone] = useState<boolean>(true);
   const [manualAddMetoda, setManualAddMetoda] = useState<'gotowka' | 'autopay' | 'inna'>('gotowka');
 
+  // Stan menu rozwijanego w tabeli zarzadzania
+  const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
+
   const [nagrodaFormData, setNagrodaFormData] = useState({
     miejsce: "1",
     tytul: "",
@@ -250,6 +253,13 @@ export default function AnalizaFormyPage() {
     carbs: number;
     water: number;
   } | null>(null);
+
+  // Zamykanie menu po kliknięciu poza nim
+  useEffect(() => {
+    const handleClickOutside = () => setOpenDropdownId(null);
+    window.addEventListener("click", handleClickOutside);
+    return () => window.removeEventListener("click", handleClickOutside);
+  }, []);
 
   // Funkcja automatycznie weryfikująca minimum osób i aktywująca edycję
   const verifyAndAutoActivateChallenge = async (
@@ -1150,7 +1160,6 @@ export default function AnalizaFormyPage() {
     return (klienci || []).filter(k => !(uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(k.id)));
   }, [klienci, uczestnicyRedukcji]);
 
-  // Lista niezapisanych klubowiczów przefiltrowana przez wyszukiwarkę modala
   const filteredNiezapisaniKlienci = useMemo(() => {
     if (!manualAddSearchQuery.trim()) return niezapisaniKlienci;
     const query = manualAddSearchQuery.toLowerCase().trim();
@@ -2177,15 +2186,15 @@ export default function AnalizaFormyPage() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleOpenRedukcjaPomiarModal('start', selectedKlient ? selectedKlient.id : currentUserId!)}
-                      className="bg-sky-100 hover:bg-sky-200 text-sky-950 font-black text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer shadow-sm flex items-center gap-1"
                     >
-                      + Pomiar Początkowy (Start)
+                      <span>+</span> Start
                     </button>
                     <button
                       onClick={() => handleOpenRedukcjaPomiarModal('koniec', selectedKlient ? selectedKlient.id : currentUserId!)}
-                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer shadow-sm flex items-center gap-1"
                     >
-                      + Pomiar Końcowy (Finał)
+                      <span>+</span> Finał
                     </button>
                   </div>
                 )}
@@ -2213,7 +2222,7 @@ export default function AnalizaFormyPage() {
                         <>
                           <tr className="hover:bg-slate-50/50">
                             <td className="p-3 font-bold text-sky-900 flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block"></span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
                               <span>Pomiar Początkowy (START)</span>
                             </td>
                             <td className="p-3 text-slate-600">{sP ? sP.data_pomiaru : 'Brak pomiaru'}</td>
@@ -2225,8 +2234,8 @@ export default function AnalizaFormyPage() {
                           </tr>
 
                           <tr className="hover:bg-slate-50/50">
-                            <td className="p-3 font-bold text-amber-700 flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>
+                            <td className="p-3 font-bold text-rose-700 flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span>
                               <span>Pomiar Końcowy (FINAŁ)</span>
                             </td>
                             <td className="p-3 text-slate-600">{kP ? kP.data_pomiaru : 'Oczekuje na finał'}</td>
@@ -2302,7 +2311,7 @@ export default function AnalizaFormyPage() {
                       <th className="p-3 text-center">Masa Mięśniowa</th>
                       <th className="p-3 text-center">Wisceralny</th>
                       <th className="p-3 text-right">Punkty Procentowe</th>
-                      {appRole === 'admin' && <th className="p-3 text-center">Zarządzanie (Admin)</th>}
+                      {appRole === 'admin' && <th className="p-3 text-center w-36">Zarządzanie (Admin)</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-sky-50">
@@ -2416,37 +2425,74 @@ export default function AnalizaFormyPage() {
                             <span className="text-slate-400 font-normal text-xs">W trakcie</span>
                           )}
                         </td>
+
+                        {/* NOWY MODUŁ PRZYCISKÓW ZARZĄDZANIA ADMINA */}
                         {appRole === 'admin' && (
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1 flex-wrap">
+                          <td className="p-3 text-center relative">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {/* 1. ZIELONY KWADRATOWY PRZYCISK + (START) */}
                               <button
                                 onClick={() => handleOpenRedukcjaPomiarModal('start', row.klient_id)}
-                                className="bg-sky-50 hover:bg-sky-100 text-sky-800 font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
-                                title="Edytuj pomiar startowy"
+                                className="w-8 h-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
+                                title="Dodaj / Edytuj pomiar początkowy (Start)"
                               >
-                                Start
+                                +
                               </button>
+
+                              {/* 2. CZERWONY KWADRATOWY PRZYCISK + (FINAŁ) */}
                               <button
                                 onClick={() => handleOpenRedukcjaPomiarModal('koniec', row.klient_id)}
-                                className="bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
-                                title="Edytuj pomiar końcowy"
+                                className="w-8 h-8 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
+                                title="Dodaj / Edytuj pomiar końcowy (Finał)"
                               >
-                                Finał
+                                +
                               </button>
+
+                              {/* 3. ŻÓŁTY KWADRATOWY PRZYCISK - (BRAK POMIARÓW / DNF) */}
                               <button
                                 onClick={() => handleToggleBrakPomiaru(row.id, !!row.brak_pomiaru_koncowego)}
-                                className={`font-bold px-2 py-1 rounded text-[10px] cursor-pointer transition-colors ${row.brak_pomiaru_koncowego ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800 hover:bg-rose-200'}`}
-                                title={row.brak_pomiaru_koncowego ? "Przywróć do rankingu" : "Oznacz brak pomiaru końcowego (DNF)"}
+                                className={`w-8 h-8 rounded-xl font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 ${
+                                  row.brak_pomiaru_koncowego 
+                                    ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-600' 
+                                    : 'bg-amber-400 hover:bg-amber-500 text-slate-950'
+                                }`}
+                                title={row.brak_pomiaru_koncowego ? "Przywróć klubowicza do rankingu" : "Oznacz: Nie przystąpił do pomiarów (DNF)"}
                               >
-                                {row.brak_pomiaru_koncowego ? '✓ Przywróć' : '❌ DNF'}
+                                -
                               </button>
-                              <button
-                                onClick={() => handleDeleteParticipant(row.id)}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-2 py-1 rounded text-[10px] cursor-pointer"
-                                title="Usuń uczestnika z wyzwania"
-                              >
-                                Usuń
-                              </button>
+
+                              {/* 4. PRZYCISK TRZY KROPKI Z MENU ROZWIJANYM */}
+                              <div className="relative inline-block text-left">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenDropdownId(openDropdownId === row.id ? null : row.id);
+                                  }}
+                                  className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs flex items-center justify-center transition-all cursor-pointer border border-slate-200 active:scale-95"
+                                  title="Więcej opcji"
+                                >
+                                  •••
+                                </button>
+
+                                {openDropdownId === row.id && (
+                                  <div 
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute right-0 top-full mt-1.5 w-44 bg-white border border-slate-200 rounded-2xl shadow-2xl py-1.5 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenDropdownId(null);
+                                        handleDeleteParticipant(row.id);
+                                      }}
+                                      className="w-full text-left px-3.5 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors cursor-pointer"
+                                    >
+                                      <span>🗑️</span> Usuń z wyzwania
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </td>
                         )}
