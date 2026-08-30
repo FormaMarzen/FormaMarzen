@@ -93,6 +93,20 @@ interface RedukcjaNagroda {
   opis?: string;
 }
 
+interface BadaniaKrwiWpis {
+  id?: number;
+  klient_id: number | string;
+  email_klienta: string;
+  plik_pdf_url?: string | null;
+  plik_pdf_nazwa?: string | null;
+  zdjecia?: string[];
+  interpretacja?: string | null;
+  zalecenia?: string | null;
+  suplementacja?: string | null;
+  data_badania?: string;
+  updated_at?: string;
+}
+
 const calculateAge = (birthDateString?: string | null): number | null => {
   if (!birthDateString) return null;
   const birth = new Date(birthDateString);
@@ -140,7 +154,7 @@ const fetchAllFromSupabase = async (
 };
 
 export default function AnalizaFormyPage() {
-  const [activeTab, setActiveTab] = useState<'pomiary' | 'makro' | 'redukcja'>('pomiary');
+  const [activeTab, setActiveTab] = useState<'pomiary' | 'makro' | 'redukcja' | 'badania'>('pomiary');
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
@@ -183,6 +197,19 @@ export default function AnalizaFormyPage() {
 
   // Stan menu rozwijanego w tabeli zarzadzania
   const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
+
+  // Stany Badania Krwi
+  const [badaniaKrwi, setBadaniaKrwi] = useState<BadaniaKrwiWpis | null>(null);
+  const [isUploadingPdf, setIsUploadingPdf] = useState<boolean>(false);
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
+  const [isSavingBadania, setIsSavingBadania] = useState<boolean>(false);
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
+  const [badaniaForm, setBadaniaForm] = useState({
+    data_badania: new Date().toISOString().split('T')[0],
+    interpretacja: '',
+    zalecenia: '',
+    suplementacja: ''
+  });
 
   const [nagrodaFormData, setNagrodaFormData] = useState({
     miejsce: "1",
@@ -286,6 +313,38 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  const fetchBadaniaKrwi = async (klientId: number | string | null, email: string) => {
+    try {
+      let query = supabase.from('klub_badania_krwi').select('*');
+      if (klientId) {
+        query = query.or(`klient_id.eq.${klientId},email_klienta.ilike.${email.trim()}`);
+      } else {
+        query = query.ilike('email_klienta', email.trim());
+      }
+
+      const { data, error } = await query.order('id', { ascending: false }).limit(1).maybeSingle();
+      if (data && !error) {
+        setBadaniaKrwi(data);
+        setBadaniaForm({
+          data_badania: data.data_badania || new Date().toISOString().split('T')[0],
+          interpretacja: data.interpretacja || '',
+          zalecenia: data.zalecenia || '',
+          suplementacja: data.suplementacja || ''
+        });
+      } else {
+        setBadaniaKrwi(null);
+        setBadaniaForm({
+          data_badania: new Date().toISOString().split('T')[0],
+          interpretacja: '',
+          zalecenia: '',
+          suplementacja: ''
+        });
+      }
+    } catch (err) {
+      console.error("Błąd pobierania badań krwi:", err);
+    }
+  };
+
   useEffect(() => {
     const initAuth = async () => {
       setIsLoading(true);
@@ -328,6 +387,7 @@ export default function AnalizaFormyPage() {
                 if (age) setCalcAge(String(age));
 
                 await fetchMeasurements(myClientProfile.id, cleanEmail);
+                await fetchBadaniaKrwi(myClientProfile.id, cleanEmail);
               }
             } else {
               setAppRole('klubowicz');
@@ -342,6 +402,7 @@ export default function AnalizaFormyPage() {
                 if (age) setCalcAge(String(age));
 
                 await fetchMeasurements(myClientProfile.id, cleanEmail);
+                await fetchBadaniaKrwi(myClientProfile.id, cleanEmail);
               }
             }
           }
@@ -452,6 +513,7 @@ export default function AnalizaFormyPage() {
     if (age) setCalcAge(String(age));
 
     fetchMeasurements(klient.id, klient['E-mail']);
+    fetchBadaniaKrwi(klient.id, klient['E-mail']);
   };
 
   const handleSubmitMeasurement = async (e: React.FormEvent) => {
@@ -537,6 +599,205 @@ export default function AnalizaFormyPage() {
       setMeasurements(prev => prev.filter(m => m.id !== id));
     } else {
       alert("Błąd podczas usuwania: " + error.message);
+    }
+  };
+
+  // Obsługa plików i zaleceń w zakładce Badania Krwi
+  const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf') {
+      alert("Proszę wybrać plik w formacie PDF.");
+      return;
+    }
+
+    const tKlientId = selectedKlient?.id || currentUserId;
+    const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
+
+    if (!tEmail) {
+      alert("Brak profilu użytkownika.");
+      return;
+    }
+
+    setIsUploadingPdf(true);
+    try {
+      const fileName = `badania_${tKlientId || 'klient'}_${Date.now()}.pdf`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('badania')
+        .upload(fileName, file, { upsert: true });
+
+      let publicUrl = '';
+      if (!uploadError && uploadData) {
+        const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
+        publicUrl = urlData.publicUrl;
+      } else {
+        // Fallback w przypadku braku skonfigurowanego storage bucketu
+        publicUrl = URL.createObjectURL(file);
+      }
+
+      const currentRecord = badaniaKrwi;
+      const payload = {
+        klient_id: tKlientId,
+        email_klienta: tEmail,
+        plik_pdf_url: publicUrl,
+        plik_pdf_nazwa: file.name,
+        data_badania: badaniaForm.data_badania || new Date().toISOString().split('T')[0],
+        interpretacja: currentRecord?.interpretacja || '',
+        zalecenia: currentRecord?.zalecenia || '',
+        suplementacja: currentRecord?.suplementacja || '',
+        zdjecia: currentRecord?.zdjecia || [],
+        updated_at: new Date().toISOString()
+      };
+
+      if (currentRecord?.id) {
+        await supabase.from('klub_badania_krwi').update(payload).eq('id', currentRecord.id);
+      } else {
+        await supabase.from('klub_badania_krwi').insert([payload]);
+      }
+
+      alert("Plik PDF z wynikami badań został pomyślnie wgrany!");
+      await fetchBadaniaKrwi(tKlientId, tEmail);
+    } catch (err: any) {
+      console.error("Błąd wgrywania PDF:", err);
+      alert("Wystąpił błąd podczas wgrywania pliku PDF: " + err.message);
+    } finally {
+      setIsUploadingPdf(false);
+    }
+  };
+
+  const handleDeletePdf = async () => {
+    if (!badaniaKrwi?.id) return;
+    if (!confirm("Czy na pewno chcesz usunąć swój wgrany plik PDF z wynikami badań?")) return;
+
+    try {
+      const { error } = await supabase
+        .from('klub_badania_krwi')
+        .update({ plik_pdf_url: null, plik_pdf_nazwa: null, updated_at: new Date().toISOString() })
+        .eq('id', badaniaKrwi.id);
+
+      if (!error) {
+        alert("Plik PDF został usunięty.");
+        const tKlientId = selectedKlient?.id || currentUserId;
+        const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
+        await fetchBadaniaKrwi(tKlientId, tEmail);
+      }
+    } catch (err: any) {
+      alert("Błąd usuwania pliku: " + err.message);
+    }
+  };
+
+  const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const tKlientId = selectedKlient?.id || currentUserId;
+    const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
+
+    setIsUploadingImage(true);
+    try {
+      const newUrls: string[] = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileName = `skan_${tKlientId || 'klient'}_${Date.now()}_${i}.${file.name.split('.').pop()}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('badania')
+          .upload(fileName, file, { upsert: true });
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
+          newUrls.push(urlData.publicUrl);
+        } else {
+          newUrls.push(URL.createObjectURL(file));
+        }
+      }
+
+      const updatedImages = [...(badaniaKrwi?.zdjecia || []), ...newUrls];
+      const payload = {
+        klient_id: tKlientId,
+        email_klienta: tEmail,
+        data_badania: badaniaForm.data_badania,
+        zdjecia: updatedImages,
+        interpretacja: badaniaForm.interpretacja,
+        zalecenia: badaniaForm.zalecenia,
+        suplementacja: badaniaForm.suplementacja,
+        updated_at: new Date().toISOString()
+      };
+
+      if (badaniaKrwi?.id) {
+        await supabase.from('klub_badania_krwi').update(payload).eq('id', badaniaKrwi.id);
+      } else {
+        await supabase.from('klub_badania_krwi').insert([payload]);
+      }
+
+      alert(`Dodano pomyślnie ${newUrls.length} zdjęć/skanów!`);
+      await fetchBadaniaKrwi(tKlientId, tEmail);
+    } catch (err: any) {
+      console.error("Błąd podczas dodawania zdjęć:", err);
+      alert("Błąd dodawania zdjęć: " + err.message);
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handleDeleteImage = async (imgIndex: number) => {
+    if (!badaniaKrwi?.id || !confirm("Czy usunąć to zdjęcie/skan?")) return;
+
+    const updated = (badaniaKrwi.zdjecia || []).filter((_, idx) => idx !== imgIndex);
+    const { error } = await supabase
+      .from('klub_badania_krwi')
+      .update({ zdjecia: updated, updated_at: new Date().toISOString() })
+      .eq('id', badaniaKrwi.id);
+
+    if (!error) {
+      const tKlientId = selectedKlient?.id || currentUserId;
+      const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
+      await fetchBadaniaKrwi(tKlientId, tEmail);
+    }
+  };
+
+  const handleSaveBadaniaNotes = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const tKlientId = selectedKlient?.id || currentUserId;
+    const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
+
+    if (!tEmail) {
+      alert("Wybierz klubowicza lub zaloguj się.");
+      return;
+    }
+
+    setIsSavingBadania(true);
+    try {
+      const payload = {
+        klient_id: tKlientId,
+        email_klienta: tEmail,
+        data_badania: badaniaForm.data_badania,
+        interpretacja: badaniaForm.interpretacja,
+        zalecenia: badaniaForm.zalecenia,
+        suplementacja: badaniaForm.suplementacja,
+        updated_at: new Date().toISOString()
+      };
+
+      let error = null;
+      if (badaniaKrwi?.id) {
+        const res = await supabase.from('klub_badania_krwi').update(payload).eq('id', badaniaKrwi.id);
+        error = res.error;
+      } else {
+        const res = await supabase.from('klub_badania_krwi').insert([payload]);
+        error = res.error;
+      }
+
+      if (!error) {
+        alert("Zalecenia i interpretacja badań zostały pomyślnie zapisane!");
+        await fetchBadaniaKrwi(tKlientId, tEmail);
+      } else {
+        alert("Błąd zapisu: " + error.message);
+      }
+    } catch (err: any) {
+      alert("Błąd zapisu: " + err.message);
+    } finally {
+      setIsSavingBadania(false);
     }
   };
 
@@ -1199,10 +1460,10 @@ export default function AnalizaFormyPage() {
           </div>
           <p className="text-xs text-slate-500 font-medium mt-1">
             {appRole === 'admin' 
-              ? "Panel administratora: Wyszukaj podopiecznego, zarządzaj pomiarami, edytuj karty i plany makro" 
+              ? "Panel administratora: Wyszukaj podopiecznego, zarządzaj pomiarami, badaniami krwi i planami" 
               : appRole === 'trener'
-                ? "Twoje konto trenera: Zobacz swoje wyniki, pomiary oraz dietę lub wyszukaj podopiecznego"
-                : "Twój dziennik postępów: Pomiary, skład ciała oraz wytyczne dietetyczne"}
+                ? "Twoje konto trenera: Zobacz swoje wyniki, pomiary, badania krwi oraz dietę lub wyszukaj podopiecznego"
+                : "Twój dziennik postępów: Pomiary, skład ciała, badania krwi oraz wytyczne dietetyczne"}
           </p>
         </div>
 
@@ -1256,8 +1517,8 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK */}
-      <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
+      {/* PASEK ZAKŁADEK (4 ZAKŁADKI) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
           className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
@@ -1287,6 +1548,16 @@ export default function AnalizaFormyPage() {
           }`}
         >
           <span>🔥</span> <span>3. Redukcja</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('badania')}
+          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
+            activeTab === 'badania'
+              ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+              : 'text-slate-600 hover:text-sky-950 hover:bg-white/50'
+          }`}
+        >
+          <span>🩸</span> <span>4. Badania Krwi</span>
         </button>
       </div>
 
@@ -1321,9 +1592,11 @@ export default function AnalizaFormyPage() {
                   if (myProfile) {
                     setSelectedKlient(myProfile);
                     fetchMeasurements(myProfile.id, currentUserEmail);
+                    fetchBadaniaKrwi(myProfile.id, currentUserEmail);
                   } else {
                     setSelectedKlient(null);
                     setMeasurements([]);
+                    setBadaniaKrwi(null);
                   }
                 }}
                 className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
@@ -1971,8 +2244,8 @@ export default function AnalizaFormyPage() {
                           ? 'Archiwum / Zakończona' 
                           : activeEdycjaObj.status === 'anulowane' 
                             ? 'Odwołane (Zwrócono wpisowe)' 
-                            : activeEdycjaObj.status === 'zapisy'
-                              ? 'Otwarte Zapisy'
+                            : activeEdycjaObj.status === 'zapisy' 
+                              ? 'Otwarte Zapisy' 
                               : 'Wyzwanie Aktywne'}
                       </span>
                     </div>
@@ -2426,11 +2699,10 @@ export default function AnalizaFormyPage() {
                           )}
                         </td>
 
-                        {/* NOWY MODUŁ PRZYCISKÓW ZARZĄDZANIA ADMINA */}
+                        {/* PRZYCISKI ZARZĄDZANIA ADMINA */}
                         {appRole === 'admin' && (
                           <td className="p-3 text-center relative">
                             <div className="flex items-center justify-center gap-1.5">
-                              {/* 1. ZIELONY KWADRATOWY PRZYCISK + (START) */}
                               <button
                                 onClick={() => handleOpenRedukcjaPomiarModal('start', row.klient_id)}
                                 className="w-8 h-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
@@ -2439,7 +2711,6 @@ export default function AnalizaFormyPage() {
                                 +
                               </button>
 
-                              {/* 2. CZERWONY KWADRATOWY PRZYCISK + (FINAŁ) */}
                               <button
                                 onClick={() => handleOpenRedukcjaPomiarModal('koniec', row.klient_id)}
                                 className="w-8 h-8 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
@@ -2448,7 +2719,6 @@ export default function AnalizaFormyPage() {
                                 +
                               </button>
 
-                              {/* 3. ŻÓŁTY KWADRATOWY PRZYCISK - (BRAK POMIARÓW / DNF) */}
                               <button
                                 onClick={() => handleToggleBrakPomiaru(row.id, !!row.brak_pomiaru_koncowego)}
                                 className={`w-8 h-8 rounded-xl font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 ${
@@ -2461,7 +2731,6 @@ export default function AnalizaFormyPage() {
                                 -
                               </button>
 
-                              {/* 4. PRZYCISK TRZY KROPKI Z MENU ROZWIJANYM */}
                               <div className="relative inline-block text-left">
                                 <button
                                   type="button"
@@ -2560,6 +2829,312 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
+      {/* ZAKŁADKA 4: BADANIA KRWI */}
+      {activeTab === 'badania' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
+        <div className="space-y-6">
+
+          {/* KLAUZULA PRAWNO-MEDYCZNA (DISCLAIMER) */}
+          <div className="bg-gradient-to-r from-amber-50 via-rose-50/40 to-sky-50 p-5 rounded-3xl border border-amber-200/80 shadow-sm space-y-2">
+            <div className="flex items-center gap-2.5 text-amber-950 font-black text-xs uppercase tracking-wider">
+              <span className="text-xl">🩺</span>
+              <span>Ważna Informacja i Zastrzeżenie Prawne</span>
+            </div>
+            <p className="text-xs text-slate-700 leading-relaxed font-medium">
+              Przedstawione analizy, interpretacje parametrów krwi oraz propozycje suplementacyjne mają charakter wyłącznie edukacyjno-informacyjny, profilaktyczny i sportowy. <b>Nie jestem lekarzem</b>, a zawarte tu wskazówki <b>nie stanowią porady lekarskiej, diagnozy medycznej ani leczenia</b>. Wszelkie niepokojące objawy, nieprawidłowe wartości wskaźników lub wątpliwości dotyczące Twojego stanu zdrowia należy bezwzględnie skonsultować z lekarzem medycyny.
+            </p>
+          </div>
+
+          {/* KARTA WGRYWANIA PDF PRZEZ KLUBOWICZA ORAZ POWIADOMIENIA */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            {/* KAFEL WGRYWANIA PDF */}
+            <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-4 flex flex-col justify-between">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                    <span>📄</span> Plik PDF z Twoimi Wynikami Badań
+                  </span>
+                  {badaniaKrwi?.plik_pdf_url && (
+                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      ✓ Wgrany plik
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Dodaj aktualny dokument z laboratorium w formacie PDF, aby trener mógł zapoznać się z pełnymi wynikami.
+                </p>
+              </div>
+
+              {badaniaKrwi?.plik_pdf_url ? (
+                <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-2xl flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <span className="text-2xl">📑</span>
+                    <div className="truncate">
+                      <div className="text-xs font-black text-sky-950 truncate">
+                        {badaniaKrwi.plik_pdf_nazwa || 'Wyniki_badan_krwi.pdf'}
+                      </div>
+                      <a 
+                        href={badaniaKrwi.plik_pdf_url} 
+                        target="_blank" 
+                        rel="noreferrer"
+                        className="text-[11px] text-sky-700 hover:text-sky-900 font-bold underline inline-flex items-center gap-1 mt-0.5"
+                      >
+                        Otwórz dokument PDF ↗
+                      </a>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleDeletePdf}
+                    className="text-rose-600 hover:text-rose-800 bg-white hover:bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl font-bold text-xs transition-colors shrink-0 cursor-pointer"
+                  >
+                    Usuń plik 🗑️
+                  </button>
+                </div>
+              ) : (
+                <div className="border-2 border-dashed border-sky-200 hover:border-amber-400 bg-sky-50/30 rounded-2xl p-6 text-center transition-colors">
+                  <label className="cursor-pointer block space-y-2">
+                    <span className="text-3xl block">📤</span>
+                    <span className="text-xs font-black text-sky-950 block">
+                      {isUploadingPdf ? "Trwa wgrywanie pliku..." : "Kliknij, aby wybrać plik PDF z dysku"}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block font-medium">Maksymalny format pliku: .pdf</span>
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      disabled={isUploadingPdf}
+                      onChange={handleUploadPdf}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* KAFEL INFORMACJI / POWIADOMIENIA TRENERA */}
+            <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-6 rounded-3xl shadow-sm space-y-4 flex flex-col justify-between">
+              <div className="space-y-2">
+                <span className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                  <span>💬</span> Daj znać po wgraniu wyników
+                </span>
+                <p className="text-xs text-sky-200/90 leading-relaxed font-medium">
+                  Gdy dodasz swój plik PDF z wynikami badań krwi, <b>wyślij do mnie krótką wiadomość</b> (SMS lub na naszym czacie), że wyniki są już wgrane i prosisz o analizę.
+                </p>
+              </div>
+
+              <div className="bg-sky-900/40 border border-sky-800 p-3.5 rounded-2xl text-[11px] text-sky-200 space-y-1">
+                <div className="font-bold text-amber-300">ℹ️ Co nastąpi później?</div>
+                <div>Trener przeanalizuje kluczowe parametry morfologii, enzymów i hormonów pod kątem regeneracji, samopoczucia oraz przygotuje dedykowane zalecenia dietetyczno-suplementacyjne.</div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* SEKCJA DLA TRENERA: SKANY / ZDJĘCIA TABEL I WYKRESÓW Z POWIĘKSZANIEM */}
+          <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
+              <div>
+                <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                  <span>🖼️</span> Galeria Skanów i Zdjęć Badań (Kliknij, aby powiększyć)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Zdjęcia wybranych parametrów, skany wyników lub wykresy poglądowe.
+                </p>
+              </div>
+
+              {(appRole === 'admin' || appRole === 'trener') && (
+                <label className="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm flex items-center gap-1.5 uppercase tracking-wider">
+                  <span>+</span> {isUploadingImage ? 'Wgrywanie...' : 'Dodaj Zdjęcia / Skany'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={isUploadingImage}
+                    onChange={handleUploadImages}
+                    className="hidden"
+                  />
+                </label>
+              )}
+            </div>
+
+            {(badaniaKrwi?.zdjecia || []).length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {(badaniaKrwi?.zdjecia || []).map((imgUrl, idx) => (
+                  <div 
+                    key={idx} 
+                    className="relative group rounded-2xl overflow-hidden border border-sky-200 bg-slate-100 aspect-square shadow-sm cursor-pointer"
+                    onClick={() => setEnlargedImage(imgUrl)}
+                  >
+                    <img 
+                      src={imgUrl} 
+                      alt={`Skan badania ${idx + 1}`} 
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold">
+                      🔍 Powiększ
+                    </div>
+                    {(appRole === 'admin' || appRole === 'trener') && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteImage(idx);
+                        }}
+                        className="absolute top-1.5 right-1.5 bg-rose-600 hover:bg-rose-700 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10 shadow"
+                        title="Usuń zdjęcie"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-sky-50/50 border border-sky-100 rounded-2xl p-6 text-center text-xs text-slate-400 font-bold">
+                Brak wgranych zdjęć lub skanów wyników.
+              </div>
+            )}
+          </div>
+
+          {/* SEKCJA ZALECEŃ I INTERPRETACJI */}
+          {(appRole === 'admin' || appRole === 'trener') ? (
+            <form onSubmit={handleSaveBadaniaNotes} className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-6">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">✍️</span>
+                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950">
+                    Opracowanie i Zalecenia Trenera (Edycja)
+                  </h3>
+                </div>
+                <div className="text-xs">
+                  <span className="text-slate-400 font-bold mr-2">Data analizy:</span>
+                  <input
+                    type="date"
+                    value={badaniaForm.data_badania}
+                    onChange={(e) => setBadaniaForm({...badaniaForm, data_badania: e.target.value})}
+                    className="border border-sky-200 rounded-xl px-3 py-1 font-bold text-slate-800 bg-sky-50/50"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <label className="font-black text-sky-950 uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
+                    <span>🔬</span> Interpretacja Wyników Badań
+                  </label>
+                  <textarea
+                    rows={4}
+                    placeholder="Wpisz szczegółową interpretację wskaźników (np. poziom ferrytyny, witaminy D3, próby wątrobowe, profil lipidowy)..."
+                    value={badaniaForm.interpretacja}
+                    onChange={(e) => setBadaniaForm({...badaniaForm, interpretacja: e.target.value})}
+                    className="w-full bg-sky-50/30 border border-sky-200 rounded-2xl p-4 text-slate-800 font-medium focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-black text-sky-950 uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
+                    <span>🎯</span> Ogólne Zalecenia Dietetyczne i Stylu Życia
+                  </label>
+                  <textarea
+                    rows={4}
+                    placeholder="Wpisz zalecenia dotyczące nawodnienia, regeneracji, snu, intensywności treningowej oraz modyfikacji w jadłospisie..."
+                    value={badaniaForm.zalecenia}
+                    onChange={(e) => setBadaniaForm({...badaniaForm, zalecenia: e.target.value})}
+                    className="w-full bg-sky-50/30 border border-sky-200 rounded-2xl p-4 text-slate-800 font-medium focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-black text-sky-950 uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
+                    <span>💊</span> Dedykowany Protokół Suplementacyjny
+                  </label>
+                  <textarea
+                    rows={4}
+                    placeholder="Wypisz rekomendowane suplementy wraz z dokładnymi dawkami i porami przyjmowania (np. Witamina D3 4000 IU do śniadania, Magnez wieczorem)..."
+                    value={badaniaForm.suplementacja}
+                    onChange={(e) => setBadaniaForm({...badaniaForm, suplementacja: e.target.value})}
+                    className="w-full bg-sky-50/30 border border-sky-200 rounded-2xl p-4 text-slate-800 font-medium focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2 border-t border-sky-100">
+                <button
+                  type="submit"
+                  disabled={isSavingBadania}
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingBadania ? "Zapisywanie..." : "Zapisz Interpretację i Zalecenia ➔"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            /* WIDOK DLA KLUBOWICZA */
+            <div className="space-y-4">
+              <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-3">
+                <div className="flex items-center justify-between border-b border-sky-100 pb-2">
+                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                    <span>🔬</span> Interpretacja Wyników Badań
+                  </h3>
+                  {badaniaKrwi?.data_badania && (
+                    <span className="text-[10px] text-slate-400 font-bold">Data: {badaniaKrwi.data_badania}</span>
+                  )}
+                </div>
+                <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-medium">
+                  {badaniaKrwi?.interpretacja || "Trener nie wprowadził jeszcze interpretacji wyników dla Twojego profilu."}
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-3">
+                <div className="flex items-center justify-between border-b border-sky-100 pb-2">
+                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                    <span>🎯</span> Zalecenia Treningowe i Stylu Życia
+                  </h3>
+                </div>
+                <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-medium">
+                  {badaniaKrwi?.zalecenia || "Brak dodatkowych zaleceń ogólnych."}
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-br from-amber-50/80 to-amber-100/40 p-6 rounded-3xl border border-amber-200 shadow-sm space-y-3">
+                <div className="flex items-center justify-between border-b border-amber-200 pb-2">
+                  <h3 className="font-black text-xs uppercase tracking-wider text-amber-950 flex items-center gap-2">
+                    <span>💊</span> Twój Protokół Suplementacyjny
+                  </h3>
+                </div>
+                <div className="text-xs text-slate-800 whitespace-pre-line leading-relaxed font-semibold">
+                  {badaniaKrwi?.suplementacja || "Brak zdefiniowanego planu suplementacyjnego."}
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* MODAL / LIGHTBOX DO POWIĘKSZANIA ZDJĘĆ */}
+      {enlargedImage && (
+        <div 
+          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-md cursor-pointer"
+          onClick={() => setEnlargedImage(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh] w-full flex items-center justify-center">
+            <button
+              onClick={() => setEnlargedImage(null)}
+              className="absolute -top-10 right-0 text-white hover:text-amber-400 font-black text-xl p-2 cursor-pointer"
+            >
+              ✕ Zamknij podgląd
+            </button>
+            <img 
+              src={enlargedImage} 
+              alt="Powiększony skan" 
+              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-white/20"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+      )}
+
       {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA Z DYNAMICZNĄ WYSZUKIWARKĄ */}
       {isManualAddModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -2586,7 +3161,6 @@ export default function AnalizaFormyPage() {
 
             <form onSubmit={handleManualAddParticipant} className="space-y-4 text-xs">
               
-              {/* POLE WYSZUKIWANIA I WYBORU KLUBOWICZA */}
               <div className="relative space-y-1.5">
                 <label className="font-bold text-slate-700 block">
                   Wyszukaj i wybierz klubowicza * ({niezapisaniKlienci.length} dostępnych)
