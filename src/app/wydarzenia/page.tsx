@@ -430,7 +430,7 @@ export default function WydarzeniaPage() {
     });
   };
 
-  // Szybka aktualizacja statusu płatności z poziomu modala podglądu dla Admina
+  // Szybka zmiana statusu płatności przez Admina jednym kliknięciem
   const handleQuickPaymentToggle = async (participantIndex: number) => {
     if (!isAdmin || !selectedEvent || !selectedEvent.uczestnicy) return;
 
@@ -448,7 +448,6 @@ export default function WydarzeniaPage() {
       status_platnosci: nextStatus
     };
 
-    // Zapis natychmiast do bazy Supabase
     const { error } = await supabase
       .from('wydarzenia')
       .update({ uczestnicy: currentUczestnicy })
@@ -545,15 +544,16 @@ export default function WydarzeniaPage() {
     `${k.imie} ${k.nazwisko} ${k.email || ""}`.toLowerCase().includes(klientSearch.toLowerCase())
   );
 
+  // Kompaktowe etykiety statusów zapobiegające zwężaniu imion
   const getPaymentBadge = (status?: PaymentStatus) => {
     switch (status) {
       case "calosc":
-        return { text: "Opłacono całość", bg: "bg-emerald-100 text-emerald-800 border-emerald-300", icon: "🟢" };
+        return { text: "Całość", bg: "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100", icon: "🟢" };
       case "zadatek":
-        return { text: "Zadatek opłacony", bg: "bg-amber-100 text-amber-900 border-amber-300", icon: "🟡" };
+        return { text: "Zadatek", bg: "bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100", icon: "🟡" };
       case "nieoplacone":
       default:
-        return { text: "Oczekuje na wpłatę", bg: "bg-slate-100 text-slate-600 border-slate-200", icon: "⭕" };
+        return { text: "Oczekuje", bg: "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100", icon: "⭕" };
     }
   };
 
@@ -828,7 +828,7 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
-              {/* LISTA UCZESTNIKÓW Z PODSUMOWANIEM I STATUSEM PŁATNOŚCI */}
+              {/* KOMPAKTOWA LISTA UCZESTNIKÓW */}
               {selectedEvent.uczestnicy && selectedEvent.uczestnicy.length > 0 && (
                 <div className="bg-white p-5 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-sky-100 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-50 pb-3">
@@ -838,7 +838,7 @@ export default function WydarzeniaPage() {
                       </h3>
                       {isAdmin && (
                         <p className="text-[11px] text-slate-400 font-medium mt-0.5">
-                          💡 Kliknij w status płatności uczestnika, aby go szybko zmienić.
+                          💡 Kliknij w status płatności, aby go szybko przełączyć.
                         </p>
                       )}
                     </div>
@@ -850,7 +850,7 @@ export default function WydarzeniaPage() {
                     )}
 
                     {isAdmin && (
-                      <div className="flex items-center gap-2 text-[11px] font-bold">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold">
                         <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200">
                           Zadatek: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length}
                         </span>
@@ -861,33 +861,33 @@ export default function WydarzeniaPage() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {selectedEvent.uczestnicy.map((u, idx) => {
                       const badge = getPaymentBadge(u.status_platnosci);
                       const isMe = currentUserEmail && u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase();
 
                       return (
-                        <div key={idx} className="bg-sky-50/70 border border-sky-100 p-2.5 rounded-xl flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
-                            <span className="text-xs font-bold text-sky-950 truncate">
+                        <div key={idx} className="bg-sky-50/70 border border-sky-100/90 px-3 py-2 rounded-xl flex items-center justify-between gap-2 transition-all">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0"></span>
+                            <span className="text-xs font-bold text-sky-950 truncate" title={formatUczestnikName(u, enrolledInSelected)}>
                               {formatUczestnikName(u, enrolledInSelected)} {isMe && "(Ty)"}
                             </span>
                           </div>
 
-                          {/* Widok statusu dla Admina (klikalny quick-toggle) lub dla zalogowanego uczestnika */}
+                          {/* Kompaktowy przycisk dla Admina / Klubowicza */}
                           {isAdmin ? (
                             <button
                               onClick={() => handleQuickPaymentToggle(idx)}
                               title="Kliknij, aby przełączyć: Oczekuje -> Zadatek -> Całość"
-                              className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1.5 shadow-sm hover:scale-105 shrink-0 ${badge.bg}`}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 shrink-0 ${badge.bg}`}
                             >
-                              <span>{badge.icon}</span>
+                              <span className="text-[9px]">{badge.icon}</span>
                               <span>{badge.text}</span>
                             </button>
                           ) : isMe ? (
                             <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black border flex items-center gap-1 shrink-0 ${badge.bg}`}>
-                              <span>{badge.icon}</span>
+                              <span className="text-[9px]">{badge.icon}</span>
                               <span>{badge.text}</span>
                             </span>
                           ) : null}
@@ -1268,7 +1268,7 @@ export default function WydarzeniaPage() {
                 />
               </div>
 
-              {/* ZARZĄDZANIE UCZESTNIKAMI + STATUSY PŁATNOŚCI */}
+              {/* ZARZĄDZANIE UCZESTNIKAMI */}
               <div className="p-4 sm:p-5 bg-sky-50/60 rounded-2xl border border-sky-200 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                   <label className="font-black text-sky-950 text-xs uppercase tracking-wider block">
@@ -1332,7 +1332,7 @@ export default function WydarzeniaPage() {
                   </button>
                 </div>
 
-                {/* Lista zapisanych z przełącznikami płatności */}
+                {/* Lista zapisanych */}
                 {form.uczestnicy.length > 0 && (
                   <div className="space-y-2 pt-2 border-t border-sky-200/60 max-h-60 overflow-y-auto pr-1">
                     {form.uczestnicy.map((u, index) => {
@@ -1342,7 +1342,6 @@ export default function WydarzeniaPage() {
                           <span className="truncate">{u.imie} {u.nazwisko}</span>
                           
                           <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
-                            {/* Przyciski zmiany statusu płatności */}
                             <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 gap-0.5">
                               <button
                                 type="button"
