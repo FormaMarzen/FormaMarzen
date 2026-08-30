@@ -220,6 +220,15 @@ const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date 
   return targetDate;
 };
 
+// POMOCNIK OKREŚLANIA KWARTAŁU / MIESIĄCA WAKACYJNEGO
+const getPeriodKey = (date: Date) => {
+  const y = date.getFullYear();
+  const m = date.getMonth(); // 0 = Jan, 6 = Jul, 7 = Aug
+  if (m === 6) return { key: `${y}_M6`, label: `Lipiec ${y}`, isVacation: true, maxCount: 1 };
+  if (m === 7) return { key: `${y}_M7`, label: `Sierpień ${y}`, isVacation: true, maxCount: 1 };
+  const q = Math.floor(m / 3) + 1;
+  return { key: `${y}_Q${q}`, label: `Kwartał ${q} (${y})`, isVacation: false, maxCount: 2 };
+};
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
@@ -596,7 +605,7 @@ export default function KarnetyPage() {
       isBirthday: false, 
       continuityPercent: 0, 
       birthdayPercent: 0, 
-      daysLeftBirthday: bStatus.daysLeft,
+      daysLeftBirthday: bStatus.daysLeft, 
       isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear
     };
   };
@@ -1001,7 +1010,7 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // POBIERANIE WSZYSTKICH AKTYWNYCH KARNETÓW KLIENTA (NOWO ZAKUPIONE POKAZUJĄ SIĘ PONIŻEJ)
+  // POBIERANIE WSZYSTKICH AKTYWNYCH KARNETÓW KLIENTA
   const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
   const activeKarnetyList = rawKarnetyList.filter(isPassActive);
   const karnetyList = [...activeKarnetyList].sort((a: any, b: any) => {
@@ -1056,7 +1065,7 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M (Z OBSŁUGĄ PORTFELA I AUTOPAY)
+  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -1135,7 +1144,6 @@ export default function KarnetyPage() {
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
-    // KALKULACJA ŚRODKÓW Z PORTFELA I DOPŁATY AUTOPAY
     const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
     const walletDeduction = (!isBonus13thPeriod && useWalletFunds) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
@@ -1219,7 +1227,6 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
-    // PŁATNOŚĆ DOPŁATY PRZEZ AUTOPAY
     if (amountToPayAutopay > 0 && !isBonus13thPeriod) {
       const orderId = `EXT-${currentUser.id}-${Date.now()}`.substring(0, 32);
       const opisOperacji = isContract 
@@ -1246,7 +1253,6 @@ export default function KarnetyPage() {
       return;
     }
 
-    // PŁATNOŚĆ POKRYTA W 100% Z PORTFELA LUB OKRES BONUSOWY
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
     };
@@ -1333,7 +1339,7 @@ export default function KarnetyPage() {
     loadData();
   };
 
-  // ZAKUP NOWEGO KARNETU (NOWY KARNET DODAJE SIĘ PONIŻEJ + PŁATNOŚĆ HYBRYDOWA)
+  // ZAKUP NOWEGO KARNETU
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -1359,7 +1365,6 @@ export default function KarnetyPage() {
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
-    // KALKULACJA POBRANIA Z PORTFELA I AUTOPAY
     const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
     const walletDeduction = useWalletFunds ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
@@ -1454,7 +1459,6 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
-    // PŁATNOŚĆ DOPŁATY PRZEZ BRAMKĘ AUTOPAY
     if (amountToPayAutopay > 0) {
       const orderId = `BUY-${currentUser.id}-${Date.now()}`.substring(0, 32);
       const opisOperacji = `Zakup ${selectedBuyPass}`;
@@ -1479,7 +1483,6 @@ export default function KarnetyPage() {
       return;
     }
 
-    // PŁATNOŚĆ POKRYTA W 100% Z PORTFELA
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
     };
@@ -1554,7 +1557,6 @@ export default function KarnetyPage() {
     date2.setHours(0, 0, 0, 0);
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
-
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1670,10 +1672,23 @@ export default function KarnetyPage() {
       }
     }
 
-    const startObj = new Date(suspendStartDate);
-    const month = startObj.getMonth(); 
-    const year = startObj.getFullYear();
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
+
+    // 1. SPRAWDZENIE KOLIZJI TERMINÓW Z INNYMI ZAWIESZENIAMI
+    const reqStartStr = suspendStartDate;
+    const reqEndStr = suspendEndDate;
+
+    for (const susp of globalHistory) {
+      const sStart = susp.od;
+      const sEnd = susp.status === 'aktywne' ? susp.planowane_do : (susp.do && susp.do !== '-' ? susp.do : susp.planowane_do);
+      if (sStart && sEnd) {
+        // Kolizja występuje, gdy przedziały na siebie nachodzą: startA <= endB && endA >= startB
+        if (reqStartStr <= sEnd && reqEndStr >= sStart) {
+          setSuspendError(`Wybrany termin (${reqStartStr} do ${reqEndStr}) koliduje z wcześniej zarejestrowanym zawieszeniem (od ${sStart} do ${sEnd}).`);
+          return;
+        }
+      }
+    }
 
     if (isContract) {
       const daysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
@@ -1687,59 +1702,84 @@ export default function KarnetyPage() {
         return;
       }
 
-      if (month === 8) {
-        const usedInVacation = globalHistory.some((susp: any) => {
-          const hStart = new Date(susp.od);
-          const hMonth = hStart.getMonth();
-          return hStart.getFullYear() === year && (hMonth === 6 || hMonth === 7);
-        });
-        if (usedInVacation) {
-          setSuspendError('Zgodnie z regulaminem, jeśli karnet był zawieszany w wakacje (lipiec/sierpień), nie możesz zawiesić go we wrześniu.');
-          return;
+      // 2. PODZIAŁ DNI NA KWARTAŁY / MIESIĄCE WAKACYJNE DZIEŃ PO DNIU
+      const newPeriodDays: Record<string, { days: number; label: string; maxCount: number; isVacation: boolean }> = {};
+      const curr = new Date(suspendStartDate);
+      const end = new Date(suspendEndDate);
+      curr.setHours(0, 0, 0, 0);
+      end.setHours(0, 0, 0, 0);
+
+      let hasSeptemberDay = false;
+      let reqStartPeriodKey = '';
+      const startYear = curr.getFullYear();
+
+      const tempDate = new Date(curr);
+      let dayIndex = 0;
+      while (tempDate <= end) {
+        const pInfo = getPeriodKey(tempDate);
+        if (dayIndex === 0) reqStartPeriodKey = pInfo.key;
+        if (tempDate.getMonth() === 8) hasSeptemberDay = true;
+
+        if (!newPeriodDays[pInfo.key]) {
+          newPeriodDays[pInfo.key] = { days: 0, label: pInfo.label, maxCount: pInfo.maxCount, isVacation: pInfo.isVacation };
         }
+        newPeriodDays[pInfo.key].days += 1;
+
+        tempDate.setDate(tempDate.getDate() + 1);
+        dayIndex++;
       }
 
-      const isVacation = (month === 6 || month === 7); 
-      const quarter = Math.floor(month / 3) + 1;
+      // Obliczenie dotychczas zużytych dni i operacji w historii
+      const historyPeriodDays: Record<string, number> = {};
+      const historyPeriodCounts: Record<string, number> = {};
+      let vacationUsedThisYear = false;
 
-      let sumDaysInPeriod = 0;
-      let countSuspensionsInPeriod = 0;
+      globalHistory.forEach((susp: any) => {
+        const sStartStr = susp.od;
+        const sEndStr = susp.status === 'aktywne' ? susp.planowane_do : (susp.do && susp.do !== '-' ? susp.do : susp.planowane_do);
+        if (!sStartStr) return;
 
-      if (isVacation) {
-        globalHistory.forEach((susp: any) => {
-          const hStart = new Date(susp.od);
-          const hMonth = hStart.getMonth();
-          if (hStart.getFullYear() === year && hMonth === month) {
-            const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
-            sumDaysInPeriod += daysToCount;
-            countSuspensionsInPeriod += 1;
+        const sStart = new Date(sStartStr);
+        const sEnd = sEndStr ? new Date(sEndStr) : new Date(sStart);
+        sStart.setHours(0, 0, 0, 0);
+        sEnd.setHours(0, 0, 0, 0);
+
+        // Operacja zaliczana jest do okresu, w którym się rozpoczęła
+        const startPInfo = getPeriodKey(sStart);
+        historyPeriodCounts[startPInfo.key] = (historyPeriodCounts[startPInfo.key] || 0) + 1;
+
+        const loopD = new Date(sStart);
+        while (loopD <= sEnd) {
+          const pInfo = getPeriodKey(loopD);
+          historyPeriodDays[pInfo.key] = (historyPeriodDays[pInfo.key] || 0) + 1;
+          if (pInfo.isVacation && loopD.getFullYear() === startYear) {
+            vacationUsedThisYear = true;
           }
-        });
-        if (countSuspensionsInPeriod >= 1) {
-          setSuspendError(`Wygasł limit ilościowy zawieszeń (1/miesiąc) na miesiąc wakacyjny (${month === 6 ? 'Lipiec' : 'Sierpień'}).`);
-          return;
+          loopD.setDate(loopD.getDate() + 1);
         }
-        if (sumDaysInPeriod + requestedDays > 14) {
-          setSuspendError(`W tym miesiącu wakacyjnym pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni.`);
-          return;
-        }
-      } else {
-        globalHistory.forEach((susp: any) => {
-          const hStart = new Date(susp.od);
-          const hMonth = hStart.getMonth();
-          const hQuarter = Math.floor(hMonth / 3) + 1;
-          if (hStart.getFullYear() === year && hQuarter === quarter && hMonth !== 6 && hMonth !== 7) {
-            const daysToCount = susp.status === 'aktywne' ? susp.planowane_dni : susp.dni;
-            sumDaysInPeriod += daysToCount;
-            countSuspensionsInPeriod += 1;
-          }
-        });
-        if (countSuspensionsInPeriod >= 2) {
-          setSuspendError('Wykorzystano już 2 dostępne zawieszenia w tym kwartale.');
-          return;
-        }
-        if (sumDaysInPeriod + requestedDays > 14) {
-          setSuspendError(`W tym kwartale pozostało Ci do wykorzystania tylko ${14 - sumDaysInPeriod} dni zawieszenia (Limit to 14 na kwartał).`);
+      });
+
+      // Sprawdzenie reguły września (brak zawieszenia we wrześniu, jeśli zawieszano w lipcu/sierpniu)
+      if (hasSeptemberDay && vacationUsedThisYear) {
+        setSuspendError('Zgodnie z regulaminem, jeśli karnet był zawieszany w wakacje (lipiec/sierpień), nie możesz zawiesić go we wrześniu.');
+        return;
+      }
+
+      // Sprawdzenie limitu liczby zawieszeń (operacji) w kwartale rozpoczęcia
+      const currentStartCount = historyPeriodCounts[reqStartPeriodKey] || 0;
+      const maxAllowedCount = newPeriodDays[reqStartPeriodKey]?.maxCount ?? 2;
+      if (currentStartCount >= maxAllowedCount) {
+        setSuspendError(`Wykorzystano już limit ilościowy zawieszeń (${maxAllowedCount}) w okresie: ${newPeriodDays[reqStartPeriodKey]?.label || reqStartPeriodKey}.`);
+        return;
+      }
+
+      // Sprawdzenie limitu 14 dni dla każdego z kwartałów / miesięcy objętych zawieszeniem
+      for (const key of Object.keys(newPeriodDays)) {
+        const used = historyPeriodDays[key] || 0;
+        const adding = newPeriodDays[key].days;
+        if (used + adding > 14) {
+          const left = Math.max(0, 14 - used);
+          setSuspendError(`W okresie "${newPeriodDays[key].label}" przekroczono limit 14 dni. Wykorzystano dotąd ${used} dni (pozostało ${left} dni), a próbujesz wykorzystać ${adding} dni.`);
           return;
         }
       }
@@ -2107,7 +2147,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* SEKCJA 1: AKTYWNE KARNETY (WSZYSTKIE KARNETY WIDOCZNE PONIŻEJ SIEBIE) */}
+        {/* SEKCJA 1: AKTYWNE KARNETY */}
         <div>
           <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest mb-4">TWOJE KARNETY</h2>
           
@@ -2367,7 +2407,7 @@ export default function KarnetyPage() {
                 <p className="font-bold">Limity zawieszeń obowiązują dla Twoich karnetów:</p>
                 <ul className="list-disc pl-4 space-y-2 font-medium">
                   <li><strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!</li>
-                  <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy).</li>
+                  <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy). W przypadku zawieszenia na przełomie kwartałów, dni są rozliczane proporcjonalnie w każdym kwartale.</li>
                   <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Uwaga: jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
                   <li><strong>Odwieszenie:</strong> Karnet możesz odwiesić w dowolnym momencie przed czasem, a niewykorzystane dni zostaną automatycznie doliczone do daty ważności.</li>
                 </ul>
@@ -2479,7 +2519,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ (ROZLICZENIE Z PORTFELEM I AUTOPAY) */}
+        {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
           const contractInfo = getContractRataInfo(passToExtend);
@@ -2661,7 +2701,7 @@ export default function KarnetyPage() {
           );
         })()}
 
-        {/* MODAL: KUP KARNET (ROZLICZENIE Z PORTFELEM I AUTOPAY) */}
+        {/* MODAL: KUP KARNET */}
         {isBuyPassModalOpen && (() => {
           const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
           const isContract = selectedPassDef?.isContract12M || selectedPassDef?.typKarnetu === 'Umowa 12 miesięcy';
