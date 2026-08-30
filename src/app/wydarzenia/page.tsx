@@ -28,6 +28,7 @@ interface Wydarzenie {
   cena: string;
   zadatek: string;
   zadatek_do?: string | null;
+  reszta_do?: string | null;
   opis: string;
   grafika_url: string | null;
   status: string;
@@ -59,6 +60,20 @@ interface Wydarzenie {
   koszulki_grafiki?: string[];
 }
 
+export const parsePrice = (val?: string | null): number => {
+  if (!val) return 0;
+  const cleaned = val.replace(/[^0-9.,]/g, "").replace(",", ".");
+  return parseFloat(cleaned) || 0;
+};
+
+export const obliczReszteKwoty = (cena?: string | null, zadatek?: string | null): string => {
+  const c = parsePrice(cena);
+  const z = parsePrice(zadatek);
+  if (c <= 0) return "0 PLN";
+  const roznica = Math.max(0, c - z);
+  return `${roznica} PLN`;
+};
+
 export default function WydarzeniaPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState("");
@@ -80,11 +95,12 @@ export default function WydarzeniaPage() {
   
   const [form, setForm] = useState({
     tytul: "",
-    data_od: new Date().toISOString().split('T')[0],
-    data_do: new Date().toISOString().split('T')[0],
+    data_od: new Date().toISOString().split("T")[0],
+    data_do: new Date().toISOString().split("T")[0],
     cena: "",
     zadatek: "",
     zadatek_do: "",
+    reszta_do: "",
     opis: "",
     grafika_url: "" as string | null,
     status: "wkrotce",
@@ -129,7 +145,6 @@ export default function WydarzeniaPage() {
     fetchData();
   }, []);
 
-  // Obsługa zamykania powiększenia klawiszem ESC
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -142,15 +157,84 @@ export default function WydarzeniaPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [previewImage]);
 
-  // Równoległe pobieranie danych w celu przyspieszenia startu strony
+  const dzisiajStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+
+  // Automatyczny system powiadomień wpisujący do czat_wiadomosci z konta nadawca_id: 5000 ("Forma Marzeń")
+  const sprawdzIwyslijPrzypomnieniaPlatnosci = async (events: Wydarzenie[], bazaKlubowiczow: KlientBaza[]) => {
+    const dzisiaj = new Date();
+    dzisiaj.setHours(0, 0, 0, 0);
+
+    for (const w of events) {
+      if (!w.reszta_do || !Array.isArray(w.uczestnicy) || w.uczestnicy.length === 0) continue;
+
+      const terminReszty = new Date(w.reszta_do);
+      terminReszty.setHours(0, 0, 0, 0);
+
+      const diffTime = terminReszty.getTime() - dzisiaj.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+      // Sprawdzenie czy przypada termin 5 dni lub 2 dni przed końcem
+      if (diffDays === 5 || diffDays === 2) {
+        const nieoplaceni = w.uczestnicy.filter(u => u.status_platnosci !== "calosc");
+        const kwotaReszty = obliczReszteKwoty(w.cena, w.zadatek);
+        const formatTerminu = formatDatePL(w.reszta_do);
+
+        for (const u of nieoplaceni) {
+          let recipientId: number | null = u.id ? Number(u.id) : null;
+          
+          // Jeśli brak ID, dopasuj po adresie e-mail z bazy klientów
+          if (!recipientId && u.email) {
+            const foundClient = bazaKlubowiczow.find(k => k.email && k.email.toLowerCase() === u.email?.toLowerCase());
+            if (foundClient) {
+              recipientId = Number(foundClient.id);
+            }
+          }
+
+          if (!recipientId) continue;
+
+          const tresc = diffDays === 5
+            ? `⚠️ Przypomnienie o płatności: Zbliża się termin uregulowania reszty kwoty (${kwotaReszty}) za wydarzenie "${w.tytul}". Ostateczny termin mija za 5 dni (${formatTerminu}). Prosimy o wpłatę.`
+            : `🚨 PILNE Przypomnienie: Za 2 dni (${formatTerminu}) upływa ostateczny termin dopłaty reszty kwoty (${kwotaReszty}) za udział w wydarzeniu "${w.tytul}".`;
+
+          try {
+            // Zabezpieczenie przed dublowaniem wysyłki tego samego dnia do czat_wiadomosci
+            const { data: existing } = await supabase
+              .from("czat_wiadomosci")
+              .select("id")
+              .eq("nadawca_id", 5000)
+              .eq("odbiorca_id", recipientId)
+              .ilike("tresc", `%${w.tytul}%`)
+              .gte("created_at", `${dzisiajStr}T00:00:00.000Z`)
+              .limit(1);
+
+            if (!existing || existing.length === 0) {
+              await supabase.from("czat_wiadomosci").insert([
+                {
+                  nadawca_id: 5000,
+                  nadawca_nazwa: "Forma Marzeń",
+                  odbiorca_id: recipientId,
+                  tresc: tresc,
+                  przeczytana: false,
+                  created_at: new Date().toISOString()
+                }
+              ]);
+            }
+          } catch (notifErr) {
+            console.error("Błąd podczas wysyłania wiadomości w czacie:", notifErr);
+          }
+        }
+      }
+    }
+  };
+
   const fetchData = async () => {
     setIsLoading(true);
 
     try {
       const [sessionRes, wydarzeniaRes, klienciRes] = await Promise.all([
         supabase.auth.getSession(),
-        supabase.from('wydarzenia').select('*').order('data_od', { ascending: true }),
-        supabase.from('klienci').select('id, "Imię", "Nazwisko", "E-mail"')
+        supabase.from("wydarzenia").select("*").order("data_od", { ascending: true }),
+        supabase.from("klienci").select('id, "Imię", "Nazwisko", "E-mail"')
       ]);
 
       const email = sessionRes.data.session?.user?.email || "";
@@ -159,22 +243,24 @@ export default function WydarzeniaPage() {
         setIsAdmin(true);
       }
 
+      let mappedKlienci: KlientBaza[] = [];
+      if (!klienciRes.error && klienciRes.data) {
+        mappedKlienci = klienciRes.data.map((k: any) => ({
+          id: k.id,
+          imie: (k["Imię"] || k.imie || "").trim(),
+          nazwisko: (k["Nazwisko"] || k.nazwisko || "").trim(),
+          email: (k["E-mail"] || k.email || "").trim()
+        }));
+        setKlienciBaza(mappedKlienci);
+      }
+
       if (!wydarzeniaRes.error && wydarzeniaRes.data) {
         setWydarzenia(wydarzeniaRes.data);
         if (selectedEvent) {
           const refreshed = wydarzeniaRes.data.find((w: Wydarzenie) => w.id === selectedEvent.id);
           if (refreshed) setSelectedEvent(refreshed);
         }
-      }
-
-      if (!klienciRes.error && klienciRes.data) {
-        const mapped: KlientBaza[] = klienciRes.data.map((k: any) => ({
-          id: k.id,
-          imie: (k["Imię"] || k.imie || "").trim(),
-          nazwisko: (k["Nazwisko"] || k.nazwisko || "").trim(),
-          email: (k["E-mail"] || k.email || "").trim()
-        }));
-        setKlienciBaza(mapped);
+        sprawdzIwyslijPrzypomnieniaPlatnosci(wydarzeniaRes.data, mappedKlienci);
       }
     } catch (err) {
       console.error("Błąd podczas pobierania danych:", err);
@@ -182,8 +268,6 @@ export default function WydarzeniaPage() {
       setIsLoading(false);
     }
   };
-
-  const dzisiajStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
   const przeszle = useMemo(() => {
     return wydarzenia.filter(w => {
@@ -201,13 +285,13 @@ export default function WydarzeniaPage() {
 
   const wkrotce = useMemo(() => {
     return przyszle
-      .filter(w => w.status !== 'planowane')
+      .filter(w => w.status !== "planowane")
       .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
   }, [przyszle]);
 
   const planowane = useMemo(() => {
     return przyszle
-      .filter(w => w.status === 'planowane')
+      .filter(w => w.status === "planowane")
       .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
   }, [przyszle]);
 
@@ -232,6 +316,7 @@ export default function WydarzeniaPage() {
       cena: "", 
       zadatek: "", 
       zadatek_do: "", 
+      reszta_do: "",
       opis: "", 
       grafika_url: null, 
       status: "wkrotce", 
@@ -268,10 +353,11 @@ export default function WydarzeniaPage() {
       cena: w.cena || "",
       zadatek: w.zadatek || "",
       zadatek_do: w.zadatek_do || "",
+      reszta_do: w.reszta_do || "",
       opis: w.opis || "",
       grafika_url: w.grafika_url || null,
       status: w.status || "wkrotce",
-      uczestnicy: Array.isArray(w.uczestnicy) ? w.uczestnicy.map(u => ({ ...u, status_platnosci: u.status_platnosci || 'nieoplacone' })) : [],
+      uczestnicy: Array.isArray(w.uczestnicy) ? w.uczestnicy.map(u => ({ ...u, status_platnosci: u.status_platnosci || "nieoplacone" })) : [],
       
       pokaz_whatsapp: !!w.pokaz_whatsapp,
       whatsapp_url: w.whatsapp_url || "",
@@ -304,14 +390,13 @@ export default function WydarzeniaPage() {
     e.stopPropagation();
     if (!window.confirm("Czy na pewno chcesz usunąć to wydarzenie? Tej operacji nie można cofnąć.")) return;
 
-    // Natychmiastowe usunięcie ze stanu dla szybkiego efektu UI
     setWydarzenia(prev => prev.filter(w => w.id !== id));
     if (selectedEvent?.id === id) {
       setSelectedEvent(null);
       setIsViewModalOpen(false);
     }
 
-    await supabase.from('wydarzenia').delete().eq('id', id);
+    await supabase.from("wydarzenia").delete().eq("id", id);
   };
 
   const handleImageCompress = (file: File, callback: (compressed: string) => void) => {
@@ -319,7 +404,7 @@ export default function WydarzeniaPage() {
     reader.onload = (event) => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement('canvas');
+        const canvas = document.createElement("canvas");
         const MAX_WIDTH = 1400;
         const MAX_HEIGHT = 1400;
         let width = img.width;
@@ -333,9 +418,9 @@ export default function WydarzeniaPage() {
         
         canvas.width = width;
         canvas.height = height;
-        const ctx = canvas.getContext('2d'); 
+        const ctx = canvas.getContext("2d"); 
         ctx?.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.8);
+        const compressed = canvas.toDataURL("image/jpeg", 0.8);
         callback(compressed);
       };
       img.src = event.target?.result as string;
@@ -445,16 +530,15 @@ export default function WydarzeniaPage() {
     });
   };
 
-  // Optymistyczna, natychmiastowa zmiana statusu płatności przez Admina jednym kliknięciem
   const handleQuickPaymentToggle = async (participantIndex: number) => {
     if (!isAdmin || !selectedEvent || !selectedEvent.uczestnicy) return;
 
     const currentUczestnicy = [...selectedEvent.uczestnicy];
     const target = currentUczestnicy[participantIndex];
     const nextStatusMap: Record<PaymentStatus, PaymentStatus> = {
-      "nieoplacone": "zadatek",
-      "zadatek": "calosc",
-      "calosc": "nieoplacone"
+      nieoplacone: "zadatek",
+      zadatek: "calosc",
+      calosc: "nieoplacone"
     };
     const nextStatus: PaymentStatus = nextStatusMap[target.status_platnosci || "nieoplacone"];
     
@@ -462,17 +546,14 @@ export default function WydarzeniaPage() {
       idx === participantIndex ? { ...u, status_platnosci: nextStatus } : u
     );
 
-    // Natychmiastowa aktualizacja stanu lokalnego (0ms opóźnienia dla użytkownika)
     setSelectedEvent({ ...selectedEvent, uczestnicy: updatedUczestnicy });
     setWydarzenia(prev => prev.map(w => w.id === selectedEvent.id ? { ...w, uczestnicy: updatedUczestnicy } : w));
 
-    // Zapis w tle do bazy Supabase
     const { error } = await supabase
-      .from('wydarzenia')
+      .from("wydarzenia")
       .update({ uczestnicy: updatedUczestnicy })
-      .eq('id', selectedEvent.id);
+      .eq("id", selectedEvent.id);
 
-    // Rollback w przypadku błędu sieciowego
     if (error) {
       console.error("Błąd aktualizacji statusu płatności:", error);
       setSelectedEvent({ ...selectedEvent, uczestnicy: currentUczestnicy });
@@ -491,6 +572,7 @@ export default function WydarzeniaPage() {
       cena: form.cena,
       zadatek: form.zadatek,
       zadatek_do: form.zadatek_do || null,
+      reszta_do: form.reszta_do || null,
       opis: form.opis,
       grafika_url: form.grafika_url,
       status: form.status,
@@ -522,9 +604,9 @@ export default function WydarzeniaPage() {
 
     try {
       if (editingId) {
-        await supabase.from('wydarzenia').update(payload).eq('id', editingId);
+        await supabase.from("wydarzenia").update(payload).eq("id", editingId);
       } else {
-        await supabase.from('wydarzenia').insert([payload]);
+        await supabase.from("wydarzenia").insert([payload]);
       }
       setIsAdminModalOpen(false);
       await fetchData();
@@ -537,7 +619,7 @@ export default function WydarzeniaPage() {
 
   const formatDatePL = (dateString?: string | null) => {
     if (!dateString) return "";
-    const parts = dateString.split('-');
+    const parts = dateString.split("-");
     if (parts.length === 3) {
       return `${parts[2]}.${parts[1]}.${parts[0]}`;
     }
@@ -577,7 +659,6 @@ export default function WydarzeniaPage() {
     );
   }, [klienciBaza, klientSearch]);
 
-  // Kompaktowe etykiety statusów zapobiegające zwężaniu imion
   const getPaymentBadge = (status?: PaymentStatus) => {
     switch (status) {
       case "calosc":
@@ -590,11 +671,15 @@ export default function WydarzeniaPage() {
     }
   };
 
-  const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => {
+  const formResztaKwoty = useMemo(() => {
+    return obliczReszteKwoty(form.cena, form.zadatek);
+  }, [form.cena, form.zadatek]);
+
+  const EventCard = ({ w, isPast = false }: { w: Wydarzenie; isPast?: boolean }) => {
     const zamkniete = isZapisyZamkniete(w);
     const uczestnicyCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.length : 0;
-    const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length : 0;
-    const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === 'calosc').length : 0;
+    const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "zadatek").length : 0;
+    const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "calosc").length : 0;
 
     return (
       <div 
@@ -813,26 +898,26 @@ export default function WydarzeniaPage() {
               </div>
 
               {/* Kafelki z informacjami */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
-                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl shadow-sm border border-sky-100">
-                  <span className="text-2xl sm:text-3xl">📅</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-sky-100">
+                  <span className="text-2xl">📅</span>
                   <div>
                     <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest">Termin</div>
                     <div className="font-black text-sky-950 text-xs sm:text-sm mt-0.5">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl shadow-sm border border-amber-100">
-                  <span className="text-2xl sm:text-3xl">💳</span>
+                <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-amber-100">
+                  <span className="text-2xl">💳</span>
                   <div>
-                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Koszt udziału</div>
+                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Cena całkowita</div>
                     <div className="font-black text-amber-950 text-xs sm:text-sm mt-0.5">{selectedEvent.cena || "Darmowe"}</div>
                   </div>
                 </div>
                 
                 {selectedEvent.zadatek ? (
-                  <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl shadow-sm border border-orange-100">
-                    <span className="text-2xl sm:text-3xl">💰</span>
+                  <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-orange-100">
+                    <span className="text-2xl">🟡</span>
                     <div>
                       <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">
                         {selectedEvent.zadatek_do ? `Zadatek (do ${formatDatePL(selectedEvent.zadatek_do)})` : "Zadatek"}
@@ -841,14 +926,27 @@ export default function WydarzeniaPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center text-center gap-2 bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl shadow-sm border border-emerald-100">
-                    <span className="text-2xl sm:text-3xl">✅</span>
+                  <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-emerald-100">
+                    <span className="text-2xl">✅</span>
                     <div>
                       <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Rezerwacja</div>
                       <div className="font-black text-emerald-950 text-xs sm:text-sm mt-0.5">Brak zadatku</div>
                     </div>
                   </div>
                 )}
+
+                {/* Pole Dopłaty Reszty Kwoty */}
+                <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-indigo-100">
+                  <span className="text-2xl">🟢</span>
+                  <div>
+                    <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">
+                      {selectedEvent.reszta_do ? `Reszta (do ${formatDatePL(selectedEvent.reszta_do)})` : "Reszta kwoty"}
+                    </div>
+                    <div className="font-black text-indigo-950 text-xs sm:text-sm mt-0.5">
+                      {obliczReszteKwoty(selectedEvent.cena, selectedEvent.zadatek)}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Opis ogólny */}
@@ -885,10 +983,10 @@ export default function WydarzeniaPage() {
                     {isAdmin && (
                       <div className="flex items-center gap-1.5 text-[11px] font-bold">
                         <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200">
-                          Zadatek: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length}
+                          Zadatek: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === "zadatek").length}
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-900 border border-emerald-200">
-                          Całość: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === 'calosc').length}
+                          Całość: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === "calosc").length}
                         </span>
                       </div>
                     )}
@@ -908,7 +1006,6 @@ export default function WydarzeniaPage() {
                             </span>
                           </div>
 
-                          {/* Kompaktowy przycisk dla Admina / Klubowicza */}
                           {isAdmin ? (
                             <button
                               onClick={() => handleQuickPaymentToggle(idx)}
@@ -1025,14 +1122,14 @@ export default function WydarzeniaPage() {
                         {selectedEvent.plan_grafiki.map((imgUrl, idx) => (
                           <div 
                             key={idx} 
-                            onClick={() => setPreviewImage(imgUrl)}
+                            onClick={() => setPreviewImage(imgUrl)} 
                             className="bg-white rounded-2xl overflow-hidden border border-slate-200 shadow-sm p-2 cursor-zoom-in group relative"
                           >
                             <img 
                               src={imgUrl} 
                               alt={`Plan wyjazdu ${idx + 1}`} 
                               className="w-full h-auto object-contain max-h-[400px] rounded-xl group-hover:opacity-95 transition-opacity" 
-                              loading="lazy"
+                              loading="lazy" 
                             />
                             <div className="absolute inset-2 rounded-xl bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
                               <span>🔍</span> Kliknij, aby powiększyć
@@ -1090,7 +1187,7 @@ export default function WydarzeniaPage() {
                               src={selectedEvent.koszulki_grafika_glowna} 
                               alt="Koszulka treningowa" 
                               className="w-full h-auto object-contain max-h-[350px] rounded-xl group-hover:opacity-95 transition-opacity" 
-                              loading="lazy"
+                              loading="lazy" 
                             />
                             <div className="absolute inset-2 rounded-xl bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
                               <span>🔍</span> Kliknij, aby powiększyć
@@ -1108,14 +1205,14 @@ export default function WydarzeniaPage() {
                             {selectedEvent.koszulki_grafiki.map((imgUrl, idx) => (
                               <div 
                                 key={idx} 
-                                onClick={() => setPreviewImage(imgUrl)}
+                                onClick={() => setPreviewImage(imgUrl)} 
                                 className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-200 p-2 cursor-zoom-in group relative shadow-sm"
                               >
                                 <img 
                                   src={imgUrl} 
                                   alt={`Tabela rozmiarów ${idx + 1}`} 
                                   className="w-full h-auto object-contain max-h-[300px] rounded-xl group-hover:opacity-95 transition-opacity" 
-                                  loading="lazy"
+                                  loading="lazy" 
                                 />
                                 <div className="absolute inset-2 rounded-xl bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
                                   <span>🔍</span> Kliknij, aby powiększyć
@@ -1139,7 +1236,7 @@ export default function WydarzeniaPage() {
       {/* PEŁNOEKRANOWY LIGHTBOX / ZOOM OBRAZKA */}
       {previewImage && (
         <div 
-          onClick={() => setPreviewImage(null)}
+          onClick={() => setPreviewImage(null)} 
           className="fixed inset-0 bg-slate-950/95 z-[100] flex items-center justify-center p-3 sm:p-6 backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 cursor-zoom-out"
         >
           <button 
@@ -1152,7 +1249,7 @@ export default function WydarzeniaPage() {
             <img 
               src={previewImage} 
               alt="Powiększenie" 
-              className="max-w-full max-h-[92vh] object-contain rounded-2xl shadow-2xl border border-white/10"
+              className="max-w-full max-h-[92vh] object-contain rounded-2xl shadow-2xl border border-white/10" 
             />
           </div>
         </div>
@@ -1175,7 +1272,7 @@ export default function WydarzeniaPage() {
                 {editingId ? "Edytuj wydarzenie" : "Kreator nowego wydarzenia"}
               </h3>
               <p className="text-xs sm:text-sm font-medium text-slate-500 mt-1">
-                Uzupełnij informacje ogólne, termin zadatku i zarządzaj listą uczestników oraz ich statusem płatności.
+                Uzupełnij informacje ogólne, termin zadatku i dopłaty oraz zarządzaj listą uczestników i statusem ich wpłat.
               </p>
             </div>
 
@@ -1187,7 +1284,7 @@ export default function WydarzeniaPage() {
                 <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
                 
                 <div 
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => fileInputRef.current?.click()} 
                   className="w-full h-36 bg-sky-50 border-2 border-dashed border-sky-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-sky-100 transition-colors overflow-hidden relative"
                 >
                   {form.grafika_url ? (
@@ -1210,12 +1307,12 @@ export default function WydarzeniaPage() {
               <div className="space-y-2">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Gdzie wyświetlić wydarzenie?</label>
                 <div className="grid grid-cols-2 gap-2 sm:gap-4">
-                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'wkrotce' ? 'border-sky-500 bg-sky-50 text-sky-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-                    <input type="radio" name="status" value="wkrotce" checked={form.status === 'wkrotce'} onChange={() => setForm({...form, status: 'wkrotce'})} className="hidden" />
+                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === "wkrotce" ? "border-sky-500 bg-sky-50 text-sky-900" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+                    <input type="radio" name="status" value="wkrotce" checked={form.status === "wkrotce"} onChange={() => setForm({...form, status: "wkrotce"})} className="hidden" />
                     <span className="font-black text-xs sm:text-sm">⏳ Wkrótce</span>
                   </label>
-                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === 'planowane' ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
-                    <input type="radio" name="status" value="planowane" checked={form.status === 'planowane'} onChange={() => setForm({...form, status: 'planowane'})} className="hidden" />
+                  <label className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 cursor-pointer transition-all ${form.status === "planowane" ? "border-amber-500 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+                    <input type="radio" name="status" value="planowane" checked={form.status === "planowane"} onChange={() => setForm({...form, status: "planowane"})} className="hidden" />
                     <span className="font-black text-xs sm:text-sm">📅 Planowane</span>
                   </label>
                 </div>
@@ -1228,9 +1325,9 @@ export default function WydarzeniaPage() {
                   type="text" 
                   required 
                   value={form.tytul} 
-                  onChange={(e) => setForm({...form, tytul: e.target.value})}
-                  placeholder="np. Obóz sportowy Świeradów-Zdrój"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                  onChange={(e) => setForm({...form, tytul: e.target.value})} 
+                  placeholder="np. Obóz sportowy Świeradów-Zdrój" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
                 />
               </div>
 
@@ -1242,8 +1339,8 @@ export default function WydarzeniaPage() {
                     type="date" 
                     required 
                     value={form.data_od} 
-                    onChange={(e) => setForm({...form, data_od: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setForm({...form, data_od: e.target.value})} 
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
                   />
                 </div>
                 <div className="space-y-1">
@@ -1252,8 +1349,8 @@ export default function WydarzeniaPage() {
                     type="date" 
                     required 
                     value={form.data_do} 
-                    onChange={(e) => setForm({...form, data_do: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setForm({...form, data_do: e.target.value})} 
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
                   />
                 </div>
               </div>
@@ -1265,9 +1362,9 @@ export default function WydarzeniaPage() {
                   <input 
                     type="text" 
                     value={form.cena} 
-                    onChange={(e) => setForm({...form, cena: e.target.value})}
-                    placeholder="np. 1080 PLN"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setForm({...form, cena: e.target.value})} 
+                    placeholder="np. 1080 PLN" 
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
                   />
                 </div>
                 <div className="space-y-1">
@@ -1275,9 +1372,9 @@ export default function WydarzeniaPage() {
                   <input 
                     type="text" 
                     value={form.zadatek} 
-                    onChange={(e) => setForm({...form, zadatek: e.target.value})}
-                    placeholder="np. 400 PLN"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setForm({...form, zadatek: e.target.value})} 
+                    placeholder="np. 400 PLN" 
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
                   />
                 </div>
                 <div className="space-y-1">
@@ -1285,8 +1382,33 @@ export default function WydarzeniaPage() {
                   <input 
                     type="date" 
                     value={form.zadatek_do} 
-                    onChange={(e) => setForm({...form, zadatek_do: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setForm({...form, zadatek_do: e.target.value})} 
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
+                  />
+                </div>
+              </div>
+
+              {/* DOPŁATA RESZTY KWOTY - WYLICZANA + TERMIN RESZTY */}
+              <div className="p-4 bg-sky-50/70 rounded-2xl border border-sky-200 grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+                <div className="space-y-1">
+                  <label className="font-bold text-sky-950 text-xs block uppercase">
+                    Pozostała kwota (wyliczona automatycznie)
+                  </label>
+                  <div className="w-full bg-white border border-sky-300 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-black text-sky-900 flex items-center justify-between">
+                    <span>{formResztaKwoty}</span>
+                    <span className="text-[10px] font-bold text-sky-600 bg-sky-100 px-2 py-0.5 rounded-md">Cena - Zadatek</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs block uppercase">
+                    Termin płatności reszty kwoty
+                  </label>
+                  <input 
+                    type="date" 
+                    value={form.reszta_do} 
+                    onChange={(e) => setForm({...form, reszta_do: e.target.value})} 
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500" 
                   />
                 </div>
               </div>
@@ -1297,10 +1419,10 @@ export default function WydarzeniaPage() {
                 <textarea 
                   required 
                   value={form.opis} 
-                  onChange={(e) => setForm({...form, opis: e.target.value})}
-                  placeholder="Wpisz punkty oferty, co zawiera cena, dla kogo jest wyjazd..."
-                  rows={4}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs sm:text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none"
+                  onChange={(e) => setForm({...form, opis: e.target.value})} 
+                  placeholder="Wpisz punkty oferty, co zawiera cena, dla kogo jest wyjazd..." 
+                  rows={4} 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs sm:text-sm font-medium text-slate-700 focus:outline-none focus:border-sky-500 resize-none" 
                 />
               </div>
 
@@ -1311,8 +1433,8 @@ export default function WydarzeniaPage() {
                     👥 Lista uczestników & Płatności ({form.uczestnicy.length})
                   </label>
                   <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600">
-                    <span className="text-amber-800">🟡 Zadatek: {form.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length}</span>
-                    <span className="text-emerald-800">🟢 Całość: {form.uczestnicy.filter(u => u.status_platnosci === 'calosc').length}</span>
+                    <span className="text-amber-800">🟡 Zadatek: {form.uczestnicy.filter(u => u.status_platnosci === "zadatek").length}</span>
+                    <span className="text-emerald-800">🟢 Całość: {form.uczestnicy.filter(u => u.status_platnosci === "calosc").length}</span>
                   </div>
                 </div>
 
@@ -1320,16 +1442,16 @@ export default function WydarzeniaPage() {
                   <input 
                     type="text" 
                     value={klientSearch} 
-                    onChange={(e) => setKlientSearch(e.target.value)}
-                    placeholder="🔍 Szukaj klubowicza z bazy po nazwisku..."
-                    className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setKlientSearch(e.target.value)} 
+                    placeholder="🔍 Szukaj klubowicza z bazy po nazwisku..." 
+                    className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500" 
                   />
                   {klientSearch.length > 0 && (
                     <div className="max-h-40 overflow-y-auto bg-white border border-sky-200 rounded-xl p-2 space-y-1 shadow-md">
                       {filteredKlienci.slice(0, 10).map(k => (
                         <div 
                           key={k.id} 
-                          onClick={() => handleAddParticipantFromDB(k)}
+                          onClick={() => handleAddParticipantFromDB(k)} 
                           className="p-2 hover:bg-sky-100 rounded-lg text-xs font-bold text-sky-950 flex justify-between items-center cursor-pointer transition-colors"
                         >
                           <span className="truncate pr-2">{k.imie} {k.nazwisko} <span className="text-slate-400 font-normal">({k.email || "brak e-mail"})</span></span>
@@ -1349,19 +1471,19 @@ export default function WydarzeniaPage() {
                     type="text" 
                     placeholder="Imię" 
                     value={manualImie} 
-                    onChange={(e) => setManualImie(e.target.value)}
-                    className="w-full sm:flex-1 min-w-0 bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setManualImie(e.target.value)} 
+                    className="w-full sm:flex-1 min-w-0 bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500" 
                   />
                   <input 
                     type="text" 
                     placeholder="Nazwisko" 
                     value={manualNazwisko} 
-                    onChange={(e) => setManualNazwisko(e.target.value)}
-                    className="w-full sm:flex-1 min-w-0 bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500"
+                    onChange={(e) => setManualNazwisko(e.target.value)} 
+                    className="w-full sm:flex-1 min-w-0 bg-white border border-sky-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-sky-500" 
                   />
                   <button 
                     type="button" 
-                    onClick={handleAddManualParticipant}
+                    onClick={handleAddManualParticipant} 
                     className="w-full sm:w-auto bg-sky-900 hover:bg-sky-950 text-white font-bold px-4 py-2 rounded-xl text-xs cursor-pointer transition-colors shrink-0"
                   >
                     Dopisz
@@ -1418,8 +1540,8 @@ export default function WydarzeniaPage() {
 
                             <button 
                               type="button" 
-                              onClick={() => handleRemoveParticipant(index)}
-                              className="text-rose-500 hover:text-rose-700 p-1 font-black cursor-pointer ml-1"
+                              onClick={() => handleRemoveParticipant(index)} 
+                              className="text-rose-500 hover:text-rose-700 p-1 font-black cursor-pointer ml-1" 
                               title="Usuń uczestnika"
                             >
                               ✕
@@ -1450,8 +1572,8 @@ export default function WydarzeniaPage() {
                     <input 
                       type="checkbox" 
                       checked={form.pokaz_whatsapp} 
-                      onChange={(e) => setForm({...form, pokaz_whatsapp: e.target.checked})}
-                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                      onChange={(e) => setForm({...form, pokaz_whatsapp: e.target.checked})} 
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0" 
                     />
                     <span className="font-black text-xs text-slate-800 uppercase tracking-wider">💬 Grupa WhatsApp</span>
                   </label>
@@ -1462,9 +1584,9 @@ export default function WydarzeniaPage() {
                       <input 
                         type="url" 
                         value={form.whatsapp_url} 
-                        onChange={(e) => setForm({...form, whatsapp_url: e.target.value})}
-                        placeholder="https://chat.whatsapp.com/..."
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+                        onChange={(e) => setForm({...form, whatsapp_url: e.target.value})} 
+                        placeholder="https://chat.whatsapp.com/..." 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500" 
                       />
                     </div>
                   )}
@@ -1476,8 +1598,8 @@ export default function WydarzeniaPage() {
                     <input 
                       type="checkbox" 
                       checked={form.pokaz_zbiorka} 
-                      onChange={(e) => setForm({...form, pokaz_zbiorka: e.target.checked})}
-                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                      onChange={(e) => setForm({...form, pokaz_zbiorka: e.target.checked})} 
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0" 
                     />
                     <span className="font-black text-xs text-slate-800 uppercase tracking-wider">📍 Miejsce zbiórki & Nawigacja Google Maps</span>
                   </label>
@@ -1489,9 +1611,9 @@ export default function WydarzeniaPage() {
                         <input 
                           type="text" 
                           value={form.zbiorka} 
-                          onChange={(e) => setForm({...form, zbiorka: e.target.value})}
-                          placeholder="np. Parking pod klubem, godz. 06:30"
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+                          onChange={(e) => setForm({...form, zbiorka: e.target.value})} 
+                          placeholder="np. Parking pod klubem, godz. 06:30" 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500" 
                         />
                       </div>
                       <div className="space-y-1">
@@ -1499,9 +1621,9 @@ export default function WydarzeniaPage() {
                         <input 
                           type="url" 
                           value={form.google_maps_url} 
-                          onChange={(e) => setForm({...form, google_maps_url: e.target.value})}
-                          placeholder="https://maps.app.goo.gl/... lub https://google.com/maps/..."
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+                          onChange={(e) => setForm({...form, google_maps_url: e.target.value})} 
+                          placeholder="https://maps.app.goo.gl/... lub https://google.com/maps/..." 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500" 
                         />
                       </div>
                     </div>
@@ -1514,8 +1636,8 @@ export default function WydarzeniaPage() {
                     <input 
                       type="checkbox" 
                       checked={form.pokaz_ekwipunek} 
-                      onChange={(e) => setForm({...form, pokaz_ekwipunek: e.target.checked})}
-                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                      onChange={(e) => setForm({...form, pokaz_ekwipunek: e.target.checked})} 
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0" 
                     />
                     <span className="font-black text-xs text-slate-800 uppercase tracking-wider">🎒 Co zabrać ze sobą (Ekwipunek / Checklista)</span>
                   </label>
@@ -1524,10 +1646,10 @@ export default function WydarzeniaPage() {
                     <div className="pl-0 sm:pl-7 space-y-1">
                       <textarea 
                         value={form.ekwipunek} 
-                        onChange={(e) => setForm({...form, ekwipunek: e.target.value})}
-                        placeholder="- Buty do biegania w terenie&#10;- Strój kąpielowy i klapki&#10;- Wygodny strój sportowy"
-                        rows={3}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none"
+                        onChange={(e) => setForm({...form, ekwipunek: e.target.value})} 
+                        placeholder="- Buty do biegania w terenie&#10;- Strój kąpielowy i klapki&#10;- Wygodny strój sportowy" 
+                        rows={3} 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none" 
                       />
                     </div>
                   )}
@@ -1539,8 +1661,8 @@ export default function WydarzeniaPage() {
                     <input 
                       type="checkbox" 
                       checked={form.pokaz_opis_strefy} 
-                      onChange={(e) => setForm({...form, pokaz_opis_strefy: e.target.checked})}
-                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                      onChange={(e) => setForm({...form, pokaz_opis_strefy: e.target.checked})} 
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0" 
                     />
                     <span className="font-black text-xs text-slate-800 uppercase tracking-wider">📋 Szczegółowy plan wyjazdu & wytyczne</span>
                   </label>
@@ -1549,10 +1671,10 @@ export default function WydarzeniaPage() {
                     <div className="pl-0 sm:pl-7 space-y-1">
                       <textarea 
                         value={form.strefa_opis} 
-                        onChange={(e) => setForm({...form, strefa_opis: e.target.value})}
-                        placeholder="Harmonogram poszczególnych dni, wytyczne, podział pokoi..."
-                        rows={3}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none"
+                        onChange={(e) => setForm({...form, strefa_opis: e.target.value})} 
+                        placeholder="Harmonogram poszczególnych dni, wytyczne, podział pokoi..." 
+                        rows={3} 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none" 
                       />
                     </div>
                   )}
@@ -1564,8 +1686,8 @@ export default function WydarzeniaPage() {
                     <input 
                       type="checkbox" 
                       checked={form.pokaz_plan_grafika} 
-                      onChange={(e) => setForm({...form, pokaz_plan_grafika: e.target.checked})}
-                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                      onChange={(e) => setForm({...form, pokaz_plan_grafika: e.target.checked})} 
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0" 
                     />
                     <span className="font-black text-xs text-slate-800 uppercase tracking-wider">🗺️ Wiele grafik / plakatów planu wyjazdu</span>
                   </label>
@@ -1582,7 +1704,7 @@ export default function WydarzeniaPage() {
                       />
                       <button 
                         type="button" 
-                        onClick={() => planFileInputRef.current?.click()}
+                        onClick={() => planFileInputRef.current?.click()} 
                         className="w-full py-3 bg-amber-50 hover:bg-amber-100 border-2 border-dashed border-amber-300 rounded-xl font-bold text-xs text-amber-900 transition-colors cursor-pointer flex items-center justify-center gap-2"
                       >
                         <span>📁</span> Wybierz i dodaj zdjęcia planu (możesz zaznaczyć kilka)
@@ -1595,7 +1717,7 @@ export default function WydarzeniaPage() {
                               <img src={imgUrl} alt={`Plan ${index + 1}`} className="w-full h-full object-cover" loading="lazy" />
                               <button 
                                 type="button" 
-                                onClick={() => handleRemovePlanImage(index)}
+                                onClick={() => handleRemovePlanImage(index)} 
                                 className="absolute top-1 right-1 bg-rose-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-black shadow-md cursor-pointer hover:bg-rose-700 transition-colors"
                               >
                                 ✕
@@ -1614,8 +1736,8 @@ export default function WydarzeniaPage() {
                     <input 
                       type="checkbox" 
                       checked={form.pokaz_koszulki} 
-                      onChange={(e) => setForm({...form, pokaz_koszulki: e.target.checked})}
-                      className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                      onChange={(e) => setForm({...form, pokaz_koszulki: e.target.checked})} 
+                      className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0" 
                     />
                     <span className="font-black text-xs text-slate-800 uppercase tracking-wider">👕 Koszulki treningowe (zamówienia / rozmiary)</span>
                   </label>
@@ -1629,9 +1751,9 @@ export default function WydarzeniaPage() {
                           <input 
                             type="text" 
                             value={form.koszulki_cena} 
-                            onChange={(e) => setForm({...form, koszulki_cena: e.target.value})}
-                            placeholder="np. 99 PLN"
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500"
+                            onChange={(e) => setForm({...form, koszulki_cena: e.target.value})} 
+                            placeholder="np. 99 PLN" 
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500" 
                           />
                         </div>
                         <div className="space-y-1">
@@ -1639,8 +1761,8 @@ export default function WydarzeniaPage() {
                           <input 
                             type="date" 
                             value={form.koszulki_termin} 
-                            onChange={(e) => setForm({...form, koszulki_termin: e.target.value})}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500"
+                            onChange={(e) => setForm({...form, koszulki_termin: e.target.value})} 
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500" 
                           />
                         </div>
                       </div>
@@ -1649,10 +1771,10 @@ export default function WydarzeniaPage() {
                         <label className="font-bold text-slate-600 text-[11px] block uppercase">Informacje / instrukcja zamawiania</label>
                         <textarea 
                           value={form.koszulki_opis} 
-                          onChange={(e) => setForm({...form, koszulki_opis: e.target.value})}
-                          placeholder="Wpisz wytyczne (np. rozmiary prosimy zgłaszać na recepcji lub w wiadomości)..."
-                          rows={2}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-indigo-500 resize-none"
+                          onChange={(e) => setForm({...form, koszulki_opis: e.target.value})} 
+                          placeholder="Wpisz wytyczne (np. rozmiary prosimy zgłaszać na recepcji lub w wiadomości)..." 
+                          rows={2} 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-indigo-500 resize-none" 
                         />
                       </div>
 
@@ -1661,7 +1783,7 @@ export default function WydarzeniaPage() {
                         <input type="file" ref={koszulkaMainFileInputRef} onChange={handleKoszulkaMainUpload} accept="image/*" className="hidden" />
                         
                         <div 
-                          onClick={() => koszulkaMainFileInputRef.current?.click()}
+                          onClick={() => koszulkaMainFileInputRef.current?.click()} 
                           className="w-full h-24 bg-slate-50 border-2 border-dashed border-indigo-200 rounded-xl flex items-center justify-center cursor-pointer hover:bg-indigo-50/50 transition-colors overflow-hidden relative p-2"
                         >
                           {form.koszulki_grafika_glowna ? (
@@ -1688,7 +1810,7 @@ export default function WydarzeniaPage() {
                         />
                         <button 
                           type="button" 
-                          onClick={() => koszulkaExtraFileInputRef.current?.click()}
+                          onClick={() => koszulkaExtraFileInputRef.current?.click()} 
                           className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 border-2 border-dashed border-indigo-300 rounded-xl font-bold text-xs text-indigo-900 transition-colors cursor-pointer flex items-center justify-center gap-2"
                         >
                           <span>📐</span> Dodaj tabele rozmiarów / warianty (wiele zdjęć)
@@ -1701,7 +1823,7 @@ export default function WydarzeniaPage() {
                                 <img src={imgUrl} alt={`Rozmiar ${index + 1}`} className="w-full h-full object-cover" loading="lazy" />
                                 <button 
                                   type="button" 
-                                  onClick={() => handleRemoveKoszulkaExtraImage(index)}
+                                  onClick={() => handleRemoveKoszulkaExtraImage(index)} 
                                   className="absolute top-1 right-1 bg-rose-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-black shadow-md cursor-pointer hover:bg-rose-700 transition-colors"
                                 >
                                   ✕
@@ -1724,8 +1846,8 @@ export default function WydarzeniaPage() {
                 </button>
                 <button 
                   type="submit" 
-                  disabled={isSaving}
-                  className={`w-full sm:flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={isSaving} 
+                  className={`w-full sm:flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm flex items-center justify-center gap-2 ${isSaving ? "opacity-50 cursor-not-allowed" : ""}`}
                 >
                   {isSaving ? "Zapisywanie..." : "Zapisz do bazy"}
                 </button>
