@@ -50,6 +50,9 @@ export default function RootLayout({
   const [profileHeight, setProfileHeight] = useState('');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
+  // Stan powiadomienia o nowej interpretacji badań krwi
+  const [hasUnreadInterpretation, setHasUnreadInterpretation] = useState<boolean>(false);
+
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
   // Stany dla mechanizmu Pull-to-Refresh
@@ -72,6 +75,32 @@ export default function RootLayout({
       cleanPath.startsWith('/grafik-publiczny')
     );
   })();
+
+  // Funkcja sprawdzająca nieodczytane interpretacje badań krwi
+  const checkUnreadInterpretations = async (cId: number | string | null, email: string) => {
+    if (!email && !cId) return;
+    try {
+      let query = supabase
+        .from('klub_badania_krwi')
+        .select('id, nowa_interpretacja')
+        .eq('nowa_interpretacja', true);
+
+      if (cId) {
+        query = query.or(`klient_id.eq.${cId},email_klienta.ilike.${email.trim()}`);
+      } else {
+        query = query.ilike('email_klienta', email.trim());
+      }
+
+      const { data, error } = await query;
+      if (data && data.length > 0 && !error) {
+        setHasUnreadInterpretation(true);
+      } else {
+        setHasUnreadInterpretation(false);
+      }
+    } catch (err) {
+      console.error("Błąd sprawdzania nowych interpretacji:", err);
+    }
+  };
 
   // Pobieranie ID klienta
   useEffect(() => {
@@ -249,7 +278,8 @@ export default function RootLayout({
         }
 
         const userEmail = user.email || '';
-        setProfileEmail(userEmail);
+        const cleanEmail = userEmail.toLowerCase().trim();
+        setProfileEmail(cleanEmail);
         
         const { data: clients } = await supabase
           .from('klienci')
@@ -257,7 +287,6 @@ export default function RootLayout({
 
         let klientData = null;
         if (clients && clients.length > 0) {
-          const cleanEmail = userEmail.toLowerCase().trim();
           klientData = clients.find((c: any) => {
             const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
             return cEmail === cleanEmail;
@@ -288,9 +317,11 @@ export default function RootLayout({
           setCalendarAutoSync(settings.autoSync ?? false);
 
           subscribeToPushNotifications(k.id);
+          await checkUnreadInterpretations(k.id, cleanEmail);
+        } else {
+          await checkUnreadInterpretations(null, cleanEmail);
         }
 
-        const cleanEmail = userEmail.toLowerCase().trim();
         if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
@@ -299,20 +330,20 @@ export default function RootLayout({
           const { data: trenerData } = await supabase
             .from('trenerzy')
             .select('*')
-            .ilike('email', userEmail.trim())
+            .ilike('email', cleanEmail)
             .maybeSingle();
 
           if (trenerData) {
             setAppRole('trener');
-            setProfileName(trenerData.imie_nazwisko || (klientData ? `${(klientData as any).Imię} ${(klientData as any).Nazwisko}` : userEmail.split('@')[0]));
+            setProfileName(trenerData.imie_nazwisko || (klientData ? `${(klientData as any).Imię} ${(klientData as any).Nazwisko}` : cleanEmail.split('@')[0]));
             if (trenerData.telefon && trenerData.telefon !== '-') setProfilePhone(trenerData.telefon);
           } else {
             setAppRole('klubowicz');
             if (klientData) {
               const k = klientData as any;
-              setProfileName(`${k.Imię || ''} ${k.Nazwisko || ''}`.trim() || userEmail.split('@')[0]);
+              setProfileName(`${k.Imię || ''} ${k.Nazwisko || ''}`.trim() || cleanEmail.split('@')[0]);
             } else {
-              setProfileName(userEmail.split('@')[0]);
+              setProfileName(cleanEmail.split('@')[0]);
             }
           }
         }
@@ -621,13 +652,11 @@ export default function RootLayout({
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="HandheldFriendly" content="true" />
 
-        {/* Favicon i Ikony aplikacji */}
         <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
         <link rel="icon" type="image/png" sizes="32x32" href="/logo.png?v=3" />
         <link rel="shortcut icon" href="/favicon.ico?v=3" />
         <link rel="apple-touch-icon" href="/logo.png?v=3" />
 
-        {/* Open Graph / Social Media Preview (Facebook, WhatsApp, iMessage) */}
         <meta property="og:site_name" content="Forma Marzeń" />
         <meta property="og:title" content="Forma Marzeń - Panel Klubu" />
         <meta property="og:description" content="Klub treningowy i strefa aktywności. Zarządzaj treningami, karnetami i zapisami." />
@@ -639,13 +668,11 @@ export default function RootLayout({
         <meta property="og:url" content="https://forma-marzen.vercel.app" />
         <meta property="og:type" content="website" />
 
-        {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Forma Marzeń - Panel Klubu" />
         <meta name="twitter:description" content="Klub treningowy i strefa aktywności. Zarządzaj treningami, karnetami i zapisami." />
         <meta name="twitter:image" content="https://forma-marzen.vercel.app/og-image.png" />
 
-        {/* PWA & Mobile Web App */}
         <link rel="manifest" href="/manifest.json?v=2" />
         <meta name="theme-color" content="#0284c7" />
         <meta name="mobile-web-app-capable" content="yes" />
@@ -717,19 +744,32 @@ export default function RootLayout({
                         <div className="space-y-1">
                           {section.items.map((item) => {
                             const isActive = pathname === item.href.split('?')[0];
+                            const isAnalizaFormy = item.href === '/analiza-formy';
+                            const showBlinkingBadge = isAnalizaFormy && hasUnreadInterpretation && appRole === 'klubowicz';
+
                             return (
                               <Link
                                 key={item.href}
                                 href={item.href}
                                 onClick={() => setIsMenuOpen(false)}
-                                className={`flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                                className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
                                   isActive
                                     ? "bg-amber-500 text-slate-950 font-black shadow-sm"
                                     : "text-slate-600 hover:bg-sky-50 hover:text-sky-950"
                                 }`}
                               >
-                                <span className="text-sm">{item.icon}</span>
-                                <span>{item.label}</span>
+                                <div className="flex items-center gap-3 truncate">
+                                  <span className="text-sm">{item.icon}</span>
+                                  <span className="truncate">{item.label}</span>
+                                </div>
+                                {showBlinkingBadge && (
+                                  <span className="relative flex h-4 w-4 shrink-0">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                                      !
+                                    </span>
+                                  </span>
+                                )}
                               </Link>
                             );
                           })}
@@ -762,12 +802,18 @@ export default function RootLayout({
                   
                   <div className="flex items-center gap-3">
                     <button 
-                      className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer"
+                      className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer relative"
                       onClick={() => setIsMenuOpen(true)}
                     >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 6h16M4 12h16M4 18h16" />
                       </svg>
+                      {hasUnreadInterpretation && appRole === 'klubowicz' && (
+                        <span className="absolute top-1 right-1 flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                        </span>
+                      )}
                     </button>
                     <span className="font-black text-sky-950 text-xs sm:text-sm tracking-wider uppercase">
                       {appRole === 'admin' ? 'Panel Zarządzania' : appRole === 'trener' ? 'Panel Trenera' : 'Strefa Klienta'}
