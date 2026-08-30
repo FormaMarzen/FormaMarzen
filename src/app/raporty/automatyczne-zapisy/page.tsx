@@ -87,6 +87,105 @@ const getClientEmail = (client: any): string => {
   return client['E-mail'] || client.email || client.Email || client.mail || 'Brak e-maila';
 };
 
+// Funkcja weryfikująca czy dany dzień przypada na okres zawieszenia karnetu klienta
+const isClientSuspendedOnDate = (client: any, date: Date): boolean => {
+  if (!client) return false;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const dateStr = `${y}-${m}-${d}`;
+
+  // 1. Sprawdzenie w aktywnych karnetach
+  let passes: any[] = [];
+  const rawKarnety = client.karnetyKlubowicza || client.karnety_klubowicza || client.karnety;
+  if (Array.isArray(rawKarnety)) {
+    passes = rawKarnety;
+  } else if (typeof rawKarnety === 'string') {
+    try { passes = JSON.parse(rawKarnety); } catch (e) { passes = []; }
+  }
+
+  for (const pass of passes) {
+    if (pass?.zawieszonyOd && pass?.zawieszonyDo) {
+      if (dateStr >= pass.zawieszonyOd && dateStr <= pass.zawieszonyDo) {
+        return true;
+      }
+    }
+  }
+
+  // 2. Sprawdzenie w globalnej historii zawieszeń
+  let suspensions: any[] = [];
+  const rawSusp = client.historiaZawieszenGlobalna || client.historia_zawieszen;
+  if (Array.isArray(rawSusp)) {
+    suspensions = rawSusp;
+  } else if (typeof rawSusp === 'string') {
+    try { suspensions = JSON.parse(rawSusp); } catch (e) { suspensions = []; }
+  }
+
+  for (const susp of suspensions) {
+    const start = susp.od;
+    const end = susp.status === 'aktywne' 
+      ? susp.planowane_do 
+      : (susp.do && susp.do !== '-' ? susp.do : susp.planowane_do);
+    
+    if (start && end) {
+      if (dateStr >= start && dateStr <= end) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
+// Wyciągnięcie podsumowania zawieszenia do etykiety w UI
+const getClientSuspensionInfo = (client: any): { isSuspendedNow: boolean; suspensionEnd: string | null } => {
+  if (!client) return { isSuspendedNow: false, suspensionEnd: null };
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const d = String(today.getDate()).padStart(2, '0');
+  const todayStr = `${y}-${m}-${d}`;
+
+  let passes: any[] = [];
+  const rawKarnety = client.karnetyKlubowicza || client.karnety_klubowicza || client.karnety;
+  if (Array.isArray(rawKarnety)) {
+    passes = rawKarnety;
+  } else if (typeof rawKarnety === 'string') {
+    try { passes = JSON.parse(rawKarnety); } catch (e) { passes = []; }
+  }
+
+  for (const pass of passes) {
+    if (pass?.zawieszonyOd && pass?.zawieszonyDo) {
+      if (todayStr >= pass.zawieszonyOd && todayStr <= pass.zawieszonyDo) {
+        return { isSuspendedNow: true, suspensionEnd: pass.zawieszonyDo };
+      }
+    }
+  }
+
+  let suspensions: any[] = [];
+  const rawSusp = client.historiaZawieszenGlobalna || client.historia_zawieszen;
+  if (Array.isArray(rawSusp)) {
+    suspensions = rawSusp;
+  } else if (typeof rawSusp === 'string') {
+    try { suspensions = JSON.parse(rawSusp); } catch (e) { suspensions = []; }
+  }
+
+  for (const susp of suspensions) {
+    const start = susp.od;
+    const end = susp.status === 'aktywne' 
+      ? susp.planowane_do 
+      : (susp.do && susp.do !== '-' ? susp.do : susp.planowane_do);
+    
+    if (start && end) {
+      if (todayStr >= start && todayStr <= end) {
+        return { isSuspendedNow: true, suspensionEnd: end };
+      }
+    }
+  }
+
+  return { isSuspendedNow: false, suspensionEnd: null };
+};
+
 export default function AutomatyczneZapisyPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -241,7 +340,7 @@ export default function AutomatyczneZapisyPage() {
     }).length;
   }, []);
 
-  // Automatyczna synchronizacja reguł z uwzględnieniem karencji
+  // Automatyczna synchronizacja reguł z uwzględnieniem karencji ORAZ zawieszeń karnetu
   const syncAutoBookings = useCallback(async (rules: any[], clients: any[], grafik: any[], clubRuleObj: BookingRules) => {
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -287,6 +386,7 @@ export default function AutomatyczneZapisyPage() {
       const { effectiveDate } = getEffectivePassExpiry(clientObj, clubRuleObj);
       const endDate = effectiveDate;
 
+      // 1. Czyszczenie zapisów jeśli karnet całkowicie wygasł
       if (!endDate || endDate < startDate) {
         const keysToRemove: string[] = [];
         (existingBookings || []).forEach((b: any) => {
@@ -320,6 +420,40 @@ export default function AutomatyczneZapisyPage() {
         continue;
       }
 
+      // 2. Czyszczenie przyszłych zapisów, które przypadają na okres zawieszenia
+      const suspendedKeysToRemove: string[] = [];
+      (existingBookings || []).forEach((b: any) => {
+        if (b.class_key && b.class_key.startsWith(`${classObj.id}_`)) {
+          const datePart = b.class_key.split('_')[1];
+          if (datePart) {
+            let m = 0, d = 0, yr = currentYear;
+            if (datePart.includes('/')) {
+              const p = datePart.split('/').map(Number);
+              d = p[0]; m = p[1];
+            } else if (datePart.includes('-')) {
+              const p = datePart.split('-').map(Number);
+              yr = p[0]; m = p[1]; d = p[2];
+            }
+            const bookingDate = new Date(yr, m - 1, d);
+            const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || '00:00').split(':');
+            const classDateTime = new Date(yr, m - 1, d, parseInt(sh, 10), parseInt(sm, 10), 0);
+
+            if (classDateTime > now && isClientSuspendedOnDate(clientObj, bookingDate)) {
+              suspendedKeysToRemove.push(b.class_key);
+              bookedKeys.delete(b.class_key);
+            }
+          }
+        }
+      });
+
+      if (suspendedKeysToRemove.length > 0) {
+        await supabase
+          .from('zapisy_zajec')
+          .delete()
+          .in('class_key', suspendedKeysToRemove)
+          .eq('klient_id', Number(rule.klient_id));
+      }
+
       let rawNadchodzace = clientObj.zapisyNadchodzace || [];
       if (typeof rawNadchodzace === 'string') {
         try { rawNadchodzace = JSON.parse(rawNadchodzace); } catch (e) { rawNadchodzace = []; }
@@ -327,9 +461,16 @@ export default function AutomatyczneZapisyPage() {
       let newZapisyNadchodzace = Array.isArray(rawNadchodzace) ? [...rawNadchodzace] : [];
       let hasUpdates = false;
 
+      // 3. Generowanie stałych rezerwacji dzień po dniu (z pomijaniem dni zawieszenia)
       let curr = new Date(startDate);
       while (curr <= endDate) {
         if (targetDayIndices.includes(curr.getDay())) {
+          // SPRAWDZENIE: Jeśli karnet jest w tym dniu zawieszony, pomijamy zapis!
+          if (isClientSuspendedOnDate(clientObj, curr)) {
+            curr.setDate(curr.getDate() + 1);
+            continue;
+          }
+
           const month = String(curr.getMonth() + 1).padStart(2, '0');
           const day = String(curr.getDate()).padStart(2, '0');
           const year = curr.getFullYear();
@@ -392,7 +533,6 @@ export default function AutomatyczneZapisyPage() {
     try {
       setLoading(true);
 
-      // Pobieranie wszystkich tabel równolegle
       const [
         rulesRes,
         klienciData,
@@ -423,11 +563,13 @@ export default function AutomatyczneZapisyPage() {
       }
       setClubRules(activeRules);
 
-      // 2. Wzbogacenie klientów
+      // 2. Wzbogacenie klientów (wraz ze statusem zawieszenia)
       let enrichedClients: any[] = [];
       if (klienciData && klienciData.length > 0) {
         enrichedClients = klienciData.map((c: any) => {
           const passDetails = getEffectivePassExpiry(c, activeRules);
+          const suspInfo = getClientSuspensionInfo(c);
+
           return {
             ...c,
             fullName: getClientFullName(c),
@@ -437,7 +579,9 @@ export default function AutomatyczneZapisyPage() {
             passName: passDetails.passName,
             effectiveEndDate: passDetails.effectiveDate,
             graceDays: passDetails.graceDays,
-            hasActiveOrGracePass: passDetails.hasActiveOrGracePass
+            hasActiveOrGracePass: passDetails.hasActiveOrGracePass,
+            isSuspendedNow: suspInfo.isSuspendedNow,
+            suspensionEnd: suspInfo.suspensionEnd
           };
         });
         setKlienciList(enrichedClients);
@@ -472,7 +616,7 @@ export default function AutomatyczneZapisyPage() {
     }
   }, [getEffectivePassExpiry, syncAutoBookings]);
 
-  // Subskrypcja Realtime z zabezpieczeniem przed spamowaniem wywołań
+  // Subskrypcja Realtime
   useEffect(() => {
     loadData();
 
@@ -766,7 +910,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System integruje reguły z tabeli <strong>club_booking_rules</strong> (karencja po wygaśnięciu karnetu/umowy: {clubRules.expired_pass_grace_days ?? 15} dni).
+            System integruje reguły z tabeli <strong>club_booking_rules</strong> (karencja: {clubRules.expired_pass_grace_days ?? 15} dni) oraz <strong>automatycznie respektuje zawieszenia karnetów</strong>.
           </p>
         </div>
       </div>
@@ -839,7 +983,12 @@ export default function AutomatyczneZapisyPage() {
                           }`}>
                             Karnet: {klient.displayPassExpiry}
                           </span>
-                          {klient.graceDays > 0 && (
+                          {klient.isSuspendedNow && (
+                            <span className="text-[9px] px-2 py-0.5 rounded-md font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                              ❄️ Zawieszony do: {klient.suspensionEnd}
+                            </span>
+                          )}
+                          {klient.graceDays > 0 && !klient.isSuspendedNow && (
                             <span className="text-[9px] px-2 py-0.5 rounded-md font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
                               Karencja: +{klient.graceDays} dni
                             </span>
@@ -933,6 +1082,8 @@ export default function AutomatyczneZapisyPage() {
               const matchedClient = klienciList.find(k => String(k.id) === String(item.klient_id));
               const livePassExpiry = matchedClient ? matchedClient.displayPassExpiry : (item.pass_expiry || 'Brak');
               const hasActiveOrGrace = matchedClient ? matchedClient.hasActiveOrGracePass : (item.pass_expiry && item.pass_expiry !== 'Brak');
+              const isSuspendedNow = matchedClient?.isSuspendedNow ?? false;
+              const suspensionEnd = matchedClient?.suspensionEnd ?? null;
               const graceDays = matchedClient?.graceDays ?? clubRules.expired_pass_grace_days ?? 15;
               const futureBookingsCount = futureBookingsMap.get(item.id) ?? 0;
               const isDeletingThis = isDeletingId === item.id;
@@ -952,7 +1103,12 @@ export default function AutomatyczneZapisyPage() {
                       }`}>
                         Ważność karnetu: {livePassExpiry}
                       </span>
-                      {graceDays > 0 && (
+                      {isSuspendedNow && (
+                        <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded-md border border-amber-300">
+                          ❄️ Zawieszony do: {suspensionEnd}
+                        </span>
+                      )}
+                      {graceDays > 0 && !isSuspendedNow && (
                         <span className="bg-indigo-50 text-indigo-900 text-[10px] font-bold px-2 py-0.5 rounded-md border border-indigo-200">
                           Karencja: +{graceDays} dni
                         </span>
