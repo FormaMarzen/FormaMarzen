@@ -3,11 +3,14 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
+export type PaymentStatus = "nieoplacone" | "zadatek" | "calosc";
+
 interface Uczestnik {
   id?: string | number;
   imie: string;
   nazwisko: string;
   email?: string;
+  status_platnosci?: PaymentStatus;
 }
 
 interface KlientBaza {
@@ -156,6 +159,10 @@ export default function WydarzeniaPage() {
 
     if (!error && data) {
       setWydarzenia(data);
+      if (selectedEvent) {
+        const refreshed = data.find((w: Wydarzenie) => w.id === selectedEvent.id);
+        if (refreshed) setSelectedEvent(refreshed);
+      }
     }
 
     const { data: klienciData, error: klienciError } = await supabase
@@ -255,7 +262,7 @@ export default function WydarzeniaPage() {
       opis: w.opis || "",
       grafika_url: w.grafika_url || null,
       status: w.status || "wkrotce",
-      uczestnicy: Array.isArray(w.uczestnicy) ? w.uczestnicy : [],
+      uczestnicy: Array.isArray(w.uczestnicy) ? w.uczestnicy.map(u => ({ ...u, status_platnosci: u.status_platnosci || 'nieoplacone' })) : [],
       
       pokaz_whatsapp: !!w.pokaz_whatsapp,
       whatsapp_url: w.whatsapp_url || "",
@@ -383,7 +390,13 @@ export default function WydarzeniaPage() {
     }
     setForm(prev => ({
       ...prev,
-      uczestnicy: [...prev.uczestnicy, { id: k.id, imie: k.imie, nazwisko: k.nazwisko, email: k.email }]
+      uczestnicy: [...prev.uczestnicy, { 
+        id: k.id, 
+        imie: k.imie, 
+        nazwisko: k.nazwisko, 
+        email: k.email,
+        status_platnosci: "nieoplacone"
+      }]
     }));
     setKlientSearch("");
   };
@@ -392,7 +405,11 @@ export default function WydarzeniaPage() {
     if (!manualImie.trim()) return;
     setForm(prev => ({
       ...prev,
-      uczestnicy: [...prev.uczestnicy, { imie: manualImie.trim(), nazwisko: manualNazwisko.trim() }]
+      uczestnicy: [...prev.uczestnicy, { 
+        imie: manualImie.trim(), 
+        nazwisko: manualNazwisko.trim(),
+        status_platnosci: "nieoplacone"
+      }]
     }));
     setManualImie("");
     setManualNazwisko("");
@@ -403,6 +420,44 @@ export default function WydarzeniaPage() {
       ...prev,
       uczestnicy: prev.uczestnicy.filter((_, idx) => idx !== indexToRemove)
     }));
+  };
+
+  const handleUpdateParticipantPayment = (index: number, status: PaymentStatus) => {
+    setForm(prev => {
+      const updated = [...prev.uczestnicy];
+      updated[index] = { ...updated[index], status_platnosci: status };
+      return { ...prev, uczestnicy: updated };
+    });
+  };
+
+  // Szybka aktualizacja statusu płatności z poziomu modala podglądu dla Admina
+  const handleQuickPaymentToggle = async (participantIndex: number) => {
+    if (!isAdmin || !selectedEvent || !selectedEvent.uczestnicy) return;
+
+    const currentUczestnicy = [...selectedEvent.uczestnicy];
+    const target = currentUczestnicy[participantIndex];
+    const nextStatusMap: Record<PaymentStatus, PaymentStatus> = {
+      "nieoplacone": "zadatek",
+      "zadatek": "calosc",
+      "calosc": "nieoplacone"
+    };
+    const nextStatus: PaymentStatus = nextStatusMap[target.status_platnosci || "nieoplacone"];
+    
+    currentUczestnicy[participantIndex] = {
+      ...target,
+      status_platnosci: nextStatus
+    };
+
+    // Zapis natychmiast do bazy Supabase
+    const { error } = await supabase
+      .from('wydarzenia')
+      .update({ uczestnicy: currentUczestnicy })
+      .eq('id', selectedEvent.id);
+
+    if (!error) {
+      setSelectedEvent({ ...selectedEvent, uczestnicy: currentUczestnicy });
+      setWydarzenia(prev => prev.map(w => w.id === selectedEvent.id ? { ...w, uczestnicy: currentUczestnicy } : w));
+    }
   };
 
   const handleSaveEvent = async (e: React.FormEvent) => {
@@ -490,9 +545,23 @@ export default function WydarzeniaPage() {
     `${k.imie} ${k.nazwisko} ${k.email || ""}`.toLowerCase().includes(klientSearch.toLowerCase())
   );
 
+  const getPaymentBadge = (status?: PaymentStatus) => {
+    switch (status) {
+      case "calosc":
+        return { text: "Opłacono całość", bg: "bg-emerald-100 text-emerald-800 border-emerald-300", icon: "🟢" };
+      case "zadatek":
+        return { text: "Zadatek opłacony", bg: "bg-amber-100 text-amber-900 border-amber-300", icon: "🟡" };
+      case "nieoplacone":
+      default:
+        return { text: "Oczekuje na wpłatę", bg: "bg-slate-100 text-slate-600 border-slate-200", icon: "⭕" };
+    }
+  };
+
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie, isPast?: boolean }) => {
     const zamkniete = isZapisyZamkniete(w);
     const uczestnicyCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.length : 0;
+    const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length : 0;
+    const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === 'calosc').length : 0;
 
     return (
       <div 
@@ -534,9 +603,18 @@ export default function WydarzeniaPage() {
           <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{w.opis || "Brak dodatkowego opisu."}</p>
           
           {uczestnicyCount > 0 && (
-            <div className="mt-3 py-1.5 px-3 bg-sky-50 rounded-xl text-xs font-bold text-sky-800 flex items-center gap-2">
-              <span>👥</span>
-              <span>Zapisanych osób: <strong className="font-black">{uczestnicyCount}</strong></span>
+            <div className="mt-3 flex flex-wrap gap-1.5 items-center">
+              <div className="py-1 px-2.5 bg-sky-50 rounded-lg text-[11px] font-bold text-sky-800 flex items-center gap-1.5">
+                <span>👥</span>
+                <span>Zapisanych: <strong className="font-black">{uczestnicyCount}</strong></span>
+              </div>
+
+              {isAdmin && (oplaconeZadatekCount > 0 || oplaconeCaloscCount > 0) && (
+                <div className="py-1 px-2.5 bg-emerald-50 rounded-lg text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
+                  <span>💰</span>
+                  <span>Wpłaty: <strong>{oplaconeCaloscCount} pełne</strong> {oplaconeZadatekCount > 0 && `• ${oplaconeZadatekCount} zadatek`}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -750,26 +828,72 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
-              {/* LISTA UCZESTNIKÓW */}
+              {/* LISTA UCZESTNIKÓW Z PODSUMOWANIEM I STATUSEM PŁATNOŚCI */}
               {selectedEvent.uczestnicy && selectedEvent.uczestnicy.length > 0 && (
-                <div className="bg-white p-5 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-sky-100">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-4">
-                    <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
-                      <span>👥</span> Lista uczestników ({selectedEvent.uczestnicy.length})
-                    </h3>
+                <div className="bg-white p-5 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-sky-100 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-50 pb-3">
+                    <div>
+                      <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
+                        <span>👥</span> Lista uczestników ({selectedEvent.uczestnicy.length})
+                      </h3>
+                      {isAdmin && (
+                        <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                          💡 Kliknij w status płatności uczestnika, aby go szybko zmienić.
+                        </p>
+                      )}
+                    </div>
+
                     {!enrolledInSelected && !isAdmin && (
                       <span className="text-[10px] sm:text-[11px] text-slate-400 font-medium italic">
                         Anonimizacja nazwisk dla osób niezapisanych
                       </span>
                     )}
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                    {selectedEvent.uczestnicy.map((u, idx) => (
-                      <div key={idx} className="bg-sky-50/70 border border-sky-100/80 px-3 py-2 rounded-xl text-xs font-bold text-sky-950 flex items-center gap-2 min-w-0">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                        <span className="truncate">{formatUczestnikName(u, enrolledInSelected)}</span>
+
+                    {isAdmin && (
+                      <div className="flex items-center gap-2 text-[11px] font-bold">
+                        <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200">
+                          Zadatek: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-900 border border-emerald-200">
+                          Całość: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === 'calosc').length}
+                        </span>
                       </div>
-                    ))}
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {selectedEvent.uczestnicy.map((u, idx) => {
+                      const badge = getPaymentBadge(u.status_platnosci);
+                      const isMe = currentUserEmail && u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase();
+
+                      return (
+                        <div key={idx} className="bg-sky-50/70 border border-sky-100 p-2.5 rounded-xl flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
+                            <span className="text-xs font-bold text-sky-950 truncate">
+                              {formatUczestnikName(u, enrolledInSelected)} {isMe && "(Ty)"}
+                            </span>
+                          </div>
+
+                          {/* Widok statusu dla Admina (klikalny quick-toggle) lub dla zalogowanego uczestnika */}
+                          {isAdmin ? (
+                            <button
+                              onClick={() => handleQuickPaymentToggle(idx)}
+                              title="Kliknij, aby przełączyć: Oczekuje -> Zadatek -> Całość"
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1.5 shadow-sm hover:scale-105 shrink-0 ${badge.bg}`}
+                            >
+                              <span>{badge.icon}</span>
+                              <span>{badge.text}</span>
+                            </button>
+                          ) : isMe ? (
+                            <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black border flex items-center gap-1 shrink-0 ${badge.bg}`}>
+                              <span>{badge.icon}</span>
+                              <span>{badge.text}</span>
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -998,7 +1122,7 @@ export default function WydarzeniaPage() {
         </div>
       )}
 
-      {/* MODAL ADMINA: DODAJ / EDYTUJ WYDARZENIE (POPRAWIONA RESPONSYWNOŚĆ) */}
+      {/* MODAL ADMINA: DODAJ / EDYTUJ WYDARZENIE */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/75 z-50 flex items-start sm:items-center justify-center p-2 sm:p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl sm:rounded-3xl max-w-3xl w-full p-4 sm:p-8 shadow-2xl relative border-2 border-sky-900 my-4 sm:my-8 max-h-[92vh] overflow-y-auto overflow-x-hidden">
@@ -1015,7 +1139,7 @@ export default function WydarzeniaPage() {
                 {editingId ? "Edytuj wydarzenie" : "Kreator nowego wydarzenia"}
               </h3>
               <p className="text-xs sm:text-sm font-medium text-slate-500 mt-1">
-                Uzupełnij informacje ogólne, termin zadatku i aktywuj wybrane opcje strefy uczestnika.
+                Uzupełnij informacje ogólne, termin zadatku i zarządzaj listą uczestników oraz ich statusem płatności.
               </p>
             </div>
 
@@ -1144,12 +1268,16 @@ export default function WydarzeniaPage() {
                 />
               </div>
 
-              {/* ZARZĄDZANIE UCZESTNIKAMI */}
+              {/* ZARZĄDZANIE UCZESTNIKAMI + STATUSY PŁATNOŚCI */}
               <div className="p-4 sm:p-5 bg-sky-50/60 rounded-2xl border border-sky-200 space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                   <label className="font-black text-sky-950 text-xs uppercase tracking-wider block">
-                    👥 Lista uczestników wydarzenia ({form.uczestnicy.length})
+                    👥 Lista uczestników & Płatności ({form.uczestnicy.length})
                   </label>
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600">
+                    <span className="text-amber-800">🟡 Zadatek: {form.uczestnicy.filter(u => u.status_platnosci === 'zadatek').length}</span>
+                    <span className="text-emerald-800">🟢 Całość: {form.uczestnicy.filter(u => u.status_platnosci === 'calosc').length}</span>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -1179,7 +1307,7 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
 
-                {/* Formularz dopisania ręcznego dostosowany do urządzeń mobilnych */}
+                {/* Formularz dopisania ręcznego */}
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input 
                     type="text" 
@@ -1204,20 +1332,67 @@ export default function WydarzeniaPage() {
                   </button>
                 </div>
 
+                {/* Lista zapisanych z przełącznikami płatności */}
                 {form.uczestnicy.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2 pt-2 border-t border-sky-200/60 max-h-48 overflow-y-auto">
-                    {form.uczestnicy.map((u, index) => (
-                      <span key={index} className="inline-flex items-center gap-1.5 bg-white border border-sky-200 px-2.5 py-1 rounded-xl text-xs font-bold text-sky-950 shadow-sm max-w-full">
-                        <span className="truncate">{u.imie} {u.nazwisko}</span>
-                        <button 
-                          type="button" 
-                          onClick={() => handleRemoveParticipant(index)}
-                          className="text-rose-500 hover:text-rose-700 ml-1 font-black cursor-pointer shrink-0"
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    ))}
+                  <div className="space-y-2 pt-2 border-t border-sky-200/60 max-h-60 overflow-y-auto pr-1">
+                    {form.uczestnicy.map((u, index) => {
+                      const currentStatus: PaymentStatus = u.status_platnosci || "nieoplacone";
+                      return (
+                        <div key={index} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white border border-sky-200 p-2.5 rounded-xl text-xs font-bold text-sky-950 shadow-sm">
+                          <span className="truncate">{u.imie} {u.nazwisko}</span>
+                          
+                          <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                            {/* Przyciski zmiany statusu płatności */}
+                            <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateParticipantPayment(index, "nieoplacone")}
+                                className={`px-2 py-1 rounded-md text-[10px] font-black cursor-pointer transition-all ${
+                                  currentStatus === "nieoplacone" 
+                                    ? "bg-slate-200 text-slate-800 shadow-xs" 
+                                    : "text-slate-400 hover:text-slate-700"
+                                }`}
+                              >
+                                Oczekuje
+                              </button>
+                              
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateParticipantPayment(index, "zadatek")}
+                                className={`px-2 py-1 rounded-md text-[10px] font-black cursor-pointer transition-all ${
+                                  currentStatus === "zadatek" 
+                                    ? "bg-amber-500 text-slate-950 shadow-xs" 
+                                    : "text-amber-700/60 hover:text-amber-800"
+                                }`}
+                              >
+                                🟡 Zadatek
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateParticipantPayment(index, "calosc")}
+                                className={`px-2 py-1 rounded-md text-[10px] font-black cursor-pointer transition-all ${
+                                  currentStatus === "calosc" 
+                                    ? "bg-emerald-600 text-white shadow-xs" 
+                                    : "text-emerald-700/60 hover:text-emerald-800"
+                                }`}
+                              >
+                                🟢 Całość
+                              </button>
+                            </div>
+
+                            <button 
+                              type="button" 
+                              onClick={() => handleRemoveParticipant(index)}
+                              className="text-rose-500 hover:text-rose-700 p-1 font-black cursor-pointer ml-1"
+                              title="Usuń uczestnika"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
