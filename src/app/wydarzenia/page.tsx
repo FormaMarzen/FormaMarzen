@@ -182,7 +182,6 @@ export default function WydarzeniaPage() {
         for (const u of nieoplaceni) {
           let recipientId: number | null = u.id ? Number(u.id) : null;
           
-          // Jeśli brak ID, dopasuj po adresie e-mail z bazy klientów
           if (!recipientId && u.email) {
             const foundClient = bazaKlubowiczow.find(k => k.email && k.email.toLowerCase() === u.email?.toLowerCase());
             if (foundClient) {
@@ -197,7 +196,6 @@ export default function WydarzeniaPage() {
             : `🚨 PILNE Przypomnienie: Za 2 dni (${formatTerminu}) upływa ostateczny termin dopłaty reszty kwoty (${kwotaReszty}) za udział w wydarzeniu "${w.tytul}".`;
 
           try {
-            // Zabezpieczenie przed dublowaniem wysyłki tego samego dnia do czat_wiadomosci
             const { data: existing } = await supabase
               .from("czat_wiadomosci")
               .select("id")
@@ -744,10 +742,15 @@ export default function WydarzeniaPage() {
 
             {w.zadatek && (
               <div className="flex flex-col items-end">
-                <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">
-                  {w.zadatek_do ? `Zadatek (do ${formatDatePL(w.zadatek_do)})` : "Zadatek"}
+                <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider leading-tight">
+                  Zadatek
                 </span>
-                <span className="font-black text-amber-700 text-sm">{w.zadatek}</span>
+                {w.zadatek_do && (
+                  <span className="text-[9px] font-semibold text-amber-500/90 leading-tight">
+                    (do {formatDatePL(w.zadatek_do)})
+                  </span>
+                )}
+                <span className="font-black text-amber-700 text-sm mt-0.5">{w.zadatek}</span>
               </div>
             )}
 
@@ -899,49 +902,62 @@ export default function WydarzeniaPage() {
 
               {/* Kafelki z informacjami */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-                <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-sky-100">
+                <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-sky-100">
                   <span className="text-2xl">📅</span>
-                  <div>
-                    <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest">Termin</div>
+                  <div className="w-full">
+                    <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest leading-tight">Termin</div>
+                    <div className="h-3.5"></div>
                     <div className="font-black text-sky-950 text-xs sm:text-sm mt-0.5">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-amber-100">
+                <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-amber-100">
                   <span className="text-2xl">💳</span>
-                  <div>
-                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Cena całkowita</div>
+                  <div className="w-full">
+                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest leading-tight">Cena całkowita</div>
+                    <div className="h-3.5"></div>
                     <div className="font-black text-amber-950 text-xs sm:text-sm mt-0.5">{selectedEvent.cena || "Darmowe"}</div>
                   </div>
                 </div>
                 
                 {selectedEvent.zadatek ? (
-                  <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-orange-100">
+                  <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-orange-100">
                     <span className="text-2xl">🟡</span>
-                    <div>
-                      <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">
-                        {selectedEvent.zadatek_do ? `Zadatek (do ${formatDatePL(selectedEvent.zadatek_do)})` : "Zadatek"}
-                      </div>
+                    <div className="w-full">
+                      <div className="text-[10px] font-bold text-orange-500 uppercase tracking-widest leading-tight">Zadatek</div>
+                      {selectedEvent.zadatek_do ? (
+                        <div className="text-[9px] font-semibold text-orange-400 mt-0.5 leading-tight">
+                          (do {formatDatePL(selectedEvent.zadatek_do)})
+                        </div>
+                      ) : (
+                        <div className="h-3.5"></div>
+                      )}
                       <div className="font-black text-orange-950 text-xs sm:text-sm mt-0.5">{selectedEvent.zadatek}</div>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-emerald-100">
+                  <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-emerald-100">
                     <span className="text-2xl">✅</span>
-                    <div>
-                      <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Rezerwacja</div>
+                    <div className="w-full">
+                      <div className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest leading-tight">Rezerwacja</div>
+                      <div className="h-3.5"></div>
                       <div className="font-black text-emerald-950 text-xs sm:text-sm mt-0.5">Brak zadatku</div>
                     </div>
                   </div>
                 )}
 
                 {/* Pole Dopłaty Reszty Kwoty */}
-                <div className="flex flex-col items-center justify-center text-center gap-1 bg-white p-4 rounded-2xl shadow-sm border border-indigo-100">
+                <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-indigo-100">
                   <span className="text-2xl">🟢</span>
-                  <div>
-                    <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">
-                      {selectedEvent.reszta_do ? `Reszta (do ${formatDatePL(selectedEvent.reszta_do)})` : "Reszta kwoty"}
-                    </div>
+                  <div className="w-full">
+                    <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest leading-tight">Reszta kwoty</div>
+                    {selectedEvent.reszta_do ? (
+                      <div className="text-[9px] font-semibold text-indigo-400 mt-0.5 leading-tight">
+                        (do {formatDatePL(selectedEvent.reszta_do)})
+                      </div>
+                    ) : (
+                      <div className="h-3.5"></div>
+                    )}
                     <div className="font-black text-indigo-950 text-xs sm:text-sm mt-0.5">
                       {obliczReszteKwoty(selectedEvent.cena, selectedEvent.zadatek)}
                     </div>
