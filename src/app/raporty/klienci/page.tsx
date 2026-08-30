@@ -24,6 +24,13 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
+// Pomocniczy kalkulator stanu portfela jako liczby
+const getWalletNumber = (walletStr: string | number | null | undefined): number => {
+  if (walletStr === null || walletStr === undefined) return 0;
+  const num = parseFloat(String(walletStr).replace(/[^0-9.-]+/g, ''));
+  return isNaN(num) ? 0 : num;
+};
+
 // Pomocniczy kalkulator dni do wygaśnięcia karnetu
 const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | null => {
   if (!expiryDateStr || expiryDateStr === '-') return null;
@@ -98,7 +105,7 @@ const normalizeClassSignature = (dateStr: string, titleStr: string): string => {
   return `${day}_${cleanTitle}`;
 };
 
-// PRECYZYJNA WERYFIKACJA DNI TYGODNIA Z TABELI grafik_zajec (OBIEKT JSONB)
+// PRECYZYJNA WERYFIKACJA DNI TYGODNIA Z TABELI grafik_zajec
 const isDateMatchingScheduleDays = (dateObj: Date, scheduleClass: any): boolean => {
   if (!scheduleClass) return true;
   const rawDays = scheduleClass.days || scheduleClass.dzien_tygodnia || scheduleClass.dni;
@@ -211,6 +218,7 @@ export default function KlienciPage() {
   const [editingClient, setEditingClient] = useState<any | null>(null);
   const [profileClient, setProfileClient] = useState<any | null>(null);
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
+  const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
 
   const [isExtendPassModalOpen, setIsExtendPassModalOpen] = useState(false);
   const [extendPassTarget, setExtendPassTarget] = useState<any | null>(null);
@@ -296,8 +304,6 @@ export default function KlienciPage() {
     }, null);
     return latest?.cena || '0.00 PLN';
   };
-
-  const isWalletNegative = (walletStr: string) => walletStr?.includes('-');
 
   const calculateStandardSystemDiscount = (client: any) => {
     if (!client) return 0;
@@ -554,17 +560,17 @@ export default function KlienciPage() {
 
     const nowyWypis = { 
       ...zajecieItem, 
-      id: Date.now(),
-      wypisujacy: 'Zarządca (Panel Klienci)',
-      data_operacji: new Date().toISOString()
+      id: Date.now(), 
+      wypisujacy: 'Zarządca (Panel Klienci)', 
+      data_operacji: new Date().toISOString() 
     };
     const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
     const uaktualnioneWypisy = [nowyWypis, ...stareWypisy];
 
     await supabase.from('klienci').update({ 
-      karnetyKlubowicza: karnetyZaktualizowane,
+      karnetyKlubowicza: karnetyZaktualizowane, 
       zapisyNadchodzace: uaktualnioneNadchodzace, 
-      zapisyWypisy: uaktualnioneWypisy
+      zapisyWypisy: uaktualnioneWypisy 
     }).eq('id', profileClient.id);
 
     await supabase.from('transakcje').insert([{
@@ -936,13 +942,13 @@ export default function KlienciPage() {
 
     const updatedClient = { 
         ...profileClient, 
-        rabat: targetVal,
+        rabat: targetVal, 
         systemDiscountOffset: newOffset, 
         hasLostContinuity: false 
     };
     
     const { error } = await supabase.from('klienci').update({ 
-        rabat: targetVal,
+        rabat: targetVal, 
         system_discount_offset: newOffset, 
         hasLostContinuity: false 
     }).eq('id', profileClient.id);
@@ -956,7 +962,6 @@ export default function KlienciPage() {
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingSystemDiscount(false);
   };
-
   const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -1082,7 +1087,7 @@ export default function KlienciPage() {
       Nazwisko: profileClient.lastName, 
       telefon: profileClient.phone, 
       email: profileClient.email, 
-      płeć: profileClient.gender,
+      płeć: profileClient.gender, 
       Urodziny: profileClient.birthDate 
     }).eq('id', profileClient.id);
     setIsEditProfileInfoOpen(false);
@@ -1103,6 +1108,7 @@ export default function KlienciPage() {
       await supabase.from('klienci').delete().eq('id', id);
       
       setTableActionClient(null);
+      setOpenDropdownId(null);
       if (profileClient && profileClient.id === id) setProfileClient(null);
       loadData();
     }
@@ -1112,6 +1118,7 @@ export default function KlienciPage() {
     if (confirm("Czy na pewno chcesz dezaktywować tego użytkownika?")) {
       alert("Konto zostało dezaktywowane.");
       setTableActionClient(null);
+      setOpenDropdownId(null);
     }
   };
 
@@ -1121,6 +1128,7 @@ export default function KlienciPage() {
       if (confirm(`Czy na pewno chcesz zaplanować dezaktywację konta na dzień ${dataWyb}?`)) {
         alert(`Zaplanowano dezaktywację konta na dzień ${dataWyb}.`);
         setTableActionClient(null);
+        setOpenDropdownId(null);
       }
     }
   };
@@ -1724,7 +1732,6 @@ export default function KlienciPage() {
 
     if (sortField === 'firstName') { valA = a.firstName || ''; valB = b.firstName || ''; }
     else if (sortField === 'lastName') { valA = a.lastName || ''; valB = b.lastName || ''; }
-    else if (sortField === 'registered') { valA = a.registered || ''; valB = b.registered || ''; }
     else if (sortField === 'pass') { 
       valA = a.karnetyKlubowicza?.[0]?.nazwa || ''; 
       valB = b.karnetyKlubowicza?.[0]?.nazwa || ''; 
@@ -1747,11 +1754,10 @@ export default function KlienciPage() {
       return sortDirection === 'asc' ? expA.localeCompare(expB) : expB.localeCompare(expA);
     }
     else if (sortField === 'wallet') { 
-      valA = parseFloat(String(a.wallet).replace(/[^0-9.-]+/g, "")) || 0; 
-      valB = parseFloat(String(b.wallet).replace(/[^0-9.-]+/g, "")) || 0; 
+      valA = getWalletNumber(a.wallet); 
+      valB = getWalletNumber(b.wallet); 
       return sortDirection === 'asc' ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
     }
-    else if (sortField === 'birthDate') { valA = a.birthDate || ''; valB = b.birthDate || ''; }
 
     if (typeof valA === 'string' && typeof valB === 'string') {
       return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
@@ -1760,6 +1766,7 @@ export default function KlienciPage() {
   });
 
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
@@ -1836,30 +1843,31 @@ export default function KlienciPage() {
         </div>
       </div>
 
-      {/* Tabela Klientów (bez kolumn Email i Telefon) */}
+      {/* Tabela Klientów (Z nowymi kolumnami RABAT i ZAWIESZENIE, bez Dołączył i Urodziny) */}
       <div className="bg-white border border-sky-200 rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto w-full">
-          <table className="w-full text-left text-xs min-w-[900px]">
+          <table className="w-full text-left text-xs min-w-[980px]">
             <thead>
               <tr className="bg-sky-50/80 text-sky-900 uppercase text-[10px] tracking-wider border-b border-sky-200">
                 <th className="py-3 px-3 text-center w-10 whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></th>
                 <th onClick={() => handleSort('firstName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Imię {sortField === 'firstName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('lastName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Nazwisko {sortField === 'lastName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('registered')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Dołączył {sortField === 'registered' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('pass')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Karnet {sortField === 'pass' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
+                <th className="py-3 px-3 font-bold whitespace-nowrap">Rabat (Stały / System)</th>
+                <th className="py-3 px-3 font-bold whitespace-nowrap">Zawieszenie</th>
                 <th onClick={() => handleSort('price')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Cena {sortField === 'price' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('expiresDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Wygasa {sortField === 'expiresDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('wallet')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Portfel {sortField === 'wallet' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th onClick={() => handleSort('birthDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Urodziny {sortField === 'birthDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th className="py-3 px-3 text-right font-bold w-20 whitespace-nowrap">Akcje</th>
+                <th className="py-3 px-3 text-right font-bold w-16 whitespace-nowrap">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {sortedClients.map((client) => {
-                const negativeW = isWalletNegative(client.wallet);
+                const walletNum = getWalletNumber(client.wallet);
                 const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo >= todayStr);
                 const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr) || (client.blokadaDo && client.blokadaDo >= todayStr);
                 const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
+                const aktywnyKarnetObj = maKarnet ? client.karnetyKlubowicza[0] : null;
                 const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : '';
                 const dataWygasnieciaKarnetu = maKarnet ? client.karnetyKlubowicza[0].waznyDo : '-';
 
@@ -1867,8 +1875,7 @@ export default function KlienciPage() {
                 const daysUntilExp = getDaysUntilExpiry(dataWygasnieciaKarnetu);
                 const isPassExpiringSoon = maKarnet && daysUntilExp !== null && daysUntilExp <= 5;
 
-                // WERYFIKACJA CENY REGULARNEJ KARNETU Z ZAKŁADKI KARNETY
-                const aktywnyKarnetObj = maKarnet ? client.karnetyKlubowicza[0] : null;
+                // WERYFIKACJA CENY REGULARNEJ
                 const pasujacyKarnetDef = aktywnyKarnetObj ? dostepneKarnety.find(k => k.nazwa === aktywnyKarnetObj.nazwa) : null;
                 const cenaRegularnaKatalog = pasujacyKarnetDef ? (parseFloat(String(pasujacyKarnetDef.cena).replace(/[^0-9.]/g, '')) || 0) : null;
                 const cenaKlientaNum = parseFloat(String(client.price || '').replace(/[^0-9.]/g, '')) || 0;
@@ -1878,6 +1885,22 @@ export default function KlienciPage() {
                   cenaRegularnaKatalog !== null && 
                   Math.abs(cenaKlientaNum - cenaRegularnaKatalog) > 0.01
                 );
+
+                // DANE RABATÓW
+                const stalyRabat = parseFloat(client.discount || '0') || 0;
+                const sysRabat = calculateSystemDiscount(client);
+
+                // DANE ZAWIESZENIA (Dla 12M lub innych)
+                const isContract = aktywnyKarnetObj?.isContract12M;
+                const dniZawLeft = aktywnyKarnetObj?.contractSuspensionDaysLeft ?? (isContract ? 30 : null);
+
+                // PODŚWIETLENIE PORTFELA: 0 = neutral, >0 = green, <0 = red
+                let walletBadgeClass = 'bg-slate-100 text-slate-700 border-slate-200';
+                if (walletNum > 0) {
+                  walletBadgeClass = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold';
+                } else if (walletNum < 0) {
+                  walletBadgeClass = 'bg-rose-100 text-rose-800 border-rose-300 font-bold';
+                }
 
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
@@ -1889,20 +1912,21 @@ export default function KlienciPage() {
                       </div>
                     </td>
                     <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">{client.lastName}</td>
-                    <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.registered}</td>
+                    
+                    {/* KARNET */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-semibold text-slate-800">{nazwaKarnetu}</span>
-                          {client.karnetyKlubowicza?.[0]?.isContract12M && (
+                          <span className="font-semibold text-slate-800">{nazwaKarnetu || 'Brak karnetu'}</span>
+                          {aktywnyKarnetObj?.isContract12M && (
                             <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-2 py-0.5 rounded border border-amber-300 uppercase">
-                              12M • Rata {client.karnetyKlubowicza[0].rata || '0/12'}
+                              12M • Rata {aktywnyKarnetObj.rata || '0/12'}
                             </span>
                           )}
                         </div>
                         {aktywnyKarnetZawieszony && (
                           <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-200 inline-block w-fit whitespace-nowrap">
-                            ⏸️ Zawieszony: od {aktywnyKarnetZawieszony.zawieszonyOd} do {aktywnyKarnetZawieszony.zawieszonyDo}
+                            ⏸️ Zawieszony: {aktywnyKarnetZawieszony.zawieszonyOd} - {aktywnyKarnetZawieszony.zawieszonyDo}
                           </span>
                         )}
                         {aktywnaBlokada && (
@@ -1912,6 +1936,53 @@ export default function KlienciPage() {
                         )}
                       </div>
                     </td>
+
+                    {/* NOWA KOLUMNA: RABAT (STAŁY / SYSTEMOWY) */}
+                    <td className="py-3.5 px-3 whitespace-nowrap font-mono text-[11px]">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-400 text-[9px] font-sans font-bold uppercase">Stały:</span>
+                          {stalyRabat > 0 ? (
+                            <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold px-1.5 py-0.5 rounded">
+                              {stalyRabat}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-sans">-</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-400 text-[9px] font-sans font-bold uppercase">Ciągłość:</span>
+                          {sysRabat > 0 ? (
+                            <span className="bg-sky-50 text-sky-800 border border-sky-200 font-bold px-1.5 py-0.5 rounded">
+                              {sysRabat}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-sans">0%</span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* NOWA KOLUMNA: ZAWIESZENIE (POZOSTAŁO Z PULI DNI) */}
+                    <td className="py-3.5 px-3 whitespace-nowrap font-mono text-xs">
+                      {isContract && dniZawLeft !== null ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
+                            dniZawLeft <= 5 ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-sky-50 text-sky-900 border-sky-200'
+                          }`}>
+                            {dniZawLeft} / 30 dni
+                          </span>
+                        </div>
+                      ) : aktywnyKarnetZawieszony ? (
+                        <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-300">
+                          W trakcie
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-[11px] font-sans">-</span>
+                      )}
+                    </td>
+
+                    {/* CENA */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-medium">
                       {isPriceDifferent ? (
                         <span className="bg-pink-100 text-pink-800 border border-pink-300 font-bold px-2 py-1 rounded-lg inline-block shadow-sm">
@@ -1921,6 +1992,8 @@ export default function KlienciPage() {
                         <span className="text-slate-800">{client.price}</span>
                       )}
                     </td>
+
+                    {/* WYGASA */}
                     <td className="py-3.5 px-3 font-mono whitespace-nowrap">
                       {maKarnet && dataWygasnieciaKarnetu !== '-' ? (
                         isPassExpiringSoon ? (
@@ -1936,17 +2009,63 @@ export default function KlienciPage() {
                         <span className="text-slate-400">-</span>
                       )}
                     </td>
-                    <td className="py-3.5 px-3 font-bold whitespace-nowrap">
-                      <span className={`px-2 py-0.5 rounded-lg text-xs whitespace-nowrap ${negativeW ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200'}`}>
+
+                    {/* PORTFEL (PODŚWIETLENIE: 0 = bez, >0 = zielone, <0 = czerwone) */}
+                    <td className="py-3.5 px-3 whitespace-nowrap">
+                      <span className={`px-2.5 py-1 rounded-lg text-xs font-mono border whitespace-nowrap inline-block ${walletBadgeClass}`}>
                         {client.wallet}
                       </span>
                     </td>
-                    <td className="py-3.5 px-3 font-mono text-slate-500 whitespace-nowrap">{client.birthDate || 'Nie podano'}</td>
-                    <td className="py-3.5 px-3 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => openProfile(client)} className="p-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg border border-sky-200 cursor-pointer" title="Otwórz profil">👤</button>
-                        <button onClick={() => setTableActionClient(client)} className="p-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg border border-amber-200 cursor-pointer" title="Zarządzaj klubowiczem">✏️</button>
-                        <button onClick={() => handleDeleteClient(client.id)} className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg border border-sky-200 cursor-pointer" title="Usuń">🗑️</button>
+
+                    {/* AKCJE (MENU ROZWIJANE POD TRZEMA KROPKAMI ...) */}
+                    <td className="py-3.5 px-3 text-right whitespace-nowrap relative">
+                      <div className="relative inline-block text-left">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenDropdownId(openDropdownId === client.id ? null : client.id);
+                          }} 
+                          className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-900 flex items-center justify-center font-bold text-base transition-colors cursor-pointer"
+                          title="Więcej opcji"
+                        >
+                          •••
+                        </button>
+
+                        {openDropdownId === client.id && (
+                          <div 
+                            className="absolute right-0 mt-1.5 w-44 bg-white rounded-xl shadow-xl border border-sky-200 py-1.5 z-50 text-xs font-semibold text-slate-700 animate-in fade-in zoom-in-95"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button 
+                              onClick={() => {
+                                setOpenDropdownId(null);
+                                openProfile(client);
+                              }} 
+                              className="w-full text-left px-3.5 py-2 hover:bg-sky-50 flex items-center gap-2 cursor-pointer text-slate-800"
+                            >
+                              <span>👤</span> Profil klubowicza
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setOpenDropdownId(null);
+                                setTableActionClient(client);
+                              }} 
+                              className="w-full text-left px-3.5 py-2 hover:bg-amber-50 text-amber-900 flex items-center gap-2 cursor-pointer font-bold"
+                            >
+                              <span>✏️</span> Edycja / Narzędzia
+                            </button>
+                            <div className="border-t border-slate-100 my-1"></div>
+                            <button 
+                              onClick={() => {
+                                setOpenDropdownId(null);
+                                handleDeleteClient(client.id);
+                              }} 
+                              className="w-full text-left px-3.5 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-bold"
+                            >
+                              <span>🗑️</span> Usuń klubowicza
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1956,7 +2075,6 @@ export default function KlienciPage() {
           </table>
         </div>
       </div>
-
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM Z TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2117,7 +2235,7 @@ export default function KlienciPage() {
                   </div>
                 </div>
 
-                {/* Avatar */}
+                {/* Avatar & DATA DOŁĄCZENIA POD PRZYCISKIEM EDYCJI ZDJĘCIA */}
                 <div className="flex flex-col items-center gap-2 shrink-0 self-center sm:self-auto">
                   <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-slate-900 text-white font-black flex items-center justify-center text-3xl overflow-hidden border-2 border-sky-300 shadow-md">
                     {profileClient.avatarUrl ? (
@@ -2144,6 +2262,12 @@ export default function KlienciPage() {
                   >
                     ✏️ Edytuj zdjęcie
                   </button>
+
+                  {/* DATA DOŁĄCZENIA KLUBOWICZA W JEGO PROFILU */}
+                  <div className="text-center pt-1 border-t border-slate-200/80 w-full">
+                    <span className="text-[10px] text-slate-400 font-semibold block uppercase tracking-wider">Dołączył do klubu</span>
+                    <span className="text-xs font-mono font-bold text-slate-700">{profileClient.registered || profileClient.Zarejestrowany || '-'}</span>
+                  </div>
                 </div>
               </div>
 
@@ -2422,10 +2546,10 @@ export default function KlienciPage() {
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                   {(() => {
-                    const walletVal = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-                    let walletClass = 'bg-slate-100 text-slate-800 border-slate-200';
-                    if (walletVal < 0) walletClass = 'bg-rose-100 text-rose-800 border-rose-200';
-                    else if (walletVal > 0) walletClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                    const walletVal = getWalletNumber(profileClient.wallet);
+                    let walletClass = 'bg-slate-100 text-slate-700 border-slate-200';
+                    if (walletVal < 0) walletClass = 'bg-rose-100 text-rose-800 border-rose-300';
+                    else if (walletVal > 0) walletClass = 'bg-emerald-100 text-emerald-800 border-emerald-300';
                     return (
                       <span className={`font-black px-3 py-1 rounded-xl text-sm border whitespace-nowrap ${walletClass}`}>
                         {profileClient.wallet}
@@ -3336,9 +3460,17 @@ export default function KlienciPage() {
             
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex justify-between items-center text-xs">
               <span className="font-bold text-amber-900 uppercase whitespace-nowrap">Aktualne saldo klubowicza:</span>
-              <span className={`text-base font-black px-3 py-1 rounded-lg border whitespace-nowrap ${isWalletNegative(profileClient.wallet) ? 'bg-rose-100 text-rose-800 border-rose-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300'}`}>
-                {profileClient.wallet}
-              </span>
+              {(() => {
+                const wVal = getWalletNumber(profileClient.wallet);
+                let wClass = 'bg-slate-100 text-slate-700 border-slate-300';
+                if (wVal > 0) wClass = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+                else if (wVal < 0) wClass = 'bg-rose-100 text-rose-800 border-rose-300';
+                return (
+                  <span className={`text-base font-black px-3 py-1 rounded-lg border whitespace-nowrap ${wClass}`}>
+                    {profileClient.wallet}
+                  </span>
+                );
+              })()}
             </div>
 
             <div className="overflow-x-auto text-xs max-h-[60vh]">
@@ -3568,7 +3700,7 @@ export default function KlienciPage() {
                       <input 
                         type="number" 
                         min="0" 
-                        max="30"
+                        max="30" 
                         value={editingPassModal.contractSuspensionDaysLeft ?? 30} 
                         onChange={(e) => setEditingPassModal({...editingPassModal, contractSuspensionDaysLeft: parseInt(e.target.value, 10) || 0})} 
                         className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
@@ -3858,7 +3990,7 @@ export default function KlienciPage() {
                       <input 
                         type="number" 
                         min="0" 
-                        max="30"
+                        max="30" 
                         value={newClient.customSuspensionDays} 
                         onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})} 
                         className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
