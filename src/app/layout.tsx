@@ -591,6 +591,10 @@ export default function RootLayout({
           <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
           <meta name="HandheldFriendly" content="true" />
+          <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
+          <link rel="icon" type="image/png" sizes="32x32" href="/logo.png?v=3" />
+          <link rel="shortcut icon" href="/favicon.ico?v=3" />
+          <link rel="apple-touch-icon" href="/logo.png?v=3" />
           <link rel="manifest" href="/manifest.json?v=2" />
           <meta name="theme-color" content="#0284c7" />
         </head>
@@ -616,21 +620,35 @@ export default function RootLayout({
         <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
         <meta name="HandheldFriendly" content="true" />
-        <meta property="og:title" content="Forma Marzeń" />
-        <meta property="og:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-        <meta property="og:image" content="https://forma-marzen.vercel.app/logo.png" />
+
+        {/* Favicon i Ikony aplikacji */}
+        <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/logo.png?v=3" />
+        <link rel="shortcut icon" href="/favicon.ico?v=3" />
+        <link rel="apple-touch-icon" href="/logo.png?v=3" />
+
+        {/* Open Graph / Social Media Preview (Facebook, WhatsApp, iMessage) */}
+        <meta property="og:site_name" content="Forma Marzeń" />
+        <meta property="og:title" content="Forma Marzeń - Panel Klubu" />
+        <meta property="og:description" content="Klub treningowy i strefa aktywności. Zarządzaj treningami, karnetami i zapisami." />
+        <meta property="og:image" content="https://forma-marzen.vercel.app/og-image.png" />
+        <meta property="og:image:secure_url" content="https://forma-marzen.vercel.app/og-image.png" />
+        <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:url" content="https://forma-marzen.vercel.app" />
         <meta property="og:type" content="website" />
+
+        {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Forma Marzeń" />
-        <meta name="twitter:description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-        <meta name="twitter:image" content="https://forma-marzen.vercel.app/logo.png" />
+        <meta name="twitter:title" content="Forma Marzeń - Panel Klubu" />
+        <meta name="twitter:description" content="Klub treningowy i strefa aktywności. Zarządzaj treningami, karnetami i zapisami." />
+        <meta name="twitter:image" content="https://forma-marzen.vercel.app/og-image.png" />
+
+        {/* PWA & Mobile Web App */}
         <link rel="manifest" href="/manifest.json?v=2" />
         <meta name="theme-color" content="#0284c7" />
         <meta name="mobile-web-app-capable" content="yes" />
-        <link rel="apple-touch-icon" href="/logo.png?v=2" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Forma Marzeń" />
@@ -783,7 +801,7 @@ export default function RootLayout({
                         className="relative group block cursor-pointer focus:outline-none"
                         title="Menu użytkownika"
                       >
-                        <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-amber-500 shadow-sm bg-sky-100 flex items-center justify-center font-black text-sky-900 text-xs">
+                        <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-amber-500 shadow-md bg-sky-100 flex items-center justify-center font-black text-sky-900 text-xs">
                           {profileAvatar ? (
                             <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
                           ) : (
@@ -1076,7 +1094,7 @@ export default function RootLayout({
                   Anuluj
                 </button>
                 <button 
-                  type="button"
+                  type="submit"
                   onClick={async () => {
                     const cleanEmail = (profileEmail || '').trim();
                     if (!cleanEmail) {
