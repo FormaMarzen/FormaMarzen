@@ -1853,7 +1853,7 @@ export default function KlienciPage() {
                 <th onClick={() => handleSort('firstName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Imię {sortField === 'firstName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('lastName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Nazwisko {sortField === 'lastName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('pass')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Karnet {sortField === 'pass' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
-                <th className="py-3 px-3 font-bold whitespace-nowrap">Rabat (Stały / System)</th>
+                <th className="py-3 px-3 font-bold whitespace-nowrap">Rabat (Stały / Ciągłość)</th>
                 <th className="py-3 px-3 font-bold whitespace-nowrap">Zawieszenie</th>
                 <th onClick={() => handleSort('price')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Cena {sortField === 'price' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('expiresDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Wygasa {sortField === 'expiresDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
@@ -1890,9 +1890,16 @@ export default function KlienciPage() {
                 const stalyRabat = parseFloat(client.discount || '0') || 0;
                 const sysRabat = calculateSystemDiscount(client);
 
-                // DANE ZAWIESZENIA (Dla 12M lub innych)
+                // DANE ZAWIESZENIA (Dla 12M z pulą lub karnetów ze statusem wykorzystanych/zaplanowanych dni)
                 const isContract = aktywnyKarnetObj?.isContract12M;
                 const dniZawLeft = aktywnyKarnetObj?.contractSuspensionDaysLeft ?? (isContract ? 30 : null);
+
+                // Wyliczenie wykorzystanych dni z historii zawieszeń
+                const histZaw = client.historiaZawieszen || [];
+                const lacznieWykorzystaneDni = histZaw.reduce((sum: number, item: any) => {
+                  const d = parseInt(item.dni || item.planowane_dni || '0', 10);
+                  return sum + (isNaN(d) ? 0 : d);
+                }, 0);
 
                 // PODŚWIETLENIE PORTFELA: 0 = neutral, >0 = green, <0 = red
                 let walletBadgeClass = 'bg-slate-100 text-slate-700 border-slate-200';
@@ -1937,7 +1944,7 @@ export default function KlienciPage() {
                       </div>
                     </td>
 
-                    {/* NOWA KOLUMNA: RABAT (STAŁY / SYSTEMOWY) */}
+                    {/* NOWA KOLUMNA: RABAT (STAŁY / CIĄGŁOŚĆ) */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-mono text-[11px]">
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1.5">
@@ -1963,19 +1970,28 @@ export default function KlienciPage() {
                       </div>
                     </td>
 
-                    {/* NOWA KOLUMNA: ZAWIESZENIE (POZOSTAŁO Z PULI DNI) */}
+                    {/* NOWA KOLUMNA: ZAWIESZENIE (UMOWA 12M ORAZ DLA INNYCH WYKORZYSTANE / PLANOWANE DNI) */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-mono text-xs">
                       {isContract && dniZawLeft !== null ? (
                         <div className="flex items-center gap-1.5">
                           <span className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
                             dniZawLeft <= 5 ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-sky-50 text-sky-900 border-sky-200'
                           }`}>
-                            {dniZawLeft} / 30 dni
+                            Pula: {dniZawLeft} / 30 dni
                           </span>
                         </div>
                       ) : aktywnyKarnetZawieszony ? (
-                        <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-300">
-                          W trakcie
+                        <div className="flex flex-col gap-0.5">
+                          <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-300 inline-block w-fit">
+                            ⏳ Plan: do {aktywnyKarnetZawieszony.zawieszonyDo}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-sans">
+                            Wykorzystano: {lacznieWykorzystaneDni} dni
+                          </span>
+                        </div>
+                      ) : lacznieWykorzystaneDni > 0 ? (
+                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-medium border border-slate-200">
+                          Wykorzystano: {lacznieWykorzystaneDni} dni
                         </span>
                       ) : (
                         <span className="text-slate-400 text-[11px] font-sans">-</span>
@@ -2263,7 +2279,7 @@ export default function KlienciPage() {
                     ✏️ Edytuj zdjęcie
                   </button>
 
-                  {/* DATA DOŁĄCZENIA KLUBOWICZA W JEGO PROFILU */}
+                  {/* INFORMACJA O DOŁĄCZENIU KLUBOWICZA DO APLIKACJI */}
                   <div className="text-center pt-1 border-t border-slate-200/80 w-full">
                     <span className="text-[10px] text-slate-400 font-semibold block uppercase tracking-wider">Dołączył do klubu</span>
                     <span className="text-xs font-mono font-bold text-slate-700">{profileClient.registered || profileClient.Zarejestrowany || '-'}</span>
@@ -3583,7 +3599,7 @@ export default function KlienciPage() {
                         <input 
                           type="number" 
                           min="0" 
-                          max="30"
+                          max="30" 
                           placeholder="30"
                           value={newPassCustomSuspensionDays}
                           onChange={(e) => setNewPassCustomSuspensionDays(e.target.value)}
