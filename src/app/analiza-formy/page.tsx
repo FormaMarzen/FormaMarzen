@@ -93,17 +93,26 @@ interface RedukcjaNagroda {
   opis?: string;
 }
 
-interface BadaniaKrwiWpis {
-  id?: number;
+export interface SuplementKlubowicza {
+  producent: string;
+  produkt: string;
+  dawka: string;
+  jednostka: string;
+}
+
+export interface BadaniaKrwiWpis {
+  id: number;
   klient_id: number | string;
   email_klienta: string;
+  data_badania: string;
   plik_pdf_url?: string | null;
   plik_pdf_nazwa?: string | null;
   zdjecia?: string[];
   interpretacja?: string | null;
   zalecenia?: string | null;
-  suplementacja?: string | null;
-  data_badania?: string;
+  suplementacja_trener?: string[];
+  suplementacja_klubowicz?: SuplementKlubowicza[];
+  created_at?: string;
   updated_at?: string;
 }
 
@@ -194,21 +203,30 @@ export default function AnalizaFormyPage() {
   const [isManualSearchFocused, setIsManualSearchFocused] = useState<boolean>(false);
   const [manualAddOplacone, setManualAddOplacone] = useState<boolean>(true);
   const [manualAddMetoda, setManualAddMetoda] = useState<'gotowka' | 'autopay' | 'inna'>('gotowka');
-
-  // Stan menu rozwijanego w tabeli zarzadzania
   const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
 
   // Stany Badania Krwi
-  const [badaniaKrwi, setBadaniaKrwi] = useState<BadaniaKrwiWpis | null>(null);
+  const [badaniaList, setBadaniaList] = useState<BadaniaKrwiWpis[]>([]);
+  const [selectedBadanieDetail, setSelectedBadanieDetail] = useState<BadaniaKrwiWpis | null>(null);
+  const [isBadaniaModalOpen, setIsBadaniaModalOpen] = useState<boolean>(false);
+  const [isDetailViewOpen, setIsDetailViewOpen] = useState<boolean>(false);
+  const [editingBadanieId, setEditingBadanieId] = useState<number | null>(null);
+
   const [isUploadingPdf, setIsUploadingPdf] = useState<boolean>(false);
-  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
-  const [isSavingBadania, setIsSavingBadania] = useState<boolean>(false);
+  const [isUploadingImages, setIsUploadingImages] = useState<boolean>(false);
+  const [isSavingBadanie, setIsSavingBadanie] = useState<boolean>(false);
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
-  const [badaniaForm, setBadaniaForm] = useState({
+
+  // Formularz Badania Krwi
+  const [badanieFormData, setBadanieFormData] = useState({
     data_badania: new Date().toISOString().split('T')[0],
+    plik_pdf_url: '' as string,
+    plik_pdf_nazwa: '' as string,
+    zdjecia: [] as string[],
     interpretacja: '',
     zalecenia: '',
-    suplementacja: ''
+    suplementacja_trener: [''] as string[],
+    suplementacja_klubowicz: [] as SuplementKlubowicza[]
   });
 
   const [nagrodaFormData, setNagrodaFormData] = useState({
@@ -281,14 +299,12 @@ export default function AnalizaFormyPage() {
     water: number;
   } | null>(null);
 
-  // Zamykanie menu po kliknięciu poza nim
   useEffect(() => {
     const handleClickOutside = () => setOpenDropdownId(null);
     window.addEventListener("click", handleClickOutside);
     return () => window.removeEventListener("click", handleClickOutside);
   }, []);
 
-  // Funkcja automatycznie weryfikująca minimum osób i aktywująca edycję
   const verifyAndAutoActivateChallenge = async (
     edycjaId: number, 
     uczestnicyList: RedukcjaUczestnik[], 
@@ -315,33 +331,22 @@ export default function AnalizaFormyPage() {
 
   const fetchBadaniaKrwi = async (klientId: number | string | null, email: string) => {
     try {
-      let query = supabase.from('klub_badania_krwi').select('*');
+      let query = supabase.from('klub_badania_krwi').select('*').order('data_badania', { ascending: false });
       if (klientId) {
         query = query.or(`klient_id.eq.${klientId},email_klienta.ilike.${email.trim()}`);
       } else {
         query = query.ilike('email_klienta', email.trim());
       }
 
-      const { data, error } = await query.order('id', { ascending: false }).limit(1).maybeSingle();
+      const { data, error } = await query;
       if (data && !error) {
-        setBadaniaKrwi(data);
-        setBadaniaForm({
-          data_badania: data.data_badania || new Date().toISOString().split('T')[0],
-          interpretacja: data.interpretacja || '',
-          zalecenia: data.zalecenia || '',
-          suplementacja: data.suplementacja || ''
-        });
+        setBadaniaList(data as BadaniaKrwiWpis[]);
       } else {
-        setBadaniaKrwi(null);
-        setBadaniaForm({
-          data_badania: new Date().toISOString().split('T')[0],
-          interpretacja: '',
-          zalecenia: '',
-          suplementacja: ''
-        });
+        setBadaniaList([]);
       }
     } catch (err) {
       console.error("Błąd pobierania badań krwi:", err);
+      setBadaniaList([]);
     }
   };
 
@@ -602,105 +607,109 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Obsługa plików i zaleceń w zakładce Badania Krwi
+  // --- OBSŁUGA BADAŃ KRWI ---
+  const handleOpenNewBadanieModal = () => {
+    setEditingBadanieId(null);
+    setBadanieFormData({
+      data_badania: new Date().toISOString().split('T')[0],
+      plik_pdf_url: '',
+      plik_pdf_nazwa: '',
+      zdjecia: [],
+      interpretacja: '',
+      zalecenia: '',
+      suplementacja_trener: [''],
+      suplementacja_klubowicz: []
+    });
+    setIsBadaniaModalOpen(true);
+  };
+
+  const handleEditBadanie = (badanie: BadaniaKrwiWpis) => {
+    setEditingBadanieId(badanie.id);
+    setBadanieFormData({
+      data_badania: badanie.data_badania || new Date().toISOString().split('T')[0],
+      plik_pdf_url: badanie.plik_pdf_url || '',
+      plik_pdf_nazwa: badanie.plik_pdf_nazwa || '',
+      zdjecia: badanie.zdjecia || [],
+      interpretacja: badanie.interpretacja || '',
+      zalecenia: badanie.zalecenia || '',
+      suplementacja_trener: (badanie.suplementacja_trener && badanie.suplementacja_trener.length > 0) 
+        ? badanie.suplementacja_trener 
+        : [''],
+      suplementacja_klubowicz: badanie.suplementacja_klubowicz || []
+    });
+    setIsBadaniaModalOpen(true);
+  };
+
+  const handleDeleteBadanie = async (badanieId: number) => {
+    if (!confirm("Czy na pewno chcesz bezpowrotnie usunąć ten wpis badań krwi?")) return;
+    try {
+      const { error } = await supabase.from('klub_badania_krwi').delete().eq('id', badanieId);
+      if (!error) {
+        setBadaniaList(prev => prev.filter(b => b.id !== badanieId));
+        if (selectedBadanieDetail?.id === badanieId) {
+          setIsDetailViewOpen(false);
+          setSelectedBadanieDetail(null);
+        }
+        alert("Wpis badań krwi został usunięty.");
+      } else {
+        alert("Błąd podczas usuwania: " + error.message);
+      }
+    } catch (err: any) {
+      alert("Błąd: " + err.message);
+    }
+  };
+
+  // Upload PDF w formularzu
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (file.type !== 'application/pdf') {
-      alert("Proszę wybrać plik w formacie PDF.");
-      return;
-    }
-
-    const tKlientId = selectedKlient?.id || currentUserId;
-    const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
-
-    if (!tEmail) {
-      alert("Brak profilu użytkownika.");
+      alert("Proszę wybrać plik PDF.");
       return;
     }
 
     setIsUploadingPdf(true);
     try {
-      const fileName = `badania_${tKlientId || 'klient'}_${Date.now()}.pdf`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const tKlientId = selectedKlient?.id || currentUserId || 'klient';
+      const fileName = `badania_${tKlientId}_${Date.now()}.pdf`;
+      const { data: uploadData, error: uploadErr } = await supabase.storage
         .from('badania')
         .upload(fileName, file, { upsert: true });
 
       let publicUrl = '';
-      if (!uploadError && uploadData) {
+      if (!uploadErr && uploadData) {
         const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
         publicUrl = urlData.publicUrl;
       } else {
-        // Fallback w przypadku braku skonfigurowanego storage bucketu
         publicUrl = URL.createObjectURL(file);
       }
 
-      const currentRecord = badaniaKrwi;
-      const payload = {
-        klient_id: tKlientId,
-        email_klienta: tEmail,
+      setBadanieFormData(prev => ({
+        ...prev,
         plik_pdf_url: publicUrl,
-        plik_pdf_nazwa: file.name,
-        data_badania: badaniaForm.data_badania || new Date().toISOString().split('T')[0],
-        interpretacja: currentRecord?.interpretacja || '',
-        zalecenia: currentRecord?.zalecenia || '',
-        suplementacja: currentRecord?.suplementacja || '',
-        zdjecia: currentRecord?.zdjecia || [],
-        updated_at: new Date().toISOString()
-      };
-
-      if (currentRecord?.id) {
-        await supabase.from('klub_badania_krwi').update(payload).eq('id', currentRecord.id);
-      } else {
-        await supabase.from('klub_badania_krwi').insert([payload]);
-      }
-
-      alert("Plik PDF z wynikami badań został pomyślnie wgrany!");
-      await fetchBadaniaKrwi(tKlientId, tEmail);
+        plik_pdf_nazwa: file.name
+      }));
     } catch (err: any) {
-      console.error("Błąd wgrywania PDF:", err);
-      alert("Wystąpił błąd podczas wgrywania pliku PDF: " + err.message);
+      alert("Błąd wgrywania PDF: " + err.message);
     } finally {
       setIsUploadingPdf(false);
     }
   };
 
-  const handleDeletePdf = async () => {
-    if (!badaniaKrwi?.id) return;
-    if (!confirm("Czy na pewno chcesz usunąć swój wgrany plik PDF z wynikami badań?")) return;
-
-    try {
-      const { error } = await supabase
-        .from('klub_badania_krwi')
-        .update({ plik_pdf_url: null, plik_pdf_nazwa: null, updated_at: new Date().toISOString() })
-        .eq('id', badaniaKrwi.id);
-
-      if (!error) {
-        alert("Plik PDF został usunięty.");
-        const tKlientId = selectedKlient?.id || currentUserId;
-        const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
-        await fetchBadaniaKrwi(tKlientId, tEmail);
-      }
-    } catch (err: any) {
-      alert("Błąd usuwania pliku: " + err.message);
-    }
-  };
-
+  // Upload zdjęć w formularzu
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const tKlientId = selectedKlient?.id || currentUserId;
-    const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
-
-    setIsUploadingImage(true);
+    setIsUploadingImages(true);
     try {
+      const tKlientId = selectedKlient?.id || currentUserId || 'klient';
       const newUrls: string[] = [];
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const fileName = `skan_${tKlientId || 'klient'}_${Date.now()}_${i}.${file.name.split('.').pop()}`;
+        const ext = file.name.split('.').pop() || 'jpg';
+        const fileName = `skan_${tKlientId}_${Date.now()}_${i}.${ext}`;
         const { data: uploadData, error: uploadErr } = await supabase.storage
           .from('badania')
           .upload(fileName, file, { upsert: true });
@@ -713,75 +722,99 @@ export default function AnalizaFormyPage() {
         }
       }
 
-      const updatedImages = [...(badaniaKrwi?.zdjecia || []), ...newUrls];
-      const payload = {
-        klient_id: tKlientId,
-        email_klienta: tEmail,
-        data_badania: badaniaForm.data_badania,
-        zdjecia: updatedImages,
-        interpretacja: badaniaForm.interpretacja,
-        zalecenia: badaniaForm.zalecenia,
-        suplementacja: badaniaForm.suplementacja,
-        updated_at: new Date().toISOString()
-      };
-
-      if (badaniaKrwi?.id) {
-        await supabase.from('klub_badania_krwi').update(payload).eq('id', badaniaKrwi.id);
-      } else {
-        await supabase.from('klub_badania_krwi').insert([payload]);
-      }
-
-      alert(`Dodano pomyślnie ${newUrls.length} zdjęć/skanów!`);
-      await fetchBadaniaKrwi(tKlientId, tEmail);
+      setBadanieFormData(prev => ({
+        ...prev,
+        zdjecia: [...prev.zdjecia, ...newUrls]
+      }));
     } catch (err: any) {
-      console.error("Błąd podczas dodawania zdjęć:", err);
-      alert("Błąd dodawania zdjęć: " + err.message);
+      alert("Błąd podczas dodawania zdjęć: " + err.message);
     } finally {
-      setIsUploadingImage(false);
+      setIsUploadingImages(false);
     }
   };
 
-  const handleDeleteImage = async (imgIndex: number) => {
-    if (!badaniaKrwi?.id || !confirm("Czy usunąć to zdjęcie/skan?")) return;
-
-    const updated = (badaniaKrwi.zdjecia || []).filter((_, idx) => idx !== imgIndex);
-    const { error } = await supabase
-      .from('klub_badania_krwi')
-      .update({ zdjecia: updated, updated_at: new Date().toISOString() })
-      .eq('id', badaniaKrwi.id);
-
-    if (!error) {
-      const tKlientId = selectedKlient?.id || currentUserId;
-      const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
-      await fetchBadaniaKrwi(tKlientId, tEmail);
-    }
+  // Obsługa dynamicznych pól suplementacji trenera
+  const handleAddCoachSupplementRow = () => {
+    setBadanieFormData(prev => ({
+      ...prev,
+      suplementacja_trener: [...prev.suplementacja_trener, '']
+    }));
   };
 
-  const handleSaveBadaniaNotes = async (e: React.FormEvent) => {
+  const handleUpdateCoachSupplementRow = (index: number, value: string) => {
+    const updated = [...badanieFormData.suplementacja_trener];
+    updated[index] = value;
+    setBadanieFormData(prev => ({ ...prev, suplementacja_trener: updated }));
+  };
+
+  const handleRemoveCoachSupplementRow = (index: number) => {
+    const updated = badanieFormData.suplementacja_trener.filter((_, i) => i !== index);
+    setBadanieFormData(prev => ({ 
+      ...prev, 
+      suplementacja_trener: updated.length > 0 ? updated : [''] 
+    }));
+  };
+
+  // Obsługa suplementów przyjmowanych przez klubowicza
+  const handleAddMemberSupplementRow = () => {
+    setBadanieFormData(prev => ({
+      ...prev,
+      suplementacja_klubowicz: [
+        ...prev.suplementacja_klubowicz,
+        { producent: '', produkt: '', dawka: '', jednostka: 'mg' }
+      ]
+    }));
+  };
+
+  const handleUpdateMemberSupplementRow = (index: number, field: keyof SuplementKlubowicza, value: string) => {
+    const updated = [...badanieFormData.suplementacja_klubowicz];
+    updated[index] = { ...updated[index], [field]: value };
+    setBadanieFormData(prev => ({ ...prev, suplementacja_klubowicz: updated }));
+  };
+
+  const handleRemoveMemberSupplementRow = (index: number) => {
+    const updated = badanieFormData.suplementacja_klubowicz.filter((_, i) => i !== index);
+    setBadanieFormData(prev => ({ ...prev, suplementacja_klubowicz: updated }));
+  };
+
+  // Zapis całego badania do Supabase
+  const handleSaveBadanieFull = async (e: React.FormEvent) => {
     e.preventDefault();
-    const tKlientId = selectedKlient?.id || currentUserId;
+    const tKlientId = selectedKlient ? selectedKlient.id : currentUserId;
     const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
 
     if (!tEmail) {
-      alert("Wybierz klubowicza lub zaloguj się.");
+      alert("Nie można zidentyfikować profilu klubowicza.");
       return;
     }
 
-    setIsSavingBadania(true);
-    try {
-      const payload = {
-        klient_id: tKlientId,
-        email_klienta: tEmail,
-        data_badania: badaniaForm.data_badania,
-        interpretacja: badaniaForm.interpretacja,
-        zalecenia: badaniaForm.zalecenia,
-        suplementacja: badaniaForm.suplementacja,
-        updated_at: new Date().toISOString()
-      };
+    setIsSavingBadanie(true);
 
+    const filteredCoachSupplements = badanieFormData.suplementacja_trener
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const filteredMemberSupplements = badanieFormData.suplementacja_klubowicz
+      .filter(s => s.produkt.trim() !== '' || s.producent.trim() !== '');
+
+    const payload = {
+      klient_id: tKlientId,
+      email_klienta: tEmail,
+      data_badania: badanieFormData.data_badania,
+      plik_pdf_url: badanieFormData.plik_pdf_url || null,
+      plik_pdf_nazwa: badanieFormData.plik_pdf_nazwa || null,
+      zdjecia: badanieFormData.zdjecia || [],
+      interpretacja: badanieFormData.interpretacja || null,
+      zalecenia: badanieFormData.zalecenia || null,
+      suplementacja_trener: filteredCoachSupplements,
+      suplementacja_klubowicz: filteredMemberSupplements,
+      updated_at: new Date().toISOString()
+    };
+
+    try {
       let error = null;
-      if (badaniaKrwi?.id) {
-        const res = await supabase.from('klub_badania_krwi').update(payload).eq('id', badaniaKrwi.id);
+      if (editingBadanieId) {
+        const res = await supabase.from('klub_badania_krwi').update(payload).eq('id', editingBadanieId);
         error = res.error;
       } else {
         const res = await supabase.from('klub_badania_krwi').insert([payload]);
@@ -789,15 +822,17 @@ export default function AnalizaFormyPage() {
       }
 
       if (!error) {
-        alert("Zalecenia i interpretacja badań zostały pomyślnie zapisane!");
+        alert(editingBadanieId ? "Wpis badań został zaktualizowany!" : "Nowe badanie zostało zapisane!");
+        setIsBadaniaModalOpen(false);
+        setEditingBadanieId(null);
         await fetchBadaniaKrwi(tKlientId, tEmail);
       } else {
-        alert("Błąd zapisu: " + error.message);
+        alert("Błąd zapisu badania: " + error.message);
       }
     } catch (err: any) {
       alert("Błąd zapisu: " + err.message);
     } finally {
-      setIsSavingBadania(false);
+      setIsSavingBadanie(false);
     }
   };
 
@@ -1506,6 +1541,15 @@ export default function AnalizaFormyPage() {
             </button>
           )}
 
+          {activeTab === 'badania' && (
+            <button
+              onClick={handleOpenNewBadanieModal}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
+            >
+              <span>+</span> Dodaj Wyniki / Analizę Krwi
+            </button>
+          )}
+
           {activeTab === 'redukcja' && appRole === 'admin' && (
             <button
               onClick={() => setIsNewEdycjaModalOpen(true)}
@@ -1517,7 +1561,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK (4 ZAKŁADKI) */}
+      {/* PASEK ZAKŁADEK */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -1596,7 +1640,7 @@ export default function AnalizaFormyPage() {
                   } else {
                     setSelectedKlient(null);
                     setMeasurements([]);
-                    setBadaniaKrwi(null);
+                    setBadaniaList([]);
                   }
                 }}
                 className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
@@ -1701,7 +1745,7 @@ export default function AnalizaFormyPage() {
         appRole === 'admin' && (
           <div className="bg-sky-50 border border-sky-200 rounded-2xl p-8 text-center text-slate-500 text-xs font-bold space-y-1">
             <span className="text-2xl block mb-2">👤</span>
-            Użyj powyższego pola wyszukiwania, aby wybrać klubowicza i załadować jego historię pomiarów.
+            Użyj powyższego pola wyszukiwania, aby wybrać klubowicza i załadować jego historię pomiarów oraz badań krwi.
           </div>
         )
       )}
@@ -2201,7 +2245,6 @@ export default function AnalizaFormyPage() {
       {activeTab === 'redukcja' && (
         <div className="space-y-8">
           
-          {/* BANERY INFORMACYJNE */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex items-start gap-3 shadow-sm">
               <span className="text-xl">📅</span>
@@ -2220,7 +2263,6 @@ export default function AnalizaFormyPage() {
             </div>
           </div>
 
-          {/* GŁÓWNY BANER WYBRANEGO WYZWANIA */}
           {activeEdycjaObj ? (
             <div className="bg-gradient-to-br from-slate-900 via-sky-950 to-slate-950 text-white p-6 rounded-3xl shadow-xl space-y-6 border border-sky-900/50">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-800/80 pb-4">
@@ -2289,7 +2331,6 @@ export default function AnalizaFormyPage() {
                     </>
                   )}
 
-                  {/* SELEKTOR EDYCJI */}
                   {edycjeRedukcji.length > 0 && (
                     <select
                       value={selectedEdycjaId || ""}
@@ -2307,7 +2348,6 @@ export default function AnalizaFormyPage() {
                 </div>
               </div>
 
-              {/* KAFLE PODSUMOWUJĄCE */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
                 <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60">
                   <span className="text-[10px] text-sky-300 uppercase font-bold block">Termin Wyzwania</span>
@@ -2386,7 +2426,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* SEKCJA: NAGRODY W TEJ EDYCJI */}
+          {/* NAGRODY */}
           {activeEdycjaObj && (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm p-6 space-y-4">
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
@@ -2442,7 +2482,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* DEDYKOWANA KARTA SKŁADU CIAŁA DLA WYBRANEGO KLUBOWICZA */}
+          {/* DEDYKOWANA KARTA SKŁADU CIAŁA */}
           {(selectedKlient || currentUserId) && activeEdycjaObj && (appRole !== 'klubowicz' || isCurrentUserJoined) ? (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3 p-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 pb-3">
@@ -2699,7 +2739,6 @@ export default function AnalizaFormyPage() {
                           )}
                         </td>
 
-                        {/* PRZYCISKI ZARZĄDZANIA ADMINA */}
                         {appRole === 'admin' && (
                           <td className="p-3 text-center relative">
                             <div className="flex items-center justify-center gap-1.5">
@@ -2780,7 +2819,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* SEKCJA ARCHIWUM POPRZEDNICH EDYCJI */}
+          {/* SEKCJA ARCHIWUM */}
           {edycjeRedukcji.filter(e => e.status === 'zakonczone' || e.status === 'anulowane').length > 0 && (
             <div className="pt-6 border-t border-sky-200 space-y-4">
               <div className="flex items-center gap-2">
@@ -2844,275 +2883,607 @@ export default function AnalizaFormyPage() {
             </p>
           </div>
 
-          {/* KARTA WGRYWANIA PDF PRZEZ KLUBOWICZA ORAZ POWIADOMIENIA */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
-            {/* KAFEL WGRYWANIA PDF */}
-            <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-4 flex flex-col justify-between">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
-                    <span>📄</span> Plik PDF z Twoimi Wynikami Badań
-                  </span>
-                  {badaniaKrwi?.plik_pdf_url && (
-                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                      ✓ Wgrany plik
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  Dodaj aktualny dokument z laboratorium w formacie PDF, aby trener mógł zapoznać się z pełnymi wynikami.
-                </p>
+          {/* KAFEL INFORMACYJNY DLA KLUBOWICZA O POWIADOMIENIU */}
+          <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                <span>💬</span> Instrukcja dla Klubowicza
               </div>
-
-              {badaniaKrwi?.plik_pdf_url ? (
-                <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-2xl flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 overflow-hidden">
-                    <span className="text-2xl">📑</span>
-                    <div className="truncate">
-                      <div className="text-xs font-black text-sky-950 truncate">
-                        {badaniaKrwi.plik_pdf_nazwa || 'Wyniki_badan_krwi.pdf'}
-                      </div>
-                      <a 
-                        href={badaniaKrwi.plik_pdf_url} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="text-[11px] text-sky-700 hover:text-sky-900 font-bold underline inline-flex items-center gap-1 mt-0.5"
-                      >
-                        Otwórz dokument PDF ↗
-                      </a>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={handleDeletePdf}
-                    className="text-rose-600 hover:text-rose-800 bg-white hover:bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl font-bold text-xs transition-colors shrink-0 cursor-pointer"
-                  >
-                    Usuń plik 🗑️
-                  </button>
-                </div>
-              ) : (
-                <div className="border-2 border-dashed border-sky-200 hover:border-amber-400 bg-sky-50/30 rounded-2xl p-6 text-center transition-colors">
-                  <label className="cursor-pointer block space-y-2">
-                    <span className="text-3xl block">📤</span>
-                    <span className="text-xs font-black text-sky-950 block">
-                      {isUploadingPdf ? "Trwa wgrywanie pliku..." : "Kliknij, aby wybrać plik PDF z dysku"}
-                    </span>
-                    <span className="text-[10px] text-slate-400 block font-medium">Maksymalny format pliku: .pdf</span>
-                    <input
-                      type="file"
-                      accept="application/pdf"
-                      disabled={isUploadingPdf}
-                      onChange={handleUploadPdf}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-              )}
+              <p className="text-xs text-sky-200 font-medium">
+                Po dodaniu lub zaktualizowaniu wyników badań krwi (PDF/zdjęcia), <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o interpretację oraz przygotowanie zaleceń.
+              </p>
             </div>
-
-            {/* KAFEL INFORMACJI / POWIADOMIENIA TRENERA */}
-            <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-6 rounded-3xl shadow-sm space-y-4 flex flex-col justify-between">
-              <div className="space-y-2">
-                <span className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                  <span>💬</span> Daj znać po wgraniu wyników
-                </span>
-                <p className="text-xs text-sky-200/90 leading-relaxed font-medium">
-                  Gdy dodasz swój plik PDF z wynikami badań krwi, <b>wyślij do mnie krótką wiadomość</b> (SMS lub na naszym czacie), że wyniki są już wgrane i prosisz o analizę.
-                </p>
-              </div>
-
-              <div className="bg-sky-900/40 border border-sky-800 p-3.5 rounded-2xl text-[11px] text-sky-200 space-y-1">
-                <div className="font-bold text-amber-300">ℹ️ Co nastąpi później?</div>
-                <div>Trener przeanalizuje kluczowe parametry morfologii, enzymów i hormonów pod kątem regeneracji, samopoczucia oraz przygotuje dedykowane zalecenia dietetyczno-suplementacyjne.</div>
-              </div>
-            </div>
-
+            <button
+              onClick={handleOpenNewBadanieModal}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer"
+            >
+              + Dodaj wpis badań
+            </button>
           </div>
 
-          {/* SEKCJA DLA TRENERA: SKANY / ZDJĘCIA TABEL I WYKRESÓW Z POWIĘKSZANIEM */}
-          <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-sky-100 pb-3 gap-2">
-              <div>
-                <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
-                  <span>🖼️</span> Galeria Skanów i Zdjęć Badań (Kliknij, aby powiększyć)
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Zdjęcia wybranych parametrów, skany wyników lub wykresy poglądowe.
-                </p>
-              </div>
-
-              {(appRole === 'admin' || appRole === 'trener') && (
-                <label className="bg-slate-900 hover:bg-slate-800 text-white font-black text-xs px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm flex items-center gap-1.5 uppercase tracking-wider">
-                  <span>+</span> {isUploadingImage ? 'Wgrywanie...' : 'Dodaj Zdjęcia / Skany'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    disabled={isUploadingImage}
-                    onChange={handleUploadImages}
-                    className="hidden"
-                  />
-                </label>
-              )}
+          {/* TABELA LISTY BADAŃ KRWI I INTERPRETACJI */}
+          <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
+            <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
+              <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                <span>📋</span> Historia Badań Krwi i Interpretacji Trenera
+              </h3>
+              <span className="text-[10px] font-bold text-slate-500">
+                Liczba wpisów: {badaniaList.length}
+              </span>
             </div>
 
-            {(badaniaKrwi?.zdjecia || []).length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                {(badaniaKrwi?.zdjecia || []).map((imgUrl, idx) => (
-                  <div 
-                    key={idx} 
-                    className="relative group rounded-2xl overflow-hidden border border-sky-200 bg-slate-100 aspect-square shadow-sm cursor-pointer"
-                    onClick={() => setEnlargedImage(imgUrl)}
-                  >
-                    <img 
-                      src={imgUrl} 
-                      alt={`Skan badania ${idx + 1}`} 
-                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold">
-                      🔍 Powiększ
-                    </div>
-                    {(appRole === 'admin' || appRole === 'trener') && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteImage(idx);
-                        }}
-                        className="absolute top-1.5 right-1.5 bg-rose-600 hover:bg-rose-700 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity z-10 shadow"
-                        title="Usuń zdjęcie"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="bg-sky-50/50 border border-sky-100 rounded-2xl p-6 text-center text-xs text-slate-400 font-bold">
-                Brak wgranych zdjęć lub skanów wyników.
-              </div>
-            )}
-          </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse min-w-[800px]">
+                <thead>
+                  <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
+                    <th className="p-3 w-28">Data Badania</th>
+                    <th className="p-3 w-40">Dokument PDF</th>
+                    <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
+                    <th className="p-3">Główne Wnioski / Interpretacja</th>
+                    <th className="p-3 w-36 text-center">Suplementacja</th>
+                    <th className="p-3 text-center w-36">Akcje</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-sky-100">
+                  {badaniaList.length > 0 ? (
+                    badaniaList.map((b) => (
+                      <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
+                        <td className="p-3 font-black text-sky-950 whitespace-nowrap">
+                          {b.data_badania}
+                        </td>
+                        <td className="p-3">
+                          {b.plik_pdf_url ? (
+                            <a
+                              href={b.plik_pdf_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5"
+                            >
+                              <span>📄</span> {b.plik_pdf_nazwa || "Wyniki.pdf"}
+                            </a>
+                          ) : (
+                            <span className="text-slate-400 italic">Brak pliku PDF</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center font-bold text-slate-700">
+                          {(b.zdjecia || []).length > 0 ? (
+                            <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
+                              📷 {b.zdjecia?.length} szt.
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
+                          {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="space-y-0.5 text-[10px]">
+                            <span className="block font-bold text-emerald-700">
+                              Trener: {(b.suplementacja_trener || []).length} poz.
+                            </span>
+                            <span className="block font-bold text-sky-700">
+                              Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                setSelectedBadanieDetail(b);
+                                setIsDetailViewOpen(true);
+                              }}
+                              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
+                              title="Otwórz szczegóły"
+                            >
+                              🔍 Podgląd
+                            </button>
 
-          {/* SEKCJA ZALECEŃ I INTERPRETACJI */}
-          {(appRole === 'admin' || appRole === 'trener') ? (
-            <form onSubmit={handleSaveBadaniaNotes} className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-6">
-              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">✍️</span>
-                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950">
-                    Opracowanie i Zalecenia Trenera (Edycja)
-                  </h3>
-                </div>
-                <div className="text-xs">
-                  <span className="text-slate-400 font-bold mr-2">Data analizy:</span>
-                  <input
-                    type="date"
-                    value={badaniaForm.data_badania}
-                    onChange={(e) => setBadaniaForm({...badaniaForm, data_badania: e.target.value})}
-                    className="border border-sky-200 rounded-xl px-3 py-1 font-bold text-slate-800 bg-sky-50/50"
-                  />
-                </div>
-              </div>
+                            <button
+                              onClick={() => handleEditBadanie(b)}
+                              className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
+                              title="Edytuj wpis"
+                            >
+                              ✏️
+                            </button>
 
-              <div className="space-y-4 text-xs">
-                <div>
-                  <label className="font-black text-sky-950 uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
-                    <span>🔬</span> Interpretacja Wyników Badań
-                  </label>
-                  <textarea
-                    rows={4}
-                    placeholder="Wpisz szczegółową interpretację wskaźników (np. poziom ferrytyny, witaminy D3, próby wątrobowe, profil lipidowy)..."
-                    value={badaniaForm.interpretacja}
-                    onChange={(e) => setBadaniaForm({...badaniaForm, interpretacja: e.target.value})}
-                    className="w-full bg-sky-50/30 border border-sky-200 rounded-2xl p-4 text-slate-800 font-medium focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-black text-sky-950 uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
-                    <span>🎯</span> Ogólne Zalecenia Dietetyczne i Stylu Życia
-                  </label>
-                  <textarea
-                    rows={4}
-                    placeholder="Wpisz zalecenia dotyczące nawodnienia, regeneracji, snu, intensywności treningowej oraz modyfikacji w jadłospisie..."
-                    value={badaniaForm.zalecenia}
-                    onChange={(e) => setBadaniaForm({...badaniaForm, zalecenia: e.target.value})}
-                    className="w-full bg-sky-50/30 border border-sky-200 rounded-2xl p-4 text-slate-800 font-medium focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-black text-sky-950 uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
-                    <span>💊</span> Dedykowany Protokół Suplementacyjny
-                  </label>
-                  <textarea
-                    rows={4}
-                    placeholder="Wypisz rekomendowane suplementy wraz z dokładnymi dawkami i porami przyjmowania (np. Witamina D3 4000 IU do śniadania, Magnez wieczorem)..."
-                    value={badaniaForm.suplementacja}
-                    onChange={(e) => setBadaniaForm({...badaniaForm, suplementacja: e.target.value})}
-                    className="w-full bg-sky-50/30 border border-sky-200 rounded-2xl p-4 text-slate-800 font-medium focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end pt-2 border-t border-sky-100">
-                <button
-                  type="submit"
-                  disabled={isSavingBadania}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-3 rounded-xl uppercase tracking-wider shadow-sm transition-all cursor-pointer disabled:opacity-50"
-                >
-                  {isSavingBadania ? "Zapisywanie..." : "Zapisz Interpretację i Zalecenia ➔"}
-                </button>
-              </div>
-            </form>
-          ) : (
-            /* WIDOK DLA KLUBOWICZA */
-            <div className="space-y-4">
-              <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-3">
-                <div className="flex items-center justify-between border-b border-sky-100 pb-2">
-                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
-                    <span>🔬</span> Interpretacja Wyników Badań
-                  </h3>
-                  {badaniaKrwi?.data_badania && (
-                    <span className="text-[10px] text-slate-400 font-bold">Data: {badaniaKrwi.data_badania}</span>
+                            <button
+                              onClick={() => handleDeleteBadanie(b.id)}
+                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
+                              title="Usuń wpis"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
+                        Brak zarejestrowanych badań krwi dla wybranego profilu. Kliknij "+ Dodaj Wyniki / Analizę Krwi" powyżej.
+                      </td>
+                    </tr>
                   )}
-                </div>
-                <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-medium">
-                  {badaniaKrwi?.interpretacja || "Trener nie wprowadził jeszcze interpretacji wyników dla Twojego profilu."}
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-3xl border border-sky-200 shadow-sm space-y-3">
-                <div className="flex items-center justify-between border-b border-sky-100 pb-2">
-                  <h3 className="font-black text-xs uppercase tracking-wider text-sky-950 flex items-center gap-2">
-                    <span>🎯</span> Zalecenia Treningowe i Stylu Życia
-                  </h3>
-                </div>
-                <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-medium">
-                  {badaniaKrwi?.zalecenia || "Brak dodatkowych zaleceń ogólnych."}
-                </div>
-              </div>
-
-              <div className="bg-gradient-to-br from-amber-50/80 to-amber-100/40 p-6 rounded-3xl border border-amber-200 shadow-sm space-y-3">
-                <div className="flex items-center justify-between border-b border-amber-200 pb-2">
-                  <h3 className="font-black text-xs uppercase tracking-wider text-amber-950 flex items-center gap-2">
-                    <span>💊</span> Twój Protokół Suplementacyjny
-                  </h3>
-                </div>
-                <div className="text-xs text-slate-800 whitespace-pre-line leading-relaxed font-semibold">
-                  {badaniaKrwi?.suplementacja || "Brak zdefiniowanego planu suplementacyjnego."}
-                </div>
-              </div>
+                </tbody>
+              </table>
             </div>
-          )}
+          </div>
 
         </div>
       )}
 
-      {/* MODAL / LIGHTBOX DO POWIĘKSZANIA ZDJĘĆ */}
+      {/* MODAL 1: FORMULARZ DODAWANIA / EDYCJI BADANIA KRWI */}
+      {isBadaniaModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-4xl w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 max-h-[90vh] overflow-y-auto">
+            
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <div>
+                <h3 className="font-black text-sm uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                  <span>🩸</span> {editingBadanieId ? "Edycja Wpisu Badań Krwi" : "Nowy Wpis Badań Krwi"}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Dla: <span className="font-bold text-slate-800">{selectedKlient ? `${selectedKlient.Imię || ''} ${selectedKlient.Nazwisko || ''}` : currentUserEmail}</span>
+                </p>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsBadaniaModalOpen(false);
+                  setEditingBadanieId(null);
+                }} 
+                className="text-slate-400 hover:text-slate-700 font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBadanieFull} className="space-y-6 text-xs">
+              
+              {/* DATA BADANIA */}
+              <div className="bg-sky-50/50 p-4 rounded-2xl border border-sky-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <label className="font-bold text-slate-700">Data wykonania badania krwi *</label>
+                <input
+                  type="date"
+                  required
+                  value={badanieFormData.data_badania}
+                  onChange={(e) => setBadanieFormData({...badanieFormData, data_badania: e.target.value})}
+                  className="bg-white border border-sky-200 rounded-xl px-4 py-2 font-bold text-slate-800 focus:outline-none"
+                />
+              </div>
+
+              {/* PLIK PDF (DODAWANIE / USUWANIE) */}
+              <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
+                <label className="font-black text-sky-950 uppercase tracking-wider block">
+                  📄 Wyniki Badań w Pliku PDF
+                </label>
+                
+                {badanieFormData.plik_pdf_url ? (
+                  <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="text-xl">📑</span>
+                      <span className="font-bold text-slate-900 truncate">{badanieFormData.plik_pdf_nazwa || 'Plik_badan.pdf'}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBadanieFormData(prev => ({ ...prev, plik_pdf_url: '', plik_pdf_nazwa: '' }))}
+                      className="text-rose-600 hover:text-rose-800 text-xs font-bold bg-white px-3 py-1 rounded-lg border border-rose-200 cursor-pointer"
+                    >
+                      Usuń plik ✕
+                    </button>
+                  </div>
+                ) : (
+                  <label className="border-2 border-dashed border-sky-200 hover:border-amber-400 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-colors bg-sky-50/20">
+                    <span className="text-2xl mb-1">📤</span>
+                    <span className="font-bold text-slate-700">{isUploadingPdf ? 'Wgrywanie pliku PDF...' : 'Kliknij, aby wgrać plik PDF z wynikami'}</span>
+                    <input type="file" accept="application/pdf" disabled={isUploadingPdf} onChange={handleUploadPdf} className="hidden" />
+                  </label>
+                )}
+              </div>
+
+              {/* SKANY / ZDJĘCIA */}
+              <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="font-black text-sky-950 uppercase tracking-wider">
+                    📷 Zdjęcia / Skany Wyników (Dla Trenera i Klubowicza)
+                  </label>
+                  <label className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">
+                    + Dodaj zdjęcia
+                    <input type="file" accept="image/*" multiple disabled={isUploadingImages} onChange={handleUploadImages} className="hidden" />
+                  </label>
+                </div>
+
+                {badanieFormData.zdjecia.length > 0 ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    {badanieFormData.zdjecia.map((imgUrl, idx) => (
+                      <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-sky-200 bg-slate-100 group">
+                        <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setBadanieFormData(prev => ({ ...prev, zdjecia: prev.zdjecia.filter((_, i) => i !== idx) }))}
+                          className="absolute top-1 right-1 bg-rose-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-slate-400 italic text-[11px]">Brak dodanych zdjęć.</div>
+                )}
+              </div>
+
+              {/* INTERPRETACJA Z NOTKĄ W NAWIASIE */}
+              <div className="space-y-1.5">
+                <label className="font-black text-sky-950 uppercase tracking-wider block">
+                  INTERPRETACJA WYNIKÓW BADAŃ{" "}
+                  <span className="text-[10px] text-slate-500 font-normal normal-case">
+                    (są to rzeczy, które powtarzają się w różnych wynikach, ale nie musi to oznaczać, że to występuje)
+                  </span>
+                </label>
+                <textarea
+                  rows={4}
+                  placeholder="Wpisz interpretację wskaźników krwi..."
+                  value={badanieFormData.interpretacja}
+                  onChange={(e) => setBadanieFormData({...badanieFormData, interpretacja: e.target.value})}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-2xl p-3.5 text-slate-800 font-medium focus:outline-none"
+                />
+              </div>
+
+              {/* OGÓLNE ZALECENIA */}
+              <div className="space-y-1.5">
+                <label className="font-black text-sky-950 uppercase tracking-wider block">
+                  OGÓLNE ZALECENIA DIETETYCZNE I STYLU ŻYCIA
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Wpisz zalecenia dotyczące diety, nawodnienia, regeneracji, snu itp..."
+                  value={badanieFormData.zalecenia}
+                  onChange={(e) => setBadanieFormData({...badanieFormData, zalecenia: e.target.value})}
+                  className="w-full bg-sky-50/40 border border-sky-200 rounded-2xl p-3.5 text-slate-800 font-medium focus:outline-none"
+                />
+              </div>
+
+              {/* SEKCJA DWUKOLUMNOWA: SUPLEMENTACJA TRENERA (DYNAMICZNE OKIENKA) + SUPLEMENTACJA KLUBOWICZA */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-sky-100">
+                
+                {/* 1. DEDYKIWANY PROTOKÓŁ SUPLEMENTACYJNY TRENERA */}
+                <div className="bg-amber-50/40 p-4 rounded-2xl border border-amber-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-black text-amber-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <span>💊</span> Dedykowany Protokół Suplementacyjny (Trener)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAddCoachSupplementRow}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-2.5 py-1 rounded-xl text-[10px] uppercase cursor-pointer"
+                    >
+                      + Dodaj suplement
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {badanieFormData.suplementacja_trener.map((sup, sIdx) => (
+                      <div key={sIdx} className="flex items-center gap-2">
+                        <span className="font-bold text-amber-900 text-xs w-4">{sIdx + 1}.</span>
+                        <input
+                          type="text"
+                          placeholder="np. B-complex 1 kaps. rano do śniadania"
+                          value={sup}
+                          onChange={(e) => handleUpdateCoachSupplementRow(sIdx, e.target.value)}
+                          className="flex-1 bg-white border border-amber-300 rounded-xl px-3 py-2 font-bold text-slate-800 focus:outline-none text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCoachSupplementRow(sIdx)}
+                          className="text-rose-500 hover:text-rose-700 font-bold p-1 cursor-pointer"
+                          title="Usuń pozycję"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. SUPLEMENTY PRZYJMOWANE PRZEZ KLUBOWICZA */}
+                <div className="bg-sky-50/50 p-4 rounded-2xl border border-sky-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-black text-sky-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <span>🙋‍♂️</span> Suplementy Przyjmowane przez Klubowicza
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAddMemberSupplementRow}
+                      className="bg-sky-900 hover:bg-slate-800 text-white font-black px-2.5 py-1 rounded-xl text-[10px] uppercase cursor-pointer"
+                    >
+                      + Dodaj swój suplement
+                    </button>
+                  </div>
+
+                  {badanieFormData.suplementacja_klubowicz.length > 0 ? (
+                    <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                      {badanieFormData.suplementacja_klubowicz.map((item, mIdx) => (
+                        <div key={mIdx} className="bg-white p-2.5 rounded-xl border border-sky-200 space-y-2 relative group">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Producent</span>
+                              <input
+                                type="text"
+                                placeholder="np. Aliness / Swanson"
+                                value={item.producent}
+                                onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'producent', e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Nazwa Produktu</span>
+                              <input
+                                type="text"
+                                placeholder="np. Maślan Sodu / Magnez"
+                                value={item.produkt}
+                                onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'produkt', e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Dawka dzienna</span>
+                              <input
+                                type="text"
+                                placeholder="np. 500"
+                                value={item.dawka}
+                                onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'dawka', e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-[9px] font-bold text-slate-400 block uppercase">Jednostka</span>
+                              <select
+                                value={item.jednostka}
+                                onChange={(e) => handleUpdateMemberSupplementRow(mIdx, 'jednostka', e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-800 text-xs cursor-pointer"
+                              >
+                                <option value="mg">mg</option>
+                                <option value="g">gramy (g)</option>
+                                <option value="mcg (µg)">mcg (µg)</option>
+                                <option value="IU">IU (j.m.)</option>
+                                <option value="kaps.">kapsułek (kaps.)</option>
+                                <option value="tabl.">tabletek (tabl.)</option>
+                                <option value="ml">ml</option>
+                                <option value="miarka">miarka</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMemberSupplementRow(mIdx)}
+                            className="absolute top-1 right-1 text-rose-500 hover:text-rose-700 font-bold text-xs p-1 cursor-pointer"
+                            title="Usuń pozycję"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-slate-400 italic text-[11px] p-2 bg-white rounded-xl text-center">
+                      Klubowicz nie dodał jeszcze swoich suplementów.
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-sky-100">
+                <button
+                  type="button"
+                  onClick={() => setIsBadaniaModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingBadanie}
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer shadow disabled:opacity-50"
+                >
+                  {isSavingBadanie ? "Zapisywanie..." : editingBadanieId ? "Zapisz Zmiany" : "Utwórz Wpis Badania"}
+                </button>
+              </div>
+
+            </form>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: ESTETYCZNE OKNO PODGLĄDU SZCZEGÓŁÓW BADANIA KRWI (CARD VIEW) */}
+      {isDetailViewOpen && selectedBadanieDetail && (
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-4xl w-full p-6 md:p-8 shadow-2xl space-y-6 my-8 border border-sky-100 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+            
+            {/* GŁÓWKA KARTY */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-sky-100 gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center text-2xl shadow-sm">
+                  🩸
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-sky-950 uppercase tracking-wider">
+                    Szczegółowa Karta Wyników Badań Krwi
+                  </h3>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Data wykonania badania: <b className="text-slate-900">{selectedBadanieDetail.data_badania}</b>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setIsDetailViewOpen(false);
+                    handleEditBadanie(selectedBadanieDetail);
+                  }}
+                  className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold px-3 py-1.5 rounded-xl text-xs cursor-pointer"
+                >
+                  ✏️ Edytuj
+                </button>
+                <button
+                  onClick={() => setIsDetailViewOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1.5 rounded-xl text-xs cursor-pointer"
+                >
+                  ✕ Zamknij
+                </button>
+              </div>
+            </div>
+
+            {/* DOKUMENT PDF I SKANY */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-sky-50/70 p-4 rounded-2xl border border-sky-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-sky-900 uppercase block">Oryginalny Dokument PDF</span>
+                  <div className="text-xs font-black text-sky-950 mt-0.5">
+                    {selectedBadanieDetail.plik_pdf_nazwa || "Wyniki_Badań.pdf"}
+                  </div>
+                </div>
+                {selectedBadanieDetail.plik_pdf_url ? (
+                  <a
+                    href={selectedBadanieDetail.plik_pdf_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl transition-all shadow-xs cursor-pointer"
+                  >
+                    Otwórz PDF ↗
+                  </a>
+                ) : (
+                  <span className="text-xs text-slate-400 italic">Brak pliku</span>
+                )}
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Dołączone Skany / Zdjęcia</span>
+                  <div className="text-xs font-black text-slate-900 mt-0.5">
+                    Liczba zdjęć: {(selectedBadanieDetail.zdjecia || []).length}
+                  </div>
+                </div>
+                {(selectedBadanieDetail.zdjecia || []).length > 0 && (
+                  <span className="text-[11px] font-bold text-sky-700">Kliknij zdjęcie poniżej</span>
+                )}
+              </div>
+            </div>
+
+            {/* GALERIA ZDJĘĆ ZE SKANAMI */}
+            {(selectedBadanieDetail.zdjecia || []).length > 0 && (
+              <div className="space-y-2">
+                <span className="text-[11px] font-black text-sky-950 uppercase tracking-wider block">
+                  📷 Galeria Zdjęć i Skanów Parametrów
+                </span>
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
+                  {selectedBadanieDetail.zdjecia?.map((imgUrl, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => setEnlargedImage(imgUrl)}
+                      className="aspect-square rounded-2xl overflow-hidden border border-sky-200 bg-slate-100 cursor-pointer hover:scale-105 transition-transform relative group shadow-xs"
+                    >
+                      <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-bold">
+                        🔍 Powiększ
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* INTERPRETACJA WYNIKÓW */}
+            <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-2">
+              <div className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                <span>🔬</span> INTERPRETACJA WYNIKÓW BADAŃ{" "}
+                <span className="text-[10px] text-slate-400 font-normal normal-case">
+                  (są to rzeczy, które powtarzają się w różnych wynikach, ale nie musi to oznaczać, że to występuje)
+                </span>
+              </div>
+              <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-medium bg-sky-50/30 p-4 rounded-xl border border-sky-100">
+                {selectedBadanieDetail.interpretacja || "Brak wprowadzonej interpretacji."}
+              </div>
+            </div>
+
+            {/* ZALECENIA OGÓLNE */}
+            <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-2">
+              <div className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
+                <span>🎯</span> OGÓLNE ZALECENIA DIETETYCZNE I STYLU ŻYCIA
+              </div>
+              <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-medium bg-sky-50/30 p-4 rounded-xl border border-sky-100">
+                {selectedBadanieDetail.zalecenia || "Brak dodatkowych zaleceń."}
+              </div>
+            </div>
+
+            {/* SEKCJA PORÓWNAWCZA SUPLEMENTACJI (OBOK SIEBIE) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              
+              {/* ZALECENIA TRENERA */}
+              <div className="bg-gradient-to-br from-amber-50 to-amber-100/40 p-5 rounded-2xl border border-amber-200 shadow-sm space-y-3">
+                <div className="text-xs font-black uppercase tracking-wider text-amber-950 flex items-center gap-2 border-b border-amber-200 pb-2">
+                  <span>💊</span> Dedykowany Protokół Suplementacyjny (Trener)
+                </div>
+                {(selectedBadanieDetail.suplementacja_trener || []).length > 0 ? (
+                  <ul className="space-y-2 text-xs">
+                    {selectedBadanieDetail.suplementacja_trener?.map((sup, sIdx) => (
+                      <li key={sIdx} className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-amber-200">
+                        <span className="font-black text-amber-800">{sIdx + 1}.</span>
+                        <span className="font-bold text-slate-900">{sup}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-xs text-slate-500 italic">Brak zaleceń suplementacyjnych.</div>
+                )}
+              </div>
+
+              {/* SUPLEMENTY KLUBOWICZA */}
+              <div className="bg-sky-50/60 p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3">
+                <div className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2 border-b border-sky-200 pb-2">
+                  <span>🙋‍♂️</span> Suplementy Przyjmowane przez Klubowicza
+                </div>
+                {(selectedBadanieDetail.suplementacja_klubowicz || []).length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead>
+                        <tr className="text-[10px] font-black uppercase text-slate-400 border-b border-sky-100">
+                          <th className="pb-1.5">Producent</th>
+                          <th className="pb-1.5">Produkt</th>
+                          <th className="pb-1.5 text-right">Dawka / Dzień</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-sky-100">
+                        {selectedBadanieDetail.suplementacja_klubowicz?.map((item, mIdx) => (
+                          <tr key={mIdx}>
+                            <td className="py-2 font-semibold text-slate-600">{item.producent || '-'}</td>
+                            <td className="py-2 font-black text-slate-900">{item.produkt}</td>
+                            <td className="py-2 text-right font-black text-amber-600">{item.dawka} {item.jednostka}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-500 italic">Klubowicz nie wprowadził swoich suplementów.</div>
+                )}
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX POWIĘKSZANIA ZDJĘĆ */}
       {enlargedImage && (
         <div 
           className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-md cursor-pointer"
@@ -3135,7 +3506,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA Z DYNAMICZNĄ WYSZUKIWARKĄ */}
+      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA DO WYZWANIA REDUKCJI */}
       {isManualAddModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -3692,7 +4063,6 @@ export default function AnalizaFormyPage() {
 
             <form onSubmit={handleSubmitMeasurement} className="space-y-6 text-xs">
               
-              {/* WYBÓR MIEJSCA POMIARU */}
               <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200 space-y-3">
                 <label className="font-black text-amber-950 uppercase tracking-wider block text-[11px]">
                   📍 Gdzie został wykonany pomiar?
