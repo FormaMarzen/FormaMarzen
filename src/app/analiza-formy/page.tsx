@@ -112,6 +112,7 @@ export interface BadaniaKrwiWpis {
   zalecenia?: string | null;
   suplementacja_trener?: string[];
   suplementacja_klubowicz?: SuplementKlubowicza[];
+  nowa_interpretacja?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -305,6 +306,11 @@ export default function AnalizaFormyPage() {
     return () => window.removeEventListener("click", handleClickOutside);
   }, []);
 
+  // Wskaźnik nieodczytanej interpretacji
+  const hasUnreadInterpretation = useMemo(() => {
+    return badaniaList.some(b => b.nowa_interpretacja === true);
+  }, [badaniaList]);
+
   const verifyAndAutoActivateChallenge = async (
     edycjaId: number, 
     uczestnicyList: RedukcjaUczestnik[], 
@@ -347,6 +353,26 @@ export default function AnalizaFormyPage() {
     } catch (err) {
       console.error("Błąd pobierania badań krwi:", err);
       setBadaniaList([]);
+    }
+  };
+
+  // Oznaczanie powiadomienia jako odczytane przez klubowicza
+  const markInterpretationAsRead = async (badanieId?: number) => {
+    if (appRole !== 'klubowicz') return;
+    
+    try {
+      if (badanieId) {
+        await supabase.from('klub_badania_krwi').update({ nowa_interpretacja: false }).eq('id', badanieId);
+        setBadaniaList(prev => prev.map(b => b.id === badanieId ? { ...b, nowa_interpretacja: false } : b));
+      } else {
+        const unreadIds = badaniaList.filter(b => b.nowa_interpretacja).map(b => b.id);
+        if (unreadIds.length > 0) {
+          await supabase.from('klub_badania_krwi').update({ nowa_interpretacja: false }).in('id', unreadIds);
+          setBadaniaList(prev => prev.map(b => ({ ...b, nowa_interpretacja: false })));
+        }
+      }
+    } catch (err) {
+      console.error("Błąd oznaczania odczytania interpretacji:", err);
     }
   };
 
@@ -659,7 +685,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Upload PDF w formularzu
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -696,7 +721,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Upload zdjęć w formularzu
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -733,7 +757,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Obsługa dynamicznych pól suplementacji trenera
   const handleAddCoachSupplementRow = () => {
     setBadanieFormData(prev => ({
       ...prev,
@@ -755,7 +778,6 @@ export default function AnalizaFormyPage() {
     }));
   };
 
-  // Obsługa suplementów przyjmowanych przez klubowicza
   const handleAddMemberSupplementRow = () => {
     setBadanieFormData(prev => ({
       ...prev,
@@ -777,7 +799,6 @@ export default function AnalizaFormyPage() {
     setBadanieFormData(prev => ({ ...prev, suplementacja_klubowicz: updated }));
   };
 
-  // Zapis całego badania do Supabase
   const handleSaveBadanieFull = async (e: React.FormEvent) => {
     e.preventDefault();
     const tKlientId = selectedKlient ? selectedKlient.id : currentUserId;
@@ -797,6 +818,10 @@ export default function AnalizaFormyPage() {
     const filteredMemberSupplements = badanieFormData.suplementacja_klubowicz
       .filter(s => s.produkt.trim() !== '' || s.producent.trim() !== '');
 
+    // Jeśli interpretację dodaje lub edytuje trener/admin, flaga nowej interpretacji = true
+    const isTrainerOrAdmin = appRole === 'admin' || appRole === 'trener';
+    const hasInterpretationContent = Boolean(badanieFormData.interpretacja && badanieFormData.interpretacja.trim().length > 0);
+
     const payload = {
       klient_id: tKlientId,
       email_klienta: tEmail,
@@ -808,6 +833,7 @@ export default function AnalizaFormyPage() {
       zalecenia: badanieFormData.zalecenia || null,
       suplementacja_trener: filteredCoachSupplements,
       suplementacja_klubowicz: filteredMemberSupplements,
+      nowa_interpretacja: isTrainerOrAdmin && hasInterpretationContent ? true : false,
       updated_at: new Date().toISOString()
     };
 
@@ -1561,7 +1587,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK */}
+      {/* PASEK ZAKŁADEK Z WSKAŹNIKIEM NOWEJ INTERPRETACJI */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -1594,18 +1620,32 @@ export default function AnalizaFormyPage() {
           <span>🔥</span> <span>3. Redukcja</span>
         </button>
         <button
-          onClick={() => setActiveTab('badania')}
-          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
+          onClick={() => {
+            setActiveTab('badania');
+            markInterpretationAsRead();
+          }}
+          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer relative ${
             activeTab === 'badania'
               ? 'bg-amber-500 text-slate-950 font-black shadow-md'
               : 'text-slate-600 hover:text-sky-950 hover:bg-white/50'
           }`}
         >
-          <span>🩸</span> <span>4. Badania Krwi</span>
+          <span>🩸</span> 
+          <span>4. Badania Krwi</span>
+
+          {/* MIGA WYKRZYKNIK JEŚLI JEST NOWA INTERPRETACJA */}
+          {hasUnreadInterpretation && appRole === 'klubowicz' && (
+            <span className="relative flex h-4 w-4 ml-1">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          )}
         </button>
       </div>
 
-      {/* WYSZUKIWARKA KLUBOWICZA TYLKO DLA ADMINA / TRENERA */}
+      {/* WYSZUKIWARKA KLUBOWICZA */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3 relative">
           <label className="text-xs font-black text-sky-950 uppercase tracking-wider flex items-center justify-between">
@@ -1692,7 +1732,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* KARTA WYBRANEGO PODOPIECZNEGO Z WZROSTEM I WIEKIEM */}
+      {/* KARTA WYBRANEGO PODOPIECZNEGO */}
       {selectedKlient ? (
         <div className="bg-gradient-to-r from-sky-950 to-slate-900 p-4 rounded-2xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
@@ -1750,7 +1790,7 @@ export default function AnalizaFormyPage() {
         )
       )}
 
-      {/* ZAKŁADKA 1: POMIARY CENTYMETREM */}
+      {/* ZAKŁADKA 1: POMIARY */}
       {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
           {latestMeasurement ? (
@@ -2241,7 +2281,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* ZAKŁADKA 3: WYZWANIE REDUKCJI */}
+      {/* ZAKŁADKA 3: REDUKCJA */}
       {activeTab === 'redukcja' && (
         <div className="space-y-8">
           
@@ -2482,7 +2522,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* DEDYKOWANA KARTA SKŁADU CIAŁA */}
+          {/* TABELA SKŁADU CIAŁA */}
           {(selectedKlient || currentUserId) && activeEdycjaObj && (appRole !== 'klubowicz' || isCurrentUserJoined) ? (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3 p-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-sky-100 pb-3">
@@ -2819,7 +2859,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* SEKCJA ARCHIWUM */}
+          {/* ARCHIWUM */}
           {edycjeRedukcji.filter(e => e.status === 'zakonczone' || e.status === 'anulowane').length > 0 && (
             <div className="pt-6 border-t border-sky-200 space-y-4">
               <div className="flex items-center gap-2">
@@ -2929,7 +2969,15 @@ export default function AnalizaFormyPage() {
                     badaniaList.map((b) => (
                       <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
                         <td className="p-3 font-black text-sky-950 whitespace-nowrap">
-                          {b.data_badania}
+                          <div className="flex items-center gap-1.5">
+                            {b.nowa_interpretacja && appRole === 'klubowicz' && (
+                              <span className="relative flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                              </span>
+                            )}
+                            <span>{b.data_badania}</span>
+                          </div>
                         </td>
                         <td className="p-3">
                           {b.plik_pdf_url ? (
@@ -2973,6 +3021,7 @@ export default function AnalizaFormyPage() {
                               onClick={() => {
                                 setSelectedBadanieDetail(b);
                                 setIsDetailViewOpen(true);
+                                markInterpretationAsRead(b.id);
                               }}
                               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
                               title="Otwórz szczegóły"
@@ -3053,7 +3102,7 @@ export default function AnalizaFormyPage() {
                 />
               </div>
 
-              {/* PLIK PDF (DODAWANIE / USUWANIE) */}
+              {/* PLIK PDF */}
               <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
                 <label className="font-black text-sky-950 uppercase tracking-wider block">
                   📄 Wyniki Badań w Pliku PDF
@@ -3145,10 +3194,10 @@ export default function AnalizaFormyPage() {
                 />
               </div>
 
-              {/* SEKCJA DWUKOLUMNOWA: SUPLEMENTACJA TRENERA (DYNAMICZNE OKIENKA) + SUPLEMENTACJA KLUBOWICZA */}
+              {/* SUPLEMENTACJA DWUKOLUMNOWA */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2 border-t border-sky-100">
                 
-                {/* 1. DEDYKIWANY PROTOKÓŁ SUPLEMENTACYJNY TRENERA */}
+                {/* 1. PROTOKÓŁ TRENERA */}
                 <div className="bg-amber-50/40 p-4 rounded-2xl border border-amber-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-black text-amber-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
@@ -3187,7 +3236,7 @@ export default function AnalizaFormyPage() {
                   </div>
                 </div>
 
-                {/* 2. SUPLEMENTY PRZYJMOWANE PRZEZ KLUBOWICZA */}
+                {/* 2. SUPLEMENTACJA KLUBOWICZA */}
                 <div className="bg-sky-50/50 p-4 rounded-2xl border border-sky-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-black text-sky-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
@@ -3302,7 +3351,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL 2: ESTETYCZNE OKNO PODGLĄDU SZCZEGÓŁÓW BADANIA KRWI (CARD VIEW) */}
+      {/* MODAL 2: OKNO PODGLĄDU SZCZEGÓŁÓW BADANIA KRWI */}
       {isDetailViewOpen && selectedBadanieDetail && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 md:p-8 shadow-2xl space-y-6 my-8 border border-sky-100 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
@@ -3378,7 +3427,7 @@ export default function AnalizaFormyPage() {
               </div>
             </div>
 
-            {/* GALERIA ZDJĘĆ ZE SKANAMI */}
+            {/* GALERIA ZDJĘĆ */}
             {(selectedBadanieDetail.zdjecia || []).length > 0 && (
               <div className="space-y-2">
                 <span className="text-[11px] font-black text-sky-950 uppercase tracking-wider block">
@@ -3424,10 +3473,9 @@ export default function AnalizaFormyPage() {
               </div>
             </div>
 
-            {/* SEKCJA PORÓWNAWCZA SUPLEMENTACJI (OBOK SIEBIE) */}
+            {/* PORÓWNANIE SUPLEMENTACJI */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               
-              {/* ZALECENIA TRENERA */}
               <div className="bg-gradient-to-br from-amber-50 to-amber-100/40 p-5 rounded-2xl border border-amber-200 shadow-sm space-y-3">
                 <div className="text-xs font-black uppercase tracking-wider text-amber-950 flex items-center gap-2 border-b border-amber-200 pb-2">
                   <span>💊</span> Dedykowany Protokół Suplementacyjny (Trener)
@@ -3446,7 +3494,6 @@ export default function AnalizaFormyPage() {
                 )}
               </div>
 
-              {/* SUPLEMENTY KLUBOWICZA */}
               <div className="bg-sky-50/60 p-5 rounded-2xl border border-sky-200 shadow-sm space-y-3">
                 <div className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2 border-b border-sky-200 pb-2">
                   <span>🙋‍♂️</span> Suplementy Przyjmowane przez Klubowicza
@@ -3506,7 +3553,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA DO WYZWANIA REDUKCJI */}
+      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA DO WYZWANIA */}
       {isManualAddModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -3747,7 +3794,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: WYBÓR PŁATNOŚCI (KLUBOWICZ) */}
+      {/* MODAL: WYBÓR PŁATNOŚCI */}
       {isJoinModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-100">
@@ -3821,7 +3868,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) */}
+      {/* MODAL: TWORZENIE NOWEJ EDYCJI */}
       {isNewEdycjaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -3923,7 +3970,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: POMIAR ANALIZY SKŁADU CIAŁA (ADMIN) */}
+      {/* MODAL: POMIAR REDUKCJI */}
       {isRedukcjaPomiarModalOpen && (() => {
         const targetClient = (klienci || []).find(k => String(k.id) === String(targetPomiarKlientId));
         const targetAge = targetClient ? calculateAge(targetClient.Urodziny || targetClient.urodziny) : null;
@@ -4037,7 +4084,7 @@ export default function AnalizaFormyPage() {
         );
       })()}
 
-      {/* MODAL: POMIAR OGÓLNY Z WYBOREM MIEJSCA (STUDIO VS INNE) */}
+      {/* MODAL: POMIAR OGÓLNY */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 max-h-[90vh] overflow-y-auto">
