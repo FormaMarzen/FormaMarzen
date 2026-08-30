@@ -176,6 +176,8 @@ export default function AnalizaFormyPage() {
 
   // Formularze
   const [manualAddKlientId, setManualAddKlientId] = useState<string>('');
+  const [manualAddSearchQuery, setManualAddSearchQuery] = useState<string>('');
+  const [isManualSearchFocused, setIsManualSearchFocused] = useState<boolean>(false);
   const [manualAddOplacone, setManualAddOplacone] = useState<boolean>(true);
   const [manualAddMetoda, setManualAddMetoda] = useState<'gotowka' | 'autopay' | 'inna'>('gotowka');
 
@@ -387,7 +389,6 @@ export default function AnalizaFormyPage() {
         setNagrodyRedukcji(nagrodyRes.data as RedukcjaNagroda[]);
       }
 
-      // Automatyczne sprawdzenie minimum osób przy załadowaniu danych
       if (loadedParticipants.length > 0) {
         await verifyAndAutoActivateChallenge(edycjaId, loadedParticipants, optionalEdycjeList);
       }
@@ -665,6 +666,7 @@ export default function AnalizaFormyPage() {
       alert("Klubowicz został pomyślnie dodany do wyzwania! (Kwota wpisowego trafia do kasy klubu)");
       setIsManualAddModalOpen(false);
       setManualAddKlientId('');
+      setManualAddSearchQuery('');
       await loadEdycjaDetails(selectedEdycjaId);
     } else {
       if (error.code === '23505') {
@@ -807,7 +809,6 @@ export default function AnalizaFormyPage() {
       alert("Błąd aktualizacji statusu płatności: " + error.message);
       if (selectedEdycjaId) await loadEdycjaDetails(selectedEdycjaId);
     } else if (selectedEdycjaId) {
-      // Automatyczna weryfikacja czy osiągnięto minimum po zatwierdzeniu wpłaty
       await verifyAndAutoActivateChallenge(selectedEdycjaId, updatedParticipants);
     }
   };
@@ -1148,6 +1149,22 @@ export default function AnalizaFormyPage() {
   const niezapisaniKlienci = useMemo(() => {
     return (klienci || []).filter(k => !(uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(k.id)));
   }, [klienci, uczestnicyRedukcji]);
+
+  // Lista niezapisanych klubowiczów przefiltrowana przez wyszukiwarkę modala
+  const filteredNiezapisaniKlienci = useMemo(() => {
+    if (!manualAddSearchQuery.trim()) return niezapisaniKlienci;
+    const query = manualAddSearchQuery.toLowerCase().trim();
+    return niezapisaniKlienci.filter(k => 
+      `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase().includes(query) ||
+      (k['E-mail'] && k['E-mail'].toLowerCase().includes(query)) ||
+      (k['Numer tel.'] && k['Numer tel.'].includes(query))
+    );
+  }, [niezapisaniKlienci, manualAddSearchQuery]);
+
+  const selectedManualKlientObj = useMemo(() => {
+    if (!manualAddKlientId) return null;
+    return (klienci || []).find(k => String(k.id) === String(manualAddKlientId)) || null;
+  }, [klienci, manualAddKlientId]);
 
   if (isLoading) {
     return (
@@ -1547,7 +1564,7 @@ export default function AnalizaFormyPage() {
                           <td className="p-3 text-center border-r border-sky-100">{m.talia || '-'}</td>
                           <td className="p-3 text-center border-r border-sky-100">{m.biodra || '-'}</td>
                           <td className="p-3 text-center border-r border-sky-100">{m.udo || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.lydka || '-'}</td>
+                          <td className="p-3 text-center border-r border-sky-200">{m.lydka || '-'}</td>
                           <td className="p-3 text-center border-r border-sky-100 font-black text-sky-950">{m.waga}</td>
                           <td className="p-3 text-center border-r border-sky-100 font-semibold">{m.tkanka_tluszczowa ? `${m.tkanka_tluszczowa}%` : '-'}</td>
                           <td className="p-3 text-center border-r border-sky-100">{m.miesnie || '-'}</td>
@@ -1935,8 +1952,8 @@ export default function AnalizaFormyPage() {
                       <span className={`text-[9px] font-bold px-2.5 py-0.5 rounded-full uppercase border ${
                         activeEdycjaObj.status === 'zakonczone' 
                           ? 'bg-slate-800 text-slate-300 border-slate-700' 
-                          : activeEdycjaObj.status === 'anulowane'
-                            ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                          : activeEdycjaObj.status === 'anulowane' 
+                            ? 'bg-rose-950/80 text-rose-300 border-rose-800' 
                             : activeEdycjaObj.status === 'zapisy'
                               ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
                               : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
@@ -1958,7 +1975,11 @@ export default function AnalizaFormyPage() {
                   {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' && (
                     <>
                       <button
-                        onClick={() => setIsManualAddModalOpen(true)}
+                        onClick={() => {
+                          setManualAddKlientId('');
+                          setManualAddSearchQuery('');
+                          setIsManualAddModalOpen(true);
+                        }}
                         className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl transition-all shadow cursor-pointer uppercase tracking-wider"
                       >
                         + Dodaj Klubowicza
@@ -2493,7 +2514,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA */}
+      {/* MODAL: RĘCZNE DODAWANIE KLUBOWICZA Z DYNAMICZNĄ WYSZUKIWARKĄ */}
       {isManualAddModalOpen && activeEdycjaObj && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -2504,23 +2525,126 @@ export default function AnalizaFormyPage() {
                 </h3>
                 <p className="text-[11px] text-slate-500">Edycja: {activeEdycjaObj.nazwa}</p>
               </div>
-              <button onClick={() => setIsManualAddModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+              <button 
+                onClick={() => {
+                  setIsManualAddModalOpen(false);
+                  setManualAddKlientId('');
+                  setManualAddSearchQuery('');
+                  setIsManualSearchFocused(false);
+                }} 
+                className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
 
             <form onSubmit={handleManualAddParticipant} className="space-y-4 text-xs">
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Wybierz Klubowicza z Bazy *</label>
-                <select
-                  required
-                  value={manualAddKlientId}
-                  onChange={(e) => setManualAddKlientId(e.target.value)}
-                  className="w-full p-3 border rounded-xl font-bold bg-white"
-                >
-                  <option value="">-- Wybierz osobę ({niezapisaniKlienci.length} dostępnych) --</option>
-                  {niezapisaniKlienci.map(k => (
-                    <option key={k.id} value={k.id}>{k.Imię} {k.Nazwisko} ({k['E-mail']})</option>
-                  ))}
-                </select>
+              
+              {/* POLE WYSZUKIWANIA I WYBORU KLUBOWICZA */}
+              <div className="relative space-y-1.5">
+                <label className="font-bold text-slate-700 block">
+                  Wyszukaj i wybierz klubowicza * ({niezapisaniKlienci.length} dostępnych)
+                </label>
+
+                {selectedManualKlientObj ? (
+                  <div className="flex items-center justify-between p-3 bg-sky-50 border-2 border-sky-300 rounded-2xl">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-sky-200 text-sky-950 font-black text-xs flex items-center justify-center overflow-hidden shrink-0 border border-sky-400">
+                        {selectedManualKlientObj.avatarUrl || selectedManualKlientObj.AvatarUrl ? (
+                          <img src={selectedManualKlientObj.avatarUrl || selectedManualKlientObj.AvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="uppercase">{selectedManualKlientObj.Imię?.[0] || 'K'}{selectedManualKlientObj.Nazwisko?.[0] || ''}</span>
+                        )}
+                      </div>
+                      <div>
+                        <div className="font-black text-xs text-sky-950">
+                          {selectedManualKlientObj.Imię} {selectedManualKlientObj.Nazwisko}
+                        </div>
+                        <div className="text-[10px] text-slate-500">{selectedManualKlientObj['E-mail']}</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualAddKlientId('');
+                        setManualAddSearchQuery('');
+                        setIsManualSearchFocused(true);
+                      }}
+                      className="text-rose-600 hover:text-rose-800 font-bold text-xs bg-white px-2.5 py-1 rounded-lg border border-rose-200 transition-colors"
+                    >
+                      ✕ Zmień
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <div className="relative flex items-center">
+                      <span className="absolute left-3 text-slate-400 text-sm pointer-events-none">🔍</span>
+                      <input
+                        type="text"
+                        required={!manualAddKlientId}
+                        placeholder="Wpisz imię, nazwisko lub e-mail klubowicza..."
+                        value={manualAddSearchQuery}
+                        onFocus={() => setIsManualSearchFocused(true)}
+                        onChange={(e) => {
+                          setManualAddSearchQuery(e.target.value);
+                          setIsManualSearchFocused(true);
+                        }}
+                        className="w-full bg-slate-50 border border-sky-200 rounded-xl pl-9 pr-8 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white"
+                      />
+                      {manualAddSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setManualAddSearchQuery('')}
+                          className="absolute right-3 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    {isManualSearchFocused && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-sky-200 rounded-2xl shadow-xl z-50 max-h-56 overflow-y-auto divide-y divide-sky-50">
+                        {filteredNiezapisaniKlienci.length > 0 ? (
+                          filteredNiezapisaniKlienci.map((klient) => {
+                            const avatar = klient.avatarUrl || klient.AvatarUrl;
+                            return (
+                              <div
+                                key={klient.id}
+                                onClick={() => {
+                                  setManualAddKlientId(String(klient.id));
+                                  setManualAddSearchQuery('');
+                                  setIsManualSearchFocused(false);
+                                }}
+                                className="p-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between transition-colors"
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-900 font-bold text-[10px] flex items-center justify-center shrink-0 border border-sky-300">
+                                    {avatar ? (
+                                      <img src={avatar} alt="Avatar" className="w-full h-full object-cover rounded-full" />
+                                    ) : (
+                                      <span className="uppercase">{klient.Imię?.[0] || 'K'}{klient.Nazwisko?.[0] || ''}</span>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold text-slate-900 text-xs">{klient.Imię} {klient.Nazwisko}</div>
+                                    <div className="text-[10px] text-slate-500">{klient['E-mail']}</div>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                  Wybierz
+                                </span>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="p-4 text-center text-slate-400 italic text-xs">
+                            Nie znaleziono klubowicza pasującego do frazy "{manualAddSearchQuery}".
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -2549,8 +2673,25 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setIsManualAddModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow">Dodaj do Gry</button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setIsManualAddModalOpen(false);
+                    setManualAddKlientId('');
+                    setManualAddSearchQuery('');
+                    setIsManualSearchFocused(false);
+                  }} 
+                  className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={!manualAddKlientId}
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow disabled:opacity-40"
+                >
+                  Dodaj do Gry
+                </button>
               </div>
             </form>
           </div>
@@ -2689,7 +2830,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) Z DOMYŚLNYM STATUSEM 'zapisy' */}
+      {/* MODAL: TWORZENIE NOWEJ EDYCJI (ADMIN) */}
       {isNewEdycjaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-sky-100">
