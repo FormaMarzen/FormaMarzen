@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 export type PaymentStatus = "nieoplacone" | "zadatek" | "calosc";
@@ -63,6 +63,7 @@ export default function WydarzeniaPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [wydarzenia, setWydarzenia] = useState<Wydarzenie[]>([]);
   const [klienciBaza, setKlienciBaza] = useState<KlientBaza[]>([]);
 
@@ -141,66 +142,74 @@ export default function WydarzeniaPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [previewImage]);
 
+  // Równoległe pobieranie danych w celu przyspieszenia startu strony
   const fetchData = async () => {
     setIsLoading(true);
-    
-    const { data: { session } } = await supabase.auth.getSession();
-    const email = session?.user?.email || "";
-    setCurrentUserEmail(email);
-    
-    if (email === "maciejklaput@gmail.com") {
-      setIsAdmin(true);
-    }
 
-    const { data, error } = await supabase
-      .from('wydarzenia')
-      .select('*')
-      .order('data_od', { ascending: true });
+    try {
+      const [sessionRes, wydarzeniaRes, klienciRes] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.from('wydarzenia').select('*').order('data_od', { ascending: true }),
+        supabase.from('klienci').select('id, "Imię", "Nazwisko", "E-mail"')
+      ]);
 
-    if (!error && data) {
-      setWydarzenia(data);
-      if (selectedEvent) {
-        const refreshed = data.find((w: Wydarzenie) => w.id === selectedEvent.id);
-        if (refreshed) setSelectedEvent(refreshed);
+      const email = sessionRes.data.session?.user?.email || "";
+      setCurrentUserEmail(email);
+      if (email === "maciejklaput@gmail.com") {
+        setIsAdmin(true);
       }
-    }
 
-    const { data: klienciData, error: klienciError } = await supabase
-      .from('klienci')
-      .select('id, "Imię", "Nazwisko", "E-mail"');
+      if (!wydarzeniaRes.error && wydarzeniaRes.data) {
+        setWydarzenia(wydarzeniaRes.data);
+        if (selectedEvent) {
+          const refreshed = wydarzeniaRes.data.find((w: Wydarzenie) => w.id === selectedEvent.id);
+          if (refreshed) setSelectedEvent(refreshed);
+        }
+      }
 
-    if (!klienciError && klienciData) {
-      const mapped: KlientBaza[] = klienciData.map((k: any) => ({
-        id: k.id,
-        imie: (k["Imię"] || k.imie || "").trim(),
-        nazwisko: (k["Nazwisko"] || k.nazwisko || "").trim(),
-        email: (k["E-mail"] || k.email || "").trim()
-      }));
-      setKlienciBaza(mapped);
+      if (!klienciRes.error && klienciRes.data) {
+        const mapped: KlientBaza[] = klienciRes.data.map((k: any) => ({
+          id: k.id,
+          imie: (k["Imię"] || k.imie || "").trim(),
+          nazwisko: (k["Nazwisko"] || k.nazwisko || "").trim(),
+          email: (k["E-mail"] || k.email || "").trim()
+        }));
+        setKlienciBaza(mapped);
+      }
+    } catch (err) {
+      console.error("Błąd podczas pobierania danych:", err);
+    } finally {
+      setIsLoading(false);
     }
-    
-    setIsLoading(false);
   };
 
-  const dzisiajStr = new Date().toISOString().split('T')[0];
+  const dzisiajStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  const przeszle = wydarzenia.filter(w => {
-    const dataKoniec = w.data_do || w.data_od;
-    return dataKoniec < dzisiajStr;
-  }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
+  const przeszle = useMemo(() => {
+    return wydarzenia.filter(w => {
+      const dataKoniec = w.data_do || w.data_od;
+      return dataKoniec < dzisiajStr;
+    }).sort((a, b) => new Date(b.data_od).getTime() - new Date(a.data_od).getTime());
+  }, [wydarzenia, dzisiajStr]);
 
-  const przyszle = wydarzenia.filter(w => {
-    const dataKoniec = w.data_do || w.data_od;
-    return dataKoniec >= dzisiajStr;
-  });
+  const przyszle = useMemo(() => {
+    return wydarzenia.filter(w => {
+      const dataKoniec = w.data_do || w.data_od;
+      return dataKoniec >= dzisiajStr;
+    });
+  }, [wydarzenia, dzisiajStr]);
 
-  const wkrotce = przyszle
-    .filter(w => w.status !== 'planowane')
-    .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+  const wkrotce = useMemo(() => {
+    return przyszle
+      .filter(w => w.status !== 'planowane')
+      .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+  }, [przyszle]);
 
-  const planowane = przyszle
-    .filter(w => w.status === 'planowane')
-    .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+  const planowane = useMemo(() => {
+    return przyszle
+      .filter(w => w.status === 'planowane')
+      .sort((a, b) => new Date(a.data_od).getTime() - new Date(b.data_od).getTime());
+  }, [przyszle]);
 
   const isZapisyZamkniete = (w: Wydarzenie) => {
     if (!w.zadatek_do) return false;
@@ -295,8 +304,14 @@ export default function WydarzeniaPage() {
     e.stopPropagation();
     if (!window.confirm("Czy na pewno chcesz usunąć to wydarzenie? Tej operacji nie można cofnąć.")) return;
 
+    // Natychmiastowe usunięcie ze stanu dla szybkiego efektu UI
+    setWydarzenia(prev => prev.filter(w => w.id !== id));
+    if (selectedEvent?.id === id) {
+      setSelectedEvent(null);
+      setIsViewModalOpen(false);
+    }
+
     await supabase.from('wydarzenia').delete().eq('id', id);
-    fetchData();
   };
 
   const handleImageCompress = (file: File, callback: (compressed: string) => void) => {
@@ -394,8 +409,8 @@ export default function WydarzeniaPage() {
         id: k.id, 
         imie: k.imie, 
         nazwisko: k.nazwisko, 
-        email: k.email,
-        status_platnosci: "nieoplacone"
+        email: k.email, 
+        status_platnosci: "nieoplacone" 
       }]
     }));
     setKlientSearch("");
@@ -407,8 +422,8 @@ export default function WydarzeniaPage() {
       ...prev,
       uczestnicy: [...prev.uczestnicy, { 
         imie: manualImie.trim(), 
-        nazwisko: manualNazwisko.trim(),
-        status_platnosci: "nieoplacone"
+        nazwisko: manualNazwisko.trim(), 
+        status_platnosci: "nieoplacone" 
       }]
     }));
     setManualImie("");
@@ -430,7 +445,7 @@ export default function WydarzeniaPage() {
     });
   };
 
-  // Szybka zmiana statusu płatności przez Admina jednym kliknięciem
+  // Optymistyczna, natychmiastowa zmiana statusu płatności przez Admina jednym kliknięciem
   const handleQuickPaymentToggle = async (participantIndex: number) => {
     if (!isAdmin || !selectedEvent || !selectedEvent.uczestnicy) return;
 
@@ -443,17 +458,23 @@ export default function WydarzeniaPage() {
     };
     const nextStatus: PaymentStatus = nextStatusMap[target.status_platnosci || "nieoplacone"];
     
-    currentUczestnicy[participantIndex] = {
-      ...target,
-      status_platnosci: nextStatus
-    };
+    const updatedUczestnicy = currentUczestnicy.map((u, idx) => 
+      idx === participantIndex ? { ...u, status_platnosci: nextStatus } : u
+    );
 
+    // Natychmiastowa aktualizacja stanu lokalnego (0ms opóźnienia dla użytkownika)
+    setSelectedEvent({ ...selectedEvent, uczestnicy: updatedUczestnicy });
+    setWydarzenia(prev => prev.map(w => w.id === selectedEvent.id ? { ...w, uczestnicy: updatedUczestnicy } : w));
+
+    // Zapis w tle do bazy Supabase
     const { error } = await supabase
       .from('wydarzenia')
-      .update({ uczestnicy: currentUczestnicy })
+      .update({ uczestnicy: updatedUczestnicy })
       .eq('id', selectedEvent.id);
 
-    if (!error) {
+    // Rollback w przypadku błędu sieciowego
+    if (error) {
+      console.error("Błąd aktualizacji statusu płatności:", error);
       setSelectedEvent({ ...selectedEvent, uczestnicy: currentUczestnicy });
       setWydarzenia(prev => prev.map(w => w.id === selectedEvent.id ? { ...w, uczestnicy: currentUczestnicy } : w));
     }
@@ -461,6 +482,8 @@ export default function WydarzeniaPage() {
 
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
+
     const payload = {
       tytul: form.tytul,
       data_od: form.data_od,
@@ -497,13 +520,19 @@ export default function WydarzeniaPage() {
       koszulki_grafiki: form.pokaz_koszulki ? form.koszulki_grafiki : []
     };
 
-    if (editingId) {
-      await supabase.from('wydarzenia').update(payload).eq('id', editingId);
-    } else {
-      await supabase.from('wydarzenia').insert([payload]);
+    try {
+      if (editingId) {
+        await supabase.from('wydarzenia').update(payload).eq('id', editingId);
+      } else {
+        await supabase.from('wydarzenia').insert([payload]);
+      }
+      setIsAdminModalOpen(false);
+      await fetchData();
+    } catch (err) {
+      console.error("Błąd podczas zapisywania wydarzenia:", err);
+    } finally {
+      setIsSaving(false);
     }
-    setIsAdminModalOpen(false);
-    fetchData();
   };
 
   const formatDatePL = (dateString?: string | null) => {
@@ -540,9 +569,13 @@ export default function WydarzeniaPage() {
     return null;
   };
 
-  const filteredKlienci = klienciBaza.filter(k => 
-    `${k.imie} ${k.nazwisko} ${k.email || ""}`.toLowerCase().includes(klientSearch.toLowerCase())
-  );
+  const filteredKlienci = useMemo(() => {
+    if (!klientSearch.trim()) return [];
+    const search = klientSearch.toLowerCase();
+    return klienciBaza.filter(k => 
+      `${k.imie} ${k.nazwisko} ${k.email || ""}`.toLowerCase().includes(search)
+    );
+  }, [klienciBaza, klientSearch]);
 
   // Kompaktowe etykiety statusów zapobiegające zwężaniu imion
   const getPaymentBadge = (status?: PaymentStatus) => {
@@ -572,14 +605,14 @@ export default function WydarzeniaPage() {
       >
         {isAdmin && (
           <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
-            <button onClick={(e) => handleOpenEdit(w, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm cursor-pointer">✏️</button>
-            <button onClick={(e) => handleDelete(w.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm cursor-pointer">🗑️</button>
+            <button onClick={(e) => handleOpenEdit(w, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm cursor-pointer" title="Edytuj">✏️</button>
+            <button onClick={(e) => handleDelete(w.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm cursor-pointer" title="Usuń">🗑️</button>
           </div>
         )}
 
         <div className="h-48 w-full bg-slate-100 relative overflow-hidden">
           {w.grafika_url ? (
-            <img src={w.grafika_url} alt={w.tytul} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+            <img src={w.grafika_url} alt={w.tytul} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy" />
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-sky-100 to-amber-50 flex items-center justify-center text-4xl opacity-50">🎟️</div>
           )}
@@ -999,6 +1032,7 @@ export default function WydarzeniaPage() {
                               src={imgUrl} 
                               alt={`Plan wyjazdu ${idx + 1}`} 
                               className="w-full h-auto object-contain max-h-[400px] rounded-xl group-hover:opacity-95 transition-opacity" 
+                              loading="lazy"
                             />
                             <div className="absolute inset-2 rounded-xl bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
                               <span>🔍</span> Kliknij, aby powiększyć
@@ -1056,6 +1090,7 @@ export default function WydarzeniaPage() {
                               src={selectedEvent.koszulki_grafika_glowna} 
                               alt="Koszulka treningowa" 
                               className="w-full h-auto object-contain max-h-[350px] rounded-xl group-hover:opacity-95 transition-opacity" 
+                              loading="lazy"
                             />
                             <div className="absolute inset-2 rounded-xl bg-indigo-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
                               <span>🔍</span> Kliknij, aby powiększyć
@@ -1080,6 +1115,7 @@ export default function WydarzeniaPage() {
                                   src={imgUrl} 
                                   alt={`Tabela rozmiarów ${idx + 1}`} 
                                   className="w-full h-auto object-contain max-h-[300px] rounded-xl group-hover:opacity-95 transition-opacity" 
+                                  loading="lazy"
                                 />
                                 <div className="absolute inset-2 rounded-xl bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5 backdrop-blur-[2px]">
                                   <span>🔍</span> Kliknij, aby powiększyć
@@ -1556,7 +1592,7 @@ export default function WydarzeniaPage() {
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
                           {form.plan_grafiki.map((imgUrl, index) => (
                             <div key={index} className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-50 h-24 group">
-                              <img src={imgUrl} alt={`Plan ${index + 1}`} className="w-full h-full object-cover" />
+                              <img src={imgUrl} alt={`Plan ${index + 1}`} className="w-full h-full object-cover" loading="lazy" />
                               <button 
                                 type="button" 
                                 onClick={() => handleRemovePlanImage(index)}
@@ -1662,7 +1698,7 @@ export default function WydarzeniaPage() {
                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
                             {form.koszulki_grafiki.map((imgUrl, index) => (
                               <div key={index} className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-50 h-24 group">
-                                <img src={imgUrl} alt={`Rozmiar ${index + 1}`} className="w-full h-full object-cover" />
+                                <img src={imgUrl} alt={`Rozmiar ${index + 1}`} className="w-full h-full object-cover" loading="lazy" />
                                 <button 
                                   type="button" 
                                   onClick={() => handleRemoveKoszulkaExtraImage(index)}
@@ -1686,8 +1722,12 @@ export default function WydarzeniaPage() {
                 <button type="button" onClick={() => setIsAdminModalOpen(false)} className="w-full sm:flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer text-sm">
                   Anuluj
                 </button>
-                <button type="submit" className="w-full sm:flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm">
-                  Zapisz do bazy
+                <button 
+                  type="submit" 
+                  disabled={isSaving}
+                  className={`w-full sm:flex-1 bg-amber-500 hover:bg-amber-600 text-slate-900 font-black px-4 py-3 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer text-sm flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {isSaving ? "Zapisywanie..." : "Zapisz do bazy"}
                 </button>
               </div>
             </form>
