@@ -99,14 +99,25 @@ export default function DashboardPage() {
     return Array.from(keys);
   };
 
- // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH
-  const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH
+  const sendPushNotification = async (
+    clientIds: number | string | (number | string)[],
+    payload: { title?: string; body?: string; url?: string; typ?: string; type?: string }
+  ) => {
     try {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
-      const validIds = rawIds.map(id => Number(id)).filter(id => !isNaN(id) && id > 0 && id !== 5000 && id !== 999999999);
-      if (validIds.length === 0) return;
+      const validIds = rawIds
+        .map(id => Number(id))
+        .filter(id => !isNaN(id) && id > 0 && id !== 5000 && id !== 999999999);
 
-      await fetch('/api/push/send', {
+      if (validIds.length === 0) {
+        console.warn('[PUSH CLIENT] Brak prawidłowych ID odbiorców do wysyłki.');
+        return;
+      }
+
+      console.log('[PUSH CLIENT] Wysyłanie powiadomienia do ID:', validIds, payload);
+
+      const res = await fetch('/api/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -114,14 +125,19 @@ export default function DashboardPage() {
           payload: {
             title: payload.title || 'FORMA MARZEŃ',
             body: payload.body || '',
-            url: payload.url || '/'
+            url: payload.url || '/',
+            typ: payload.typ || payload.type || 'PUSH'
           }
         })
       });
+
+      const resData = await res.json();
+      console.log('[PUSH CLIENT] Odpowiedź serwera:', resData);
     } catch (err) {
-      console.error('Błąd wywołania sendPushNotification:', err);
+      console.error('[PUSH CLIENT ERROR] Błąd wywołania sendPushNotification:', err);
     }
   };
+
   
   // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH
   const subscribeToPushNotifications = async (klientId: number) => {
