@@ -72,7 +72,7 @@ export async function POST(request: Request) {
 
     const seenEndpoints = new Set<string>();
 
-    // 1. Wyszukiwanie subskrypcji po identyfikatorach ID
+    // 1. Wyszukiwanie subskrypcji po identyfikatorach ID w tabeli klienci
     if (rawIds && (Array.isArray(rawIds) ? rawIds.length > 0 : true)) {
       const idList = Array.isArray(rawIds) ? rawIds : [rawIds];
       const validNumericIds = idList
@@ -84,6 +84,10 @@ export async function POST(request: Request) {
           .from('klienci')
           .select('id, push_subscription, "Imię", "Nazwisko", firstName, lastName, "E-mail", email')
           .in('id', validNumericIds);
+
+        if (clientsErr) {
+          console.error('[PUSH ERROR] Błąd pobierania klientów z bazy:', clientsErr);
+        }
 
         if (!clientsErr && clientsData && clientsData.length > 0) {
           for (const c of clientsData) {
@@ -99,17 +103,18 @@ export async function POST(request: Request) {
               try {
                 const parsed = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
                 if (parsed) userSubs.push(parsed);
-              } catch (e) {}
+              } catch (e) {
+                console.error(`[PUSH ERROR] Nie udało się sparsować push_subscription dla klienta ${c.id}:`, e);
+              }
             }
 
+            // Sprawdzenie również w tabeli pomocniczej push_subscriptions, jeśli istnieje
             try {
-              let query = supabase.from('push_subscriptions').select('*');
-              if (mail) {
-                query = query.or(`user_id.eq.${c.id},user_id.eq."${mail}",klient_id.eq.${c.id}`);
-              } else {
-                query = query.or(`user_id.eq.${c.id},klient_id.eq.${c.id}`);
-              }
-              const { data: dbSubs } = await query;
+              const { data: dbSubs } = await supabase
+                .from('push_subscriptions')
+                .select('*')
+                .or(`user_id.eq.${c.id},user_id.eq."${mail}"`);
+
               if (dbSubs && dbSubs.length > 0) {
                 for (const subRow of dbSubs) {
                   const sObj = subRow.subscription
@@ -118,40 +123,53 @@ export async function POST(request: Request) {
                   if (sObj) userSubs.push(sObj);
                 }
               }
-            } catch (e) {}
+            } catch (e) {
+              // Tabela push_subscriptions może nie mieć relacji po ID klienta, ignorujemy błąd cicho
+            }
 
             let addedAnyDevice = false;
 
             for (const subItem of userSubs) {
               const cleanSub = subItem?.subscription ? (typeof subItem.subscription === 'string' ? JSON.parse(subItem.subscription) : subItem.subscription) : subItem;
-              if (cleanSub?.endpoint && cleanSub?.keys?.p256dh && cleanSub?.keys?.auth) {
-                if (!seenEndpoints.has(cleanSub.endpoint)) {
-                  seenEndpoints.add(cleanSub.endpoint);
-                  targetsToSend.push({
-                    subObj: cleanSub,
-                    recipientName: odbiorcaTekst,
-                    recipientId: c.id,
-                    clientRowId: c.id,
-                    endpoint: cleanSub.endpoint,
-                  });
-                  addedAnyDevice = true;
-                }
+              
+              if (!cleanSub?.endpoint) {
+                console.warn(`[PUSH WARN] Subskrypcja dla klienta ${c.id} nie zawiera endpointu.`);
+                continue;
+              }
+
+              if (!cleanSub?.keys?.p256dh || !cleanSub?.keys?.auth) {
+                console.warn(`[PUSH WARN] Subskrypcja dla klienta ${c.id} posiada endpoint, ale brakuje kluczy szyfrowania keys.p256dh / keys.auth. Endpoint:`, cleanSub.endpoint);
+                continue;
+              }
+
+              if (!seenEndpoints.has(cleanSub.endpoint)) {
+                seenEndpoints.add(cleanSub.endpoint);
+                targetsToSend.push({
+                  subObj: cleanSub,
+                  recipientName: odbiorcaTekst,
+                  recipientId: c.id,
+                  clientRowId: c.id,
+                  endpoint: cleanSub.endpoint,
+                });
+                addedAnyDevice = true;
               }
             }
 
             if (!addedAnyDevice) {
-              console.warn(`[PUSH WARN] Brak zarejestrowanej subskrypcji dla użytkownika: ${odbiorcaTekst} (ID: ${c.id})`);
+              console.warn(`[PUSH WARN] Brak poprawnej, aktywnej subskrypcji z kluczami dla użytkownika: ${odbiorcaTekst} (ID: ${c.id})`);
               logEntries.push({
                 odbiorca: odbiorcaTekst,
                 odbiorca_id: c.id,
                 tytul: tytulPowiadomienia,
                 tresc: trescPowiadomienia,
                 typ: typPowiadomienia,
-                status: 'Brak aktywnej subskrypcji (Klubowicz nie aktywował Push)',
+                status: 'Brak aktywnej subskrypcji lub brak kluczy P256DH/Auth',
                 created_at: new Date().toISOString(),
               });
             }
           }
+        } else {
+          console.warn('[PUSH WARN] Nie znaleziono klientów w bazie dla ID:', validNumericIds);
         }
       }
     }
@@ -206,18 +224,6 @@ export async function POST(request: Request) {
           } catch (e) {}
         }
 
-        if (!parsedSub) {
-          const { data: dbSub } = await supabase
-            .from('push_subscriptions')
-            .select('*')
-            .or(`user_id.eq.${clientFound.id},user_id.eq."${recipientEmail}"`)
-            .limit(1)
-            .maybeSingle();
-          if (dbSub) {
-            parsedSub = dbSub.subscription ? (typeof dbSub.subscription === 'string' ? JSON.parse(dbSub.subscription) : dbSub.subscription) : dbSub;
-          }
-        }
-
         if (parsedSub?.endpoint && parsedSub?.keys?.p256dh && parsedSub?.keys?.auth) {
           if (!seenEndpoints.has(parsedSub.endpoint)) {
             seenEndpoints.add(parsedSub.endpoint);
@@ -236,7 +242,7 @@ export async function POST(request: Request) {
             tytul: tytulPowiadomienia,
             tresc: trescPowiadomienia,
             typ: typPowiadomienia,
-            status: 'Brak aktywnej subskrypcji (Klubowicz nie aktywował Push)',
+            status: 'Brak aktywnej subskrypcji lub brak kluczy P256DH/Auth',
             created_at: new Date().toISOString(),
           });
         }
@@ -244,13 +250,13 @@ export async function POST(request: Request) {
     }
 
     if (targetsToSend.length === 0) {
-      console.warn('[PUSH WARN] Nie znaleziono żadnego aktywnego urządzenia do wysyłki.');
+      console.warn('[PUSH WARN] Nie znaleziono żadnego aktywnego urządzenia do wysyłki (po weryfikacji kluczy).');
       if (logEntries.length > 0) {
         await supabase.from('historia_powiadomien').insert(logEntries);
       }
       return NextResponse.json({
         success: false,
-        warning: 'Brak zarejestrowanych urządzeń odbiorców.',
+        warning: 'Brak zarejestrowanych urządzeń odbiorców z poprawnymi kluczami.',
         logged: logEntries.length,
       });
     }
@@ -315,7 +321,7 @@ export async function POST(request: Request) {
             created_at: new Date().toISOString(),
           });
 
-          return Promise.reject({
+            return Promise.reject({
             success: false,
             statusCode: err.statusCode,
             isExpired,
@@ -348,4 +354,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
