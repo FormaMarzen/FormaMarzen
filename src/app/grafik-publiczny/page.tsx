@@ -118,10 +118,9 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
     }
-    // Precyzyjne dopasowanie po ID i dacie bez kolizji podciągów
+    // Precyzyjne dopasowanie po dokładnym ID i dacie (bez kolizji podciągów)
     for (const key of Object.keys(nadpisaneZajeciaDni)) {
-      const parts = key.split('_');
-      const matchesId = parts.includes(String(item.id));
+      const matchesId = key === String(item.id) || key.startsWith(String(item.id) + '_');
       if (matchesId && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
         return nadpisaneZajeciaDni[key];
       }
@@ -144,10 +143,9 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
     }
-    // Precyzyjne dopasowanie zapisów po ID i dacie
+    // Precyzyjne dopasowanie zapisów po dokładnym ID i dacie
     for (const key of Object.keys(zapisyNaZajecia)) {
-      const parts = key.split('_');
-      const matchesId = parts.includes(String(item.id));
+      const matchesId = key === String(item.id) || key.startsWith(String(item.id) + '_');
       if (matchesId && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
         if (zapisyNaZajecia[key] && zapisyNaZajecia[key].length > 0) {
           return zapisyNaZajecia[key];
