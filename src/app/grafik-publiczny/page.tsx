@@ -110,6 +110,7 @@ export default function PublicSchedulePage() {
       `${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
+      `jednorazowe_${item.id}`,
       String(item.id)
     ];
     for (const k of keysToCheck) {
@@ -125,6 +126,7 @@ export default function PublicSchedulePage() {
       `${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
+      `jednorazowe_${item.id}`,
       String(item.id)
     ];
     for (const k of keysToCheck) {
@@ -133,7 +135,7 @@ export default function PublicSchedulePage() {
     return [];
   }, [zapisyNaZajecia]);
 
-  // Zoptymalizowane, w pełni równoległe pobieranie danych publicznych
+  // Zoptymalizowane, w pełni równoległe pobieranie danych publicznych z bezpiecznymi limitami
   const loadPublicData = useCallback(async () => {
     setIsLoading(true);
 
@@ -149,13 +151,13 @@ export default function PublicSchedulePage() {
         karnetyRes
       ] = await Promise.allSettled([
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('grafik_zajec').select('*'),
-        supabase.from('zajecia_jednorazowe').select('*'),
-        supabase.from('nadpisania_zajec').select('*'),
-        supabase.from('zapisy_zajec').select('class_key, status'),
-        supabase.from('wydarzenia_kilkudniowe').select('*'),
-        supabase.from('rodzaje_zajec').select('*'),
-        supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true })
+        supabase.from('grafik_zajec').select('*').limit(1000),
+        supabase.from('zajecia_jednorazowe').select('*').limit(1000),
+        supabase.from('nadpisania_zajec').select('*').limit(1000),
+        supabase.from('zapisy_zajec').select('class_key, status').limit(5000),
+        supabase.from('wydarzenia_kilkudniowe').select('*').limit(1000),
+        supabase.from('rodzaje_zajec').select('*').limit(1000),
+        supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).limit(1000)
       ]);
 
       // 1. Reguły rezerwacji
@@ -207,15 +209,17 @@ export default function PublicSchedulePage() {
       if (nadpisaniaRes.status === 'fulfilled' && nadpisaniaRes.value.data) {
         const nadpisaniaMap: { [key: string]: any } = {};
         nadpisaniaRes.value.data.forEach((n: any) => {
-          nadpisaniaMap[n.class_key] = {
-            start: n.start,
-            end: n.end,
-            trainer: n.trainer,
-            limit: n.limit,
-            isOdwołane: Boolean(n.is_odwolane || n.is_odwołane || n.odwolane || n.odwołane || n.status === 'odwołane' || n.status === 'odwolane'),
-            isUsunięte: Boolean(n.is_usuniete || n.is_usunięte || n.usuniete || n.usunięte || n.status === 'usunięte' || n.status === 'usuniete'),
-            powodOdwolania: n.powod_odwolania || n.powod || 'ODWOŁANE PRZEZ KLUB'
-          };
+          if (n.class_key) {
+            nadpisaniaMap[n.class_key] = {
+              start: n.start,
+              end: n.end,
+              trainer: n.trainer,
+              limit: n.limit,
+              isOdwołane: Boolean(n.is_odwolane || n.is_odwołane || n.odwolane || n.odwołane || n.status === 'odwołane' || n.status === 'odwolane'),
+              isUsunięte: Boolean(n.is_usuniete || n.is_usunięte || n.usuniete || n.usunięte || n.status === 'usunięte' || n.status === 'usuniete'),
+              powodOdwolania: n.powod_odwolania || n.powod || 'ODWOŁANE PRZEZ KLUB'
+            };
+          }
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
@@ -224,8 +228,10 @@ export default function PublicSchedulePage() {
       if (zapisyRes.status === 'fulfilled' && zapisyRes.value.data) {
         const grouped: { [key: string]: any[] } = {};
         zapisyRes.value.data.forEach((z: any) => {
-          if (!grouped[z.class_key]) grouped[z.class_key] = [];
-          grouped[z.class_key].push(z);
+          if (z.class_key) {
+            if (!grouped[z.class_key]) grouped[z.class_key] = [];
+            grouped[z.class_key].push(z);
+          }
         });
         setZapisyNaZajecia(grouped);
       }
