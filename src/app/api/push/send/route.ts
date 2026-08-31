@@ -34,7 +34,6 @@ export async function POST(request: Request) {
     const typPowiadomienia = payload?.typ || payload?.type || 'PUSH';
     const docelowyUrl = payload?.url || '/';
 
-    // Lista zadań do wysyłki: { subObj, recipientName, recipientId, clientDbRow }
     const targetsToSend: Array<{
       subObj: any;
       recipientName: string;
@@ -49,10 +48,10 @@ export async function POST(request: Request) {
       tresc: string;
       typ: string;
       status: string;
-      created_at?: string;
+      created_at: string;
     }> = [];
 
-    // 1. Obsługa przekazania clientIds (np. przy odwołaniu zajęć lub awansie z krzesełka)
+    // 1. Pobieranie subskrypcji po clientIds z tabeli klienci
     if (clientIds && (Array.isArray(clientIds) ? clientIds.length > 0 : true)) {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
       const validNumericIds = rawIds
@@ -82,7 +81,6 @@ export async function POST(request: Request) {
               }
             }
 
-            // Fallback do tabeli push_subscriptions jeśli kolumna w klienci jest pusta
             if (!parsedSub) {
               const { data: dbSub } = await supabase
                 .from('push_subscriptions')
@@ -119,7 +117,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2. Obsługa przekazania bezpośredniej tablicy subskrypcji
+    // 2. Pobieranie z przekazanej tablicy subscriptions
     if (subscriptions && Array.isArray(subscriptions) && subscriptions.length > 0) {
       for (const rawSub of subscriptions) {
         let subObj = rawSub;
@@ -146,7 +144,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // 3. Obsługa wyszukiwania po adresie e-mail
+    // 3. Fallback po emailu
     const recipientEmail = (targetEmail || email || '').toLowerCase().trim();
     if (targetsToSend.length === 0 && recipientEmail) {
       const { data: clientFound } = await supabase
@@ -192,7 +190,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // Jeśli brak subskrypcji do wysłania, zapisujemy logi i kończymy
     if (targetsToSend.length === 0) {
       if (logEntries.length > 0) {
         await supabase.from('historia_powiadomien').insert(logEntries);
@@ -216,12 +213,10 @@ export async function POST(request: Request) {
       },
     });
 
+    // Czyste opcje VAPID bez błędnych nagłówków blokujących Apple APNs
     const pushOptions = {
       TTL: 86400,
       urgency: 'high' as const,
-      headers: {
-        Urgency: 'high',
-      },
     };
 
     const results = await Promise.allSettled(
@@ -245,12 +240,11 @@ export async function POST(request: Request) {
             recipient: target.recipientName,
           };
         } catch (err: any) {
-          console.error(`Błąd bramki push dla ${target.recipientName}:`, err.message);
+          console.error(`Błąd wysyłki push dla ${target.recipientName}:`, err);
 
           const isExpired = err.statusCode === 404 || err.statusCode === 410;
           const statusDesc = isExpired ? 'Brak aktywnej subskrypcji (Wygasła)' : `Błąd wysyłki: ${err.statusCode || err.message}`;
 
-          // Czyszczenie wygasłej subskrypcji w bazie
           if (isExpired && target.clientRowId) {
             await supabase.from('klienci').update({ push_subscription: null }).eq('id', target.clientRowId);
           }
@@ -289,7 +283,7 @@ export async function POST(request: Request) {
       total: targetsToSend.length,
     });
   } catch (error: any) {
-    console.error('Błąd krytyczny endpointu /api/push/send:', error);
+    console.error('Błąd krytyczny /api/push/send:', error);
     return NextResponse.json(
       { success: false, error: error.message || 'Błąd serwera' },
       { status: 500 }

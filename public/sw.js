@@ -1,22 +1,33 @@
-// public/sw.js
 self.addEventListener('push', function (event) {
   if (!event.data) return;
 
+  let title = 'FORMA MARZEŃ';
+  let body = '';
+  let url = '/';
+  let icon = '/icon-192x192.png';
+  let badge = '/icon-192x192.png';
+
   try {
     const data = event.data.json();
-    const title = data.title || 'FORMA MARZEŃ';
-    const options = {
-      body: data.body || '',
-      vibrate: [200, 100, 200],
-      data: {
-        url: data.url || '/'
-      }
-    };
-
-    event.waitUntil(self.registration.showNotification(title, options));
+    title = data.title || title;
+    body = data.body || '';
+    url = data.url || (data.data && data.data.url) || '/';
+    icon = data.icon || icon;
+    badge = data.badge || badge;
   } catch (err) {
-    console.error('Błąd parsowania powiadomienia Push:', err);
+    body = event.data.text();
   }
+
+  const options = {
+    body: body,
+    icon: icon,
+    badge: badge,
+    data: { url: url },
+    tag: 'forma-marzen-notification-' + Date.now(),
+    renotify: true
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', function (event) {
