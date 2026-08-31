@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import "./globals.css";
@@ -50,8 +50,11 @@ export default function RootLayout({
   const [profileHeight, setProfileHeight] = useState('');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
-  // Stan powiadomienia o nowej interpretacji badań krwi
+  // Stany powiadomień dla poszczególnych sekcji
   const [hasUnreadInterpretation, setHasUnreadInterpretation] = useState<boolean>(false);
+  const [hasUnreadRedukcja, setHasUnreadRedukcja] = useState<boolean>(false);
+  const [hasUnreadWydarzenia, setHasUnreadWydarzenia] = useState<boolean>(false);
+  const [hasUnreadBazaWiedzy, setHasUnreadBazaWiedzy] = useState<boolean>(false);
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
@@ -76,33 +79,89 @@ export default function RootLayout({
     );
   })();
 
-  // Funkcja sprawdzająca nieodczytane interpretacje badań krwi
-  const checkUnreadInterpretations = async (cId: number | string | null, email: string) => {
-    if (!email && !cId) return;
+  // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego
+  const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
+    if (typeof window === "undefined") return;
+
     try {
-      let query = supabase
-        .from('klub_badania_krwi')
-        .select('id, nowa_interpretacja')
-        .eq('nowa_interpretacja', true);
+      // 1. Badania Krwi (Interpretacje)
+      let bloodUnread = false;
+      if (email || cId) {
+        let query = supabase.from('klub_badania_krwi').select('id, nowa_interpretacja').eq('nowa_interpretacja', true);
+        if (cId) query = query.or(`klient_id.eq.${cId},email_klienta.ilike.${email.trim()}`);
+        else query = query.ilike('email_klienta', email.trim());
 
-      if (cId) {
-        query = query.or(`klient_id.eq.${cId},email_klienta.ilike.${email.trim()}`);
+        const { data: bloodData } = await query;
+        if (bloodData && bloodData.length > 0) bloodUnread = true;
+      }
+      setHasUnreadInterpretation(bloodUnread);
+
+      // 2. Wyzwania Redukcji
+      const { data: redukcjeData } = await supabase
+        .from('klub_redukcja_edycje')
+        .select('id, status')
+        .in('status', ['zapisy', 'aktywne']);
+
+      if (redukcjeData && redukcjeData.length > 0) {
+        const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
+        setHasUnreadRedukcja(hasUnseenRedukcja);
       } else {
-        query = query.ilike('email_klienta', email.trim());
+        setHasUnreadRedukcja(false);
       }
 
-      const { data, error } = await query;
-      if (data && data.length > 0 && !error) {
-        setHasUnreadInterpretation(true);
+      // 3. Wydarzenia Klubowe
+      const dzisiajStr = new Date().toISOString().split("T")[0];
+      const { data: eventsData } = await supabase
+        .from('wydarzenia')
+        .select('id, data_od, data_do');
+
+      if (eventsData && eventsData.length > 0) {
+        const futureEvents = eventsData.filter((w: any) => {
+          const dataKoniec = w.data_do || w.data_od;
+          return dataKoniec >= dzisiajStr;
+        });
+        const hasUnseenEvent = futureEvents.some((w: any) => !localStorage.getItem(`seen_event_${w.id}`));
+        setHasUnreadWydarzenia(hasUnseenEvent);
       } else {
-        setHasUnreadInterpretation(false);
+        setHasUnreadWydarzenia(false);
       }
+
+      // 4. Baza Wiedzy (Propozycje suplementów dla admina oraz nowe wpisy w suplementach/sporcie/odżywianiu/przepisach)
+      let unreadBaza = false;
+
+      if (role === 'admin') {
+        const { data: sugData } = await supabase
+          .from('sugestie_suplementow')
+          .select('id')
+          .eq('status', 'oczekujace');
+        if (sugData && sugData.length > 0) unreadBaza = true;
+      }
+
+      if (!unreadBaza) {
+        const [suplRes, sportRes, odzRes, przRes] = await Promise.all([
+          supabase.from('suplementy').select('id'),
+          supabase.from('baza_sport').select('id'),
+          supabase.from('baza_odzywianie').select('id'),
+          supabase.from('baza_przepisow').select('id')
+        ]);
+
+        const hasUnreadSupl = (suplRes.data || []).some((item: any) => !localStorage.getItem(`seen_supl_${item.id}`));
+        const hasUnreadSport = (sportRes.data || []).some((item: any) => !localStorage.getItem(`seen_sport_${item.id}`));
+        const hasUnreadOdz = (odzRes.data || []).some((item: any) => !localStorage.getItem(`seen_odz_${item.id}`));
+        const hasUnreadPrzepis = (przRes.data || []).some((item: any) => !localStorage.getItem(`seen_przepis_${item.id}`));
+
+        if (hasUnreadSupl || hasUnreadSport || hasUnreadOdz || hasUnreadPrzepis) {
+          unreadBaza = true;
+        }
+      }
+      setHasUnreadBazaWiedzy(unreadBaza);
+
     } catch (err) {
-      console.error("Błąd sprawdzania nowych interpretacji:", err);
+      console.error("Błąd sprawdzania powiadomień w menu:", err);
     }
   };
 
-  // Pobieranie ID klienta
+  // Pobieranie ID klienta dla kalendarza
   useEffect(() => {
     if (showCalendarSettings && !currentClientId) {
       const fetchClientIdInstantly = async () => {
@@ -299,6 +358,8 @@ export default function RootLayout({
           }
         }
 
+        let computedRole: 'admin' | 'trener' | 'klubowicz' = 'klubowicz';
+
         if (klientData) {
           const k = klientData as any;
           setCurrentClientId(k.id);
@@ -317,12 +378,10 @@ export default function RootLayout({
           setCalendarAutoSync(settings.autoSync ?? false);
 
           subscribeToPushNotifications(k.id);
-          await checkUnreadInterpretations(k.id, cleanEmail);
-        } else {
-          await checkUnreadInterpretations(null, cleanEmail);
         }
 
         if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
+          computedRole = 'admin';
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
           if (klientData) subscribeToPushNotifications((klientData as any).id);
@@ -334,10 +393,12 @@ export default function RootLayout({
             .maybeSingle();
 
           if (trenerData) {
+            computedRole = 'trener';
             setAppRole('trener');
             setProfileName(trenerData.imie_nazwisko || (klientData ? `${(klientData as any).Imię} ${(klientData as any).Nazwisko}` : cleanEmail.split('@')[0]));
             if (trenerData.telefon && trenerData.telefon !== '-') setProfilePhone(trenerData.telefon);
           } else {
+            computedRole = 'klubowicz';
             setAppRole('klubowicz');
             if (klientData) {
               const k = klientData as any;
@@ -347,6 +408,8 @@ export default function RootLayout({
             }
           }
         }
+
+        await checkAllBadges(klientData ? (klientData as any).id : null, cleanEmail, computedRole);
       } catch (err) {
         console.error("Błąd sprawdzania sesji:", err);
       } finally {
@@ -532,6 +595,11 @@ export default function RootLayout({
     : appRole === 'trener' 
       ? trenerMenuSections 
       : klientMenuSections;
+
+  // Główny stan pokazujący czy na przycisku otwarcia menu (hamburger) powinien być wykrzyknik
+  const hasAnyBadgeInMenu = useMemo(() => {
+    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy;
+  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy]);
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -744,8 +812,16 @@ export default function RootLayout({
                         <div className="space-y-1">
                           {section.items.map((item) => {
                             const isActive = pathname === item.href.split('?')[0];
-                            const isAnalizaFormy = item.href === '/analiza-formy';
-                            const showBlinkingBadge = isAnalizaFormy && hasUnreadInterpretation && appRole === 'klubowicz';
+                            
+                            // Logika sprawdzania wykrzykników dla poszczególnych pozycji menu
+                            let showBadge = false;
+                            if (item.href === '/analiza-formy') {
+                              showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja;
+                            } else if (item.href === '/wydarzenia') {
+                              showBadge = hasUnreadWydarzenia;
+                            } else if (item.href === '/baza-wiedzy') {
+                              showBadge = hasUnreadBazaWiedzy;
+                            }
 
                             return (
                               <Link
@@ -762,8 +838,8 @@ export default function RootLayout({
                                   <span className="text-sm">{item.icon}</span>
                                   <span className="truncate">{item.label}</span>
                                 </div>
-                                {showBlinkingBadge && (
-                                  <span className="relative flex h-4 w-4 shrink-0">
+                                {showBadge && (
+                                  <span className="relative flex h-4 w-4 shrink-0 ml-1">
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
                                     <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
                                       !
@@ -804,14 +880,17 @@ export default function RootLayout({
                     <button 
                       className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer relative"
                       onClick={() => setIsMenuOpen(true)}
+                      title="Otwórz menu"
                     >
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 6h16M4 12h16M4 18h16" />
                       </svg>
-                      {hasUnreadInterpretation && appRole === 'klubowicz' && (
-                        <span className="absolute top-1 right-1 flex h-2.5 w-2.5">
+                      {hasAnyBadgeInMenu && (
+                        <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600 text-[8px] font-black text-white items-center justify-center shadow">
+                            !
+                          </span>
                         </span>
                       )}
                     </button>
