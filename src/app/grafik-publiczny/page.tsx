@@ -91,7 +91,15 @@ export default function PublicSchedulePage() {
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
       if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
-        const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
+        const activeCount = Array.isArray(signups)
+          ? signups.filter(s => {
+              if (s.is_cancelled || s.is_odwolany || s.is_anulowany) return false;
+              const st = (s.status || '').toLowerCase();
+              if (st === 'odwołany' || st === 'odwolany' || st === 'anulowany' || st === 'cancelled') return false;
+              return true;
+            }).length
+          : 0;
+
         if (activeCount < minRequired) {
           return {
             isAutoCancelled: true,
@@ -104,58 +112,78 @@ export default function PublicSchedulePage() {
   }, [bookingRules, currentDate]);
 
   const findOverride = useCallback((item: any, col: any) => {
-    const keysToCheck = [
+    const candidateKeys = [
       `${item.id}_${col.isoDate}`,
       `${item.id}_${col.date}`,
       `${item.id}_${col.date?.replace('/', '.')}`,
       `${item.id}_${col.date?.replace('/', '-')}`,
+      `${item.id}_${col.fullFormattedDate}`,
+      `${item.id}_${col.key}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
       `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}`,
       String(item.id)
     ];
-    for (const k of keysToCheck) {
+
+    for (const k of candidateKeys) {
       if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
     }
-    // Precyzyjne dopasowanie nadpisania bez kolizji ID
+
     for (const key of Object.keys(nadpisaneZajeciaDni)) {
       const parts = key.split('_');
-      const hasId = parts.includes(String(item.id));
-      const hasDate = key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')) || key.includes(col.date?.replace('/', '-'));
+      const hasId = parts.some(p => p === String(item.id));
+      const hasDate =
+        key.includes(col.isoDate) ||
+        key.includes(col.date) ||
+        key.includes(col.date?.replace('/', '.')) ||
+        key.includes(col.date?.replace('/', '-')) ||
+        (col.fullFormattedDate && key.includes(col.fullFormattedDate));
+
       if (hasId && hasDate) {
         return nadpisaneZajeciaDni[key];
       }
     }
+
     return null;
   }, [nadpisaneZajeciaDni]);
 
   const getSignups = useCallback((item: any, col: any) => {
-    const keysToCheck = [
+    const candidateKeys = [
       `${item.id}_${col.isoDate}`,
       `${item.id}_${col.date}`,
       `${item.id}_${col.date?.replace('/', '.')}`,
       `${item.id}_${col.date?.replace('/', '-')}`,
+      `${item.id}_${col.fullFormattedDate}`,
+      `${item.id}_${col.key}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
       `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}`,
       String(item.id)
     ];
-    for (const k of keysToCheck) {
+
+    for (const k of candidateKeys) {
       if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
     }
-    // Precyzyjne dopasowanie zapisów po ID i dacie
+
     for (const key of Object.keys(zapisyNaZajecia)) {
       const parts = key.split('_');
-      const hasId = parts.includes(String(item.id));
-      const hasDate = key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')) || key.includes(col.date?.replace('/', '-'));
+      const hasId = parts.some(p => p === String(item.id));
+      const hasDate =
+        key.includes(col.isoDate) ||
+        key.includes(col.date) ||
+        key.includes(col.date?.replace('/', '.')) ||
+        key.includes(col.date?.replace('/', '-')) ||
+        (col.fullFormattedDate && key.includes(col.fullFormattedDate));
+
       if (hasId && hasDate) {
         if (zapisyNaZajecia[key] && zapisyNaZajecia[key].length > 0) {
           return zapisyNaZajecia[key];
         }
       }
     }
+
     return [];
   }, [zapisyNaZajecia]);
 
@@ -174,15 +202,16 @@ export default function PublicSchedulePage() {
         karnetyRes
       ] = await Promise.allSettled([
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('grafik_zajec').select('*').limit(1000),
-        supabase.from('zajecia_jednorazowe').select('*').limit(1000),
-        supabase.from('nadpisania_zajec').select('*').limit(1000),
-        supabase.from('zapisy_zajec').select('class_key, status').limit(5000),
+        supabase.from('grafik_zajec').select('*').limit(2000),
+        supabase.from('zajecia_jednorazowe').select('*').limit(2000),
+        supabase.from('nadpisania_zajec').select('*').limit(3000),
+        supabase.from('zapisy_zajec').select('*').limit(10000),
         supabase.from('wydarzenia_kilkudniowe').select('*').limit(1000),
         supabase.from('rodzaje_zajec').select('*').limit(1000),
         supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).limit(1000)
       ]);
 
+      // 1. Reguły rezerwacji
       if (rulesRes.status === 'fulfilled' && rulesRes.value.data) {
         const rulesData = rulesRes.value.data;
         setBookingRules({
@@ -193,67 +222,129 @@ export default function PublicSchedulePage() {
         });
       }
 
+      // 2. Szablony grafiku
       if (szablonyRes.status === 'fulfilled' && szablonyRes.value.data) {
-        setZapisaneZajecia(szablonyRes.value.data.map((s: any) => ({
-          id: s.id,
-          title: s.title || s.nazwa,
-          start: s.start || s.start_time,
-          end: s.end || s.end_time,
-          trainer: s.trainer || s.prowadzacy,
-          limit: s.limit || s.limit_miejsc || 12,
-          days: s.days || {},
-          isOdwołane: Boolean(s.is_odwolane || s.is_odwołane || s.odwolane || s.status === 'odwołane' || s.status === 'odwolane'),
-          isUsunięte: Boolean(s.is_usuniete || s.is_usunięte || s.usuniete || s.status === 'usunięte' || s.status === 'usuniete'),
-          powodOdwolania: s.powod_odwolania || s.powod || ''
-        })));
+        setZapisaneZajecia(szablonyRes.value.data.map((s: any) => {
+          let parsedDays = s.days;
+          if (typeof parsedDays === 'string') {
+            try {
+              parsedDays = JSON.parse(parsedDays);
+            } catch (e) {
+              parsedDays = {};
+            }
+          }
+          return {
+            id: s.id,
+            title: s.title || s.nazwa,
+            start: s.start || s.start_time,
+            end: s.end || s.end_time,
+            trainer: s.trainer || s.prowadzacy,
+            limit: s.limit || s.limit_miejsc || 12,
+            days: parsedDays || {},
+            isOdwołane: Boolean(s.is_odwolane || s.is_odwołane || s.odwolane || s.status === 'odwołane' || s.status === 'odwolane'),
+            isUsunięte: Boolean(s.is_usuniete || s.is_usunięte || s.usuniete || s.status === 'usunięte' || s.status === 'usuniete' || s.is_deleted || s.deleted),
+            powodOdwolania: s.powod_odwolania || s.powod || ''
+          };
+        }));
       }
 
+      // 3. Zajęcia jednorazowe
       if (jednorazoweRes.status === 'fulfilled' && jednorazoweRes.value.data) {
         setJednorazoweZajecia(jednorazoweRes.value.data.map((j: any) => ({
           id: j.id,
           title: j.title || j.nazwa,
           start: j.start_time || j.start,
           end: j.end_time || j.end,
-          trainer: j.trainer,
+          trainer: j.trainer || j.prowadzacy,
           limit: j.limit_miejsc || j.limit || 12,
           displayDate: j.display_date || j.displayDate,
           fullDateStr: j.full_date_str || j.fullDateStr || j.date,
           isJednorazowe: true,
           isOdwołane: Boolean(j.is_odwolane || j.is_odwołane || j.odwolane || j.odwołane || j.status === 'odwołane' || j.status === 'odwolane'),
-          isUsunięte: Boolean(j.is_usuniete || j.is_usunięte || j.usuniete || j.usunięte || j.status === 'usunięte' || j.status === 'usuniete'),
+          isUsunięte: Boolean(j.is_usuniete || j.is_usunięte || j.usuniete || j.usunięte || j.status === 'usunięte' || j.status === 'usuniete' || j.is_deleted || j.deleted),
           powodOdwolania: j.powod_odwolania || j.powod || ''
         })));
       }
 
+      // 4. Nadpisania zajęć (zabezpieczenie wszystkich formatów kluczy)
       if (nadpisaniaRes.status === 'fulfilled' && nadpisaniaRes.value.data) {
         const nadpisaniaMap: { [key: string]: any } = {};
+        const registerOverride = (k: string, val: any) => {
+          if (k) nadpisaniaMap[String(k).trim()] = val;
+        };
+
         nadpisaniaRes.value.data.forEach((n: any) => {
-          if (n.class_key) {
-            nadpisaniaMap[n.class_key] = {
-              start: n.start,
-              end: n.end,
-              trainer: n.trainer,
-              limit: n.limit,
-              isOdwołane: Boolean(n.is_odwolane || n.is_odwołane || n.odwolane || n.odwołane || n.status === 'odwołane' || n.status === 'odwolane'),
-              isUsunięte: Boolean(n.is_usuniete || n.is_usunięte || n.usuniete || n.usunięte || n.status === 'usunięte' || n.status === 'usuniete'),
-              powodOdwolania: n.powod_odwolania || n.powod || 'ODWOŁANE PRZEZ KLUB'
-            };
+          const isOdw = Boolean(
+            n.is_odwolane || n.is_odwołane || n.odwolane || n.odwołane ||
+            n.is_cancelled || n.cancelled ||
+            n.status === 'odwołane' || n.status === 'odwolane' || n.status === 'cancelled'
+          );
+          const isUsun = Boolean(
+            n.is_usuniete || n.is_usunięte || n.usuniete || n.usunięte ||
+            n.is_deleted || n.deleted ||
+            n.status === 'usunięte' || n.status === 'usuniete' || n.status === 'deleted'
+          );
+
+          const overrideVal = {
+            start: n.start || n.start_time,
+            end: n.end || n.end_time,
+            trainer: n.trainer || n.prowadzacy,
+            limit: n.limit || n.limit_miejsc,
+            isOdwołane: isOdw,
+            isUsunięte: isUsun,
+            powodOdwolania: n.powod_odwolania || n.powod || (isOdw ? 'ODWOŁANE PRZEZ KLUB' : '')
+          };
+
+          if (n.class_key) registerOverride(n.class_key, overrideVal);
+          if (n.classKey) registerOverride(n.classKey, overrideVal);
+          if (n.key) registerOverride(n.key, overrideVal);
+          if (n.id) registerOverride(String(n.id), overrideVal);
+
+          const cId = n.class_id || n.zajecia_id || n.id_zajec || n.grafik_id || n.training_id;
+          const cDate = n.data || n.date || n.dzien || n.display_date || n.displayDate || n.iso_date || n.isoDate;
+          if (cId && cDate) {
+            registerOverride(`${cId}_${cDate}`, overrideVal);
+            registerOverride(`${cId}_${String(cDate).replace(/\//g, '.')}`, overrideVal);
+            registerOverride(`${cId}_${String(cDate).replace(/\./g, '/')}`, overrideVal);
+            registerOverride(`${cId}_${String(cDate).replace(/\//g, '-')}`, overrideVal);
+            registerOverride(`jednorazowe_${cId}_${cDate}`, overrideVal);
           }
         });
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
+      // 5. Zapisy na zajęcia (rejestracja wszystkich wariantów powiązań)
       if (zapisyRes.status === 'fulfilled' && zapisyRes.value.data) {
         const grouped: { [key: string]: any[] } = {};
+        const addSignup = (key: string, item: any) => {
+          if (!key) return;
+          const cleanKey = String(key).trim();
+          if (!grouped[cleanKey]) grouped[cleanKey] = [];
+          grouped[cleanKey].push(item);
+        };
+
         zapisyRes.value.data.forEach((z: any) => {
-          if (z.class_key) {
-            if (!grouped[z.class_key]) grouped[z.class_key] = [];
-            grouped[z.class_key].push(z);
+          const status = z.status || (z.is_cancelled ? 'odwolany' : 'zapisany');
+          const signupItem = { ...z, status };
+
+          if (z.class_key) addSignup(z.class_key, signupItem);
+          if (z.classKey) addSignup(z.classKey, signupItem);
+          if (z.key) addSignup(z.key, signupItem);
+
+          const cId = z.class_id || z.zajecia_id || z.id_zajec || z.grafik_id || z.training_id || z.zajecie_id;
+          const cDate = z.data || z.date || z.dzien || z.display_date || z.displayDate || z.iso_date || z.isoDate || z.session_date;
+          if (cId && cDate) {
+            addSignup(`${cId}_${cDate}`, signupItem);
+            addSignup(`${cId}_${String(cDate).replace(/\//g, '.')}`, signupItem);
+            addSignup(`${cId}_${String(cDate).replace(/\./g, '/')}`, signupItem);
+            addSignup(`${cId}_${String(cDate).replace(/\//g, '-')}`, signupItem);
+            addSignup(`jednorazowe_${cId}_${cDate}`, signupItem);
           }
         });
         setZapisyNaZajecia(grouped);
       }
 
+      // 6. Wydarzenia kilkudniowe
       if (wydarzeniaRes.status === 'fulfilled' && wydarzeniaRes.value.data) {
         setWydarzeniaKilkudniowe(wydarzeniaRes.value.data.map((w: any) => ({
           id: w.id,
@@ -263,10 +354,12 @@ export default function PublicSchedulePage() {
         })));
       }
 
+      // 7. Rodzaje zajęć
       if (rodzajeRes.status === 'fulfilled' && rodzajeRes.value.data) {
         setRodzajeZajec(rodzajeRes.value.data);
       }
 
+      // 8. Katalog karnetów
       if (karnetyRes.status === 'fulfilled' && karnetyRes.value.data) {
         setKatalogKarnetow(karnetyRes.value.data.filter((k: any) => k.aktywny !== false));
       } else {
@@ -315,7 +408,9 @@ export default function PublicSchedulePage() {
 
       const dayStr = String(dayDate.getDate()).padStart(2, '0');
       const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-      const isoDateStr = `${dayDate.getFullYear()}-${monthStr}-${dayStr}`;
+      const yearStr = String(dayDate.getFullYear());
+      const isoDateStr = `${yearStr}-${monthStr}-${dayStr}`;
+      const fullFormattedDate = `${dayStr}.${monthStr}.${yearStr}`;
 
       const isToday =
         dayDate.getDate() === today.getDate() &&
@@ -327,6 +422,7 @@ export default function PublicSchedulePage() {
         key: keys[index],
         date: `${dayStr}/${monthStr}`,
         isoDate: isoDateStr,
+        fullFormattedDate,
         fullDate: dayDate,
         isToday
       };
@@ -639,7 +735,10 @@ export default function PublicSchedulePage() {
                 const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
 
                 const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
-                  .filter((item: any) => item.days && item.days[col.key])
+                  .filter((item: any) => {
+                    if (Array.isArray(item.days)) return item.days.includes(col.key);
+                    return item.days && item.days[col.key];
+                  })
                   .map((item: any) => {
                     const override = findOverride(item, col);
                     const merged = override ? { ...item, ...override } : item;
@@ -668,7 +767,7 @@ export default function PublicSchedulePage() {
 
                 [...standardoweDnia, ...jednorazoweDnia].forEach((item: any) => {
                   if (item.isUsunięte) return;
-                  const sigKey = `${(item.start || '').trim()}_${(item.end || '').trim()}_${(item.title || '').trim().toLowerCase()}`;
+                  const sigKey = item.id ? `id_${item.id}` : `${(item.start || '').trim()}_${(item.end || '').trim()}_${(item.title || '').trim().toLowerCase()}`;
 
                   if (!uniqueZajeciaMap.has(sigKey)) {
                     uniqueZajeciaMap.set(sigKey, item);
@@ -686,7 +785,6 @@ export default function PublicSchedulePage() {
                   }
                 });
 
-                // Stabilne sortowanie po czasie i tytule
                 const zajeciaDnia = Array.from(uniqueZajeciaMap.values()).sort((a: any, b: any) => {
                   const timeComp = (a.start || "").localeCompare(b.start || "");
                   if (timeComp !== 0) return timeComp;
