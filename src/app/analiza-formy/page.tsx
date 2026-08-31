@@ -3472,6 +3472,13 @@ export default function AnalizaFormyPage() {
               </div>
             )}
 
+            {/* MIGAJĄCY CZERWONY KOMUNIKAT */}
+            <div className="animate-pulse bg-rose-50 border border-rose-300 p-3.5 rounded-2xl text-center shadow-xs">
+              <span className="text-xs font-black text-rose-600 uppercase tracking-wider flex items-center justify-center gap-2">
+                <span>⚠️</span> poniżej znajdują sie wypunktowane najważniejsze informacje które należy omówić na treningu.
+              </span>
+            </div>
+
             {/* INTERPRETACJA */}
             <div className="bg-white p-5 rounded-2xl border border-sky-200 shadow-sm space-y-2">
               <div className="text-xs font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
