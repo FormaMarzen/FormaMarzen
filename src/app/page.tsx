@@ -137,6 +137,73 @@ export default function DashboardPage() {
       console.error('[PUSH CLIENT ERROR] Błąd wywołania sendPushNotification:', err);
     }
   };
+
+  // HELPER: AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ I WYSYŁKA PUSH
+  const promoteWaitlistMember = async (classItem: any, displayDate: string, currentSignups: any[], removedUserId: number) => {
+    if (!classItem) return;
+    const classKey = `${classItem.id}_${displayDate}`;
+    const allVariantKeys = getKeysVariants(classItem.id, displayDate);
+    const limitZajec = classItem.limit || 12;
+    
+    const pozostali = currentSignups.filter((u: any) => String(u.id) !== String(removedUserId));
+    const listaGlowna = pozostali.filter((u: any) => u.status === 'zapisany');
+    const rezerwa = pozostali.filter((u: any) => u.status === 'krzesełko');
+
+    if (listaGlowna.length < limitZajec && rezerwa.length > 0) {
+      let d = 1, m = 1;
+      if (displayDate.includes('/')) {
+        [d, m] = displayDate.split('/').map(Number);
+      } else if (displayDate.includes('-')) {
+        const p = displayDate.split('-').map(Number);
+        m = p[1]; d = p[2];
+      }
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const [sh = '00', sm = '00'] = (classItem.start || '00:00').split(':');
+      const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+      const diffMinutes = (classStartDateTime.getTime() - new Date().getTime()) / (1000 * 60);
+
+      const posortowanaRezerwa = rezerwa.sort((a: any, b: any) => {
+        if (a.created_at && b.created_at) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        return Number(a.id) - Number(b.id);
+      });
+
+      let promotedUser = null;
+      for (const wMember of posortowanaRezerwa) {
+        const cutoffMin = wMember.waitlist_cutoff_minutes !== undefined && wMember.waitlist_cutoff_minutes !== null 
+          ? Number(wMember.waitlist_cutoff_minutes) 
+          : 30;
+        if (diffMinutes > cutoffMin) {
+          promotedUser = wMember;
+          break;
+        }
+      }
+
+      if (promotedUser) {
+        await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).in('class_key', allVariantKeys).eq('klient_id', promotedUser.id);
+        
+        await sendPushNotification(promotedUser.id, {
+          title: `Jesteś na liście głównej: ${classItem.title}!`,
+          body: `Zwolniło się miejsce! Zostałeś przeniesiony z listy rezerwowej na listę główną treningu ${classItem.title} (${displayDate} ${classItem.start}).`,
+          url: '/'
+        });
+
+        await supabase.from('transakcje').insert([{ 
+          klient_id: promotedUser.id, 
+          typ_operacji: 'awans_z_krzesełka', 
+          class_key: classKey, 
+          opis: `Automatyczny awans z listy rezerwowej na listę główną (trening: ${classItem.title}).` 
+        }]);
+        
+        await supabase.from('booking_logs').insert([{
+          action_type: 'WAITLIST_PROMOTION',
+          status: 'SUCCESS',
+          reason: `Klubowicz ID:${promotedUser.id} awansowany na listę główną w ${classKey}`,
+          rule_applied: 'waitlist_auto_promotion',
+          payload: { klient_id: promotedUser.id, class_key: classKey }
+        }]);
+      }
+    }
+  };
   
   // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH
   const subscribeToPushNotifications = async (klientId: number) => {
@@ -1600,7 +1667,6 @@ export default function DashboardPage() {
       isFetchingRef.current = false;
     }
   };
-
   useEffect(() => {
     loadData();
 
@@ -1619,6 +1685,7 @@ export default function DashboardPage() {
       window.removeEventListener('storage', loadData);
     };
   }, [selectedWeekDate]);
+  
   // OBSŁUGA HISTORII ZAJĘĆ (MODAL HISTORII)
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
@@ -1822,113 +1889,109 @@ export default function DashboardPage() {
   };
 
   // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (POWIADOMIENIE PUSH DLA GRUPY GŁÓWNEJ I KRZESEŁKA)
-const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
-  const classKey = `${item.id}_${displayDate}`;
-  const allVariantKeys = getKeysVariants(item.id, displayDate);
-  const nextOdwołaneState = !item.isOdwołane;
+  const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
+    const classKey = `${item.id}_${displayDate}`;
+    const allVariantKeys = getKeysVariants(item.id, displayDate);
+    const nextOdwołaneState = !item.isOdwołane;
 
-  setActiveMenuClassId(null);
+    setActiveMenuClassId(null);
 
-  // 1. Pobieramy listę wszystkich zapisanych osób bezpośrednio z bazy przed usunięciem
-  const { data: dbSignups } = await supabase
-    .from('zapisy_zajec')
-    .select('klient_id, status')
-    .in('class_key', allVariantKeys);
+    const { data: dbSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('klient_id, status')
+      .in('class_key', allVariantKeys);
 
-  const zapisani = dbSignups || [];
-  const participantIds: number[] = Array.from(new Set(zapisani.map((s: any) => Number(s.klient_id)).filter(Boolean)));
+    const zapisani = dbSignups || [];
+    const participantIds: number[] = Array.from(new Set(zapisani.map((s: any) => Number(s.klient_id)).filter(Boolean)));
 
-  // 2. Czyścimy stare rekordy nadpisań
-  await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
+    await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
 
-  if (nextOdwołaneState) {
-    // Przypadek: ODWOŁANIE ZAJĘĆ
-    for (const u of zapisani) {
-      const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.klient_id).maybeSingle();
-      if (clientData) {
-        let parsedKarnety = [];
-        if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
-        else if (typeof clientData.karnetyKlubowicza === 'string') {
-          try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+    if (nextOdwołaneState) {
+      for (const u of zapisani) {
+        const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.klient_id).maybeSingle();
+        if (clientData) {
+          let parsedKarnety = [];
+          if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+          else if (typeof clientData.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+          }
+
+          const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+          if (passIndex !== -1) {
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            parsedKarnety[passIndex] = {
+              ...parsedKarnety[passIndex],
+              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+            };
+            await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.klient_id);
+          }
+
+          await supabase.from('transakcje').insert([{
+            klient_id: u.klient_id,
+            typ_operacji: 'zajecia_wypis',
+            class_key: classKey,
+            opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
+          }]);
         }
-
-        const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-        if (passIndex !== -1) {
-          const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-          const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
-          parsedKarnety[passIndex] = {
-            ...parsedKarnety[passIndex],
-            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
-          };
-          await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.klient_id);
-        }
-
-        await supabase.from('transakcje').insert([{
-          klient_id: u.klient_id,
-          typ_operacji: 'zajecia_wypis',
-          class_key: classKey,
-          opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
-        }]);
       }
-    }
 
-    // WYSYŁKA PUSH DO WSZYSTKICH (GRUPA GŁÓWNA + KRZESEŁKO)
-    if (participantIds.length > 0) {
-      await sendPushNotification(participantIds, {
-        title: `Odwołano trening: ${item.title}`,
-        body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany przez klub. Zwrócono wejście na karnet.`,
-        url: '/'
-      });
-    }
+      if (participantIds.length > 0) {
+        await sendPushNotification(participantIds, {
+          title: `Odwołano trening: ${item.title}`,
+          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany przez klub. Zwrócono wejście na karnet.`,
+          url: '/'
+        });
+      }
 
-    await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
+      await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
 
-    const rowsToInsert = allVariantKeys.map(vKey => ({
-      class_key: vKey,
-      start: item.start || '08:00',
-      end: item.end || '09:00',
-      trainer: item.trainer || '',
-      limit: item.limit || 12,
-      is_odwolane: true,
-      is_usuniete: item.isUsunięte || false
-    }));
-    await supabase.from('nadpisania_zajec').insert(rowsToInsert);
-  } else {
-    if (item.isUsunięte) {
       const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
         end: item.end || '09:00',
         trainer: item.trainer || '',
         limit: item.limit || 12,
-        is_odwolane: false,
+        is_odwolane: true,
         is_usuniete: item.isUsunięte || false
       }));
       await supabase.from('nadpisania_zajec').insert(rowsToInsert);
-    }
-  }
-
-  setNadpisaneZajeciaDni(prev => {
-    const updated = { ...prev };
-    allVariantKeys.forEach(k => {
-      if (nextOdwołaneState) {
-        updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false };
-      } else {
-        delete updated[k];
+    } else {
+      if (item.isUsunięte) {
+        const rowsToInsert = allVariantKeys.map(vKey => ({
+          class_key: vKey,
+          start: item.start || '08:00',
+          end: item.end || '09:00',
+          trainer: item.trainer || '',
+          limit: item.limit || 12,
+          is_odwolane: false,
+          is_usuniete: item.isUsunięte || false
+        }));
+        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
       }
+    }
+
+    setNadpisaneZajeciaDni(prev => {
+      const updated = { ...prev };
+      allVariantKeys.forEach(k => {
+        if (nextOdwołaneState) {
+          updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false };
+        } else {
+          delete updated[k];
+        }
+      });
+      return updated;
     });
-    return updated;
-  });
 
-  await supabase.from('transakcje').insert([{
-    typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
-    class_key: classKey,
-    opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
-  }]);
+    await supabase.from('transakcje').insert([{
+      typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
+      class_key: classKey,
+      opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
+    }]);
 
-  await loadData();
-  showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
-};
+    await loadData();
+    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
+  };
 
   // USUWANIE I PRZYWRACANIE ZAJĘĆ (POWIADOMIENIE PUSH DLA GRUPY GŁÓWNEJ I KRZESEŁKA)
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
@@ -2083,12 +2146,17 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
             
             if (classStartDateTime > now) {
               const keysToDelete = getKeysVariants(classId, dateStr);
+              const classKey = `${classId}_${dateStr}`;
+              const aktualni = zapisyNaZajecia[classKey] || [];
+
               await supabase
                 .from('zapisy_zajec')
                 .delete()
                 .in('class_key', keysToDelete)
                 .eq('klient_id', Number(klientId));
               cancelledCount++;
+
+              await promoteWaitlistMember(classDetails, dateStr, aktualni, klientId);
             }
           }
         }
@@ -2142,12 +2210,17 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
 
             if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
               const keysToDelete = getKeysVariants(classId, dateStr);
+              const classKey = `${classId}_${dateStr}`;
+              const aktualni = zapisyNaZajecia[classKey] || [];
+
               await supabase
                 .from('zapisy_zajec')
                 .delete()
                 .in('class_key', keysToDelete)
                 .eq('klient_id', Number(klientId));
               cancelledCount++;
+
+              await promoteWaitlistMember(classDetails, dateStr, aktualni, klientId);
             }
           }
         }
@@ -2270,7 +2343,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
 
     let updatedKarnety = [];
     let nowaDataWygasnieciaStr = '';
-    
+
     if (karnetyList.length > 0 && activationMode === 'after') {
       updatedKarnety = karnetyList.map((k: any, index: number) => {
         if (index === karnetyList.length - 1) {
@@ -2489,12 +2562,17 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
 
             if (classStartDateTime > now) {
               const keysToDelete = getKeysVariants(classId, dateStr);
+              const classKey = `${classId}_${dateStr}`;
+              const aktualni = zapisyNaZajecia[classKey] || [];
+
               await supabase
                 .from('zapisy_zajec')
                 .delete()
                 .in('class_key', keysToDelete)
                 .eq('klient_id', profileClient.id);
               cancelledCount++;
+
+              await promoteWaitlistMember(classDetails, dateStr, aktualni, profileClient.id);
             }
           }
         }
@@ -2680,12 +2758,17 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
             
             if (classStartDateTime > now) {
               const keysToDelete = getKeysVariants(classId, dateStr);
+              const classKey = `${classId}_${dateStr}`;
+              const aktualni = zapisyNaZajecia[classKey] || [];
+
               await supabase
                 .from('zapisy_zajec')
                 .delete()
                 .in('class_key', keysToDelete)
                 .eq('klient_id', profileClient.id);
               cancelledCount++;
+
+              await promoteWaitlistMember(classDetails, dateStr, aktualni, profileClient.id);
             }
           }
         }
@@ -2771,7 +2854,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
-  // PRECYZYJNE ZLICZANIE WSZYSTKICH AKTYWNYCH ZAPISÓW W PRZÓD
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -2833,7 +2915,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     }
   };
 
-  // USZCZELNIONY ZAPIS KLUBOWICZA NA ZAJĘCIA (BEZWZGLĘDNE ZAPOBIEGANIE OVERBOOKINGOWI)
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -2958,7 +3039,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
 
-    // KRYTYCZNA WALIDACJA LIVE W BAZIE (BRAK MOŻLIWOŚCI ZAPISU 5. OSOBY PRZY LIMICIE 4)
     const { data: liveSignupsDb } = await supabase
       .from('zapisy_zajec')
       .select('id, status, klient_id')
@@ -3241,7 +3321,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     await loadData();
   };
 
-// SAMODZIELNE WYPISANIE KLUBOWICZA Z ZAJĘĆ Z AUTOMATYCZNYM AWANSEM Z KRZESEŁKA I PUSH
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3255,7 +3334,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
 
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
-    const limitZajec = selectedClass.limit || 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
 
     const { error } = await supabase
@@ -3321,68 +3399,24 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
       payload: { klient_id: currentUser.id, class_key: classKey }
     }]);
 
-    const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
-    const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
-    const diffMinutes = (classStartDateTime.getTime() - new Date().getTime()) / (1000 * 60);
-
-    const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
-    const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
-    const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
-
+    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.id) !== String(currentUser.id));
+    
+    // Auto-odwołanie zajęć jeśli jest pusto
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       selectedClass,
       selectedClass.displayDate,
       pozostaliUczestnicy
     );
 
-    // AWANS Z LISTY REZERWOWEJ I WYSYŁKA PUSH
-    if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
-      const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
-        const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
-        return diffMinutes > cutoff;
-      }) || rezerwaPoWypisie[0];
-
-      if (kandydatDoAwansu) {
-        await supabase
-          .from('zapisy_zajec')
-          .update({ status: 'zapisany' })
-          .in('class_key', keysToDelete)
-          .eq('klient_id', kandydatDoAwansu.id);
-
-        const awansowanyKlient = klienciList.find(c => c.id === kandydatDoAwansu.id);
-        const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${kandydatDoAwansu.id}`;
-
-        await supabase.from('transakcje').insert([{
-          klient_id: kandydatDoAwansu.id,
-          typ_operacji: 'zajecia_awans_rezerwa',
-          class_key: classKey,
-          opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
-        }]);
-
-        await supabase.from('booking_logs').insert([{
-          action_type: 'WAITLIST_PROMOTED',
-          status: 'SUCCESS',
-          reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
-          rule_applied: 'waitlist_auto_promote',
-          payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
-        }]);
-
-        await sendPushNotification([Number(kandydatDoAwansu.id)], {
-          title: 'Zwolniło się miejsce!',
-          body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
-          url: '/'
-        });
-      }
+    // Awans z listy rezerwowej (jeśli nie odwołano automatycznie całych zajęć)
+    if (!autoCancelled) {
+      await promoteWaitlistMember(selectedClass, selectedClass.displayDate, aktualni, currentUser.id);
     }
 
-    showToast(autoCancelled 
-      ? "Wypisano z zajęć. Trening został automatycznie odwołany z powodu zbyt małej liczby osób (zwrócono wejścia)." 
-      : "Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście."
-    );
-    await loadData();
+    showToast("Zostałeś pomyślnie wypisany z zajęć.");
+    loadData();
     setSelectedClass(null);
   };
-
   // WYPISANIE KLUBOWICZA Z LISTY AKTYWNYCH ZAPISÓW (PANEL GŁÓWNY)
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const now = new Date();
@@ -3472,9 +3506,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const limitZajec = classInfo?.limit || 12;
 
     const aktualni = zapisyNaZajecia[classKey] || [];
-    const pozostaliUczestnicy = aktualni.filter(u => String(u.id) !== String(currentUser.id));
-    const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
-    const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
+    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.id) !== String(currentUser.id));
 
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       classInfo || { id: classId, title, start: startStr, limit: limitZajec },
@@ -3482,44 +3514,14 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
       pozostaliUczestnicy
     );
 
-    // AWANS Z LISTY REZERWOWEJ I POWIADOMIENIE PUSH
-    if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
-      const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
-        const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
-        return diffMinutes > cutoff;
-      }) || rezerwaPoWypisie[0];
-
-      if (kandydatDoAwansu) {
-        await supabase
-          .from('zapisy_zajec')
-          .update({ status: 'zapisany' })
-          .in('class_key', keysToDelete)
-          .eq('klient_id', kandydatDoAwansu.id);
-
-        const awansowanyKlient = klienciList.find(c => c.id === kandydatDoAwansu.id);
-        const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${kandydatDoAwansu.id}`;
-
-        await supabase.from('transakcje').insert([{
-          klient_id: kandydatDoAwansu.id,
-          typ_operacji: 'zajecia_awans_rezerwa',
-          class_key: classKey,
-          opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
-        }]);
-
-        await supabase.from('booking_logs').insert([{
-          action_type: 'WAITLIST_PROMOTED',
-          status: 'SUCCESS',
-          reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
-          rule_applied: 'waitlist_auto_promote',
-          payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
-        }]);
-
-        await sendPushNotification([Number(kandydatDoAwansu.id)], {
-          title: 'Zwolniło się miejsce!',
-          body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${title} (${startStr})!`,
-          url: '/'
-        });
-      }
+    // Zintegrowany, scentralizowany awans z krzesełka połączony z powiadomieniami PUSH
+    if (!autoCancelled) {
+      await promoteWaitlistMember(
+        classInfo || { id: classId, title, start: startStr, limit: limitZajec },
+        dateStr,
+        aktualni,
+        currentUser.id
+      );
     }
 
     showToast(autoCancelled 
@@ -3603,7 +3605,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
 
-    // WALIDACJA LIVE W BAZIE POD KĄTEM OVERBOOKINGU
     const { data: liveDbSignups } = await supabase
       .from('zapisy_zajec')
       .select('id, status, klient_id')
@@ -3764,9 +3765,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
       }
     ]);
     
-    const pozostaliUczestnicy = aktualni.filter(u => u.id !== clientToUnregister.id);
-    const listaGlownaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'zapisany');
-    const rezerwaPoWypisie = pozostaliUczestnicy.filter(u => u.status === 'krzesełko');
+    const pozostaliUczestnicy = aktualni.filter((u: any) => u.id !== clientToUnregister.id);
 
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       selectedClass,
@@ -3774,37 +3773,9 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
       pozostaliUczestnicy
     );
 
-    if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
-      const pierwszaRezerwa = rezerwaPoWypisie[0];
-      await supabase
-        .from('zapisy_zajec')
-        .update({ status: 'zapisany' })
-        .in('class_key', keysToDelete)
-        .eq('klient_id', pierwszaRezerwa.id);
-
-      const awansowanyKlient = klienciList.find(c => c.id === pierwszaRezerwa.id);
-      const imieNazwisko = awansowanyKlient ? `${awansowanyKlient.firstName} ${awansowanyKlient.lastName}` : `ID: ${pierwszaRezerwa.id}`;
-
-      await supabase.from('transakcje').insert([{
-        klient_id: pierwszaRezerwa.id,
-        typ_operacji: 'zajecia_awans_rezerwa',
-        class_key: classKey,
-        opis: `Automatyczny awans: ${imieNazwisko} przepisany z listy rezerwowej na listę główną.`
-      }]);
-
-      await supabase.from('booking_logs').insert([{
-        action_type: 'WAITLIST_PROMOTED',
-        status: 'SUCCESS',
-        reason: `${imieNazwisko} awansował na listę główną w ${classKey}`,
-        rule_applied: 'waitlist_auto_promote',
-        payload: { klient_id: pierwszaRezerwa.id, class_key: classKey }
-      }]);
-
-      await sendPushNotification(pierwszaRezerwa.id, {
-        title: 'Zwolniło się miejsce!',
-        body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
-        url: '/'
-      });
+    // Zintegrowany awans z krzesełka po usunięciu klubowicza przez admina/trenera
+    if (!autoCancelled) {
+      await promoteWaitlistMember(selectedClass, selectedClass.displayDate, aktualni, clientToUnregister.id);
     }
 
     if (blokadaZapisow) {
@@ -3961,7 +3932,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
 
-  // MAPOWANIE AKTYWNYCH ZAPISÓW KLUBOWICZA NA CAŁY ROK (2026/2027)
   if (['klubowicz', 'trener'].includes(appRole) && currentUser) {
     const karnety = currentUser.karnetyKlubowicza || [];
     if (karnety.length === 0) { needsNewPass = true; } else {
@@ -3995,7 +3965,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
 
           if (classInfo) {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-              // pomijamy usunięte
+              // pomijamy
             } else {
               const [sh = '00', sm = '00'] = (classInfo.start || '00:00').split(':');
               const classStartDateTime = new Date(
@@ -5032,7 +5002,6 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
           </section>
         </div>
       )}
-
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
