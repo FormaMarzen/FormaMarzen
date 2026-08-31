@@ -1344,7 +1344,6 @@ export default function ClubChat() {
       currentMembers = currentMembers.filter((m) => String(m) !== String(myId));
     }
 
-    // 1. Optymistyczna natychmiastowa aktualizacja stanu UI
     setGroups((prev) =>
       prev.map((g) => (g.id === group.id ? { ...g, czlonkowie_ids: currentMembers } : g))
     );
@@ -1357,7 +1356,6 @@ export default function ClubChat() {
       }
     }
 
-    // 2. Wysłanie aktualizacji do bazy Supabase
     const { error } = await supabase
       .from("czat_grupy")
       .update({ czlonkowie_ids: currentMembers })
@@ -2200,8 +2198,12 @@ export default function ClubChat() {
   };
 
   const isPositioned = position !== null;
-  const isLeftSide = isPositioned ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 200) : false;
-  const isTopSide = isPositioned ? position.y < 540 : false;
+  const isLeftSide = isPositioned
+    ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 300)
+    : false;
+  const isTopHalf = isPositioned
+    ? position.y < (typeof window !== "undefined" ? window.innerHeight / 2 : 400)
+    : false;
 
   // FILTROWANIE GRUP: Moje, Otwarte, Zamknięte
   const allMyGroups = groups.filter((g: any) => {
@@ -2514,9 +2516,9 @@ export default function ClubChat() {
           className={`fixed sm:absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in fade-in
             left-3 right-3 sm:left-auto sm:right-auto bottom-20 sm:bottom-auto
             w-auto sm:w-[410px]
-            h-[calc(100dvh-110px)] sm:h-[560px] max-h-[620px]
-            ${isLeftSide ? "sm:left-0" : "sm:right-0"}
-            ${isTopSide ? "sm:top-16 sm:slide-in-from-top-4" : "sm:bottom-16 sm:slide-in-from-bottom-4"}
+            h-[calc(100dvh-110px)] sm:h-[560px] max-h-[calc(100vh-120px)]
+            ${isLeftSide ? "sm:left-0 sm:right-auto" : "sm:right-0 sm:left-auto"}
+            ${isTopHalf ? "sm:top-full sm:mt-3 sm:bottom-auto sm:slide-in-from-top-4" : "sm:bottom-full sm:mb-3 sm:top-auto sm:slide-in-from-bottom-4"}
           `}
         >
           {/* NAGŁÓWEK CZATU */}
@@ -3564,8 +3566,11 @@ export default function ClubChat() {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
                   const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂") || msg.tresc?.includes("Bazy Wiedzy");
 
-                  const time = msg.created_at
-                    ? new Date(msg.created_at).toLocaleTimeString("pl-PL", {
+                  const messageDateTime = msg.created_at
+                    ? new Date(msg.created_at).toLocaleString("pl-PL", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        year: "numeric",
                         hour: "2-digit",
                         minute: "2-digit",
                       })
@@ -3588,7 +3593,7 @@ export default function ClubChat() {
                       <MessageItem msg={msg} isMe={isMe} />
 
                       <div className="flex items-center gap-2 mt-1 px-1">
-                        <span className="text-[9px] text-slate-400 font-mono">{time}</span>
+                        <span className="text-[9px] text-slate-400 font-mono">{messageDateTime}</span>
                         {isMe && !selectedGroup && (
                           <span className="text-[9px] text-slate-400 font-medium">
                             {msg.przeczytana && readTime
