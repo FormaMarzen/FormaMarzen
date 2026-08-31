@@ -433,9 +433,23 @@ export default function ClubChat() {
     }
   };
 
-  // Inicjalizacja pozycji dymka
+  // Inicjalizacja pozycji dymka oraz responsywna korekta przy zmianie rozmiaru/obrocie ekranu
   useEffect(() => {
     if (typeof window !== "undefined") {
+      const handleResize = () => {
+        setPosition((prev) => {
+          if (!prev) return prev;
+          const maxX = window.innerWidth - 70;
+          const maxY = window.innerHeight - 70;
+          return {
+            x: Math.min(Math.max(10, prev.x), Math.max(10, maxX)),
+            y: Math.min(Math.max(10, prev.y), Math.max(10, maxY)),
+          };
+        });
+      };
+
+      window.addEventListener("resize", handleResize);
+
       const savedPos = localStorage.getItem("chat_bubble_pos");
       if (savedPos) {
         try {
@@ -446,7 +460,7 @@ export default function ClubChat() {
             x: Math.min(Math.max(10, parsed.x), Math.max(10, maxX)),
             y: Math.min(Math.max(10, parsed.y), Math.max(10, maxY)),
           });
-          return;
+          return () => window.removeEventListener("resize", handleResize);
         } catch {
           // fallback
         }
@@ -455,6 +469,8 @@ export default function ClubChat() {
         x: Math.max(10, window.innerWidth - 80),
         y: Math.max(10, window.innerHeight - 80),
       });
+
+      return () => window.removeEventListener("resize", handleResize);
     }
   }, []);
 
@@ -2198,11 +2214,17 @@ export default function ClubChat() {
   };
 
   const isPositioned = position !== null;
-  const isLeftSide = isPositioned
-    ? position.x < (typeof window !== "undefined" ? window.innerWidth / 2 : 300)
+  const modalWidth = 410;
+  const modalHeight = 560;
+
+  // Sprawdzanie czy okno czatu zmieści się po prawej stronie dymka, czy musi przeskoczyć w lewo
+  const openToLeft = isPositioned
+    ? position.x + modalWidth > (typeof window !== "undefined" ? window.innerWidth - 20 : 800)
     : false;
-  const isTopHalf = isPositioned
-    ? position.y < (typeof window !== "undefined" ? window.innerHeight / 2 : 400)
+
+  // Sprawdzanie czy okno czatu zmieści się w górę, czy musi przeskoczyć w dół
+  const openDownwards = isPositioned
+    ? position.y - modalHeight < 20
     : false;
 
   // FILTROWANIE GRUP: Moje, Otwarte, Zamknięte
@@ -2514,11 +2536,11 @@ export default function ClubChat() {
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           className={`fixed sm:absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in fade-in
-            left-3 right-3 sm:left-auto sm:right-auto bottom-20 sm:bottom-auto
+            inset-x-3 bottom-20 sm:inset-x-auto sm:bottom-auto
             w-auto sm:w-[410px]
-            h-[calc(100dvh-110px)] sm:h-[560px] max-h-[calc(100vh-120px)]
-            ${isLeftSide ? "sm:left-0 sm:right-auto" : "sm:right-0 sm:left-auto"}
-            ${isTopHalf ? "sm:top-full sm:mt-3 sm:bottom-auto sm:slide-in-from-top-4" : "sm:bottom-full sm:mb-3 sm:top-auto sm:slide-in-from-bottom-4"}
+            h-[calc(100dvh-110px)] sm:h-[560px] max-h-[calc(100vh-100px)]
+            ${openToLeft ? "sm:right-0 sm:left-auto" : "sm:left-0 sm:right-auto"}
+            ${openDownwards ? "sm:top-full sm:mt-3 sm:bottom-auto sm:slide-in-from-top-4" : "sm:bottom-full sm:mb-3 sm:top-auto sm:slide-in-from-bottom-4"}
           `}
         >
           {/* NAGŁÓWEK CZATU */}
