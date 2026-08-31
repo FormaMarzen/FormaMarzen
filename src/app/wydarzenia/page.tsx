@@ -81,6 +81,7 @@ export default function WydarzeniaPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [wydarzenia, setWydarzenia] = useState<Wydarzenie[]>([]);
   const [klienciBaza, setKlienciBaza] = useState<KlientBaza[]>([]);
+  const [hasUnreadEvents, setHasUnreadEvents] = useState(false);
 
   // Stany dla Modala Podglądu Klubowicza
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -158,6 +159,30 @@ export default function WydarzeniaPage() {
   }, [previewImage]);
 
   const dzisiajStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+
+  const checkUnreadEvents = (events: Wydarzenie[]) => {
+    if (typeof window === "undefined") return;
+    const futureEvents = events.filter(w => {
+      const dataKoniec = w.data_do || w.data_od;
+      return dataKoniec >= dzisiajStr;
+    });
+
+    const hasAnyUnread = futureEvents.some(
+      w => !localStorage.getItem(`seen_event_${w.id}`)
+    );
+    setHasUnreadEvents(hasAnyUnread);
+  };
+
+  const markEventAsSeen = (eventId: number) => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(`seen_event_${eventId}`, "true");
+    checkUnreadEvents(wydarzenia);
+  };
+
+  const isEventUnread = (eventId: number) => {
+    if (typeof window === "undefined") return false;
+    return !localStorage.getItem(`seen_event_${eventId}`);
+  };
 
   // Automatyczny system powiadomień wpisujący do czat_wiadomosci z konta nadawca_id: 5000 ("Forma Marzeń")
   const sprawdzIwyslijPrzypomnieniaPlatnosci = async (events: Wydarzenie[], bazaKlubowiczow: KlientBaza[]) => {
@@ -237,7 +262,7 @@ export default function WydarzeniaPage() {
 
       const email = sessionRes.data.session?.user?.email || "";
       setCurrentUserEmail(email);
-      if (email === "maciejklaput@gmail.com") {
+      if (email === "maciejklaput@gmail.com" || email === "maciejklaput@icloud.com") {
         setIsAdmin(true);
       }
 
@@ -254,6 +279,7 @@ export default function WydarzeniaPage() {
 
       if (!wydarzeniaRes.error && wydarzeniaRes.data) {
         setWydarzenia(wydarzeniaRes.data);
+        checkUnreadEvents(wydarzeniaRes.data);
         if (selectedEvent) {
           const refreshed = wydarzeniaRes.data.find((w: Wydarzenie) => w.id === selectedEvent.id);
           if (refreshed) setSelectedEvent(refreshed);
@@ -673,15 +699,22 @@ export default function WydarzeniaPage() {
     return obliczReszteKwoty(form.cena, form.zadatek);
   }, [form.cena, form.zadatek]);
 
+  const handleOpenEventModal = (w: Wydarzenie) => {
+    markEventAsSeen(w.id);
+    setSelectedEvent(w);
+    setIsViewModalOpen(true);
+  };
+
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie; isPast?: boolean }) => {
     const zamkniete = isZapisyZamkniete(w);
+    const unread = !isPast && isEventUnread(w.id);
     const uczestnicyCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.length : 0;
     const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "zadatek").length : 0;
     const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "calosc").length : 0;
 
     return (
       <div 
-        onClick={() => !isPast && (setSelectedEvent(w), setIsViewModalOpen(true))}
+        onClick={() => !isPast && handleOpenEventModal(w)}
         className={`relative bg-white rounded-3xl overflow-hidden border border-sky-100 flex flex-col group transition-all duration-300 ${
           isPast ? "opacity-60 grayscale hover:grayscale-0 cursor-default" : "shadow-sm hover:shadow-xl hover:-translate-y-1 hover:border-sky-300 cursor-pointer"
         }`}
@@ -690,6 +723,15 @@ export default function WydarzeniaPage() {
           <div className="absolute top-3 right-3 flex gap-2 z-20 bg-white/95 p-1.5 rounded-xl backdrop-blur-md shadow-md border border-slate-100">
             <button onClick={(e) => handleOpenEdit(w, e)} className="w-9 h-9 flex items-center justify-center bg-sky-100 text-sky-700 rounded-lg hover:bg-sky-200 transition-colors shadow-sm cursor-pointer" title="Edytuj">✏️</button>
             <button onClick={(e) => handleDelete(w.id, e)} className="w-9 h-9 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm cursor-pointer" title="Usuń">🗑️</button>
+          </div>
+        )}
+
+        {unread && (
+          <div className="absolute top-3 right-3 z-10 flex h-6 w-6">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-6 w-6 bg-rose-600 text-xs font-black text-white items-center justify-center shadow-lg">
+              !
+            </span>
           </div>
         )}
 
@@ -789,7 +831,15 @@ export default function WydarzeniaPage() {
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
             <span className="p-2 bg-amber-500 rounded-xl shadow-sm text-slate-900">🎯</span>
-            Wydarzenia Klubowe
+            <span>Wydarzenia Klubowe</span>
+            {hasUnreadEvents && !isAdmin && (
+              <span className="relative flex h-5 w-5 ml-1">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-5 w-5 bg-rose-600 text-xs font-black text-white items-center justify-center shadow">
+                  !
+                </span>
+              </span>
+            )}
           </h1>
           <p className="text-slate-500 text-sm mt-2 font-medium max-w-2xl">
             Sprawdź co planujemy w najbliższym czasie. Zapisz się na warsztaty, obozy lub wspólne treningi!
@@ -1196,7 +1246,7 @@ export default function WydarzeniaPage() {
                         <div className="space-y-2">
                           <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">Wizualizacja koszulki</span>
                           <div 
-                            onClick={() => setPreviewImage(selectedEvent.koszulki_grafika_glowna!)}
+                            onClick={() => setPreviewImage(selectedEvent.koszulki_grafika_glowna!)} 
                             className="bg-slate-50 rounded-2xl overflow-hidden border border-indigo-100 p-2 max-w-md mx-auto shadow-sm cursor-zoom-in group relative"
                           >
                             <img 
