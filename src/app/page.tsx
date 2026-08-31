@@ -137,7 +137,6 @@ export default function DashboardPage() {
       console.error('[PUSH CLIENT ERROR] Błąd wywołania sendPushNotification:', err);
     }
   };
-
   
   // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH
   const subscribeToPushNotifications = async (klientId: number) => {
