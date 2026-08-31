@@ -10,7 +10,7 @@ self.addEventListener('push', function (event) {
   try {
     const data = event.data.json();
     title = data.title || title;
-    body = data.body || '';
+    body = data.body || data.message || '';
     url = data.url || (data.data && data.data.url) || '/';
     icon = data.icon || icon;
     badge = data.badge || badge;
@@ -23,7 +23,7 @@ self.addEventListener('push', function (event) {
     icon: icon,
     badge: badge,
     data: { url: url },
-    tag: 'forma-marzen-notification-' + Date.now(),
+    tag: 'forma-marzen-' + Date.now(),
     renotify: true
   };
 
@@ -38,7 +38,7 @@ self.addEventListener('notificationclick', function (event) {
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
       for (let i = 0; i < clientList.length; i++) {
         const client = clientList[i];
-        if (client.url.includes(targetUrl) && 'focus' in client) {
+        if (client.url && client.url.includes(targetUrl) && 'focus' in client) {
           return client.focus();
         }
       }

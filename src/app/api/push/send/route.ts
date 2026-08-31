@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     let subject = (process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl').trim();
 
     if (!publicKey || !privateKey) {
-      console.error('Brak kluczy VAPID w zmiennych środowiskowych Vercel.');
+      console.error('[PUSH ERROR] Brak kluczy VAPID w zmiennych środowiskowych.');
       return NextResponse.json(
         { success: false, error: 'Brak konfiguracji VAPID na serwerze' },
         { status: 500 }
@@ -44,13 +44,14 @@ export async function POST(request: Request) {
       typ
     } = bodyData;
 
-    // Uniwersalna ekstrakcja treści powiadomienia
     const tytulPowiadomienia = payload?.title || title || 'FORMA MARZEŃ';
     const trescPowiadomienia = payload?.body || body || message || payload?.message || '';
     const typPowiadomienia = payload?.typ || payload?.type || typ || type || 'PUSH';
     const docelowyUrl = payload?.url || url || '/';
 
     const rawIds = clientIds || participantIds || userIds;
+    console.log('[PUSH] Otrzymano żądanie wysyłki dla ID:', rawIds, 'Tytuł:', tytulPowiadomienia);
+
     const targetsToSend: Array<{
       subObj: any;
       recipientName: string;
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
 
     const seenEndpoints = new Set<string>();
 
-    // 1. Pobieranie subskrypcji po ID odbiorców
+    // 1. Wyszukiwanie subskrypcji po identyfikatorach ID
     if (rawIds && (Array.isArray(rawIds) ? rawIds.length > 0 : true)) {
       const idList = Array.isArray(rawIds) ? rawIds : [rawIds];
       const validNumericIds = idList
@@ -94,7 +95,6 @@ export async function POST(request: Request) {
 
             let userSubs: any[] = [];
 
-            // Sprawdzenie kolumny push_subscription w tabeli klienci
             if (c.push_subscription) {
               try {
                 const parsed = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
@@ -102,7 +102,6 @@ export async function POST(request: Request) {
               } catch (e) {}
             }
 
-            // Sprawdzenie powiązanych rekordów w tabeli push_subscriptions (wiele urządzeń)
             try {
               let query = supabase.from('push_subscriptions').select('*');
               if (mail) {
@@ -141,6 +140,7 @@ export async function POST(request: Request) {
             }
 
             if (!addedAnyDevice) {
+              console.warn(`[PUSH WARN] Brak zarejestrowanej subskrypcji dla użytkownika: ${odbiorcaTekst} (ID: ${c.id})`);
               logEntries.push({
                 odbiorca: odbiorcaTekst,
                 odbiorca_id: c.id,
@@ -156,16 +156,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2. Pobieranie z bezpośrednio przekazanej tablicy subscriptions
+    // 2. Bezpośrednie subskrypcje przekazane w parametrze
     if (subscriptions && Array.isArray(subscriptions) && subscriptions.length > 0) {
       for (const rawSub of subscriptions) {
         let subObj = rawSub;
         if (typeof subObj === 'string') {
-          try {
-            subObj = JSON.parse(subObj);
-          } catch (e) {
-            continue;
-          }
+          try { subObj = JSON.parse(subObj); } catch (e) { continue; }
         }
         if (subObj?.subscription) {
           subObj = typeof subObj.subscription === 'string' ? JSON.parse(subObj.subscription) : subObj.subscription;
@@ -248,6 +244,7 @@ export async function POST(request: Request) {
     }
 
     if (targetsToSend.length === 0) {
+      console.warn('[PUSH WARN] Nie znaleziono żadnego aktywnego urządzenia do wysyłki.');
       if (logEntries.length > 0) {
         await supabase.from('historia_powiadomien').insert(logEntries);
       }
@@ -275,6 +272,8 @@ export async function POST(request: Request) {
       urgency: 'high' as const,
     };
 
+    console.log(`[PUSH] Wysyłanie powiadomień do ${targetsToSend.length} urządzeń...`);
+
     const results = await Promise.allSettled(
       targetsToSend.map(async (target) => {
         try {
@@ -296,7 +295,7 @@ export async function POST(request: Request) {
             recipient: target.recipientName,
           };
         } catch (err: any) {
-          console.error(`Błąd wysyłki push dla ${target.recipientName}:`, err);
+          console.error(`[PUSH ERROR] Błąd dla ${target.recipientName}:`, err.statusCode, err.message);
 
           const isExpired = err.statusCode === 404 || err.statusCode === 410;
           const statusDesc = isExpired ? 'Brak aktywnej subskrypcji (Wygasła)' : `Błąd wysyłki: ${err.statusCode || err.message}`;
@@ -333,6 +332,8 @@ export async function POST(request: Request) {
     const delivered = results.filter((r) => r.status === 'fulfilled').length;
     const failed = results.filter((r) => r.status === 'rejected').length;
 
+    console.log(`[PUSH RESULT] Dostarczono: ${delivered}, Błędy: ${failed}`);
+
     return NextResponse.json({
       success: true,
       delivered,
@@ -340,10 +341,11 @@ export async function POST(request: Request) {
       total: targetsToSend.length,
     });
   } catch (error: any) {
-    console.error('Błąd krytyczny /api/push/send:', error);
+    console.error('[PUSH CRITICAL ERROR]:', error);
     return NextResponse.json(
       { success: false, error: error.message || 'Błąd serwera' },
       { status: 500 }
     );
   }
 }
+
