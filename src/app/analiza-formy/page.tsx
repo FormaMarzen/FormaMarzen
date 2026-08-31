@@ -191,6 +191,7 @@ export default function AnalizaFormyPage() {
   const [pomiaryRedukcji, setPomiaryRedukcji] = useState<RedukcjaPomiar[]>([]);
   const [nagrodyRedukcji, setNagrodyRedukcji] = useState<RedukcjaNagroda[]>([]);
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
+  const [hasUnreadChallenge, setHasUnreadChallenge] = useState<boolean>(false);
   
   // Modale Redukcji
   const [isNewEdycjaModalOpen, setIsNewEdycjaModalOpen] = useState<boolean>(false);
@@ -313,6 +314,15 @@ export default function AnalizaFormyPage() {
   const hasUnreadInterpretation = useMemo(() => {
     return badaniaList.some(b => b.nowa_interpretacja === true);
   }, [badaniaList]);
+
+  const markChallengeAsRead = (edycjaId?: number | null) => {
+    if (typeof window === 'undefined') return;
+    const targetId = edycjaId || selectedEdycjaId;
+    if (targetId) {
+      localStorage.setItem(`seen_challenge_${targetId}`, 'true');
+    }
+    setHasUnreadChallenge(false);
+  };
 
   const verifyAndAutoActivateChallenge = async (
     edycjaId: number, 
@@ -460,8 +470,19 @@ export default function AnalizaFormyPage() {
           new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
         );
         setEdycjeRedukcji(sorted);
+        
+        const active = sorted.find((e: any) => e.status !== 'zakonczone' && e.status !== 'anulowane') || sorted[0];
+        
+        if (active && (active.status === 'aktywne' || active.status === 'zapisy')) {
+          if (typeof window !== 'undefined') {
+            const hasSeen = localStorage.getItem(`seen_challenge_${active.id}`);
+            if (!hasSeen) {
+              setHasUnreadChallenge(true);
+            }
+          }
+        }
+
         if (!selectedEdycjaId) {
-          const active = sorted.find((e: any) => e.status !== 'zakonczone' && e.status !== 'anulowane') || sorted[0];
           setSelectedEdycjaId(active.id);
           await loadEdycjaDetails(active.id, sorted);
         } else {
@@ -1630,14 +1651,27 @@ export default function AnalizaFormyPage() {
           <span>🥗</span> <span>2. Dieta i Makro</span>
         </button>
         <button
-          onClick={() => setActiveTab('redukcja')}
-          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer ${
+          onClick={() => {
+            setActiveTab('redukcja');
+            markChallengeAsRead();
+          }}
+          className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer relative ${
             activeTab === 'redukcja'
               ? 'bg-amber-500 text-slate-950 font-black shadow-md'
               : 'text-slate-600 hover:text-sky-950 hover:bg-white/50'
           }`}
         >
-          <span>🔥</span> <span>3. Redukcja</span>
+          <span>🔥</span> 
+          <span>3. Redukcja</span>
+
+          {hasUnreadChallenge && appRole === 'klubowicz' && (
+            <span className="relative flex h-4 w-4 ml-1">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          )}
         </button>
         <button
           onClick={() => {
