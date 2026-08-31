@@ -236,6 +236,48 @@ export default function BazaWiedzyPage() {
     setIsLoading(false);
   };
 
+  // Funkcje obsługi nieodczytanych wpisów (wykrzykniki)
+  const getStorageKeyPrefix = (tab: TabType) => {
+    if (tab === "suplementy") return "seen_supl_";
+    if (tab === "sport") return "seen_sport_";
+    if (tab === "odzywianie") return "seen_odz_";
+    return "seen_przepis_";
+  };
+
+  const isItemUnread = (item: any, tab: TabType) => {
+    if (typeof window === "undefined") return false;
+    const key = `${getStorageKeyPrefix(tab)}${item.id}`;
+    return !localStorage.getItem(key);
+  };
+
+  const markItemAsSeen = (item: any, tab: TabType) => {
+    if (typeof window === "undefined") return;
+    const key = `${getStorageKeyPrefix(tab)}${item.id}`;
+    localStorage.setItem(key, "true");
+  };
+
+  const hasUnreadSuplementy = useMemo(() => {
+    const unreadItems = suplementy.some((item) => isItemUnread(item, "suplementy"));
+    const unreadSugestie = isAdmin && sugestie.length > 0;
+    return unreadItems || unreadSugestie;
+  }, [suplementy, sugestie, isAdmin]);
+
+  const hasUnreadSport = useMemo(() => {
+    return sportWpisy.some((item) => isItemUnread(item, "sport"));
+  }, [sportWpisy]);
+
+  const hasUnreadOdzywianie = useMemo(() => {
+    return odzywianieWpisy.some((item) => isItemUnread(item, "odzywianie"));
+  }, [odzywianieWpisy]);
+
+  const hasUnreadPrzepisy = useMemo(() => {
+    return przepisy.some((item) => isItemUnread(item, "przepisy"));
+  }, [przepisy]);
+
+  const hasAnyUnreadOverall = useMemo(() => {
+    return hasUnreadSuplementy || hasUnreadSport || hasUnreadOdzywianie || hasUnreadPrzepisy;
+  }, [hasUnreadSuplementy, hasUnreadSport, hasUnreadOdzywianie, hasUnreadPrzepisy]);
+
   const getAutorDisplay = (item: Przepis) => {
     const emailKey = (item.autor_email || "").toLowerCase().trim();
     if (emailKey && klienciMap[emailKey]) {
@@ -693,6 +735,12 @@ export default function BazaWiedzyPage() {
     return { label: kategoria, icon: "📌", color: "bg-slate-50 text-slate-800 border-slate-200" };
   };
 
+  const handleOpenItemModal = (item: any) => {
+    markItemAsSeen(item, activeTab);
+    setSelectedItem(item);
+    setIsViewModalOpen(true);
+  };
+
   if (isLoading) {
     return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie Bazy Wiedzy...</div>;
   }
@@ -704,7 +752,15 @@ export default function BazaWiedzyPage() {
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-sky-950 uppercase tracking-tight flex items-center gap-3">
             <span className="p-2 bg-amber-500 rounded-xl shadow-sm text-slate-900">📚</span>
-            Baza Wiedzy
+            <span>Baza Wiedzy</span>
+            {hasAnyUnreadOverall && (
+              <span className="relative flex h-5 w-5 ml-1">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-5 w-5 bg-rose-600 text-xs font-black text-white items-center justify-center shadow">
+                  !
+                </span>
+              </span>
+            )}
           </h1>
           <p className="text-slate-500 text-sm mt-2 font-medium max-w-2xl">
             Kompendium wiedzy treningowej, suplementacji, zdrowego odżywiania oraz przepisów dla klubowiczów.
@@ -731,7 +787,16 @@ export default function BazaWiedzyPage() {
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
           }`}
         >
-          <span>💊</span> Suplementy i Witaminy
+          <span>💊</span> 
+          <span>Suplementy i Witaminy</span>
+          {hasUnreadSuplementy && (
+            <span className="relative flex h-4 w-4 ml-0.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          )}
         </button>
 
         <button
@@ -742,7 +807,16 @@ export default function BazaWiedzyPage() {
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
           }`}
         >
-          <span>🏋️</span> Sport i Trening
+          <span>🏋️</span> 
+          <span>Sport i Trening</span>
+          {hasUnreadSport && (
+            <span className="relative flex h-4 w-4 ml-0.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          )}
         </button>
 
         <button
@@ -753,7 +827,16 @@ export default function BazaWiedzyPage() {
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
           }`}
         >
-          <span>🥗</span> Odżywianie i Dieta
+          <span>🥗</span> 
+          <span>Odżywianie i Dieta</span>
+          {hasUnreadOdzywianie && (
+            <span className="relative flex h-4 w-4 ml-0.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          )}
         </button>
 
         <button
@@ -764,7 +847,16 @@ export default function BazaWiedzyPage() {
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
           }`}
         >
-          <span>🍳</span> Przepisy
+          <span>🍳</span> 
+          <span>Przepisy</span>
+          {hasUnreadPrzepisy && (
+            <span className="relative flex h-4 w-4 ml-0.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          )}
         </button>
       </div>
 
@@ -795,6 +887,10 @@ export default function BazaWiedzyPage() {
               <div className="bg-sky-950 text-white rounded-3xl p-5 sm:p-6 shadow-md space-y-4 border border-sky-800">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+                    </span>
                     <span className="text-xl">🔔</span>
                     <h3 className="font-black text-sm sm:text-base uppercase tracking-wider text-amber-400">
                       Oczekujące propozycje suplementów od Klubowiczów ({sugestie.length})
@@ -969,14 +1065,12 @@ export default function BazaWiedzyPage() {
                     const podstawowe = item.dawkowanie_podstawowe || item.dawkowanie || "";
                     const wyzsze = item.dawkowanie_wyzsze || "";
                     const autorWyswietlany = activeTab === "przepisy" ? getAutorDisplay(item) : "";
+                    const isUnread = isItemUnread(item, activeTab);
 
                     return (
                       <tr
                         key={item.id}
-                        onClick={() => {
-                          setSelectedItem(item);
-                          setIsViewModalOpen(true);
-                        }}
+                        onClick={() => handleOpenItemModal(item)}
                         className={`hover:bg-sky-50/40 transition-colors cursor-pointer group ${
                           item.do_weryfikacji ? "bg-amber-50/60" : ""
                         }`}
@@ -999,6 +1093,14 @@ export default function BazaWiedzyPage() {
                                 <div className="font-black text-sky-950 text-base group-hover:text-sky-700 transition-colors">
                                   {item.nazwa}
                                 </div>
+                                {isUnread && (
+                                  <span className="relative flex h-3.5 w-3.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600 text-[9px] font-black text-white items-center justify-center shadow">
+                                      !
+                                    </span>
+                                  </span>
+                                )}
                                 {item.do_weryfikacji && (
                                   <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-md uppercase tracking-wider animate-pulse">
                                     ⚠️ Do weryfikacji
