@@ -108,8 +108,10 @@ export default function PublicSchedulePage() {
       `${item.id}_${col.date}`,
       `${item.id}_${col.isoDate}`,
       `${item.id}_${col.date?.replace('/', '.')}`,
+      `${item.id}_${col.date?.replace('/', '-')}`,
       `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
+      `jednorazowe_${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}`,
       String(item.id)
     ];
@@ -124,8 +126,10 @@ export default function PublicSchedulePage() {
       `${item.id}_${col.date}`,
       `${item.id}_${col.isoDate}`,
       `${item.id}_${col.date?.replace('/', '.')}`,
+      `${item.id}_${col.date?.replace('/', '-')}`,
       `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
+      `jednorazowe_${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}`,
       String(item.id)
     ];
