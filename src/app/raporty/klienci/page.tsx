@@ -962,6 +962,7 @@ export default function KlienciPage() {
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingSystemDiscount(false);
   };
+
   const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -1173,8 +1174,8 @@ export default function KlienciPage() {
     reader.readAsDataURL(file);
   };
 
-  const handleConfirmExtendPass = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // PRZEDŁUŻENIE KARNETU (GOTÓWKA vs PORTFEL)
+  const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
@@ -1194,9 +1195,17 @@ export default function KlienciPage() {
     const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
     const kwotaKarnetu = cenaPoRabacie;
 
-    const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-    const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
-    const nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+    let nowyStanStr = profileClient.wallet;
+    let logKwota = 0;
+    let logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Zapłacono z góry / Gotówka)`;
+
+    if (paymentMethod === 'later') {
+      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+      const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
+      nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+      logKwota = -kwotaKarnetu;
+      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Obciążenie portfela - do zapłaty)`;
+    }
 
     let znizkaTekst = '';
     if (activeDiscount > 0 && !isContract) {
@@ -1237,12 +1246,47 @@ export default function KlienciPage() {
     await supabase.from('transakcje').insert([{
       klient_id: profileClient.id,
       typ_operacji: 'zakup_karnetu',
-      kwota: -kwotaKarnetu,
-      opis: `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} ${znizkaTekst} (Obciążenie portfela)`
+      kwota: logKwota,
+      opis: `${logOpis} ${znizkaTekst}`
     }]);
 
-    alert(`Karnet został przedłużony! Pobrano ${kwotaKarnetu.toFixed(2)} PLN z portfela.`);
+    alert(paymentMethod === 'later' ? `Karnet przedłużony! Dopisano ${kwotaKarnetu.toFixed(2)} PLN do portfela.` : `Karnet przedłużony i opłacony gotówką!`);
     setIsExtendPassModalOpen(false);
+    loadData();
+  };
+
+  // SPŁATA CAŁKOWITEGO ZADŁUŻENIA PORTFELA
+  const handleSplatZadluzenie = async () => {
+    if (!profileClient) return;
+    const currentWalletNum = getWalletNumber(profileClient.wallet);
+    if (currentWalletNum >= 0) {
+      alert("Klubowicz nie posiada zadłużenia w portfelu.");
+      return;
+    }
+
+    const splacanaKwota = Math.abs(currentWalletNum);
+    if (!confirm(`Czy na pewno chcesz spłacić całe zadłużenie (${splacanaKwota.toFixed(2)} PLN) i wyzerować portfel?`)) {
+      return;
+    }
+
+    const { error } = await supabase.from('klienci').update({
+      Portfel: '0.00 PLN'
+    }).eq('id', profileClient.id);
+
+    if (error) {
+      alert("Błąd spłaty zadłużenia: " + error.message);
+      return;
+    }
+
+    await supabase.from('transakcje').insert([{
+      klient_id: profileClient.id,
+      typ_operacji: 'portfel',
+      kwota: splacanaKwota,
+      opis: `Całkowita spłata zadłużenia (+${splacanaKwota.toFixed(2)} PLN) - wyzerowanie portfela`
+    }]);
+
+    setProfileClient((prev: any) => ({ ...prev, wallet: '0.00 PLN' }));
+    alert("Zadłużenie zostało spłacone. Stan portfela wynosi 0.00 PLN.");
     loadData();
   };
 
@@ -1779,8 +1823,6 @@ export default function KlienciPage() {
           <button onClick={() => setIsAddModalOpen(true)} className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition-all text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap">
             + DODAJ KLUBOWICZA
           </button>
-          <button className="p-2 bg-white border border-sky-200 text-slate-700 rounded-xl hover:bg-sky-50 shadow-sm transition-all cursor-pointer" title="Ustawienia tabeli">⚙️</button>
-          <button className="p-2 bg-white border border-sky-200 text-slate-700 rounded-xl hover:bg-sky-50 shadow-sm transition-all cursor-pointer" title="Eksportuj">📥</button>
         </div>
       </div>
 
@@ -1824,7 +1866,7 @@ export default function KlienciPage() {
         </div>
       </div>
 
-      {/* Wyszukiwanie i Filtry */}
+      {/* Wyszukiwanie */}
       <div className="space-y-3">
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
@@ -1837,13 +1879,10 @@ export default function KlienciPage() {
               className="w-full bg-white border border-sky-200 rounded-xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 shadow-sm"
             />
           </div>
-          <button className="px-4 py-2.5 bg-rose-800 hover:bg-rose-700 text-white text-xs font-bold rounded-xl uppercase tracking-wider flex items-center justify-center gap-2 shrink-0 shadow-sm transition-all cursor-pointer whitespace-nowrap">
-            <span>🎛️</span> Ustaw filtry
-          </button>
         </div>
       </div>
 
-      {/* Tabela Klientów (Z nowymi kolumnami RABAT i ZAWIESZENIE, bez Dołączył i Urodziny) */}
+      {/* Tabela Klientów */}
       <div className="bg-white border border-sky-200 rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto w-full">
           <table className="w-full text-left text-xs min-w-[980px]">
@@ -1890,7 +1929,7 @@ export default function KlienciPage() {
                 const stalyRabat = parseFloat(client.discount || '0') || 0;
                 const sysRabat = calculateSystemDiscount(client);
 
-                // DANE ZAWIESZENIA (Dla 12M z pulą lub karnetów ze statusem wykorzystanych/zaplanowanych dni)
+                // DANE ZAWIESZENIA
                 const isContract = aktywnyKarnetObj?.isContract12M;
                 const dniZawLeft = aktywnyKarnetObj?.contractSuspensionDaysLeft ?? (isContract ? 30 : null);
 
@@ -1901,7 +1940,7 @@ export default function KlienciPage() {
                   return sum + (isNaN(d) ? 0 : d);
                 }, 0);
 
-                // PODŚWIETLENIE PORTFELA: 0 = neutral, >0 = green, <0 = red
+                // PODŚWIETLENIE PORTFELA
                 let walletBadgeClass = 'bg-slate-100 text-slate-700 border-slate-200';
                 if (walletNum > 0) {
                   walletBadgeClass = 'bg-emerald-100 text-emerald-800 border-emerald-300 font-bold';
@@ -1944,7 +1983,7 @@ export default function KlienciPage() {
                       </div>
                     </td>
 
-                    {/* NOWA KOLUMNA: RABAT (STAŁY / CIĄGŁOŚĆ) */}
+                    {/* KOLUMNA: RABAT */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-mono text-[11px]">
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1.5">
@@ -1970,7 +2009,7 @@ export default function KlienciPage() {
                       </div>
                     </td>
 
-                    {/* NOWA KOLUMNA: ZAWIESZENIE (UMOWA 12M ORAZ DLA INNYCH WYKORZYSTANE / PLANOWANE DNI) */}
+                    {/* KOLUMNA: ZAWIESZENIE */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-mono text-xs">
                       {isContract && dniZawLeft !== null ? (
                         <div className="flex items-center gap-1.5">
@@ -2026,14 +2065,14 @@ export default function KlienciPage() {
                       )}
                     </td>
 
-                    {/* PORTFEL (PODŚWIETLENIE: 0 = bez, >0 = zielone, <0 = czerwone) */}
+                    {/* PORTFEL */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <span className={`px-2.5 py-1 rounded-lg text-xs font-mono border whitespace-nowrap inline-block ${walletBadgeClass}`}>
                         {client.wallet}
                       </span>
                     </td>
 
-                    {/* AKCJE (MENU ROZWIJANE POD TRZEMA KROPKAMI ...) */}
+                    {/* AKCJE */}
                     <td className="py-3.5 px-3 text-right whitespace-nowrap relative">
                       <div className="relative inline-block text-left">
                         <button 
@@ -2091,6 +2130,7 @@ export default function KlienciPage() {
           </table>
         </div>
       </div>
+
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM Z TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2251,7 +2291,7 @@ export default function KlienciPage() {
                   </div>
                 </div>
 
-                {/* Avatar & DATA DOŁĄCZENIA POD PRZYCISKIEM EDYCJI ZDJĘCIA */}
+                {/* Avatar */}
                 <div className="flex flex-col items-center gap-2 shrink-0 self-center sm:self-auto">
                   <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-slate-900 text-white font-black flex items-center justify-center text-3xl overflow-hidden border-2 border-sky-300 shadow-md">
                     {profileClient.avatarUrl ? (
@@ -2279,7 +2319,6 @@ export default function KlienciPage() {
                     ✏️ Edytuj zdjęcie
                   </button>
 
-                  {/* INFORMACJA O DOŁĄCZENIU KLUBOWICZA DO APLIKACJI */}
                   <div className="text-center pt-1 border-t border-slate-200/80 w-full">
                     <span className="text-[10px] text-slate-400 font-semibold block uppercase tracking-wider">Dołączył do klubu</span>
                     <span className="text-xs font-mono font-bold text-slate-700">{profileClient.registered || profileClient.Zarejestrowany || '-'}</span>
@@ -2573,14 +2612,22 @@ export default function KlienciPage() {
                     );
                   })()}
 
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="flex gap-2 flex-wrap items-center">
+                    {getWalletNumber(profileClient.wallet) < 0 && (
+                      <button 
+                        onClick={handleSplatZadluzenie} 
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap shadow-sm"
+                      >
+                        💳 SPŁAĆ ZADŁUŻENIE
+                      </button>
+                    )}
                     <button onClick={() => setIsWalletHistoryOpen(true)} className="text-slate-600 text-xs font-bold underline cursor-pointer py-1.5">🕒 HISTORIA PORTFELA</button>
-                    <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap">+ UZUPEŁNIJ PORTFEL</button>
+                    <button onClick={() => setIsTopUpWalletOpen(true)} className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-xl text-xs font-black cursor-pointer whitespace-nowrap shadow-sm">+ UZUPEŁNIJ PORTFEL</button>
                   </div>
                 </div>
               </div>
 
-              {/* SEKCJA: AKTYWNOŚĆ KLUBOWICZA (4 ZAKŁADKI) */}
+              {/* SEKCJA: AKTYWNOŚĆ KLUBOWICZA */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Aktywność klubowicza</h3>
                 
@@ -3203,7 +3250,7 @@ export default function KlienciPage() {
               <button onClick={() => setIsExtendPassModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={handleConfirmExtendPass} className="space-y-4 text-xs">
+            <div className="space-y-4 text-xs">
               
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1">
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap">Aktualny karnet</div>
@@ -3344,12 +3391,15 @@ export default function KlienciPage() {
 
               </div>
 
-              <div className="pt-4 flex justify-end gap-3 border-t border-sky-100">
+              <div className="pt-4 flex justify-between items-center gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsExtendPassModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer uppercase whitespace-nowrap">Anuluj</button>
-                <button type="submit" className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">🕒 Przedłuż</button>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => handleConfirmExtendPass('later')} className="bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Dopisz do portfela</button>
+                  <button type="button" onClick={() => handleConfirmExtendPass('paid')} className="bg-rose-900 hover:bg-rose-800 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer uppercase tracking-wider whitespace-nowrap">💵 Gotówka / Zapłacono</button>
+                </div>
               </div>
 
-            </form>
+            </div>
           </div>
         </div>
       )}
