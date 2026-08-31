@@ -118,9 +118,11 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
     }
-    // Elastyczne wyszukiwanie hybrydowe
+    // Precyzyjne dopasowanie po ID i dacie bez kolizji podciągów
     for (const key of Object.keys(nadpisaneZajeciaDni)) {
-      if (key.includes(String(item.id)) && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
+      const parts = key.split('_');
+      const matchesId = parts.includes(String(item.id));
+      if (matchesId && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
         return nadpisaneZajeciaDni[key];
       }
     }
@@ -142,9 +144,11 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
     }
-    // Elastyczne wyszukiwanie hybrydowe po kluczach zapisu w bazie
+    // Precyzyjne dopasowanie zapisów po ID i dacie
     for (const key of Object.keys(zapisyNaZajecia)) {
-      if (key.includes(String(item.id)) && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
+      const parts = key.split('_');
+      const matchesId = parts.includes(String(item.id));
+      if (matchesId && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
         if (zapisyNaZajecia[key] && zapisyNaZajecia[key].length > 0) {
           return zapisyNaZajecia[key];
         }
