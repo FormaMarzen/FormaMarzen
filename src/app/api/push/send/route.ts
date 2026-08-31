@@ -82,7 +82,7 @@ export async function POST(request: Request) {
       if (validNumericIds.length > 0) {
         const { data: clientsData, error: clientsErr } = await supabase
           .from('klienci')
-          .select('id, push_subscription, "Imię", "Nazwisko", "E-mail", email')
+          .select('id, push_subscription, "Imię", "Nazwisko", "E-mail"')
           .in('id', validNumericIds);
 
         if (clientsErr) {
@@ -93,7 +93,7 @@ export async function POST(request: Request) {
           for (const c of clientsData) {
             const imie = c.Imię || '';
             const nazwisko = c.Nazwisko || '';
-            const mail = (c['E-mail'] || c.email || '').toLowerCase().trim();
+            const mail = (c['E-mail'] || '').toLowerCase().trim();
             const pelnaNazwa = `${imie} ${nazwisko}`.trim();
             const odbiorcaTekst = pelnaNazwa ? (mail ? `${pelnaNazwa} (${mail})` : pelnaNazwa) : (mail || `Klubowicz #${c.id}`);
 
@@ -110,10 +110,13 @@ export async function POST(request: Request) {
 
             // Sprawdzenie w tabeli pomocniczej push_subscriptions
             try {
-              const { data: dbSubs } = await supabase
-                .from('push_subscriptions')
-                .select('*')
-                .or(`user_id.eq.${c.id},user_id.eq."${mail}"`);
+              let query = supabase.from('push_subscriptions').select('*');
+              if (mail) {
+                query = query.or(`user_id.eq.${c.id},user_id.eq."${mail}"`);
+              } else {
+                query = query.eq('user_id', String(c.id));
+              }
+              const { data: dbSubs } = await query;
 
               if (dbSubs && dbSubs.length > 0) {
                 for (const subRow of dbSubs) {
@@ -202,7 +205,7 @@ export async function POST(request: Request) {
       const { data: clientFound } = await supabase
         .from('klienci')
         .select('*')
-        .or(`"E-mail".ilike.%${recipientEmail}%,email.ilike.%${recipientEmail}%`)
+        .ilike('"E-mail"', `%${recipientEmail}%`)
         .limit(1)
         .maybeSingle();
 
