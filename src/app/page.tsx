@@ -99,76 +99,27 @@ export default function DashboardPage() {
     return Array.from(keys);
   };
 
-  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH I ZAPISU DO HISTORII SUPABASE
+ // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
-      const validIds = rawIds.map(id => String(id)).filter(id => id && id !== '0' && id !== '5000' && id !== '999999999');
+      const validIds = rawIds.map(id => Number(id)).filter(id => !isNaN(id) && id > 0 && id !== 5000 && id !== 999999999);
       if (validIds.length === 0) return;
 
-      const { data: clients, error: clientsErr } = await supabase
-        .from('klienci')
-        .select('id, push_subscription, "Imię", "Nazwisko", firstName, lastName, "E-mail", email')
-        .in('id', validIds);
-
-      if (clientsErr || !clients || clients.length === 0) return;
-
-      const subscriptions = clients
-        .map(c => {
-          if (!c.push_subscription) return null;
-          try {
-            return typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
-          } catch (e) {
-            return null;
+      await fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientIds: validIds,
+          payload: {
+            title: payload.title || 'FORMA MARZEŃ',
+            body: payload.body || '',
+            url: payload.url || '/'
           }
         })
-        .filter(Boolean);
-
-      if (subscriptions.length > 0) {
-        try {
-          await fetch('/api/push/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              subscriptions,
-              payload: {
-                title: payload.title || 'FORMA MARZEŃ',
-                body: payload.body || '',
-                url: payload.url || '/'
-              }
-            })
-          });
-        } catch (fetchErr) {
-          console.warn('Błąd wysyłania push do API:', fetchErr);
-        }
-      }
-
-      // Rejestracja w tabeli historia_powiadomien
-      const historiaEntries = clients.map((c: any) => {
-        const imie = c.Imię || c.firstName || '';
-        const nazwisko = c.Nazwisko || c.lastName || '';
-        const mail = c['E-mail'] || c.email || '';
-        const pelnaNazwa = `${imie} ${nazwisko}`.trim();
-        const odbiorcaTekst = pelnaNazwa ? (mail ? `${pelnaNazwa} (${mail})` : pelnaNazwa) : (mail || `Klubowicz #${c.id}`);
-
-        return {
-          odbiorca: odbiorcaTekst,
-          odbiorca_id: c.id,
-          tytul: payload.title,
-          tresc: payload.body,
-          typ: 'PUSH',
-          status: c.push_subscription ? 'Wysłano' : 'Brak subskrypcji (Zapisano)',
-          created_at: new Date().toISOString()
-        };
       });
-
-      if (historiaEntries.length > 0) {
-        await supabase
-          .from('historia_powiadomien')
-          .insert(historiaEntries);
-      }
     } catch (err) {
-      console.error('Błąd podczas wysyłania/zapisywania powiadomienia push:', err);
+      console.error('Błąd wywołania sendPushNotification:', err);
     }
   };
   
@@ -1856,105 +1807,113 @@ export default function DashboardPage() {
   };
 
   // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (POWIADOMIENIE PUSH DLA GRUPY GŁÓWNEJ I KRZESEŁKA)
-  const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
-    const classKey = `${item.id}_${displayDate}`;
-    const keysToDelete = getKeysVariants(item.id, displayDate);
-    const nextOdwołaneState = !item.isOdwołane;
+const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
+  const classKey = `${item.id}_${displayDate}`;
+  const allVariantKeys = getKeysVariants(item.id, displayDate);
+  const nextOdwołaneState = !item.isOdwołane;
 
-    setActiveMenuClassId(null);
+  setActiveMenuClassId(null);
 
-    await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
+  // 1. Pobieramy listę wszystkich zapisanych osób bezpośrednio z bazy przed usunięciem
+  const { data: dbSignups } = await supabase
+    .from('zapisy_zajec')
+    .select('klient_id, status')
+    .in('class_key', allVariantKeys);
 
-    if (nextOdwołaneState) {
-      const zapisani = zapisyNaZajecia[classKey] || [];
-      const participantIds: number[] = [];
+  const zapisani = dbSignups || [];
+  const participantIds: number[] = Array.from(new Set(zapisani.map((s: any) => Number(s.klient_id)).filter(Boolean)));
 
-      for (const u of zapisani) {
-        participantIds.push(u.id);
-        const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
-        if (clientData) {
-          let parsedKarnety = [];
-          if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
-          else if (typeof clientData.karnetyKlubowicza === 'string') {
-            try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
-          }
+  // 2. Czyścimy stare rekordy nadpisań
+  await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
 
-          const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-          if (passIndex !== -1) {
-            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
-            parsedKarnety[passIndex] = {
-              ...parsedKarnety[passIndex],
-              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
-            };
-            await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
-          }
-
-          await supabase.from('transakcje').insert([{
-            klient_id: u.id,
-            typ_operacji: 'zajecia_wypis',
-            class_key: classKey,
-            opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
-          }]);
+  if (nextOdwołaneState) {
+    // Przypadek: ODWOŁANIE ZAJĘĆ
+    for (const u of zapisani) {
+      const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.klient_id).maybeSingle();
+      if (clientData) {
+        let parsedKarnety = [];
+        if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+        else if (typeof clientData.karnetyKlubowicza === 'string') {
+          try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
         }
+
+        const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
+          const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+          parsedKarnety[passIndex] = {
+            ...parsedKarnety[passIndex],
+            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.klient_id);
+        }
+
+        await supabase.from('transakcje').insert([{
+          klient_id: u.klient_id,
+          typ_operacji: 'zajecia_wypis',
+          class_key: classKey,
+          opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
+        }]);
       }
+    }
 
-      if (participantIds.length > 0) {
-        await sendPushNotification(participantIds, {
-          title: `Odwołano trening: ${item.title}`,
-          body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany przez klub. Zwrócono wejście na karnet.`,
-          url: '/'
-        });
-      }
+    // WYSYŁKA PUSH DO WSZYSTKICH (GRUPA GŁÓWNA + KRZESEŁKO)
+    if (participantIds.length > 0) {
+      await sendPushNotification(participantIds, {
+        title: `Odwołano trening: ${item.title}`,
+        body: `Trening "${item.title}" w dniu ${displayDate} o godz. ${item.start} został odwołany przez klub. Zwrócono wejście na karnet.`,
+        url: '/'
+      });
+    }
 
-      await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
+    await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
 
-      const rowsToInsert = keysToDelete.map(vKey => ({
+    const rowsToInsert = allVariantKeys.map(vKey => ({
+      class_key: vKey,
+      start: item.start || '08:00',
+      end: item.end || '09:00',
+      trainer: item.trainer || '',
+      limit: item.limit || 12,
+      is_odwolane: true,
+      is_usuniete: item.isUsunięte || false
+    }));
+    await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+  } else {
+    if (item.isUsunięte) {
+      const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
         end: item.end || '09:00',
         trainer: item.trainer || '',
         limit: item.limit || 12,
-        is_odwolane: true,
+        is_odwolane: false,
         is_usuniete: item.isUsunięte || false
       }));
       await supabase.from('nadpisania_zajec').insert(rowsToInsert);
-    } else {
-      if (item.isUsunięte) {
-        const rowsToInsert = keysToDelete.map(vKey => ({
-          class_key: vKey,
-          start: item.start || '08:00',
-          end: item.end || '09:00',
-          trainer: item.trainer || '',
-          limit: item.limit || 12,
-          is_odwolane: false,
-          is_usuniete: item.isUsunięte || false
-        }));
-        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
-      }
     }
+  }
 
-    setNadpisaneZajeciaDni(prev => {
-      const updated = { ...prev };
-      keysToDelete.forEach(k => {
-        if (nextOdwołaneState) {
-          updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false };
-        } else {
-          delete updated[k];
-        }
-      });
-      return updated;
+  setNadpisaneZajeciaDni(prev => {
+    const updated = { ...prev };
+    allVariantKeys.forEach(k => {
+      if (nextOdwołaneState) {
+        updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false };
+      } else {
+        delete updated[k];
+      }
     });
+    return updated;
+  });
 
-    await supabase.from('transakcje').insert([{
-      typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
-      class_key: classKey,
-      opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
-    }]);
+  await supabase.from('transakcje').insert([{
+    typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
+    class_key: classKey,
+    opis: nextOdwołaneState ? 'Odwołano zajęcia z poziomu grafiku' : 'Przywrócono odwołane zajęcia'
+  }]);
 
-    await loadData();
-    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
-  };
+  await loadData();
+  showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
+};
 
   // USUWANIE I PRZYWRACANIE ZAJĘĆ (POWIADOMIENIE PUSH DLA GRUPY GŁÓWNEJ I KRZESEŁKA)
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
