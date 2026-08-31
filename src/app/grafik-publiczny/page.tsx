@@ -105,12 +105,12 @@ export default function PublicSchedulePage() {
 
   const findOverride = useCallback((item: any, col: any) => {
     const keysToCheck = [
-      `${item.id}_${col.date}`,
       `${item.id}_${col.isoDate}`,
+      `${item.id}_${col.date}`,
       `${item.id}_${col.date?.replace('/', '.')}`,
       `${item.id}_${col.date?.replace('/', '-')}`,
-      `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
+      `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}`,
       String(item.id)
@@ -118,17 +118,23 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
     }
+    // Elastyczne wyszukiwanie hybrydowe
+    for (const key of Object.keys(nadpisaneZajeciaDni)) {
+      if (key.includes(String(item.id)) && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
+        return nadpisaneZajeciaDni[key];
+      }
+    }
     return null;
   }, [nadpisaneZajeciaDni]);
 
   const getSignups = useCallback((item: any, col: any) => {
     const keysToCheck = [
-      `${item.id}_${col.date}`,
       `${item.id}_${col.isoDate}`,
+      `${item.id}_${col.date}`,
       `${item.id}_${col.date?.replace('/', '.')}`,
       `${item.id}_${col.date?.replace('/', '-')}`,
-      `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.isoDate}`,
+      `jednorazowe_${item.id}_${col.date}`,
       `jednorazowe_${item.id}_${col.date?.replace('/', '.')}`,
       `jednorazowe_${item.id}`,
       String(item.id)
@@ -136,10 +142,17 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
     }
+    // Elastyczne wyszukiwanie hybrydowe po kluczach zapisu w bazie
+    for (const key of Object.keys(zapisyNaZajecia)) {
+      if (key.includes(String(item.id)) && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
+        if (zapisyNaZajecia[key] && zapisyNaZajecia[key].length > 0) {
+          return zapisyNaZajecia[key];
+        }
+      }
+    }
     return [];
   }, [zapisyNaZajecia]);
 
-  // Zoptymalizowane, w pełni równoległe pobieranie danych publicznych z bezpiecznymi limitami
   const loadPublicData = useCallback(async () => {
     setIsLoading(true);
 
@@ -164,7 +177,6 @@ export default function PublicSchedulePage() {
         supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).limit(1000)
       ]);
 
-      // 1. Reguły rezerwacji
       if (rulesRes.status === 'fulfilled' && rulesRes.value.data) {
         const rulesData = rulesRes.value.data;
         setBookingRules({
@@ -175,7 +187,6 @@ export default function PublicSchedulePage() {
         });
       }
 
-      // 2. Szablony grafiku
       if (szablonyRes.status === 'fulfilled' && szablonyRes.value.data) {
         setZapisaneZajecia(szablonyRes.value.data.map((s: any) => ({
           id: s.id,
@@ -191,7 +202,6 @@ export default function PublicSchedulePage() {
         })));
       }
 
-      // 3. Zajęcia jednorazowe
       if (jednorazoweRes.status === 'fulfilled' && jednorazoweRes.value.data) {
         setJednorazoweZajecia(jednorazoweRes.value.data.map((j: any) => ({
           id: j.id,
@@ -209,7 +219,6 @@ export default function PublicSchedulePage() {
         })));
       }
 
-      // 4. Nadpisania zajęć
       if (nadpisaniaRes.status === 'fulfilled' && nadpisaniaRes.value.data) {
         const nadpisaniaMap: { [key: string]: any } = {};
         nadpisaniaRes.value.data.forEach((n: any) => {
@@ -228,7 +237,6 @@ export default function PublicSchedulePage() {
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
-      // 5. Zapisy na zajęcia
       if (zapisyRes.status === 'fulfilled' && zapisyRes.value.data) {
         const grouped: { [key: string]: any[] } = {};
         zapisyRes.value.data.forEach((z: any) => {
@@ -240,7 +248,6 @@ export default function PublicSchedulePage() {
         setZapisyNaZajecia(grouped);
       }
 
-      // 6. Wydarzenia kilkudniowe
       if (wydarzeniaRes.status === 'fulfilled' && wydarzeniaRes.value.data) {
         setWydarzeniaKilkudniowe(wydarzeniaRes.value.data.map((w: any) => ({
           id: w.id,
@@ -250,12 +257,10 @@ export default function PublicSchedulePage() {
         })));
       }
 
-      // 7. Rodzaje zajęć
       if (rodzajeRes.status === 'fulfilled' && rodzajeRes.value.data) {
         setRodzajeZajec(rodzajeRes.value.data);
       }
 
-      // 8. Katalog karnetów
       if (karnetyRes.status === 'fulfilled' && karnetyRes.value.data) {
         setKatalogKarnetow(karnetyRes.value.data.filter((k: any) => k.aktywny !== false));
       } else {
