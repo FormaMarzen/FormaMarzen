@@ -118,10 +118,12 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (nadpisaneZajeciaDni[k]) return nadpisaneZajeciaDni[k];
     }
-    // Precyzyjne dopasowanie po dokładnym ID i dacie (bez kolizji podciągów)
+    // Precyzyjne dopasowanie nadpisania bez kolizji ID
     for (const key of Object.keys(nadpisaneZajeciaDni)) {
-      const matchesId = key === String(item.id) || key.startsWith(String(item.id) + '_');
-      if (matchesId && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
+      const parts = key.split('_');
+      const hasId = parts.includes(String(item.id));
+      const hasDate = key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')) || key.includes(col.date?.replace('/', '-'));
+      if (hasId && hasDate) {
         return nadpisaneZajeciaDni[key];
       }
     }
@@ -143,10 +145,12 @@ export default function PublicSchedulePage() {
     for (const k of keysToCheck) {
       if (zapisyNaZajecia[k] && zapisyNaZajecia[k].length > 0) return zapisyNaZajecia[k];
     }
-    // Precyzyjne dopasowanie zapisów po dokładnym ID i dacie
+    // Precyzyjne dopasowanie zapisów po ID i dacie
     for (const key of Object.keys(zapisyNaZajecia)) {
-      const matchesId = key === String(item.id) || key.startsWith(String(item.id) + '_');
-      if (matchesId && (key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')))) {
+      const parts = key.split('_');
+      const hasId = parts.includes(String(item.id));
+      const hasDate = key.includes(col.isoDate) || key.includes(col.date) || key.includes(col.date?.replace('/', '.')) || key.includes(col.date?.replace('/', '-'));
+      if (hasId && hasDate) {
         if (zapisyNaZajecia[key] && zapisyNaZajecia[key].length > 0) {
           return zapisyNaZajecia[key];
         }
@@ -682,7 +686,13 @@ export default function PublicSchedulePage() {
                   }
                 });
 
-                const zajeciaDnia = Array.from(uniqueZajeciaMap.values()).sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+                // Stabilne sortowanie po czasie i tytule
+                const zajeciaDnia = Array.from(uniqueZajeciaMap.values()).sort((a: any, b: any) => {
+                  const timeComp = (a.start || "").localeCompare(b.start || "");
+                  if (timeComp !== 0) return timeComp;
+                  return (a.title || "").localeCompare(b.title || "");
+                });
+
                 const isPastDay = col.isoDate < todayStr;
 
                 return (
