@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     let subject = (process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl').trim();
 
     if (!publicKey || !privateKey) {
-      console.error('Brak skonfigurowanych kluczy VAPID w zmiennych środowiskowych Vercel.');
+      console.error('Brak kluczy VAPID w zmiennych środowiskowych Vercel.');
       return NextResponse.json(
         { success: false, error: 'Brak konfiguracji VAPID na serwerze' },
         { status: 500 }
@@ -27,96 +27,191 @@ export async function POST(request: Request) {
     webpush.setVapidDetails(subject, publicKey, privateKey);
 
     const bodyData = await request.json();
-    let { subscriptions, payload, targetEmail, email, targetName } = bodyData;
+    let { clientIds, subscriptions, payload, targetEmail, email, targetName } = bodyData;
 
-    const recipientEmail = (targetEmail || email || '').toLowerCase().trim();
-    let resolvedRecipientName = targetName || payload?.odbiorca || '';
-    let clientDbId: number | null = null;
+    const tytulPowiadomienia = payload?.title || 'FORMA MARZEŃ';
+    const trescPowiadomienia = payload?.body || '';
+    const typPowiadomienia = payload?.typ || payload?.type || 'PUSH';
+    const docelowyUrl = payload?.url || '/';
 
-    // Pobranie danych klienta (Imię i Nazwisko) z tabeli klienci
-    if (recipientEmail) {
-      const { data: clientRows } = await supabase.from('klienci').select('*');
-      if (clientRows && Array.isArray(clientRows)) {
-        const found = clientRows.find((c: any) => {
-          let cMail = '';
-          Object.keys(c).forEach((k) => {
-            const kl = k.toLowerCase().replace(/[\s\-_]/g, '');
-            if (kl.includes('mail') || kl === 'email') {
-              cMail = String(c[k] || '').toLowerCase().trim();
+    // Lista zadań do wysyłki: { subObj, recipientName, recipientId, clientDbRow }
+    const targetsToSend: Array<{
+      subObj: any;
+      recipientName: string;
+      recipientId: number | null;
+      clientRowId?: number;
+    }> = [];
+
+    const logEntries: Array<{
+      odbiorca: string;
+      odbiorca_id: number | null;
+      tytul: string;
+      tresc: string;
+      typ: string;
+      status: string;
+      created_at?: string;
+    }> = [];
+
+    // 1. Obsługa przekazania clientIds (np. przy odwołaniu zajęć lub awansie z krzesełka)
+    if (clientIds && (Array.isArray(clientIds) ? clientIds.length > 0 : true)) {
+      const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
+      const validNumericIds = rawIds
+        .map((id: any) => Number(id))
+        .filter((id: number) => !isNaN(id) && id > 0 && id !== 5000 && id !== 999999999);
+
+      if (validNumericIds.length > 0) {
+        const { data: clientsData, error: clientsErr } = await supabase
+          .from('klienci')
+          .select('id, push_subscription, "Imię", "Nazwisko", firstName, lastName, "E-mail", email')
+          .in('id', validNumericIds);
+
+        if (!clientsErr && clientsData && clientsData.length > 0) {
+          for (const c of clientsData) {
+            const imie = c.Imię || c.firstName || '';
+            const nazwisko = c.Nazwisko || c.lastName || '';
+            const mail = c['E-mail'] || c.email || '';
+            const pelnaNazwa = `${imie} ${nazwisko}`.trim();
+            const odbiorcaTekst = pelnaNazwa ? (mail ? `${pelnaNazwa} (${mail})` : pelnaNazwa) : (mail || `Klubowicz #${c.id}`);
+
+            let parsedSub: any = null;
+            if (c.push_subscription) {
+              try {
+                parsedSub = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
+              } catch (e) {
+                parsedSub = null;
+              }
             }
-          });
-          return cMail === recipientEmail;
-        });
 
-        if (found) {
-          clientDbId = found.id ? Number(found.id) : null;
-          if (!resolvedRecipientName) {
-            let imie = found['Imię'] || found['imie'] || found['Imie'] || '';
-            let nazwisko = found['Nazwisko'] || found['nazwisko'] || '';
-            const full = `${imie} ${nazwisko}`.trim();
-            if (full) resolvedRecipientName = full;
+            // Fallback do tabeli push_subscriptions jeśli kolumna w klienci jest pusta
+            if (!parsedSub) {
+              const { data: dbSub } = await supabase
+                .from('push_subscriptions')
+                .select('*')
+                .or(`user_id.eq.${c.id},user_id.eq.${mail}`)
+                .limit(1)
+                .maybeSingle();
+
+              if (dbSub) {
+                parsedSub = dbSub.subscription ? (typeof dbSub.subscription === 'string' ? JSON.parse(dbSub.subscription) : dbSub.subscription) : dbSub;
+              }
+            }
+
+            if (parsedSub && parsedSub.endpoint && parsedSub.keys?.p256dh && parsedSub.keys?.auth) {
+              targetsToSend.push({
+                subObj: parsedSub,
+                recipientName: odbiorcaTekst,
+                recipientId: c.id,
+                clientRowId: c.id,
+              });
+            } else {
+              logEntries.push({
+                odbiorca: odbiorcaTekst,
+                odbiorca_id: c.id,
+                tytul: tytulPowiadomienia,
+                tresc: trescPowiadomienia,
+                typ: typPowiadomienia,
+                status: 'Brak aktywnej subskrypcji (Klubowicz nie aktywował Push)',
+                created_at: new Date().toISOString(),
+              });
+            }
           }
         }
       }
     }
 
-    if (!resolvedRecipientName) {
-      resolvedRecipientName = recipientEmail || 'Klubowicz';
+    // 2. Obsługa przekazania bezpośredniej tablicy subskrypcji
+    if (subscriptions && Array.isArray(subscriptions) && subscriptions.length > 0) {
+      for (const rawSub of subscriptions) {
+        let subObj = rawSub;
+        if (typeof subObj === 'string') {
+          try {
+            subObj = JSON.parse(subObj);
+          } catch (e) {
+            continue;
+          }
+        }
+        if (subObj?.subscription) {
+          subObj = typeof subObj.subscription === 'string' ? JSON.parse(subObj.subscription) : subObj.subscription;
+        }
+
+        if (subObj?.endpoint && subObj?.keys?.p256dh && subObj?.keys?.auth) {
+          const recName = rawSub?.odbiorca || targetName || 'Klubowicz';
+          const recId = rawSub?.odbiorca_id || rawSub?.klient_id || null;
+          targetsToSend.push({
+            subObj,
+            recipientName: recName,
+            recipientId: recId ? Number(recId) : null,
+          });
+        }
+      }
     }
 
-    // Pobranie subskrypcji po stronie serwera
-    if ((!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) && recipientEmail) {
-      const searchQueries = [`user_id.ilike.%${recipientEmail}%`, `user_id.eq.${recipientEmail}`];
-      if (clientDbId !== null) {
-        searchQueries.push(`user_id.eq.${clientDbId}`);
-      }
-
-      const { data: dbSubs, error: dbError } = await supabase
-        .from('push_subscriptions')
+    // 3. Obsługa wyszukiwania po adresie e-mail
+    const recipientEmail = (targetEmail || email || '').toLowerCase().trim();
+    if (targetsToSend.length === 0 && recipientEmail) {
+      const { data: clientFound } = await supabase
+        .from('klienci')
         .select('*')
-        .or(searchQueries.join(','));
+        .or(`"E-mail".ilike.%${recipientEmail}%,email.ilike.%${recipientEmail}%`)
+        .limit(1)
+        .maybeSingle();
 
-      if (dbError) {
-        console.error('Błąd pobierania subskrypcji z push_subscriptions:', dbError);
-      }
+      if (clientFound) {
+        const imie = clientFound.Imię || clientFound.firstName || '';
+        const nazwisko = clientFound.Nazwisko || clientFound.lastName || '';
+        const pelnaNazwa = `${imie} ${nazwisko}`.trim();
+        const odbiorcaTekst = pelnaNazwa ? `${pelnaNazwa} (${recipientEmail})` : recipientEmail;
 
-      if (dbSubs && dbSubs.length > 0) {
-        subscriptions = dbSubs;
+        let parsedSub: any = null;
+        if (clientFound.push_subscription) {
+          try {
+            parsedSub = typeof clientFound.push_subscription === 'string' ? JSON.parse(clientFound.push_subscription) : clientFound.push_subscription;
+          } catch (e) {
+            parsedSub = null;
+          }
+        }
+
+        if (parsedSub && parsedSub.endpoint && parsedSub.keys?.p256dh && parsedSub.keys?.auth) {
+          targetsToSend.push({
+            subObj: parsedSub,
+            recipientName: odbiorcaTekst,
+            recipientId: clientFound.id,
+            clientRowId: clientFound.id,
+          });
+        } else {
+          logEntries.push({
+            odbiorca: odbiorcaTekst,
+            odbiorca_id: clientFound.id,
+            tytul: tytulPowiadomienia,
+            tresc: trescPowiadomienia,
+            typ: typPowiadomienia,
+            status: 'Brak aktywnej subskrypcji (Klubowicz nie aktywował Push)',
+            created_at: new Date().toISOString(),
+          });
+        }
       }
     }
 
-    const tytulPowiadomienia = payload?.title || 'FORMA MARZEŃ';
-    const trescPowiadomienia = payload?.body || '';
-    const typPowiadomienia = payload?.typ || payload?.type || 'PUSH';
-
-    if (!subscriptions || !Array.isArray(subscriptions) || subscriptions.length === 0) {
-      // Zapis do historia_powiadomien informacji o braku zarejestrowanego urządzenia
-      await supabase.from('historia_powiadomien').insert([
-        {
-          odbiorca: resolvedRecipientName,
-          odbiorca_id: clientDbId,
-          tytul: tytulPowiadomienia,
-          tresc: trescPowiadomienia,
-          typ: typPowiadomienia,
-          status: 'Brak aktywnej subskrypcji urządzenia (Klubowicz nie aktywował Push)',
-        },
-      ]);
-
+    // Jeśli brak subskrypcji do wysłania, zapisujemy logi i kończymy
+    if (targetsToSend.length === 0) {
+      if (logEntries.length > 0) {
+        await supabase.from('historia_powiadomien').insert(logEntries);
+      }
       return NextResponse.json({
         success: false,
-        warning: 'Powiadomienie zapisano w bazie, ale klubowicz nie ma jeszcze zarejestrowanego urządzenia w push_subscriptions.',
-        recipient: resolvedRecipientName,
+        warning: 'Brak zarejestrowanych urządzeń odbiorców.',
+        logged: logEntries.length,
       });
     }
 
     const notificationPayload = JSON.stringify({
       title: tytulPowiadomienia,
       body: trescPowiadomienia,
-      url: payload?.url || '/baza-wiedzy',
-      icon: payload?.icon || '/logo.png',
-      badge: payload?.badge || '/logo.png',
+      url: docelowyUrl,
+      icon: '/icon-192x192.png',
+      badge: '/icon-192x192.png',
       data: {
-        url: payload?.url || '/baza-wiedzy',
+        url: docelowyUrl,
         dateOfArrival: Date.now(),
       },
     });
@@ -129,95 +224,45 @@ export async function POST(request: Request) {
       },
     };
 
-    const logEntries: Array<{
-      odbiorca: string;
-      odbiorca_id: number | null;
-      tytul: string;
-      tresc: string;
-      typ: string;
-      status: string;
-    }> = [];
-
     const results = await Promise.allSettled(
-      subscriptions.map(async (rawSub: any) => {
-        let subObj = rawSub;
-        let recipientName = rawSub?.odbiorca || rawSub?.imie_nazwisko || resolvedRecipientName;
-        let recipientIdRaw = rawSub?.odbiorca_id || rawSub?.klient_id || clientDbId || payload?.odbiorca_id || null;
-
-        let recipientId: number | null = null;
-        if (recipientIdRaw !== null && recipientIdRaw !== undefined && !isNaN(Number(recipientIdRaw))) {
-          recipientId = Number(recipientIdRaw);
-        }
-
-        if (typeof subObj === 'string') {
-          try {
-            subObj = JSON.parse(subObj);
-          } catch (e) {
-            console.error('Nieprawidłowy ciąg subskrypcji JSON:', subObj);
-            logEntries.push({
-              odbiorca: recipientName,
-              odbiorca_id: recipientId,
-              tytul: tytulPowiadomienia,
-              tresc: trescPowiadomienia,
-              typ: typPowiadomienia,
-              status: 'Błąd: Niepoprawny format JSON',
-            });
-            throw new Error('Niepoprawny format subskrypcji');
-          }
-        }
-
-        if (subObj?.subscription) {
-          subObj = typeof subObj.subscription === 'string' ? JSON.parse(subObj.subscription) : subObj.subscription;
-        }
-
-        if (!subObj?.endpoint || !subObj?.keys?.p256dh || !subObj?.keys?.auth) {
-          console.error('Niekompletny obiekt subskrypcji push:', subObj);
-          logEntries.push({
-            odbiorca: recipientName,
-            odbiorca_id: recipientId,
-            tytul: tytulPowiadomienia,
-            tresc: trescPowiadomienia,
-            typ: typPowiadomienia,
-            status: 'Błąd: Brak kluczy push',
-          });
-          throw new Error('Brak wymaganych kluczy subskrypcji');
-        }
-
+      targetsToSend.map(async (target) => {
         try {
-          const response = await webpush.sendNotification(subObj, notificationPayload, pushOptions);
+          const response = await webpush.sendNotification(target.subObj, notificationPayload, pushOptions);
 
           logEntries.push({
-            odbiorca: recipientName,
-            odbiorca_id: recipientId,
+            odbiorca: target.recipientName,
+            odbiorca_id: target.recipientId,
             tytul: tytulPowiadomienia,
             tresc: trescPowiadomienia,
             typ: typPowiadomienia,
             status: 'Wysłano',
+            created_at: new Date().toISOString(),
           });
 
           return {
             success: true,
             statusCode: response.statusCode,
-            endpoint: subObj.endpoint,
+            recipient: target.recipientName,
           };
         } catch (err: any) {
-          console.error('Błąd bramki push (FCM/APNs):', {
-            message: err.message,
-            statusCode: err.statusCode,
-            body: err.body,
-            endpoint: subObj.endpoint,
-          });
+          console.error(`Błąd bramki push dla ${target.recipientName}:`, err.message);
 
           const isExpired = err.statusCode === 404 || err.statusCode === 410;
           const statusDesc = isExpired ? 'Brak aktywnej subskrypcji (Wygasła)' : `Błąd wysyłki: ${err.statusCode || err.message}`;
 
+          // Czyszczenie wygasłej subskrypcji w bazie
+          if (isExpired && target.clientRowId) {
+            await supabase.from('klienci').update({ push_subscription: null }).eq('id', target.clientRowId);
+          }
+
           logEntries.push({
-            odbiorca: recipientName,
-            odbiorca_id: recipientId,
+            odbiorca: target.recipientName,
+            odbiorca_id: target.recipientId,
             tytul: tytulPowiadomienia,
             tresc: trescPowiadomienia,
             typ: typPowiadomienia,
             status: statusDesc,
+            created_at: new Date().toISOString(),
           });
 
           return Promise.reject({
@@ -225,20 +270,13 @@ export async function POST(request: Request) {
             statusCode: err.statusCode,
             isExpired,
             message: err.message,
-            endpoint: subObj.endpoint,
           });
         }
       })
     );
 
     if (logEntries.length > 0) {
-      const { error: logError } = await supabase
-        .from('historia_powiadomien')
-        .insert(logEntries);
-
-      if (logError) {
-        console.error('Błąd zapisu do historia_powiadomien:', logError);
-      }
+      await supabase.from('historia_powiadomien').insert(logEntries);
     }
 
     const delivered = results.filter((r) => r.status === 'fulfilled').length;
@@ -248,7 +286,7 @@ export async function POST(request: Request) {
       success: true,
       delivered,
       failed,
-      total: subscriptions.length,
+      total: targetsToSend.length,
     });
   } catch (error: any) {
     console.error('Błąd krytyczny endpointu /api/push/send:', error);
