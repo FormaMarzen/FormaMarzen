@@ -82,7 +82,7 @@ export async function POST(request: Request) {
       if (validNumericIds.length > 0) {
         const { data: clientsData, error: clientsErr } = await supabase
           .from('klienci')
-          .select('id, push_subscription, "Imię", "Nazwisko", firstName, lastName, "E-mail", email')
+          .select('id, push_subscription, "Imię", "Nazwisko", "E-mail", email')
           .in('id', validNumericIds);
 
         if (clientsErr) {
@@ -91,8 +91,8 @@ export async function POST(request: Request) {
 
         if (!clientsErr && clientsData && clientsData.length > 0) {
           for (const c of clientsData) {
-            const imie = c.Imię || c.firstName || '';
-            const nazwisko = c.Nazwisko || c.lastName || '';
+            const imie = c.Imię || '';
+            const nazwisko = c.Nazwisko || '';
             const mail = (c['E-mail'] || c.email || '').toLowerCase().trim();
             const pelnaNazwa = `${imie} ${nazwisko}`.trim();
             const odbiorcaTekst = pelnaNazwa ? (mail ? `${pelnaNazwa} (${mail})` : pelnaNazwa) : (mail || `Klubowicz #${c.id}`);
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
               }
             }
 
-            // Sprawdzenie również w tabeli pomocniczej push_subscriptions, jeśli istnieje
+            // Sprawdzenie w tabeli pomocniczej push_subscriptions
             try {
               const { data: dbSubs } = await supabase
                 .from('push_subscriptions')
@@ -123,22 +123,17 @@ export async function POST(request: Request) {
                   if (sObj) userSubs.push(sObj);
                 }
               }
-            } catch (e) {
-              // Tabela push_subscriptions może nie mieć relacji po ID klienta, ignorujemy błąd cicho
-            }
+            } catch (e) {}
 
             let addedAnyDevice = false;
 
             for (const subItem of userSubs) {
               const cleanSub = subItem?.subscription ? (typeof subItem.subscription === 'string' ? JSON.parse(subItem.subscription) : subItem.subscription) : subItem;
               
-              if (!cleanSub?.endpoint) {
-                console.warn(`[PUSH WARN] Subskrypcja dla klienta ${c.id} nie zawiera endpointu.`);
-                continue;
-              }
+              if (!cleanSub?.endpoint) continue;
 
               if (!cleanSub?.keys?.p256dh || !cleanSub?.keys?.auth) {
-                console.warn(`[PUSH WARN] Subskrypcja dla klienta ${c.id} posiada endpoint, ale brakuje kluczy szyfrowania keys.p256dh / keys.auth. Endpoint:`, cleanSub.endpoint);
+                console.warn(`[PUSH WARN] Subskrypcja dla klienta ${c.id} nie posiada kluczy P256DH/Auth.`);
                 continue;
               }
 
@@ -212,8 +207,8 @@ export async function POST(request: Request) {
         .maybeSingle();
 
       if (clientFound) {
-        const imie = clientFound.Imię || clientFound.firstName || '';
-        const nazwisko = clientFound.Nazwisko || clientFound.lastName || '';
+        const imie = clientFound.Imię || '';
+        const nazwisko = clientFound.Nazwisko || '';
         const pelnaNazwa = `${imie} ${nazwisko}`.trim();
         const odbiorcaTekst = pelnaNazwa ? `${pelnaNazwa} (${recipientEmail})` : recipientEmail;
 
@@ -250,7 +245,7 @@ export async function POST(request: Request) {
     }
 
     if (targetsToSend.length === 0) {
-      console.warn('[PUSH WARN] Nie znaleziono żadnego aktywnego urządzenia do wysyłki (po weryfikacji kluczy).');
+      console.warn('[PUSH WARN] Nie znaleziono żadnego aktywnego urządzenia do wysyłki.');
       if (logEntries.length > 0) {
         await supabase.from('historia_powiadomien').insert(logEntries);
       }
@@ -321,7 +316,7 @@ export async function POST(request: Request) {
             created_at: new Date().toISOString(),
           });
 
-            return Promise.reject({
+          return Promise.reject({
             success: false,
             statusCode: err.statusCode,
             isExpired,
