@@ -50,7 +50,7 @@ export default function DashboardPage() {
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
   const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
   
-  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
+  // SYSTEM POWIADOMIEŃ TOAST
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -58,7 +58,7 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // POMOCNIK GENEROWANIA WSZYSTKICH MOŻLIWYCH WARIANTÓW CLASS_KEY (DD/MM, D/M, YYYY-MM-DD)
+  // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY
   const getKeysVariants = (classId: string | number, dateStr: string) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
@@ -72,7 +72,6 @@ export default function DashboardPage() {
       const now = new Date();
       let yr = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
       
-      // Obsługa przełomu roku
       if (m < (now.getMonth() + 1) || (m === (now.getMonth() + 1) && d < now.getDate())) {
         yr = now.getFullYear() + 1;
       }
@@ -100,7 +99,7 @@ export default function DashboardPage() {
     return Array.from(keys);
   };
 
-  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH
+  // UNIWERSALNA FUNKCJA WYSYŁANIA POWIADOMIEŃ PUSH I ZAPISU DO HISTORII SUPABASE
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
@@ -126,20 +125,25 @@ export default function DashboardPage() {
         .filter(Boolean);
 
       if (subscriptions.length > 0) {
-        await fetch('/api/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscriptions,
-            payload: {
-              title: payload.title || 'FORMA MARZEŃ',
-              body: payload.body || '',
-              url: payload.url || '/'
-            }
-          })
-        });
+        try {
+          await fetch('/api/push/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscriptions,
+              payload: {
+                title: payload.title || 'FORMA MARZEŃ',
+                body: payload.body || '',
+                url: payload.url || '/'
+              }
+            })
+          });
+        } catch (fetchErr) {
+          console.warn('Błąd wysyłania push do API:', fetchErr);
+        }
       }
 
+      // Rejestracja w tabeli historia_powiadomien
       const historiaEntries = clients.map((c: any) => {
         const imie = c.Imię || c.firstName || '';
         const nazwisko = c.Nazwisko || c.lastName || '';
@@ -153,7 +157,8 @@ export default function DashboardPage() {
           tytul: payload.title,
           tresc: payload.body,
           typ: 'PUSH',
-          status: c.push_subscription ? 'Wysłano' : 'Brak subskrypcji (Zapisano)'
+          status: c.push_subscription ? 'Wysłano' : 'Brak subskrypcji (Zapisano)',
+          created_at: new Date().toISOString()
         };
       });
 
@@ -167,7 +172,7 @@ export default function DashboardPage() {
     }
   };
   
-  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH W SUPABASE
+  // REJESTRACJA I ZAPIS SUBSKRYPCJI PUSH
   const subscribeToPushNotifications = async (klientId: number) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       return;
@@ -406,7 +411,7 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ (PEŁNA OBSŁUGA ROKU 2026 I 2027)
+  // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
     let d = 1, m = 1;
@@ -441,13 +446,11 @@ export default function DashboardPage() {
     const displayDateStr = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
     const isoDateStr = `${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-    // 1. Sprawdzamy zajęcia jednorazowe przypisane dokładnie do tej daty
     const jednorazClass = jednorazoweZajecia.find(j => 
       String(j.id) === String(classId) && 
       (j.fullDateStr === isoDateStr || j.displayDate === displayDateStr || j.displayDate === dateStr)
     );
 
-    // 2. Sprawdzamy szablon grafiku stałego TYLKO jeśli ma aktywny ten dzień tygodnia
     const stdClass = zapisaneZajecia.find(z => 
       String(z.id) === String(classId) && z.days && z.days[dayKey] === true
     );
@@ -825,7 +828,7 @@ export default function DashboardPage() {
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
-                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób i zwrócono wejścia.`,
+                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób (w tym krzesełko) i zwrócono wejścia.`,
                 rule_applied: 'min_participants_auto_cancel',
                 payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
               }]);
@@ -1104,6 +1107,7 @@ export default function DashboardPage() {
       label: `${rabatProcent}% (Ciągłość: ${liczbaKarnetow} ${liczbaKarnetow === 1 ? 'karnet' : 'karnety'})`
     };
   };
+
   const getEffectiveDiscount = (client: any) => {
     if (!client) return { percent: 0, label: '', type: 'none' };
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
@@ -1182,10 +1186,10 @@ export default function DashboardPage() {
 
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"];
 
-  // REF DLA OCHRONY PRZED NIESKOŃCZONĄ PĘTLĄ ZAPYTANIA
+  // REF DLA OCHRONY PRZED PĘTLĄ ZAPYTANIA
   const isFetchingRef = useRef(false);
 
-  // ZOPTYMALIZOWANE POBIERANIE DANYCH (-2 TYGODNIE DO +1 ROK)
+  // RÓWNOLEGŁE POBIERANIE DANYCH
   const loadData = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -1199,15 +1203,39 @@ export default function DashboardPage() {
       oneYearForward.setDate(oneYearForward.getDate() + 365);
       const oneYearForwardStr = `${oneYearForward.getFullYear()}-${String(oneYearForward.getMonth() + 1).padStart(2, '0')}-${String(oneYearForward.getDate()).padStart(2, '0')}`;
 
-      let parsedRules = { ...bookingRules };
-      const { data: rulesData } = await supabase
-        .from('club_booking_rules')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const [
+        rulesRes,
+        sessionRes,
+        trenerzyData,
+        tData,
+        karnetyDefData,
+        klienciData,
+        ogloszeniaData,
+        szablonyData,
+        rawJednorazoweRes,
+        nadpisaniaData,
+        zapisyData,
+        rodzajeData,
+        rawWydarzeniaRes
+      ] = await Promise.all([
+        supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        supabase.auth.getSession(),
+        fetchAllFromSupabase('trenerzy'),
+        fetchAllFromSupabase('transakcje', 'created_at', false, 5),
+        fetchAllFromSupabase('karnety', 'id', true, 2),
+        fetchAllFromSupabase('klienci', 'id', true, 10),
+        fetchAllFromSupabase('ogloszenia', 'id', false, 2),
+        fetchAllFromSupabase('grafik_zajec', 'id', true, 2),
+        supabase.from('zajecia_jednorazowe').select('*').gte('full_date_str', twoWeeksAgoStr).lte('full_date_str', oneYearForwardStr).order('full_date_str', { ascending: true }),
+        fetchAllFromSupabase('nadpisania_zajec', 'id', false, 5),
+        fetchAllFromSupabase('zapisy_zajec', 'id', false, 10),
+        fetchAllFromSupabase('rodzaje_zajec'),
+        supabase.from('wydarzenia_kilkudniowe').select('*').gte('date_to', twoWeeksAgoStr).lte('date_from', oneYearForwardStr).order('date_from', { ascending: true })
+      ]);
 
-      if (rulesData) {
+      let parsedRules = { ...bookingRules };
+      if (rulesRes.data) {
+        const rulesData = rulesRes.data;
         parsedRules = {
           cancel_deadline_minutes: rulesData.cancel_deadline_minutes ?? 90,
           booking_cutoff_minutes: rulesData.booking_cutoff_minutes ?? null,
@@ -1228,10 +1256,7 @@ export default function DashboardPage() {
         setDlugoscBlokady(String(rulesData.absence_ban_days || 3));
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const userEmail = session?.user?.email;
-      
-      const trenerzyData = await fetchAllFromSupabase('trenerzy');
+      const userEmail = sessionRes.data?.session?.user?.email;
       if (trenerzyData) setZespolTrenerzy(trenerzyData);
       
       let determinedRole: 'admin' | 'trener' | 'klubowicz' = 'klubowicz';
@@ -1250,12 +1275,8 @@ export default function DashboardPage() {
         }
       }
       
-      const tData = await fetchAllFromSupabase('transakcje', 'created_at', false, 5);
-      if (tData) {
-        setWszystkieTransakcje(tData);
-      }
+      if (tData) setWszystkieTransakcje(tData);
 
-      const karnetyDefData = await fetchAllFromSupabase('karnety', 'id', true, 2);
       let ustrukturyzowaneKarnetyDef: any[] = [];
       if (karnetyDefData) {
         ustrukturyzowaneKarnetyDef = karnetyDefData.map((k: any) => {
@@ -1272,9 +1293,7 @@ export default function DashboardPage() {
         setDostepneKarnety(ustrukturyzowaneKarnetyDef);
       }
 
-      const klienciData = await fetchAllFromSupabase('klienci', 'id', true, 10);
       let matchedCurrentClient: any = null;
-
       if (klienciData) {
         const enriched = klienciData.map((c: any) => {
           let parsedKarnety = [];
@@ -1355,8 +1374,7 @@ export default function DashboardPage() {
         }
       }
 
-      // 2. Ogłoszenia spersonalizowane w loadData
-      const ogloszeniaData = await fetchAllFromSupabase('ogloszenia', 'id', false, 2);
+      // Ogłoszenia
       if (ogloszeniaData) {
         const activeUserId = matchedCurrentClient ? String(matchedCurrentClient.id) : null;
         const activeUserEmail = (userEmail || '').toLowerCase().trim();
@@ -1419,8 +1437,7 @@ export default function DashboardPage() {
         setOgloszeniaList(parsedOgloszenia);
       }
 
-      // 3. Grafik stały (szablony)
-      const szablonyData = await fetchAllFromSupabase('grafik_zajec', 'id', true, 2);
+      // Grafik stały
       let mappedSzablony: any[] = [];
       if (szablonyData) {
         mappedSzablony = szablonyData.map((s: any) => ({
@@ -1437,20 +1454,14 @@ export default function DashboardPage() {
         setZapisaneZajecia(mappedSzablony);
       }
 
-     // 4. Zajęcia jednorazowe z unikalnym prefiksem ID (zapobiega kolizji z grafikiem stałym)
-      const { data: rawJednorazowe } = await supabase
-        .from('zajecia_jednorazowe')
-        .select('*')
-        .gte('full_date_str', twoWeeksAgoStr)
-        .lte('full_date_str', oneYearForwardStr)
-        .order('full_date_str', { ascending: true });
-
+      // Zajęcia jednorazowe
       let mappedJednorazowe: any[] = [];
+      const rawJednorazowe = rawJednorazoweRes.data;
       if (rawJednorazowe && rawJednorazowe.length > 0) {
         mappedJednorazowe = rawJednorazowe.map((j: any) => ({
           ...j,
-          rawDbId: j.id, // oryginalne ID w tabeli zajecia_jednorazowe
-          id: `j_${j.id}`, // unikalny identyfikator w aplikacji
+          rawDbId: j.id,
+          id: `j_${j.id}`,
           title: j.title || j.nazwa,
           start: j.start_time || j.start,
           end: j.end_time || j.end,
@@ -1484,8 +1495,7 @@ export default function DashboardPage() {
       }
       setJednorazoweZajecia(mappedJednorazowe);
 
-      // 5. Nadpisania zajęć (odwołania, usunięcia, zmiany godzin)
-      const nadpisaniaData = await fetchAllFromSupabase('nadpisania_zajec', 'id', false, 5);
+      // Nadpisania zajęć
       const nadpisaniaMap: { [key: string]: any } = {};
       if (nadpisaniaData) {
         nadpisaniaData.forEach((n: any) => {
@@ -1507,8 +1517,7 @@ export default function DashboardPage() {
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
-      // 6. Zapisy na zajęcia (główna lista + krzesełko)
-      const zapisyData = await fetchAllFromSupabase('zapisy_zajec', 'id', false, 10);
+      // Zapisy na zajęcia (główna lista + krzesełko)
       const groupedZapisy: { [key: string]: any[] } = {};
       if (zapisyData) {
         const sortedZapisy = [...zapisyData].sort((a: any, b: any) => {
@@ -1544,7 +1553,7 @@ export default function DashboardPage() {
         setZapisyNaZajecia(groupedZapisy);
       }
 
-      // 7. Generowanie bieżącego tygodnia grafiku i weryfikacja automatyzacji
+      // Bieżący tydzień grafiku i weryfikacja automatyzacji
       const currentMon = getMonday(selectedWeekDate);
       const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
         const dayDate = new Date(currentMon);
@@ -1579,8 +1588,7 @@ export default function DashboardPage() {
         activeDashboardDays
       );
 
-      // 8. Rodzaje zajęć
-      const rodzajeData = await fetchAllFromSupabase('rodzaje_zajec');
+      // Rodzaje zajęć
       if (rodzajeData) {
         const parsedRodzaje = rodzajeData.map((item: any) => {
           let parsedUstawienia: any = {};
@@ -1599,14 +1607,8 @@ export default function DashboardPage() {
         setRodzajeZajec(parsedRodzaje);
       }
       
-      // 9. Wydarzenia kilkudniowe zoptymalizowane pod okno czasowe
-      const { data: rawWydarzenia } = await supabase
-        .from('wydarzenia_kilkudniowe')
-        .select('*')
-        .gte('date_to', twoWeeksAgoStr)
-        .lte('date_from', oneYearForwardStr)
-        .order('date_from', { ascending: true });
-
+      // Wydarzenia kilkudniowe
+      const rawWydarzenia = rawWydarzeniaRes.data;
       if (rawWydarzenia && rawWydarzenia.length > 0) {
         setWydarzeniaKilkudniowe(rawWydarzenia.map((w: any) => ({ 
           id: w.id, 
@@ -1627,7 +1629,7 @@ export default function DashboardPage() {
       }
 
     } catch (err) {
-      console.error("Wystąpił błąd podczas ładowania danych Dashboardu:", err);
+      console.error("Błąd podczas ładowania danych Dashboardu:", err);
     } finally {
       isFetchingRef.current = false;
     }
@@ -1651,7 +1653,6 @@ export default function DashboardPage() {
       window.removeEventListener('storage', loadData);
     };
   }, [selectedWeekDate]);
-
   // OBSŁUGA HISTORII ZAJĘĆ (MODAL HISTORII)
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
@@ -1854,7 +1855,7 @@ export default function DashboardPage() {
     loadData();
   };
 
-// ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (BEZAWARYJNE DELETE + INSERT ZAMIAST UPSERT)
+  // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ (POWIADOMIENIE PUSH DLA GRUPY GŁÓWNEJ I KRZESEŁKA)
   const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const keysToDelete = getKeysVariants(item.id, displayDate);
@@ -1862,11 +1863,9 @@ export default function DashboardPage() {
 
     setActiveMenuClassId(null);
 
-    // 1. Zawsze najpierw czyścimy stare rekordy nadpisań z bazy
     await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
 
     if (nextOdwołaneState) {
-      // Przypadek: ODWOŁANIE ZAJĘĆ
       const zapisani = zapisyNaZajecia[classKey] || [];
       const participantIds: number[] = [];
 
@@ -1895,7 +1894,7 @@ export default function DashboardPage() {
             klient_id: u.id,
             typ_operacji: 'zajecia_wypis',
             class_key: classKey,
-            opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika i zwrócono 1 wejście.`
+            opis: `Odwołano zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
           }]);
         }
       }
@@ -1910,7 +1909,6 @@ export default function DashboardPage() {
 
       await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
 
-      // Zapisujemy nowe nadpisanie ze statusem odwołane
       const rowsToInsert = keysToDelete.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
@@ -1922,7 +1920,6 @@ export default function DashboardPage() {
       }));
       await supabase.from('nadpisania_zajec').insert(rowsToInsert);
     } else {
-      // Przypadek: PRZYWRÓCENIE ZAJĘĆ
       if (item.isUsunięte) {
         const rowsToInsert = keysToDelete.map(vKey => ({
           class_key: vKey,
@@ -1937,7 +1934,6 @@ export default function DashboardPage() {
       }
     }
 
-    // Natychmiastowa aktualizacja stanu lokalnego w pamięci
     setNadpisaneZajeciaDni(prev => {
       const updated = { ...prev };
       keysToDelete.forEach(k => {
@@ -1960,7 +1956,7 @@ export default function DashboardPage() {
     showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
   };
 
- // USUWANIE I PRZYWRACANIE ZAJĘĆ (BEZAWARYJNE ZARZĄDZANIE DLA JEDNORAZOWYCH I SZABLONÓW)
+  // USUWANIE I PRZYWRACANIE ZAJĘĆ (POWIADOMIENIE PUSH DLA GRUPY GŁÓWNEJ I KRZESEŁKA)
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const keysToDelete = getKeysVariants(item.id, displayDate);
@@ -1968,7 +1964,6 @@ export default function DashboardPage() {
 
     setActiveMenuClassId(null);
 
-    // 1. Obsługa zwrotu wejść i powiadomień klubowiczów
     if (nextUsunięteState) {
       const zapisani = zapisyNaZajecia[classKey] || [];
       const participantIds: number[] = [];
@@ -1998,7 +1993,7 @@ export default function DashboardPage() {
             klient_id: u.id,
             typ_operacji: 'zajecia_wypis',
             class_key: classKey,
-            opis: `Usunięto zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika i zwrócono 1 wejście.`
+            opis: `Usunięto zajęcia "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
           }]);
         }
       }
@@ -2014,14 +2009,11 @@ export default function DashboardPage() {
       await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
     }
 
-    // 2. Obsługa usuwania w bazie (zajęcia jednorazowe vs szablon stały)
     if (item.isJednorazowe) {
-      // Dla treningu jednorazowego/zduplikowanego: usuwamy bezpośrednio z tabeli zajecia_jednorazowe
       const rawDbId = item.rawDbId || (typeof item.id === 'string' && item.id.startsWith('j_') ? item.id.replace('j_', '') : item.id);
       await supabase.from('zajecia_jednorazowe').delete().eq('id', rawDbId);
       await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
     } else {
-      // Dla szablonu z grafiku stałego: zapisujemy regułę ukrywającą w nadpisania_zajec
       await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
 
       if (nextUsunięteState) {
@@ -2038,7 +2030,6 @@ export default function DashboardPage() {
       }
     }
 
-    // 3. Natychmiastowa aktualizacja stanu lokalnego
     setNadpisaneZajeciaDni(prev => {
       const updated = { ...prev };
       keysToDelete.forEach(k => {
@@ -2150,6 +2141,7 @@ export default function DashboardPage() {
       }]);
     }
   };
+
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -2805,7 +2797,7 @@ export default function DashboardPage() {
     showToast("Saldo portfela zostało zaktualizowane.");
   };
 
-  // PRECYZYJNE ZLICZANIE WSZYSTKICH AKTYWNYCH ZAPISÓW W PRZÓD (NA CAŁY ROK 2026 I 2027)
+  // PRECYZYJNE ZLICZANIE WSZYSTKICH AKTYWNYCH ZAPISÓW W PRZÓD
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -2867,6 +2859,7 @@ export default function DashboardPage() {
     }
   };
 
+  // USZCZELNIONY ZAPIS KLUBOWICZA NA ZAJĘCIA (BEZWZGLĘDNE ZAPOBIEGANIE OVERBOOKINGOWI)
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -2989,8 +2982,16 @@ export default function DashboardPage() {
     }
 
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const aktualni = zapisyNaZajecia[classKey] || [];
-    if (aktualni.some(k => String(k.id) === String(currentUser.id))) { 
+    const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+
+    // KRYTYCZNA WALIDACJA LIVE W BAZIE (BRAK MOŻLIWOŚCI ZAPISU 5. OSOBY PRZY LIMICIE 4)
+    const { data: liveSignupsDb } = await supabase
+      .from('zapisy_zajec')
+      .select('id, status, klient_id')
+      .in('class_key', allVariantKeys);
+
+    const actualDbSignups = liveSignupsDb || [];
+    if (actualDbSignups.some(k => String(k.klient_id) === String(currentUser.id))) { 
       showToast("Jesteś już zapisany na te zajęcia!", 'info'); 
       return; 
     }
@@ -3137,8 +3138,8 @@ export default function DashboardPage() {
     }
 
     const limitZajec = selectedClass.limit || 12;
-    const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
-    const isWaitlistTarget = glownaCount >= limitZajec;
+    const liveGlownaCount = actualDbSignups.filter((u: any) => u.status === 'zapisany').length;
+    const isWaitlistTarget = liveGlownaCount >= limitZajec;
 
     if (isWaitlistTarget) {
       setSelectedWaitlistCutoff(30);
@@ -3170,7 +3171,7 @@ export default function DashboardPage() {
       }
     }
 
-    const oblozenieStr = `${glownaCount + 1}/${limitZajec}`;
+    const oblozenieStr = `${liveGlownaCount + 1}/${limitZajec}`;
     
     await supabase.from('transakcje').insert([{ 
       klient_id: currentUser.id, 
@@ -3244,6 +3245,7 @@ export default function DashboardPage() {
     loadData();
     setSelectedClass(null);
   };
+
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
@@ -3265,6 +3267,7 @@ export default function DashboardPage() {
     await loadData();
   };
 
+  // SAMODZIELNE WYPISANIE KLUBOWICZA Z ZAJĘĆ Z AUTOMATYCZNYM AWANSEM Z KRZESEŁKA I PUSH
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3358,6 +3361,7 @@ export default function DashboardPage() {
       pozostaliUczestnicy
     );
 
+    // AWANS Z LISTY REZERWOWEJ I WYSYŁKA PUSH
     if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
       const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
         const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
@@ -3404,7 +3408,7 @@ export default function DashboardPage() {
     await loadData();
     setSelectedClass(null);
   };
-
+  // WYPISANIE KLUBOWICZA Z LISTY AKTYWNYCH ZAPISÓW (PANEL GŁÓWNY)
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const now = new Date();
     const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
@@ -3503,6 +3507,7 @@ export default function DashboardPage() {
       pozostaliUczestnicy
     );
 
+    // AWANS Z LISTY REZERWOWEJ I POWIADOMIENIE PUSH
     if (!autoCancelled && listaGlownaPoWypisie.length < limitZajec && rezerwaPoWypisie.length > 0) {
       const kandydatDoAwansu = rezerwaPoWypisie.find((w: any) => {
         const cutoff = w.waitlist_cutoff_minutes !== undefined && w.waitlist_cutoff_minutes !== null ? Number(w.waitlist_cutoff_minutes) : 30;
@@ -3549,9 +3554,13 @@ export default function DashboardPage() {
     await loadData();
   };
 
+  // ZAPIS KLUBOWICZA DO ZAJĘĆ PRZEZ TRENERA / ADMINA Z WALIDACJĄ OVERBOOKINGU
   const handleZapiszKlientaDoZajec = async (klient: any) => {
     if (!selectedClass) return;
-    if (selectedClass.isOdwołane || selectedClass.isUsunięte) { showToast("Nie można zapisać na odwołane lub usunięte zajęcia!", 'error'); return; }
+    if (selectedClass.isOdwołane || selectedClass.isUsunięte) { 
+      showToast("Nie można zapisać na odwołane lub usunięte zajęcia!", 'error'); 
+      return; 
+    }
     
     const dzisiajData = todayStr;
     const clientBanDate = klient.blokadaDo || klient.blokada_do;
@@ -3615,9 +3624,21 @@ export default function DashboardPage() {
     } else {
       if (!confirm(`Czy na pewno chcesz zapisać klienta ${klient.firstName} ${klient.lastName} na zajęcia?`)) return;
     }
+
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const aktualni = zapisyNaZajecia[classKey] || [];
-    if (aktualni.some(k => k.id === klient.id)) { showToast("Ten klient jest już zapisany na te zajęcia!", 'info'); return; }
+    const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+
+    // WALIDACJA LIVE W BAZIE POD KĄTEM OVERBOOKINGU
+    const { data: liveDbSignups } = await supabase
+      .from('zapisy_zajec')
+      .select('id, status, klient_id')
+      .in('class_key', allVariantKeys);
+
+    const actualDbList = liveDbSignups || [];
+    if (actualDbList.some(k => String(k.klient_id) === String(klient.id))) { 
+      showToast("Ten klient jest już na liście tych zajęć!", 'info'); 
+      return; 
+    }
     
     let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
       ? bookingRules.max_daily_bookings
@@ -3634,6 +3655,7 @@ export default function DashboardPage() {
         if (typLimitu === 'Niestandardowy') dailyLimit = Math.min(dailyLimit, parseInt(iloscLimitu, 10) || Infinity);
       }
     }
+
     let userSignupsOnThisDate = 0;
     const countedDayKeys = new Set<string>();
     Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
@@ -3648,13 +3670,24 @@ export default function DashboardPage() {
         }
       }
     });
-    if (userSignupsOnThisDate >= dailyLimit) { showToast(`Nie można zapisać! Wykorzystano dzienny limit (${dailyLimit}).`, 'error'); return; }
+
+    if (userSignupsOnThisDate >= dailyLimit) { 
+      showToast(`Nie można zapisać! Wykorzystano dzienny limit (${dailyLimit}).`, 'error'); 
+      return; 
+    }
     
     const limitZajec = selectedClass.limit || 12;
-    const glownaCount = aktualni.filter((u: any) => u.status === 'zapisany').length;
-    const statusZpisu = glownaCount >= limitZajec ? 'krzesełko' : 'zapisany';
-    const { error } = await supabase.from('zapisy_zajec').insert([{ class_key: classKey, klient_id: klient.id, status: statusZpisu, waitlist_cutoff_minutes: statusZpisu === 'krzesełko' ? 30 : null, obecny: false }]);
-    if (error) { showToast(`Nie udało się zapisać: ${error.message}`, 'error'); return; }
+    const glownaLiveCount = actualDbList.filter((u: any) => u.status === 'zapisany').length;
+    const statusZpisu = glownaLiveCount >= limitZajec ? 'krzesełko' : 'zapisany';
+
+    const { error } = await supabase.from('zapisy_zajec').insert([
+      { class_key: classKey, klient_id: klient.id, status: statusZpisu, waitlist_cutoff_minutes: statusZpisu === 'krzesełko' ? 30 : null, obecny: false }
+    ]);
+    
+    if (error) { 
+      showToast(`Nie udało się zapisać: ${error.message}`, 'error'); 
+      return; 
+    }
 
     let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -3669,11 +3702,26 @@ export default function DashboardPage() {
       }
     }
 
-    const oblozenieStr = `${glownaCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
+    const oblozenieStr = `${glownaLiveCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
     const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
-    await supabase.from('transakcje').insert([{ klient_id: klient.id, typ_operacji: 'zajecia_zapis', class_key: classKey, opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` }]);
-    setIsSearchingClient(false); setSearchClientQuery(''); await loadData();
-    showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}!`);
+    
+    await supabase.from('transakcje').insert([{ 
+      klient_id: klient.id, 
+      typ_operacji: 'zajecia_zapis', 
+      class_key: classKey, 
+      opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}. Obłożenie: ${oblozenieStr}` 
+    }]);
+
+    await sendPushNotification(klient.id, {
+      title: `Zapisano na trening: ${selectedClass.title}`,
+      body: `Zostałeś zapisany na trening "${selectedClass.title}" (${selectedClass.displayDate} ${selectedClass.start}) - ${statusZpisu === 'krzesełko' ? 'Lista rezerwowa' : 'Lista główna'}.`,
+      url: '/'
+    });
+
+    setIsSearchingClient(false); 
+    setSearchClientQuery(''); 
+    await loadData();
+    showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}! (${statusZpisu === 'krzesełko' ? 'Krzesełko' : 'Lista główna'})`);
   };
 
   const handlePotwierdzWypisanie = async () => {
@@ -3806,7 +3854,9 @@ export default function DashboardPage() {
       
       await handleAutoWypiszPoZablokowaniu(clientToUnregister.id, clientToUnregister, powod, classKey);
     }
-    setClientToUnregister(null); setBlokadaZapisow(false); await loadData();
+    setClientToUnregister(null); 
+    setBlokadaZapisow(false); 
+    await loadData();
     showToast(autoCancelled 
       ? "Wypisano klienta. Trening został automatycznie odwołany ze względu na brak minimalnej liczby uczestników." 
       : "Wypisano klienta z zajęć."
@@ -3849,7 +3899,9 @@ export default function DashboardPage() {
       
       await handleAutoWypiszPoZablokowaniu(clientToMarkAbsent.id, clientToMarkAbsent, powod, classKey);
     }
-    setClientToMarkAbsent(null); setBlokadaZapisow(false); await loadData();
+    setClientToMarkAbsent(null); 
+    setBlokadaZapisow(false); 
+    await loadData();
     showToast(`Oznaczono nieobecność dla ${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName}.`);
   };
 
@@ -4017,7 +4069,7 @@ export default function DashboardPage() {
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       
-      {/* NOWOCZESNE POWIADOMIENIE TOAST */}
+      {/* SYSTEM POWIADOMIEŃ TOAST */}
       {toastMessage && (
         <div
           className={`fixed bottom-6 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-2xl border flex items-center gap-3 transition-all duration-300 animate-in fade-in slide-in-from-bottom-5 ${
@@ -4040,7 +4092,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* SEKCJA: OGŁOSZENIA SPERSONALIZOWANE Z SUPABASE */}
+      {/* SEKCJA: OGŁOSZENIA SPERSONALIZOWANE */}
       {['klubowicz', 'trener'].includes(appRole) && ogloszeniaList.length > 0 && (
         <div className="space-y-3">
           {ogloszeniaList.map((ogloszenie: any) => (
@@ -4332,6 +4384,7 @@ export default function DashboardPage() {
               )}
             </div>
           </section>
+
           {/* SEKCJA: TWOJE KARNETY */}
           {appRole === 'klubowicz' && (
             <section className="space-y-4">
@@ -4390,7 +4443,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* SEKCJA: GRAFIK ZAJĘĆ Z FUNKCJONALNOŚCIAMI GRAFIKU */}
+      {/* SEKCJA: GRAFIK ZAJĘĆ */}
       <section className="space-y-4">
         <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
           <div className="flex items-center gap-3">
@@ -4622,7 +4675,7 @@ export default function DashboardPage() {
                                       <button onClick={() => { openHistoryModal(item, col.date); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
                                         🕒 Historia zajęć
                                       </button>
-                                      <button onClick={() => { showToast("Moduł wysyłania wiadomości wkrótce dostępny.", 'info'); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                      <button onClick={() => { showToast("Wiadomości wysyłane są bezpośrednio z poziomu aplikacji.", 'info'); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
                                         ✉️ Wyślij wiadomość
                                       </button>
                                       <button onClick={() => { 
@@ -4742,53 +4795,51 @@ export default function DashboardPage() {
                           </div>
                         </div>
                       );
-                    })
+                    }))}
+                  </div>
+                </>
+              );
+
+              return (
+                <div
+                  key={idx}
+                  className={`space-y-2 p-2.5 rounded-2xl border transition-all ${
+                    isToday
+                      ? 'bg-white border-rose-500 shadow-md border-t-4 border-t-rose-600'
+                      : 'bg-sky-50/40 border-sky-100'
+                  }`}
+                >
+                  <div className={`text-xs font-black uppercase tracking-wider border-b pb-1.5 mb-1.5 text-center ${
+                    isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
+                  }`}>
+                    <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
+                    <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
+                  </div>
+                  
+                  {isOtherDay && hasAnyItems ? (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => toggleDay(col.isoDate)}
+                        className="w-full bg-slate-100 hover:bg-slate-200/80 text-slate-600 font-bold text-[10px] uppercase tracking-wider py-1.5 px-2 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-200"
+                      >
+                        {isPastDay
+                          ? (isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)
+                          : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
+                      </button>
+                      {isExpanded && (
+                        <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                          {renderEventsAndClasses()}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    renderEventsAndClasses()
                   )}
                 </div>
-              </>
-            );
-
-            return (
-              <div
-                key={idx}
-                className={`space-y-2 p-2.5 rounded-2xl border transition-all ${
-                  isToday
-                    ? 'bg-white border-rose-500 shadow-md border-t-4 border-t-rose-600'
-                    : 'bg-sky-50/40 border-sky-100'
-                }`}
-              >
-                <div className={`text-xs font-black uppercase tracking-wider border-b pb-1.5 mb-1.5 text-center ${
-                  isToday ? 'text-rose-950 border-rose-200' : 'text-sky-900 border-sky-200'
-                }`}>
-                  <span className={isToday ? 'text-rose-700' : ''}>{col.day}</span>{' '}
-                  <span className={`text-[10px] font-normal ${isToday ? 'text-rose-800' : 'text-slate-500'}`}>({col.date})</span>
-                </div>
-                
-                {isOtherDay && hasAnyItems ? (
-                  <div className="space-y-2">
-                    <button
-                      onClick={() => toggleDay(col.isoDate)}
-                      className="w-full bg-slate-100 hover:bg-slate-200/80 text-slate-600 font-bold text-[10px] uppercase tracking-wider py-1.5 px-2 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-200"
-                    >
-                      {isPastDay
-                        ? (isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)
-                        : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
-                    </button>
-                    {isExpanded && (
-                      <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {renderEventsAndClasses()}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  renderEventsAndClasses()
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
         </div>
       </section>
-
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
@@ -5192,6 +5243,7 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
+
               <div className="space-y-3">
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -5466,7 +5518,9 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              {['klubowicz', 'trener'].includes(appRole) ? (
+
+              {/* DOLNY PANEL AKCJI W MODALU ZAJĘĆ */}
+              {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
                   {!isUserSignedUp ? (
                     (() => {
@@ -5479,113 +5533,113 @@ export default function DashboardPage() {
                         );
                       }
                       const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
-                    const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
-                    
-                    if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
-                      return (
-                        <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
-                          <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
-                          <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.</div>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <button
-                        onClick={handleKlubowiczZapiszSie}
-                        className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
-                          isFull
-                            ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                        }`}
-                      >
-                        {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
-                      </button>
-                    );
-                  })()
-                ) : (
-                  <button
-                    onClick={handleKlubowiczWypiszSie}
-                    className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
-                  >
-                    ❌ Wypisz się z zajęć
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
-                {!isSearchingClient ? (
-                  <button
-                    onClick={() => setIsSearchingClient(true)}
-                    className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
-                      isFull
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
-                    }`}
-                  >
-                    <span>{isFull ? '🪑' : '👤+'}</span>
-                    {isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
-                  </button>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-sky-950 uppercase">
-                        {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
-                      </span>
-                      <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
-                    </div>
-                    <input
-                      type="text"
-                      autoFocus
-                      placeholder="Wpisz imię, nazwisko lub email..."
-                      value={searchClientQuery}
-                      onChange={(e) => setSearchClientQuery(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
-                    />
-                    {searchClientQuery.trim().length > 0 && (
-                      <div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
-                        {filteredSuggestions.length > 0 ? (
-                          filteredSuggestions.map((klient) => (
-                            <div
-                              key={klient.id}
-                              onClick={() => handleZapiszKlientaDoZajec(klient)}
-                              className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
-                            >
-                              <div>
-                                <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
-                                <span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
-                                {klient.blokadaDo && klient.blokadaDo >= todayStr && (
-                                  <span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
-                                )}
-                              </div>
-                              <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                                {isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
-                              </span>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="p-4 text-center text-xs text-slate-400">
-                            Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
+                      const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
+                      
+                      if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
+                        return (
+                          <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
+                            <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
+                            <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.</div>
                           </div>
-                        )}
+                        );
+                      }
+
+                      return (
+                        <button
+                          onClick={handleKlubowiczZapiszSie}
+                          className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                            isFull
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          }`}
+                        >
+                          {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
+                        </button>
+                      );
+                    })()
+                  ) : (
+                    <button
+                      onClick={handleKlubowiczWypiszSie}
+                      className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                    >
+                      ❌ Wypisz się z zajęć
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-white border border-sky-200 rounded-2xl p-4 space-y-3">
+                  {!isSearchingClient ? (
+                    <button
+                      onClick={() => setIsSearchingClient(true)}
+                      className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
+                        isFull
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                      }`}
+                    >
+                      <span>{isFull ? '🪑' : '👤+'}</span>
+                      {isFull ? 'ZAPISZ NA KRZESEŁKO' : 'ZAPISZ KOLEJNEGO KLIENTA'}
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs text-sky-950 uppercase">
+                          {isFull ? 'Wyszukaj klubowicza na krzesełko:' : 'Wyszukaj klubowicza z bazy:'}
+                        </span>
+                        <button onClick={() => setIsSearchingClient(false)} className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer">Anuluj</button>
                       </div>
-                    )}
-                  </div>
-                )}
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="Wpisz imię, nazwisko lub email..."
+                        value={searchClientQuery}
+                        onChange={(e) => setSearchClientQuery(e.target.value)}
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500"
+                      />
+                      {searchClientQuery.trim().length > 0 && (
+                        <div className="bg-white border border-sky-200 rounded-xl max-h-48 overflow-y-auto shadow-md divide-y divide-sky-50">
+                          {filteredSuggestions.length > 0 ? (
+                            filteredSuggestions.map((klient) => (
+                              <div
+                                key={klient.id}
+                                onClick={() => handleZapiszKlientaDoZajec(klient)}
+                                className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+                              >
+                                <div>
+                                  <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
+                                  <span className="text-slate-400 ml-2">({klient.email || 'brak emaila'})</span>
+                                  {klient.blokadaDo && klient.blokadaDo >= todayStr && (
+                                    <span className="block text-rose-600 font-bold text-[10px]">⚠️ Blokada do {klient.blokadaDo}</span>
+                                  )}
+                                </div>
+                                <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${isFull ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                  {isFull ? '🪑 Krzesełko +' : 'Wybierz +'}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="p-4 text-center text-xs text-slate-400">
+                              Brak wyników. Dodaj najpierw klienta w zakładce „Klienci”.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
+                <button
+                  onClick={() => setSelectedClass(null)}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Zamknij
+                </button>
               </div>
-            )}
-            <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
-              <button
-                onClick={() => setSelectedClass(null)}
-                className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
-              >
-                Zamknij
-              </button>
             </div>
           </div>
-        </div>
-      );
-    })()}
+        );
+      })()}
 
       {/* MODAL: WYBÓR CZASU WYPISU Z LISTY REZERWOWEJ */}
       {isWaitlistModalOpen && selectedClass && (
