@@ -3226,7 +3226,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     await loadData();
   };
 
-  // SAMODZIELNE WYPISANIE KLUBOWICZA Z ZAJĘĆ Z AUTOMATYCZNYM AWANSEM Z KRZESEŁKA I PUSH
+// SAMODZIELNE WYPISANIE KLUBOWICZA Z ZAJĘĆ Z AUTOMATYCZNYM AWANSEM Z KRZESEŁKA I PUSH
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3352,7 +3352,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
           payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
         }]);
 
-        await sendPushNotification(kandydatDoAwansu.id, {
+        await sendPushNotification([Number(kandydatDoAwansu.id)], {
           title: 'Zwolniło się miejsce!',
           body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start})!`,
           url: '/'
@@ -3367,6 +3367,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     await loadData();
     setSelectedClass(null);
   };
+
   // WYPISANIE KLUBOWICZA Z LISTY AKTYWNYCH ZAPISÓW (PANEL GŁÓWNY)
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const now = new Date();
@@ -3498,7 +3499,7 @@ const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
           payload: { klient_id: kandydatDoAwansu.id, class_key: classKey }
         }]);
 
-        await sendPushNotification(kandydatDoAwansu.id, {
+        await sendPushNotification([Number(kandydatDoAwansu.id)], {
           title: 'Zwolniło się miejsce!',
           body: `Awansowałeś z listy rezerwowej (krzesełko) na listę główną treningu ${title} (${startStr})!`,
           url: '/'
