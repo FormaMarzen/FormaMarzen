@@ -1,15 +1,11 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKeyOrAnon(supabaseAnonKey));
-
-function supabaseKeyOrAnon(key: string) {
-  return key;
-}
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function OdziezPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -37,6 +33,10 @@ export default function OdziezPage() {
   const [editImgFront, setEditImgFront] = useState('/koszulka-przod.png');
   const [editImgBack, setEditImgBack] = useState('/koszulka-tyl.png');
   const [editBlik, setEditBlik] = useState('453 229 407');
+
+  // Referencje do ukrytych inputów wgrywania plików
+  const frontFileInputRef = useRef<HTMLInputElement>(null);
+  const backFileInputRef = useRef<HTMLInputElement>(null);
 
   // Formularz ręcznego dodawania klubowicza przez Admina z wyszukiwarką
   const [isManualAddModalOpen, setIsManualAddModalOpen] = useState(false);
@@ -69,7 +69,7 @@ export default function OdziezPage() {
         return;
       }
 
-      const normalizedEmail = userEmail.toLowerCase().trim();
+      const cleanEmail = userEmail.toLowerCase().trim();
 
       // Pobranie listy klientów
       const { data: klienciList } = await supabase.from('klienci').select('*');
@@ -77,9 +77,28 @@ export default function OdziezPage() {
       setClientsDatabase(allClients);
 
       let klientData = allClients.find((c: any) => 
-        (c['E-mail'] || '').toLowerCase().trim() === normalizedEmail || 
-        (c.email || '').toLowerCase().trim() === normalizedEmail
+        (c['E-mail'] || '').toLowerCase().trim() === cleanEmail || 
+        (c.email || '').toLowerCase().trim() === cleanEmail
       );
+
+      if (!klientData) {
+        if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
+          klientData = allClients.find((c: any) => c.Nazwisko && c.Nazwisko.toLowerCase().includes('kłaput'));
+        }
+      }
+
+      // Weryfikacja roli administratora
+      const adminCheck = 
+        cleanEmail === 'maciejklaput@gmail.com' ||
+        cleanEmail === 'maciejklaput@icloud.com' ||
+        klientData?.rola === 'admin' || 
+        klientData?.isAdmin === true || 
+        cleanEmail.includes('admin') || 
+        cleanEmail.includes('biuro') ||
+        (klientData?.Nazwisko && klientData.Nazwisko.toLowerCase().includes('kłaput')) ||
+        klientData?.Imię === 'Maciej';
+
+      setIsAdmin(!!adminCheck);
 
       if (klientData) {
         const rawWalletStr = klientData.Portfel || klientData.portfel || '0.00 PLN';
@@ -90,22 +109,15 @@ export default function OdziezPage() {
         const fullName = `${klientData.Imię || klientData.firstName || ''} ${klientData.Nazwisko || klientData.lastName || ''}`.trim();
         const userObj = {
           ...klientData,
-          fullName: fullName || userEmail.split('@')[0],
+          fullName: fullName || cleanEmail.split('@')[0],
           rawWalletNum: parsedWalletNum,
           wallet: `${parsedWalletNum.toFixed(2)} PLN`
         };
         setCurrentUser(userObj);
 
-        // Weryfikacja uprawnień administratora
-        const adminCheck = klientData.rola === 'admin' || 
-          klientData.isAdmin === true || 
-          normalizedEmail.includes('admin') || 
-          normalizedEmail.includes('biuro') ||
-          klientData.Imię === 'Maciej';
-        setIsAdmin(!!adminCheck);
-
-        // Załaduj kampanię odzieżową
         await loadCampaignAndOrders(userObj, !!adminCheck);
+      } else {
+        await loadCampaignAndOrders({ id: 0, fullName: cleanEmail.split('@')[0], email: cleanEmail }, !!adminCheck);
       }
     } catch (err) {
       console.error("Błąd ładowania danych odzieży:", err);
@@ -115,7 +127,6 @@ export default function OdziezPage() {
   };
 
   const loadCampaignAndOrders = async (user: any, adminStatus: boolean) => {
-    // 1. Pobierz aktywną lub najnowszą kampanię
     const { data: campaigns } = await supabase
       .from('odziez_kampanie')
       .select('*')
@@ -130,16 +141,14 @@ export default function OdziezPage() {
 
     let currentCamp = campaigns[0];
 
-    // Ustawienie danych do formularza edycji
-    setEditTitle(currentCamp.tytul || '');
-    setEditDescription(currentCamp.opis || '');
+    setEditTitle(currentCamp.tytul || 'OFICJALNA KOSZULKA TRENINGOWA');
+    setEditDescription(currentCamp.opis || 'Pamiątkowa koszulka klubowa dedykowana na to wydarzenie');
     setEditPrice(String(currentCamp.cena || '110.00'));
     setEditMinOsob(String(currentCamp.min_osob || '5'));
-    setEditImgFront(currentCamp.zdjecie_przod || '');
-    setEditImgBack(currentCamp.zdjecie_tyl || '');
+    setEditImgFront(currentCamp.zdjecie_przod || '/koszulka-przod.png');
+    setEditImgBack(currentCamp.zdjecie_tyl || '/koszulka-tyl.png');
     setEditBlik(currentCamp.blik_numer || '453 229 407');
 
-    // 2. Pobierz zamówienia dla tej kampanii
     const { data: ordersData } = await supabase
       .from('odziez_zamowienia')
       .select('*')
@@ -149,8 +158,7 @@ export default function OdziezPage() {
     const campOrders = ordersData || [];
     setOrders(campOrders);
 
-    // 3. Sprawdzenie statusu wyświetlenia dropu (czerwony wykrzyknik dla klubowicza)
-    if (!adminStatus && user) {
+    if (!adminStatus && user && user.id) {
       const { data: viewData } = await supabase
         .from('odziez_wyswietlenia')
         .select('*')
@@ -167,11 +175,9 @@ export default function OdziezPage() {
       }
     }
 
-    // 4. Automatyczna weryfikacja terminów i reguł biznesowych
     await processCampaignAutomations(currentCamp, campOrders);
   };
 
-  // Automatyzacja limitów, odliczania 7 dni i zwrotów po 30 dniach
   const processCampaignAutomations = async (camp: any, orderList: any[]) => {
     const now = new Date().getTime();
     const paidOrders = orderList.filter(o => o.status_platnosci === 'oplacone');
@@ -222,7 +228,6 @@ export default function OdziezPage() {
     setCampaign(updatedCamp);
   };
 
-  // Logika 100% automatycznego zwrotu środków na wirtualne portfele
   const executeRefunds = async (campaignId: string, paidOrders: any[]) => {
     for (const order of paidOrders) {
       if (order.status_platnosci !== 'oplacone') continue;
@@ -265,7 +270,6 @@ export default function OdziezPage() {
     }
   };
 
-  // Timer odliczający czas
   useEffect(() => {
     if (!campaign) return;
 
@@ -296,7 +300,49 @@ export default function OdziezPage() {
     return () => clearInterval(interval);
   }, [campaign]);
 
-  // Filtrowana lista klubowiczów w wyszukiwarce ręcznego dodawania
+  // Funkcja kompresji i odczytu zdjęcia z urządzenia
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'front' | 'back') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_DIM = 900;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_DIM) {
+            height *= MAX_DIM / width;
+            width = MAX_DIM;
+          }
+        } else {
+          if (height > MAX_DIM) {
+            width *= MAX_DIM / height;
+            height = MAX_DIM;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.85);
+        if (target === 'front') {
+          setEditImgFront(compressedBase64);
+        } else {
+          setEditImgBack(compressedBase64);
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const filteredClientsForManual = useMemo(() => {
     const q = clientSearchQuery.toLowerCase().trim();
     if (!q) return clientsDatabase.slice(0, 8);
@@ -309,7 +355,6 @@ export default function OdziezPage() {
     }).slice(0, 10);
   }, [clientsDatabase, clientSearchQuery]);
 
-  // Statystyki zamówień
   const paidOrdersList = useMemo(() => orders.filter(o => o.status_platnosci === 'oplacone'), [orders]);
   const sizeBreakdown = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -319,12 +364,10 @@ export default function OdziezPage() {
     return counts;
   }, [paidOrdersList]);
 
-  // Liczba nieodczytanych przez Admina opłaconych zamówień
   const unreadAdminCount = useMemo(() => {
     return orders.filter(o => o.status_platnosci === 'oplacone' && !o.admin_odczytane).length;
   }, [orders]);
 
-  // Złożenie zamówienia przez Klubowicza
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !campaign) return;
@@ -444,7 +487,6 @@ export default function OdziezPage() {
     }
   };
 
-  // Ręczne dodanie klubowicza przez Administratora
   const handleManualAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!campaign || !selectedManualClient) {
@@ -478,7 +520,6 @@ export default function OdziezPage() {
 
       if (insertErr) throw insertErr;
 
-      // Jeśli wybrano płatność z portfela klienta, potrąć środki
       if (manualPaymentMethod === 'wallet' && manualPaymentStatus === 'oplacone') {
         const rawWallet = selectedManualClient.Portfel || selectedManualClient.portfel || '0.00 PLN';
         const isNeg = String(rawWallet).includes('-');
@@ -515,20 +556,19 @@ export default function OdziezPage() {
     }
   };
 
-  // Zapisanie / Utworzenie kampanii przez Administratora
   const handleSaveCampaignAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsProcessing(true);
 
     try {
       const payload = {
-        tytul: editTitle,
-        opis: editDescription,
+        tytul: editTitle.trim(),
+        opis: editDescription.trim(),
         cena: parseFloat(editPrice) || 110.00,
         min_osob: parseInt(editMinOsob, 10) || 5,
         zdjecie_przod: editImgFront,
         zdjecie_tyl: editImgBack,
-        blik_numer: editBlik,
+        blik_numer: editBlik.trim(),
         status: 'aktywny'
       };
 
@@ -558,7 +598,7 @@ export default function OdziezPage() {
           })
         });
 
-        alert("Nowy drop odzieży został pomyślnie utworzony i opublikowany!");
+        alert("Nowy drop odzieży został pomyślnie utworzony i opublikowany dla klubowiczów!");
       }
 
       setIsEditModalOpen(false);
@@ -625,7 +665,7 @@ export default function OdziezPage() {
       
       {/* 1. ZASADY ZAMÓWIEŃ (DYNAMICZNY PRÓG = 5 OSÓB) */}
       <div className="bg-gradient-to-br from-blue-900 to-sky-950 text-white rounded-3xl p-6 sm:p-7 shadow-xl border border-sky-800 relative overflow-hidden">
-        <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <span className="text-2xl">📋</span>
             <h2 className="text-base sm:text-lg font-black tracking-wider uppercase">
@@ -642,9 +682,9 @@ export default function OdziezPage() {
             {isAdmin && (
               <button
                 onClick={() => setIsEditModalOpen(true)}
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[11px] font-black px-3.5 py-1.5 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[11px] font-black px-4 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
               >
-                ⚙️ {campaign ? 'Edytuj Drop' : '+ Utwórz Drop'}
+                <span>⚙️</span> {campaign ? 'Edytuj Koszulkę' : '+ Dodaj Koszulkę'}
               </button>
             )}
           </div>
@@ -1037,15 +1077,19 @@ export default function OdziezPage() {
 
         </div>
       ) : (
-        <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-4">
+        /* WIDOK DLA ADMINA GDY NIE MA JESZCZE KAMPANII */
+        <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-4 shadow-sm">
           <div className="text-4xl">👕</div>
-          <div className="text-slate-600 font-bold">Brak aktywnej kampanii odzieżowej.</div>
+          <div className="text-slate-800 font-black text-base">Brak aktywnej kampanii odzieżowej.</div>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            Jako administrator możesz w prosty sposób uruchomić zbiórkę na nowy drop odzieży klubowej.
+          </p>
           {isAdmin && (
             <button
               onClick={() => setIsEditModalOpen(true)}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-3 rounded-2xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-3 rounded-2xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer inline-flex items-center gap-2"
             >
-              + Utwórz nowy drop odzieży
+              <span>+</span> Dodaj pierwszą koszulkę
             </button>
           )}
         </div>
@@ -1172,8 +1216,6 @@ export default function OdziezPage() {
             </div>
 
             <form onSubmit={handleManualAddSubmit} className="space-y-4 text-xs">
-              
-              {/* Wyszukiwarka klubowiczów */}
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 block">Wyszukaj klubowicza z bazy *</label>
                 <input 
@@ -1184,7 +1226,6 @@ export default function OdziezPage() {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-emerald-500 text-slate-900 font-medium"
                 />
 
-                {/* Lista podpowiedzi */}
                 <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 mt-1 bg-white shadow-xs">
                   {filteredClientsForManual.length === 0 ? (
                     <div className="p-3 text-center text-slate-400">Brak wyników wyszukiwania</div>
@@ -1220,7 +1261,6 @@ export default function OdziezPage() {
                 )}
               </div>
 
-              {/* Wybór wariantu */}
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 block">Wariant kroju *</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1239,7 +1279,6 @@ export default function OdziezPage() {
                 </div>
               </div>
 
-              {/* Wybór rozmiaru */}
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 block">Rozmiar *</label>
                 <div className="grid grid-cols-4 gap-2">
@@ -1258,7 +1297,6 @@ export default function OdziezPage() {
                 </div>
               </div>
 
-              {/* Status płatności i metoda */}
               <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 block">Status wpłaty *</label>
@@ -1308,16 +1346,32 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* 8. MODAL EDYCJI / TWORZENIA KAMPANII PRZEZ ADMINA */}
+      {/* 8. MODAL KREATORA / EDYCJI KOSZULKI DLA ADMINA */}
       {isEditModalOpen && isAdmin && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
-                ⚙️ {campaign ? 'Edycja Dropu Odzieży' : 'Utwórz Nowy Drop Odzieży'}
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                <span>👕</span> {campaign ? 'Edycja Koszulki Klubowej' : 'Dodaj Nową Koszulkę (Nowy Drop)'}
               </h3>
               <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
             </div>
+
+            {/* Ukryte inputy plików */}
+            <input 
+              type="file" 
+              ref={frontFileInputRef} 
+              accept="image/*" 
+              onChange={(e) => handleFileUpload(e, 'front')} 
+              className="hidden" 
+            />
+            <input 
+              type="file" 
+              ref={backFileInputRef} 
+              accept="image/*" 
+              onChange={(e) => handleFileUpload(e, 'back')} 
+              className="hidden" 
+            />
 
             <form onSubmit={handleSaveCampaignAdmin} className="space-y-4 text-xs">
               <div className="space-y-1">
@@ -1325,6 +1379,7 @@ export default function OdziezPage() {
                 <input 
                   type="text" 
                   required
+                  placeholder="np. OFICJALNA KOSZULKA TRENINGOWA"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 font-bold focus:outline-none focus:border-blue-500 text-slate-900"
@@ -1335,6 +1390,7 @@ export default function OdziezPage() {
                 <label className="font-bold text-slate-700 block">Krótki opis</label>
                 <input 
                   type="text" 
+                  placeholder="np. Pamiątkowa koszulka klubowa dedykowana na to wydarzenie"
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-blue-500 text-slate-900"
@@ -1367,30 +1423,66 @@ export default function OdziezPage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Ścieżka do zdjęcia PRZÓD</label>
+              {/* ZDJĘCIE PRZÓD */}
+              <div className="space-y-1.5 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-800 block">Zdjęcie Przód (Wizualizacja)</label>
+                  <button
+                    type="button"
+                    onClick={() => frontFileInputRef.current?.click()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                  >
+                    📁 Wybierz z urządzenia
+                  </button>
+                </div>
+
                 <input 
                   type="text" 
                   value={editImgFront}
                   onChange={(e) => setEditImgFront(e.target.value)}
-                  placeholder="/koszulka-przod.png lub link https://"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-blue-500 text-slate-900 font-mono text-[11px]"
+                  placeholder="/koszulka-przod.png lub wklej link"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-500 text-slate-900 font-mono text-[10px]"
                 />
+
+                {editImgFront && (
+                  <div className="flex items-center gap-3 pt-1">
+                    <img src={editImgFront} alt="Podgląd przód" className="w-12 h-12 object-contain rounded-lg border border-slate-200 bg-white" />
+                    <span className="text-[10px] text-emerald-700 font-bold">✓ Zdjęcie przodu gotowe</span>
+                  </div>
+                )}
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Ścieżka do zdjęcia TYŁ</label>
+              {/* ZDJĘCIE TYŁ */}
+              <div className="space-y-1.5 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-800 block">Zdjęcie Tył (Wizualizacja)</label>
+                  <button
+                    type="button"
+                    onClick={() => backFileInputRef.current?.click()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                  >
+                    📁 Wybierz z urządzenia
+                  </button>
+                </div>
+
                 <input 
                   type="text" 
                   value={editImgBack}
                   onChange={(e) => setEditImgBack(e.target.value)}
-                  placeholder="/koszulka-tyl.png lub link https://"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-blue-500 text-slate-900 font-mono text-[11px]"
+                  placeholder="/koszulka-tyl.png lub wklej link"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-500 text-slate-900 font-mono text-[10px]"
                 />
+
+                {editImgBack && (
+                  <div className="flex items-center gap-3 pt-1">
+                    <img src={editImgBack} alt="Podgląd tył" className="w-12 h-12 object-contain rounded-lg border border-slate-200 bg-white" />
+                    <span className="text-[10px] text-emerald-700 font-bold">✓ Zdjęcie tyłu gotowe</span>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Numer telefonu do płatności BLIK</label>
+                <label className="font-bold text-slate-700 block">Numer telefonu do wpłat BLIK</label>
                 <input 
                   type="text" 
                   value={editBlik}
