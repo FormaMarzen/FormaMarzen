@@ -106,6 +106,7 @@ export async function POST(req: Request) {
     if (isSuccess) {
       const transactionAmount = Number(transakcja.amount) || Number(amount) || 0;
       const metadata = transakcja.gateway_response?.metadata || {};
+      const gatewayResponse = transakcja.gateway_response || {};
 
       // 2. Pobranie danych klienta
       const { data: klient, error: klientErr } = await supabase
@@ -114,11 +115,89 @@ export async function POST(req: Request) {
         .eq('id', transakcja.user_id)
         .single();
 
-      if (!klientErr && klient) {
-        const clientName = `${klient['Imię'] || klient.imie || ''} ${klient['Nazwisko'] || klient.nazwisko || ''}`.trim();
+      const clientName = klient
+        ? `${klient['Imię'] || klient.imie || ''} ${klient['Nazwisko'] || klient.nazwisko || ''}`.trim()
+        : 'Klubowicz';
 
-        // A. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
-        if (transakcja.type === 'pass_purchase' || transakcja.type === 'pass_extend') {
+      // A. OBSŁUGA OPŁACENIA KOSZULKI TRENINGOWEJ (KOSZULKA_FEE)
+      if (transakcja.type === 'koszulka_fee') {
+        const wydarzenieId = gatewayResponse.wydarzenie_id || metadata.wydarzenie_id;
+
+        if (wydarzenieId) {
+          const { data: eventData } = await supabase
+            .from('wydarzenia')
+            .select('id, tytul, koszulki_zamowienia')
+            .eq('id', wydarzenieId)
+            .single();
+
+          if (eventData) {
+            const currentOrders: any[] = eventData.koszulki_zamowienia || [];
+            const userEmail = (klient?.['E-mail'] || klient?.email || transakcja.email || '').toLowerCase().trim();
+
+            const updatedOrders = currentOrders.map((order: any) => {
+              const orderEmail = (order.email || '').toLowerCase().trim();
+              const orderId = String(order.id || '');
+              const matchesUser = (userEmail && orderEmail === userEmail) || (transakcja.user_id && orderId === String(transakcja.user_id));
+
+              if (matchesUser) {
+                return {
+                  ...order,
+                  status_platnosci: 'calosc'
+                };
+              }
+              return order;
+            });
+
+            await supabase
+              .from('wydarzenia')
+              .update({ koszulki_zamowienia: updatedOrders })
+              .eq('id', eventData.id);
+
+            // Rejestracja w tabeli transakcji (informacyjnie, bez modyfikacji portfela)
+            await supabase.from('transakcje').insert([{
+              klient_id: transakcja.user_id,
+              typ_operacji: 'koszulka_autopay',
+              kwota: 0,
+              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online: ${transactionAmount} PLN)`
+            }]);
+
+            // Powiadomienie PUSH do administratora
+            await sendPushToAdmins(
+              'Opłacono koszulkę treningową! 👕',
+              `${clientName} opłacił(a) koszulkę na wydarzenie "${eventData.tytul}" (${transactionAmount} PLN)`,
+              '/wydarzenia'
+            );
+          }
+        }
+
+      // B. OBSŁUGA WPISOWEGO NA WYZWANIE REDUKCJI (REDUKCJA_FEE)
+      } else if (transakcja.type === 'redukcja_fee') {
+        const edycjaId = gatewayResponse.edycja_id || metadata.edycja_id;
+
+        if (edycjaId && transakcja.user_id) {
+          await supabase
+            .from('klub_redukcja_uczestnicy')
+            .update({ oplacone: true, metoda_platnosci: 'autopay' })
+            .eq('edycja_id', edycjaId)
+            .eq('klient_id', transakcja.user_id);
+
+          await supabase.from('transakcje').insert([{
+            klient_id: transakcja.user_id,
+            typ_operacji: 'redukcja_fee_autopay',
+            kwota: 0,
+            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay: ${transactionAmount} PLN)`
+          }]);
+
+          await sendPushToAdmins(
+            'Wpisowe na redukcję opłacone! 🔥',
+            `${clientName} opłacił(a) wpisowe na wyzwanie redukcji (${transactionAmount} PLN)`,
+            '/analiza-formy'
+          );
+        }
+
+      // C. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
+      } else if (transakcja.type === 'pass_purchase' || transakcja.type === 'pass_extend') {
+        if (klient) {
           const clientUpdatePayload: Record<string, any> = {};
 
           if (metadata.updatedKarnetyList) {
@@ -187,15 +266,17 @@ export async function POST(req: Request) {
               }]);
           }
 
-          // Wysłanie powiadomienia PUSH do administratora o zakupie/przedłużeniu karnetu
+          // Powiadomienie PUSH do administratora o zakupie/przedłużeniu karnetu
           await sendPushToAdmins(
             transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
-            `${clientName || 'Klubowicz'} opłacił(a) karnet: ${opDescription} (${transactionAmount} PLN)`,
+            `${clientName} opłacił(a) karnet: ${opDescription} (${transactionAmount} PLN)`,
             '/klienci'
           );
+        }
 
-        } else {
-          // B. OBSŁUGA STANDARDOWEGO DOŁADOWANIA PORTFELA LUB SPŁATY
+      // D. OBSŁUGA STANDARDOWEGO DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
+      } else {
+        if (klient) {
           const rawWalletStr = klient.Portfel || klient.portfel || '0.00 PLN';
           const isNegative = String(rawWalletStr).includes('-');
           let currentWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, '')) || 0;
@@ -209,10 +290,9 @@ export async function POST(req: Request) {
             .update({ Portfel: formattedNewWallet })
             .eq('id', klient.id);
 
-          // Wysłanie powiadomienia PUSH do administratora o doładowaniu portfela
           await sendPushToAdmins(
             'Doładowanie portfela / Spłata 💰',
-            `${clientName || 'Klubowicz'} doładował(a) portfel kwotą ${transactionAmount} PLN`,
+            `${clientName} doładował(a) portfel kwotą ${transactionAmount} PLN`,
             '/klienci'
           );
         }
