@@ -5,7 +5,11 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabaseKeyOrAnon(supabaseAnonKey));
+
+function supabaseKeyOrAnon(key: string) {
+  return key;
+}
 
 export default function OdziezPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -34,6 +38,16 @@ export default function OdziezPage() {
   const [editImgBack, setEditImgBack] = useState('/koszulka-tyl.png');
   const [editBlik, setEditBlik] = useState('453 229 407');
 
+  // Formularz ręcznego dodawania klubowicza przez Admina z wyszukiwarką
+  const [isManualAddModalOpen, setIsManualAddModalOpen] = useState(false);
+  const [clientsDatabase, setClientsDatabase] = useState<any[]>([]);
+  const [clientSearchQuery, setClientSearchQuery] = useState('');
+  const [selectedManualClient, setSelectedManualClient] = useState<any>(null);
+  const [manualVariant, setManualVariant] = useState('MĘSKA');
+  const [manualSize, setManualSize] = useState('M');
+  const [manualPaymentStatus, setManualPaymentStatus] = useState<'oplacone' | 'oczekuje'>('oplacone');
+  const [manualPaymentMethod, setManualPaymentMethod] = useState<string>('gotowka');
+
   // Tabele rozmiarów (zakładki)
   const [activeSizeTab, setActiveSizeTab] = useState<'meska' | 'damska'>('meska');
 
@@ -57,9 +71,12 @@ export default function OdziezPage() {
 
       const normalizedEmail = userEmail.toLowerCase().trim();
 
-      // Pobranie profilu użytkownika
+      // Pobranie listy klientów
       const { data: klienciList } = await supabase.from('klienci').select('*');
-      let klientData = klienciList?.find((c: any) => 
+      const allClients = klienciList || [];
+      setClientsDatabase(allClients);
+
+      let klientData = allClients.find((c: any) => 
         (c['E-mail'] || '').toLowerCase().trim() === normalizedEmail || 
         (c.email || '').toLowerCase().trim() === normalizedEmail
       );
@@ -79,7 +96,7 @@ export default function OdziezPage() {
         };
         setCurrentUser(userObj);
 
-        // Weryfikacja roli administratora
+        // Weryfikacja uprawnień administratora
         const adminCheck = klientData.rola === 'admin' || 
           klientData.isAdmin === true || 
           normalizedEmail.includes('admin') || 
@@ -181,7 +198,7 @@ export default function OdziezPage() {
       updatedCamp.koniec_zamowien_at = deadline;
     }
 
-    // SCENARIUSZ B: Minęło 7 dni od osiągnięcia minimum -> Zamknięcie i przekazanie do realizacji
+    // SCENARIUSZ B: Minęło 7 dni od osiągnięcia minimum -> Zamknięcie i realizacja
     if (updatedCamp.koniec_zamowien_at && now > new Date(updatedCamp.koniec_zamowien_at).getTime() && updatedCamp.status === 'aktywny') {
       await supabase
         .from('odziez_kampanie')
@@ -279,6 +296,19 @@ export default function OdziezPage() {
     return () => clearInterval(interval);
   }, [campaign]);
 
+  // Filtrowana lista klubowiczów w wyszukiwarce ręcznego dodawania
+  const filteredClientsForManual = useMemo(() => {
+    const q = clientSearchQuery.toLowerCase().trim();
+    if (!q) return clientsDatabase.slice(0, 8);
+    return clientsDatabase.filter(c => {
+      const imie = (c.Imię || c.firstName || '').toLowerCase();
+      const nazwisko = (c.Nazwisko || c.lastName || '').toLowerCase();
+      const email = (c['E-mail'] || c.email || '').toLowerCase();
+      const tel = (c['Numer tel.'] || c.phone || '').toLowerCase();
+      return imie.includes(q) || nazwisko.includes(q) || email.includes(q) || tel.includes(q);
+    }).slice(0, 10);
+  }, [clientsDatabase, clientSearchQuery]);
+
   // Statystyki zamówień
   const paidOrdersList = useMemo(() => orders.filter(o => o.status_platnosci === 'oplacone'), [orders]);
   const sizeBreakdown = useMemo(() => {
@@ -294,7 +324,7 @@ export default function OdziezPage() {
     return orders.filter(o => o.status_platnosci === 'oplacone' && !o.admin_odczytane).length;
   }, [orders]);
 
-  // Złożenie zamówienia
+  // Złożenie zamówienia przez Klubowicza
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !campaign) return;
@@ -414,6 +444,77 @@ export default function OdziezPage() {
     }
   };
 
+  // Ręczne dodanie klubowicza przez Administratora
+  const handleManualAddSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!campaign || !selectedManualClient) {
+      alert("Wybierz klubowicza z listy.");
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const price = Number(campaign.cena) || 110;
+      const clientFullName = `${selectedManualClient.Imię || selectedManualClient.firstName || ''} ${selectedManualClient.Nazwisko || selectedManualClient.lastName || ''}`.trim() || 'Klubowicz';
+      const clientEmail = (selectedManualClient['E-mail'] || selectedManualClient.email || '').trim();
+
+      const newOrderPayload = {
+        kampania_id: campaign.id,
+        klient_id: selectedManualClient.id,
+        klient_imie_nazwisko: clientFullName,
+        klient_email: clientEmail || 'brak@email.pl',
+        wariant: manualVariant,
+        rozmiar: manualSize,
+        kwota: price,
+        metoda_platnosci: manualPaymentMethod,
+        status_platnosci: manualPaymentStatus,
+        oplacone_at: manualPaymentStatus === 'oplacone' ? new Date().toISOString() : null,
+        admin_odczytane: true
+      };
+
+      const { error: insertErr } = await supabase
+        .from('odziez_zamowienia')
+        .insert([newOrderPayload]);
+
+      if (insertErr) throw insertErr;
+
+      // Jeśli wybrano płatność z portfela klienta, potrąć środki
+      if (manualPaymentMethod === 'wallet' && manualPaymentStatus === 'oplacone') {
+        const rawWallet = selectedManualClient.Portfel || selectedManualClient.portfel || '0.00 PLN';
+        const isNeg = String(rawWallet).includes('-');
+        let curNum = parseFloat(String(rawWallet).replace(/[^0-9.]/g, "")) || 0;
+        if (isNeg) curNum = -Math.abs(curNum);
+
+        const updatedWallet = curNum - price;
+        const updatedWalletStr = `${updatedWallet.toFixed(2)} PLN`;
+
+        await supabase
+          .from('klienci')
+          .update({ Portfel: updatedWalletStr })
+          .eq('id', selectedManualClient.id);
+
+        await supabase.from('transakcje').insert([{
+          klient_id: selectedManualClient.id,
+          kwota: -price,
+          typ_operacji: 'Zakup odzież',
+          opis: `Ręczne zamówienie koszulki klubowej - ${manualVariant} (${manualSize})`,
+          data: new Date().toISOString()
+        }]);
+      }
+
+      alert(`Pomyślnie dodano ${clientFullName} do listy zamówień!`);
+      setIsManualAddModalOpen(false);
+      setSelectedManualClient(null);
+      setClientSearchQuery('');
+      await loadCampaignAndOrders(currentUser, isAdmin);
+    } catch (err: any) {
+      console.error("Błąd ręcznego dodawania zamówienia:", err);
+      alert("Wystąpił błąd: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // Zapisanie / Utworzenie kampanii przez Administratora
   const handleSaveCampaignAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -446,7 +547,6 @@ export default function OdziezPage() {
 
         if (error) throw error;
 
-        // Powiadomienie Push do wszystkich klubowiczów o nowym dropie
         await fetch('/api/push/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -674,15 +774,26 @@ export default function OdziezPage() {
                 </h3>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
-                {Object.entries(sizeBreakdown).map(([size, count]) => (
-                  <span key={size} className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg text-slate-700 font-mono">
-                    {size}: {count}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
+                  {Object.entries(sizeBreakdown).map(([size, count]) => (
+                    <span key={size} className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg text-slate-700 font-mono">
+                      {size}: {count}
+                    </span>
+                  ))}
+                  <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-lg font-bold">
+                    Opłacone: {currentPaidCount} / {orders.length}
                   </span>
-                ))}
-                <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-lg font-bold">
-                  Opłacone: {currentPaidCount} / {orders.length}
-                </span>
+                </div>
+
+                {isAdmin && (
+                  <button
+                    onClick={() => setIsManualAddModalOpen(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-3 py-1.5 rounded-xl uppercase tracking-wider transition-colors shadow-xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>+</span> Dodaj klubowicza
+                  </button>
+                )}
               </div>
             </div>
 
@@ -717,7 +828,7 @@ export default function OdziezPage() {
                             )}
                           </div>
                           <div className="text-[10px] text-slate-400 font-mono">
-                            {order.metoda_platnosci === 'wallet' ? '👛 Portfel' : '💳 AutoPay'} • {order.wariant} ({order.rozmiar})
+                            {order.metoda_platnosci === 'wallet' ? '👛 Portfel' : order.metoda_platnosci === 'autopay' ? '💳 AutoPay' : '💵 ' + order.metoda_platnosci} • {order.wariant} ({order.rozmiar})
                           </div>
                         </div>
 
@@ -926,7 +1037,6 @@ export default function OdziezPage() {
 
         </div>
       ) : (
-        /* WIDOK GDY NIE MA JESZCZE KAMPANII */
         <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-4">
           <div className="text-4xl">👕</div>
           <div className="text-slate-600 font-bold">Brak aktywnej kampanii odzieżowej.</div>
@@ -1041,7 +1151,164 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* 7. MODAL EDYCJI / TWORZENIA KAMPANII PRZEZ ADMINA */}
+      {/* 7. MODAL RĘCZNEGO DODAWANIA KLUBOWICZA PRZEZ ADMINA Z WYSZUKIWARKĄ */}
+      {isManualAddModalOpen && isAdmin && campaign && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-emerald-200 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <span>➕</span> Dodaj klubowicza do zbiórki
+              </h3>
+              <button 
+                onClick={() => {
+                  setIsManualAddModalOpen(false);
+                  setSelectedManualClient(null);
+                  setClientSearchQuery('');
+                }} 
+                className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleManualAddSubmit} className="space-y-4 text-xs">
+              
+              {/* Wyszukiwarka klubowiczów */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Wyszukaj klubowicza z bazy *</label>
+                <input 
+                  type="text" 
+                  placeholder="Wpisz imię, nazwisko, e-mail lub telefon..."
+                  value={clientSearchQuery}
+                  onChange={(e) => setClientSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-emerald-500 text-slate-900 font-medium"
+                />
+
+                {/* Lista podpowiedzi */}
+                <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 mt-1 bg-white shadow-xs">
+                  {filteredClientsForManual.length === 0 ? (
+                    <div className="p-3 text-center text-slate-400">Brak wyników wyszukiwania</div>
+                  ) : (
+                    filteredClientsForManual.map((c: any) => {
+                      const cName = `${c.Imię || c.firstName || ''} ${c.Nazwisko || c.lastName || ''}`.trim();
+                      const isSelected = selectedManualClient?.id === c.id;
+
+                      return (
+                        <div
+                          key={c.id}
+                          onClick={() => setSelectedManualClient(c)}
+                          className={`p-2.5 flex items-center justify-between cursor-pointer transition-colors ${
+                            isSelected ? 'bg-emerald-50 text-emerald-950 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">{cName || 'Brak imienia'}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{c['E-mail'] || c.email || '-'} • Tel: {c['Numer tel.'] || '-'}</div>
+                          </div>
+                          {isSelected && <span className="text-emerald-600 font-black text-sm">✓</span>}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {selectedManualClient && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-[11px] text-emerald-900 font-bold flex items-center justify-between">
+                    <span>Wybrany: {selectedManualClient.Imię} {selectedManualClient.Nazwisko} (Portfel: {selectedManualClient.Portfel || '0.00 PLN'})</span>
+                    <button type="button" onClick={() => setSelectedManualClient(null)} className="text-rose-600 font-black ml-2 cursor-pointer">✕</button>
+                  </div>
+                )}
+              </div>
+
+              {/* Wybór wariantu */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Wariant kroju *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['MĘSKA', 'DAMSKA'].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setManualVariant(v)}
+                      className={`py-2 rounded-xl font-bold uppercase border transition-all cursor-pointer ${
+                        manualVariant === v ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-50 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Wybór rozmiaru */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Rozmiar *</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setManualSize(s)}
+                      className={`py-2 rounded-xl font-black uppercase border transition-all cursor-pointer ${
+                        manualSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Status płatności i metoda */}
+              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Status wpłaty *</label>
+                  <select
+                    value={manualPaymentStatus}
+                    onChange={(e: any) => setManualPaymentStatus(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-bold focus:outline-none"
+                  >
+                    <option value="oplacone">● Opłacone (Wlicza się do progu 5)</option>
+                    <option value="oczekuje">○ Oczekuje na wpłatę</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Metoda płatności *</label>
+                  <select
+                    value={manualPaymentMethod}
+                    onChange={(e: any) => setManualPaymentMethod(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-bold focus:outline-none"
+                  >
+                    <option value="gotowka">💵 Gotówka (Recepcja)</option>
+                    <option value="blik">📱 BLIK na telefon</option>
+                    <option value="wallet">👛 Wirtualny Portfel (Potrąć)</option>
+                    <option value="przelew">🏦 Przelew bankowy</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+                <button 
+                  type="button" 
+                  onClick={() => setIsManualAddModalOpen(false)} 
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isProcessing || !selectedManualClient}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+                >
+                  {isProcessing ? 'Dodawanie...' : 'Zapisz zamówienie'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. MODAL EDYCJI / TWORZENIA KAMPANII PRZEZ ADMINA */}
       {isEditModalOpen && isAdmin && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200 my-8">
