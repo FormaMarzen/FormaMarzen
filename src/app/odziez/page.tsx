@@ -13,12 +13,17 @@ export default function OdziezPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Obsługa wielu kampanii / dropów
+  // Dane kampanii i zamówień
   const [campaignsList, setCampaignsList] = useState<any[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
   const [campaign, setCampaign] = useState<any>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [hasNewDropBadge, setHasNewDropBadge] = useState(false);
+
+  // Modal szczegółów historycznego dropu
+  const [selectedHistoryCampaign, setSelectedHistoryCampaign] = useState<any>(null);
+  const [historyOrders, setHistoryOrders] = useState<any[]>([]);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
   // Formularz zamówienia klubowicza
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
@@ -64,7 +69,6 @@ export default function OdziezPage() {
     initData();
   }, []);
 
-  // Przeładowanie danych po zmianie wybranego dropu w selektorie
   useEffect(() => {
     if (selectedCampaignId && campaignsList.length > 0) {
       const found = campaignsList.find(c => c.id === selectedCampaignId);
@@ -87,7 +91,6 @@ export default function OdziezPage() {
 
       const cleanEmail = userEmail.toLowerCase().trim();
 
-      // Pobranie listy klientów
       const { data: klienciList } = await supabase.from('klienci').select('*');
       const allClients = klienciList || [];
       setClientsDatabase(allClients);
@@ -135,7 +138,6 @@ export default function OdziezPage() {
         setCurrentUser(userObj);
       }
 
-      // Pobranie wszystkich kampanii
       const { data: campaigns } = await supabase
         .from('odziez_kampanie')
         .select('*')
@@ -143,8 +145,9 @@ export default function OdziezPage() {
 
       if (campaigns && campaigns.length > 0) {
         setCampaignsList(campaigns);
-        setSelectedCampaignId(campaigns[0].id);
-        await loadCampaignAndOrders(campaigns[0], userObj, !!adminCheck);
+        const activeCamp = campaigns.find(c => c.status === 'aktywny') || campaigns[0];
+        setSelectedCampaignId(activeCamp.id);
+        await loadCampaignAndOrders(activeCamp, userObj, !!adminCheck);
       }
     } catch (err) {
       console.error("Błąd ładowania danych odzieży:", err);
@@ -380,6 +383,9 @@ export default function OdziezPage() {
   const unreadAdminCount = useMemo(() => {
     return orders.filter(o => o.status_platnosci === 'oplacone' && !o.admin_odczytane).length;
   }, [orders]);
+
+  const activeCampaigns = useMemo(() => campaignsList.filter(c => c.status === 'aktywny'), [campaignsList]);
+  const historyCampaigns = useMemo(() => campaignsList.filter(c => c.status !== 'aktywny'), [campaignsList]);
 
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -620,7 +626,6 @@ export default function OdziezPage() {
 
         if (error) throw error;
 
-        // Wyślij powiadomienie Push TYLKO przy tworzeniu nowego dropu
         await fetch('/api/push/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -637,7 +642,6 @@ export default function OdziezPage() {
 
       setIsEditModalOpen(false);
       
-      // Odśwież listę kampanii
       const { data: updatedCampaigns } = await supabase
         .from('odziez_kampanie')
         .select('*')
@@ -697,6 +701,16 @@ export default function OdziezPage() {
     } : o));
   };
 
+  const openHistoryModal = async (histCamp: any) => {
+    setSelectedHistoryCampaign(histCamp);
+    const { data: hOrders } = await supabase
+      .from('odziez_zamowienia')
+      .select('*')
+      .eq('kampania_id', histCamp.id);
+    setHistoryOrders(hOrders || []);
+    setIsHistoryModalOpen(true);
+  };
+
   if (isLoading) {
     return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie modułu Odzież...</div>;
   }
@@ -709,20 +723,19 @@ export default function OdziezPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
       
-      {/* SELEKTOR WIELE DROPÓW */}
-      {campaignsList.length > 1 && (
+      {activeCampaigns.length > 1 && (
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
-            <span>👕</span> Wybierz drop odzieży:
+            <span>👕</span> Aktywne dropy odzieży:
           </div>
           <select
             value={selectedCampaignId}
             onChange={(e) => setSelectedCampaignId(e.target.value)}
             className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:border-blue-500 cursor-pointer w-full sm:w-auto"
           >
-            {campaignsList.map((c) => (
+            {activeCampaigns.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.tytul} ({c.status === 'aktywny' ? 'Aktywny' : c.status})
+                {c.tytul} (Cena: {c.cena} zł)
               </option>
             ))}
           </select>
@@ -828,7 +841,6 @@ export default function OdziezPage() {
       {campaign ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
           
-          {/* NAGŁÓWEK KOSZULKI Z MINIATURKĄ PRZODU */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
             <div className="flex items-center gap-4">
               
@@ -887,7 +899,6 @@ export default function OdziezPage() {
             </div>
           </div>
 
-          {/* PASEK POSTĘPU MINIMUM ZAMÓWIEŃ */}
           <div className="bg-slate-50 rounded-2xl p-4 sm:p-5 border border-slate-100 space-y-2.5">
             <div className="flex justify-between items-center text-xs font-black">
               <span className="text-slate-600 uppercase tracking-wider flex items-center gap-2">
@@ -906,7 +917,6 @@ export default function OdziezPage() {
             </div>
           </div>
 
-          {/* PRZYCISK ZAMÓWIENIA DLA KLUBOWICZA */}
           {campaign.status === 'aktywny' ? (
             <div className="flex justify-center pt-2">
               <button
@@ -922,40 +932,39 @@ export default function OdziezPage() {
             </div>
           )}
 
-          {/* 3. SEKCJA ZAMÓWIEŃ */}
+          {/* 3. SEKCJA ZAMÓWIEŃ (ADMIN WIDZI WSZYSTKO, KLUBOWICZ WIDZI WYŁĄCZNIE LICZNIK) */}
           <div className="space-y-4 pt-6 border-t border-slate-100">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-lg">👕</span>
                 <h3 className="font-black text-sm uppercase tracking-wider text-slate-900">
-                  ZAMÓWIENIA KOSZULEK ({orders.length})
+                  {isAdmin ? `ZAMÓWIENIA KOSZULEK (${orders.length})` : 'STATUS ZAMÓWIENIA'}
                 </h3>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
-                  {Object.entries(sizeBreakdown).map(([size, count]) => (
-                    <span key={size} className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg text-slate-700 font-mono">
-                      {size}: {count}
+              {isAdmin && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
+                    {Object.entries(sizeBreakdown).map(([size, count]) => (
+                      <span key={size} className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg text-slate-700 font-mono">
+                        {size}: {count}
+                      </span>
+                    ))}
+                    <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-lg font-bold">
+                      Opłacone: {currentPaidCount} / {orders.length}
                     </span>
-                  ))}
-                  <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-lg font-bold">
-                    Opłacone: {currentPaidCount} / {orders.length}
-                  </span>
-                </div>
+                  </div>
 
-                {isAdmin && (
                   <button
                     onClick={() => setIsManualAddModalOpen(true)}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-3 py-1.5 rounded-xl uppercase tracking-wider transition-colors shadow-xs flex items-center gap-1 cursor-pointer"
                   >
                     <span>+</span> Dodaj klubowicza
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
-            {/* WIDOK DLA ADMINA */}
             {isAdmin ? (
               <div className="space-y-2">
                 <div className="text-[11px] text-slate-400 italic">
@@ -1016,32 +1025,11 @@ export default function OdziezPage() {
                 </div>
               </div>
             ) : (
-              /* WIDOK DLA KLUBOWICZA */
+              /* KLUBOWICZ WIDZI WYŁĄCZNIE ILE OSÓB JUŻ OPŁACIŁO (BEZ LISTY ZAMÓWIEŃ) */
               <div className="space-y-3 pt-2">
-                <div className="bg-sky-50/70 border border-sky-100 rounded-2xl p-4 text-xs text-sky-950 leading-relaxed">
-                  🔒 Ze względów prywatności lista zamawiających jest ukryta. Aktualnie zamówienie opłaciło <strong>{currentPaidCount} osób</strong>.
+                <div className="bg-sky-50/70 border border-sky-100 rounded-2xl p-4 text-xs text-sky-950 leading-relaxed text-center">
+                  Zbiórka trwa! Do tej pory koszulkę opłaciło już <strong>{currentPaidCount} osób</strong>. Dołącz do zamawiających!
                 </div>
-
-                {orders.filter(o => o.klient_id === currentUser?.id).length > 0 && (
-                  <div className="space-y-2">
-                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Twoje zamówienia:</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {orders.filter(o => o.klient_id === currentUser?.id).map(myOrder => (
-                        <div key={myOrder.id} className="bg-white border border-slate-200 rounded-2xl p-3.5 flex justify-between items-center shadow-xs">
-                          <div>
-                            <div className="font-bold text-xs text-slate-900">{myOrder.wariant} • Rozmiar {myOrder.rozmiar}</div>
-                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">Kwota: {myOrder.kwota} zł ({myOrder.metoda_platnosci === 'wallet' ? 'Portfel' : 'AutoPay'})</div>
-                          </div>
-                          <span className={`text-[10px] font-black px-2.5 py-1 rounded-xl uppercase ${
-                            myOrder.status_platnosci === 'oplacone' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
-                          }`}>
-                            {myOrder.status_platnosci === 'oplacone' ? '✓ Opłacone' : 'Oczekuje na płatność'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -1102,7 +1090,6 @@ export default function OdziezPage() {
               </div>
             </div>
 
-            {/* TABELA MĘSKA */}
             {activeSizeTab === 'meska' ? (
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-4 space-y-3">
                 <div className="bg-sky-50 px-4 py-2 rounded-xl text-sky-900 font-bold text-xs uppercase flex items-center justify-between">
@@ -1155,7 +1142,6 @@ export default function OdziezPage() {
                 )}
               </div>
             ) : (
-              /* TABELA DAMSKA */
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-4 space-y-3">
                 <div className="bg-rose-50 px-4 py-2 rounded-xl text-rose-900 font-bold text-xs uppercase flex items-center justify-between">
                   <span>Tabela Damska (Wymiary w cm, tolerancja +/- 1 cm)</span>
@@ -1215,7 +1201,6 @@ export default function OdziezPage() {
 
         </div>
       ) : (
-        /* WIDOK DLA ADMINA GDY NIE MA JESZCZE KAMPANII */
         <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-4 shadow-sm">
           <div className="text-4xl">👕</div>
           <div className="text-slate-800 font-black text-base">Brak aktywnej kampanii odzieżowej.</div>
@@ -1245,21 +1230,55 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* 6. MODAL ZAMÓWIENIA KOSZULKI DLA KLUBOWICZA */}
+      {/* SEKCJA 3: HISTORIA POPRZEDNICH DROPÓW */}
+      {historyCampaigns.length > 0 && (
+        <div className="space-y-4 pt-8 border-t border-slate-200">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">📜</span>
+            <h3 className="text-sm font-black text-slate-700 uppercase tracking-widest">
+              HISTORIA POPRZEDNICH DROPÓW ({historyCampaigns.length})
+            </h3>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {historyCampaigns.map((hist) => (
+              <div
+                key={hist.id}
+                onClick={() => openHistoryModal(hist)}
+                className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between shadow-xs hover:border-blue-400 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 bg-slate-50 rounded-xl flex items-center justify-center border border-slate-100 shrink-0 overflow-hidden">
+                    {hist.zdjecie_przod ? (
+                      <img src={hist.zdjecie_przod} alt="mini" className="w-full h-full object-contain p-1 group-hover:scale-105 transition-transform" />
+                    ) : (
+                      <span>👕</span>
+                    )}
+                  </div>
+                  <div>
+                    <div className="font-black text-xs text-slate-900 group-hover:text-blue-600 transition-colors">{hist.tytul}</div>
+                    <div className="text-[10px] text-slate-400 font-mono mt-0.5">Cena: {hist.cena} zł • Status: <span className="uppercase font-bold text-slate-600">{hist.status}</span></div>
+                  </div>
+                </div>
+
+                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-3 py-1 rounded-xl group-hover:bg-blue-50 group-hover:text-blue-700 transition-colors">
+                  Szczegóły →
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ZAMÓWIENIA */}
       {isOrderModalOpen && campaign && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-md w-full max-h-[92vh] flex flex-col shadow-2xl border border-sky-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            
             <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
               <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
                 <span>👕</span> Zamówienie koszulki
               </h3>
-              <button 
-                onClick={() => setIsOrderModalOpen(false)} 
-                className="text-slate-400 hover:text-slate-700 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer transition-colors"
-              >
-                ✕
-              </button>
+              <button onClick={() => setIsOrderModalOpen(false)} className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer">✕</button>
             </div>
 
             <form onSubmit={handleOrderSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
@@ -1272,7 +1291,7 @@ export default function OdziezPage() {
                       type="button"
                       onClick={() => setSelectedVariant(v)}
                       className={`py-2.5 rounded-xl font-bold uppercase border transition-all cursor-pointer ${
-                        selectedVariant === v ? 'bg-blue-600 text-white border-blue-600 shadow-xs' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        selectedVariant === v ? 'bg-blue-600 text-white border-blue-600 shadow-xs' : 'bg-slate-50 text-slate-700 border-slate-200'
                       }`}
                     >
                       {v}
@@ -1290,7 +1309,7 @@ export default function OdziezPage() {
                       type="button"
                       onClick={() => setSelectedSize(s)}
                       className={`py-2 rounded-xl font-black uppercase border transition-all cursor-pointer ${
-                        selectedSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        selectedSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200'
                       }`}
                     >
                       {s}
@@ -1326,51 +1345,64 @@ export default function OdziezPage() {
                 </div>
               </div>
 
-              <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-[11px] text-slate-500 leading-normal">
-                Płatność realizowana jest natychmiastowo. W przypadku nieuzbierania progu {minRequired} osób, środki zostaną automatycznie zwrócone na Twój wirtualny portfel.
-              </div>
-
               <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
-                <button 
-                  type="button" 
-                  onClick={() => setIsOrderModalOpen(false)} 
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit" 
-                  disabled={isProcessing}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black px-6 py-3 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-                >
+                <button type="button" onClick={() => setIsOrderModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" disabled={isProcessing} className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase tracking-wider cursor-pointer">
                   {isProcessing ? 'Przetwarzanie...' : `Opłać ${campaign.cena} zł`}
                 </button>
               </div>
             </form>
-
           </div>
         </div>
       )}
 
-      {/* 7. MODAL RĘCZNEGO DODAWANIA KLUBOWICZA PRZEZ ADMINA */}
+      {/* MODAL HISTORII SZCZEGÓŁÓW */}
+      {isHistoryModalOpen && selectedHistoryCampaign && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
+              <div className="flex items-center gap-3">
+                {selectedHistoryCampaign.zdjecie_przod && (
+                  <img src={selectedHistoryCampaign.zdjecie_przod} alt="mini" className="w-10 h-10 object-contain rounded-lg bg-slate-50 border border-slate-100 p-1" />
+                )}
+                <div>
+                  <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">{selectedHistoryCampaign.tytul}</h3>
+                  <div className="text-[10px] text-slate-400 font-mono">Status: <span className="uppercase font-bold">{selectedHistoryCampaign.status}</span></div>
+                </div>
+              </div>
+              <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer">✕</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2">
+                <div className="font-bold text-slate-900 uppercase text-[11px]">Podsumowanie dropu:</div>
+                <div className="grid grid-cols-2 gap-2 text-slate-600 font-medium">
+                  <div>Cena koszulki: <span className="font-bold text-slate-900">{selectedHistoryCampaign.cena} zł</span></div>
+                  <div>Wymagane minimum: <span className="font-bold text-slate-900">{selectedHistoryCampaign.min_osob} osób</span></div>
+                  <div>Łącznie zamówień: <span className="font-bold text-slate-900">{historyOrders.length}</span></div>
+                  <div>Opłaconych: <span className="font-bold text-emerald-600">{historyOrders.filter(o => o.status_platnosci === 'oplacone').length}</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 flex justify-end shrink-0 bg-white">
+              <button onClick={() => setIsHistoryModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-2.5 rounded-xl cursor-pointer">
+                Zamknij
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL RĘCZNEGO DODAWANIA KLUBOWICZA */}
       {isManualAddModalOpen && isAdmin && campaign && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-emerald-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            
             <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
               <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
                 <span>➕</span> Dodaj klubowicza do zbiórki
               </h3>
-              <button 
-                onClick={() => {
-                  setIsManualAddModalOpen(false);
-                  setSelectedManualClient(null);
-                  setClientSearchQuery('');
-                }} 
-                className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer transition-colors"
-              >
-                ✕
-              </button>
+              <button onClick={() => { setIsManualAddModalOpen(false); setSelectedManualClient(null); setClientSearchQuery(''); }} className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer">✕</button>
             </div>
 
             <form onSubmit={handleManualAddSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
@@ -1446,7 +1478,7 @@ export default function OdziezPage() {
                       type="button"
                       onClick={() => setManualSize(s)}
                       className={`py-2 rounded-xl font-black uppercase border transition-all cursor-pointer ${
-                        manualSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        manualSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200'
                       }`}
                     >
                       {s}
@@ -1483,28 +1515,17 @@ export default function OdziezPage() {
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
-                <button 
-                  type="button" 
-                  onClick={() => setIsManualAddModalOpen(false)} 
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit" 
-                  disabled={isProcessing || !selectedManualClient}
-                  className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-                >
+                <button type="button" onClick={() => setIsManualAddModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" disabled={isProcessing || !selectedManualClient} className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer">
                   {isProcessing ? 'Dodawanie...' : 'Zapisz zamówienie'}
                 </button>
               </div>
             </form>
-
           </div>
         </div>
       )}
 
-      {/* 8. MODAL KREATORA / EDYCJI KOSZULKI DLA ADMINA */}
+      {/* MODAL EDYCJI / TWORZENIA DROPU */}
       {isEditModalOpen && isAdmin && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-sky-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
@@ -1516,12 +1537,7 @@ export default function OdziezPage() {
                   {campaign?.id ? 'Edycja Koszulki Klubowej' : 'Dodaj Nową Koszulkę (Nowy Drop)'}
                 </h3>
               </div>
-              <button 
-                onClick={() => setIsEditModalOpen(false)} 
-                className="text-slate-400 hover:text-slate-700 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer transition-colors"
-              >
-                ✕
-              </button>
+              <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer">✕</button>
             </div>
 
             <input type="file" ref={frontFileInputRef} accept="image/*" onChange={(e) => handleFileUpload(e, 'front')} className="hidden" />
@@ -1535,7 +1551,6 @@ export default function OdziezPage() {
                 <input 
                   type="text" 
                   required
-                  placeholder="np. OFICJALNA KOSZULKA TRENINGOWA"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 font-bold focus:outline-none focus:border-blue-500 text-slate-900"
@@ -1546,7 +1561,6 @@ export default function OdziezPage() {
                 <label className="font-bold text-slate-700 block">Krótki opis</label>
                 <input 
                   type="text" 
-                  placeholder="np. Pamiątkowa koszulka klubowa dedykowana na to wydarzenie"
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-blue-500 text-slate-900"
@@ -1595,140 +1609,49 @@ export default function OdziezPage() {
                 </div>
               )}
 
-              {/* ZDJĘCIE PRZÓD */}
               <div className="space-y-1.5 p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-800 block">Zdjęcie Przód (Wizualizacja)</label>
-                  <button
-                    type="button"
-                    onClick={() => frontFileInputRef.current?.click()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
-                  >
-                    📁 Wybierz z urządzenia
-                  </button>
+                  <button type="button" onClick={() => frontFileInputRef.current?.click()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">📁 Wybierz z urządzenia</button>
                 </div>
-
-                <input 
-                  type="text" 
-                  value={editImgFront}
-                  onChange={(e) => setEditImgFront(e.target.value)}
-                  placeholder="/koszulka-przod.png lub wklej link"
-                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-500 text-slate-900 font-mono text-[10px]"
-                />
-
-                {editImgFront && (
-                  <div className="flex items-center gap-3 pt-1">
-                    <img src={editImgFront} alt="Podgląd przód" className="w-12 h-12 object-contain rounded-lg border border-slate-200 bg-white" />
-                    <span className="text-[10px] text-emerald-700 font-bold">✓ Zdjęcie przodu gotowe</span>
-                  </div>
-                )}
+                <input type="text" value={editImgFront} onChange={(e) => setEditImgFront(e.target.value)} className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-[10px]" />
+                {editImgFront && <div className="flex items-center gap-3 pt-1"><img src={editImgFront} alt="Przód" className="w-12 h-12 object-contain rounded-lg border bg-white" /><span className="text-[10px] text-emerald-700 font-bold">✓ Gotowe</span></div>}
               </div>
 
-              {/* ZDJĘCIE TYŁ */}
               <div className="space-y-1.5 p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-800 block">Zdjęcie Tył (Wizualizacja)</label>
-                  <button
-                    type="button"
-                    onClick={() => backFileInputRef.current?.click()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
-                  >
-                    📁 Wybierz z urządzenia
-                  </button>
+                  <button type="button" onClick={() => backFileInputRef.current?.click()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">📁 Wybierz z urządzenia</button>
                 </div>
-
-                <input 
-                  type="text" 
-                  value={editImgBack}
-                  onChange={(e) => setEditImgBack(e.target.value)}
-                  placeholder="/koszulka-tyl.png lub wklej link"
-                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-500 text-slate-900 font-mono text-[10px]"
-                />
-
-                {editImgBack && (
-                  <div className="flex items-center gap-3 pt-1">
-                    <img src={editImgBack} alt="Podgląd tył" className="w-12 h-12 object-contain rounded-lg border border-slate-200 bg-white" />
-                    <span className="text-[10px] text-emerald-700 font-bold">✓ Zdjęcie tyłu gotowe</span>
-                  </div>
-                )}
+                <input type="text" value={editImgBack} onChange={(e) => setEditImgBack(e.target.value)} className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-[10px]" />
+                {editImgBack && <div className="flex items-center gap-3 pt-1"><img src={editImgBack} alt="Tył" className="w-12 h-12 object-contain rounded-lg border bg-white" /><span className="text-[10px] text-emerald-700 font-bold">✓ Gotowe</span></div>}
               </div>
 
-              {/* ZDJĘCIE TABELI ROZMIARÓW: MĘSKA */}
               <div className="space-y-1.5 p-3.5 bg-sky-50/60 rounded-2xl border border-sky-200">
                 <div className="flex items-center justify-between">
-                  <label className="font-bold text-sky-950 block">Grafika Tabeli Rozmiarów (Męska)</label>
-                  <button
-                    type="button"
-                    onClick={() => sizeMaleFileInputRef.current?.click()}
-                    className="bg-sky-600 hover:bg-sky-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
-                  >
-                    📁 Wybierz z urządzenia
-                  </button>
+                  <label className="font-bold text-sky-950 block">Tabela Rozmiarów (Męska)</label>
+                  <button type="button" onClick={() => sizeMaleFileInputRef.current?.click()} className="bg-sky-600 hover:bg-sky-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">📁 Wybierz z urządzenia</button>
                 </div>
-
-                <input 
-                  type="text" 
-                  value={editImgSizeMale}
-                  onChange={(e) => setEditImgSizeMale(e.target.value)}
-                  placeholder="Wklej link lub wybierz plik z urządzenia (opcjonalne)"
-                  className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 focus:outline-none focus:border-sky-500 text-slate-900 font-mono text-[10px]"
-                />
-
-                {editImgSizeMale && (
-                  <div className="flex items-center gap-3 pt-1">
-                    <img src={editImgSizeMale} alt="Tabela męska" className="w-12 h-12 object-contain rounded-lg border border-sky-200 bg-white" />
-                    <span className="text-[10px] text-emerald-700 font-bold">✓ Grafika tabeli męskiej gotowa</span>
-                  </div>
-                )}
+                <input type="text" value={editImgSizeMale} onChange={(e) => setEditImgSizeMale(e.target.value)} className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-[10px]" />
+                {editImgSizeMale && <div className="flex items-center gap-3 pt-1"><img src={editImgSizeMale} alt="Tabela męska" className="w-12 h-12 object-contain rounded-lg border bg-white" /><span className="text-[10px] text-emerald-700 font-bold">✓ Gotowe</span></div>}
               </div>
 
-              {/* ZDJĘCIE TABELI ROZMIARÓW: DAMSKA */}
               <div className="space-y-1.5 p-3.5 bg-rose-50/60 rounded-2xl border border-rose-200">
                 <div className="flex items-center justify-between">
-                  <label className="font-bold text-rose-950 block">Grafika Tabeli Rozmiarów (Damska)</label>
-                  <button
-                    type="button"
-                    onClick={() => sizeFemaleFileInputRef.current?.click()}
-                    className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
-                  >
-                    📁 Wybierz z urządzenia
-                  </button>
+                  <label className="font-bold text-rose-950 block">Tabela Rozmiarów (Damska)</label>
+                  <button type="button" onClick={() => sizeFemaleFileInputRef.current?.click()} className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl cursor-pointer">📁 Wybierz z urządzenia</button>
                 </div>
-
-                <input 
-                  type="text" 
-                  value={editImgSizeFemale}
-                  onChange={(e) => setEditImgSizeFemale(e.target.value)}
-                  placeholder="Wklej link lub wybierz plik z urządzenia (opcjonalne)"
-                  className="w-full bg-white border border-rose-200 rounded-xl px-3 py-2 focus:outline-none focus:border-rose-500 text-slate-900 font-mono text-[10px]"
-                />
-
-                {editImgSizeFemale && (
-                  <div className="flex items-center gap-3 pt-1">
-                    <img src={editImgSizeFemale} alt="Tabela damska" className="w-12 h-12 object-contain rounded-lg border border-rose-200 bg-white" />
-                    <span className="text-[10px] text-emerald-700 font-bold">✓ Grafika tabeli damskiej gotowa</span>
-                  </div>
-                )}
+                <input type="text" value={editImgSizeFemale} onChange={(e) => setEditImgSizeFemale(e.target.value)} className="w-full bg-white border border-rose-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-[10px]" />
+                {editImgSizeFemale && <div className="flex items-center gap-3 pt-1"><img src={editImgSizeFemale} alt="Tabela damska" className="w-12 h-12 object-contain rounded-lg border bg-white" /><span className="text-[10px] text-emerald-700 font-bold">✓ Gotowe</span></div>}
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
-                <button 
-                  type="button" 
-                  onClick={() => setIsEditModalOpen(false)} 
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit" 
-                  disabled={isProcessing}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-                >
+                <button type="button" onClick={() => setIsEditModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
+                <button type="submit" disabled={isProcessing} className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer">
                   {isProcessing ? 'Zapisywanie...' : 'Zapisz i Opublikuj'}
                 </button>
               </div>
             </form>
-
           </div>
         </div>
       )}
