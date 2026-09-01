@@ -321,6 +321,9 @@ export default function AnalizaFormyPage() {
     if (targetId) {
       localStorage.setItem(`seen_challenge_${targetId}`, 'true');
     }
+    edycjeRedukcji.forEach(e => {
+      localStorage.setItem(`seen_challenge_${e.id}`, 'true');
+    });
     setHasUnreadChallenge(false);
   };
 
@@ -370,8 +373,6 @@ export default function AnalizaFormyPage() {
   };
 
   const markInterpretationAsRead = async (badanieId?: number) => {
-    if (appRole !== 'klubowicz') return;
-    
     try {
       if (badanieId) {
         await supabase.from('klub_badania_krwi').update({ nowa_interpretacja: false }).eq('id', badanieId);
@@ -471,20 +472,20 @@ export default function AnalizaFormyPage() {
         );
         setEdycjeRedukcji(sorted);
         
-        const active = sorted.find((e: any) => e.status !== 'zakonczone' && e.status !== 'anulowane') || sorted[0];
+        const activeEdycje = sorted.filter((e: any) => e.status === 'aktywne' || e.status === 'zapisy');
         
-        if (active && (active.status === 'aktywne' || active.status === 'zapisy')) {
+        if (activeEdycje.length > 0) {
           if (typeof window !== 'undefined') {
-            const hasSeen = localStorage.getItem(`seen_challenge_${active.id}`);
-            if (!hasSeen) {
-              setHasUnreadChallenge(true);
-            }
+            const hasAnyUnseen = activeEdycje.some(e => !localStorage.getItem(`seen_challenge_${e.id}`));
+            setHasUnreadChallenge(hasAnyUnseen);
           }
         }
 
+        const defaultSelected = activeEdycje[0] || sorted[0];
+
         if (!selectedEdycjaId) {
-          setSelectedEdycjaId(active.id);
-          await loadEdycjaDetails(active.id, sorted);
+          setSelectedEdycjaId(defaultSelected.id);
+          await loadEdycjaDetails(defaultSelected.id, sorted);
         } else {
           await loadEdycjaDetails(selectedEdycjaId, sorted);
         }
@@ -853,14 +854,12 @@ export default function AnalizaFormyPage() {
 
     const isTrainerOrAdmin = appRole === 'admin' || appRole === 'trener';
     
-    // Filtrowanie suplementów
     const filteredCoachSupplements = badanieFormData.suplementacja_trener
       .filter(s => s.nazwa.trim() !== '' || s.dawka.trim() !== '');
 
     const filteredMemberSupplements = badanieFormData.suplementacja_klubowicz
       .filter(s => s.produkt.trim() !== '' || s.dawka.trim() !== '');
 
-    // Jeśli edytuje klubowicz, nie nadpisujemy pustymi wartościami zaleceń trenera
     const existingBadanie = editingBadanieId ? badaniaList.find(b => b.id === editingBadanieId) : null;
 
     const payload = {
@@ -1570,6 +1569,16 @@ export default function AnalizaFormyPage() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
+          {hasUnreadChallenge && (
+            <button
+              onClick={() => markChallengeAsRead()}
+              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-300 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+              title="Oznacz wyzwanie redukcji jako przeczytane"
+            >
+              <span>✓</span> Oznacz redukcję jako przeczytaną
+            </button>
+          )}
+
           {activeTab === 'pomiary' && ((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
             <button
               onClick={() => {
@@ -1664,7 +1673,7 @@ export default function AnalizaFormyPage() {
           <span>🔥</span> 
           <span>3. Redukcja</span>
 
-          {hasUnreadChallenge && appRole === 'klubowicz' && (
+          {hasUnreadChallenge && (
             <span className="relative flex h-4 w-4 ml-1">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
@@ -1687,7 +1696,7 @@ export default function AnalizaFormyPage() {
           <span>🩸</span> 
           <span>4. Badania Krwi</span>
 
-          {hasUnreadInterpretation && appRole === 'klubowicz' && (
+          {hasUnreadInterpretation && (
             <span className="relative flex h-4 w-4 ml-1">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
@@ -2706,12 +2715,12 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left border-collapse min-w-[950px]">
+                <table className="w-full text-xs text-left border-collapse min-w-[800px]">
                   <thead>
                     <tr className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] border-b border-sky-100">
                       <th className="p-3 w-16">Miejsce</th>
                       <th className="p-3">Klubowicz</th>
-                      <th className="p-3 text-center">Wpisowe / Status</th>
+                      {appRole === 'admin' && <th className="p-3 text-center">Wpisowe / Status</th>}
                       <th className="p-3 text-center">Start ➔ Koniec (Waga)</th>
                       <th className="p-3 text-center">Tk. Tłuszczowa</th>
                       <th className="p-3 text-center">Masa Mięśniowa</th>
@@ -2731,23 +2740,25 @@ export default function AnalizaFormyPage() {
                           )}
                         </td>
                         <td className="p-3 font-bold text-slate-900 flex items-center gap-2.5">
-                          {row.klientAvatar && (isCurrentUserJoined || appRole === 'admin') ? (
-                            <img src={row.klientAvatar} alt="Avatar" className="w-7 h-7 rounded-full object-cover border border-amber-400" />
+                          {row.klientAvatar ? (
+                            <img src={row.klientAvatar} alt="Avatar" className="w-7 h-7 rounded-full object-cover border border-amber-400 shrink-0" />
                           ) : (
-                            <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-900 font-bold text-[10px] flex items-center justify-center">
+                            <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-900 font-bold text-[10px] flex items-center justify-center shrink-0">
                               {row.klientName.charAt(0)}
                             </div>
                           )}
                           <div>
                             <div>{row.klientName}</div>
-                            <div className="text-[9px] text-slate-400 font-normal">
-                              Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : '💵 Gotówka'}
-                            </div>
+                            {appRole === 'admin' && (
+                              <div className="text-[9px] text-slate-400 font-normal">
+                                Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : '💵 Gotówka'}
+                              </div>
+                            )}
                           </div>
                         </td>
 
-                        <td className="p-3 text-center">
-                          {appRole === 'admin' ? (
+                        {appRole === 'admin' && (
+                          <td className="p-3 text-center">
                             <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all">
                               <input
                                 type="checkbox"
@@ -2759,12 +2770,8 @@ export default function AnalizaFormyPage() {
                                 {row.oplacone ? 'Opłacone' : 'Do opłacenia'}
                               </span>
                             </label>
-                          ) : (
-                            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${row.oplacone ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'}`}>
-                              {row.oplacone ? '✓ Opłacone' : '⏳ Oczekuje na potwierdzenie'}
-                            </span>
-                          )}
-                        </td>
+                          </td>
+                        )}
 
                         <td className="p-3 text-center font-bold text-slate-800">
                           {row.brak_pomiaru_koncowego ? (
@@ -2901,7 +2908,7 @@ export default function AnalizaFormyPage() {
                     ))}
                     {rankingRedukcji.length === 0 && (
                       <tr>
-                        <td colSpan={appRole === 'admin' ? 9 : 8} className="p-8 text-center text-slate-400 italic">
+                        <td colSpan={appRole === 'admin' ? 9 : 7} className="p-8 text-center text-slate-400 italic">
                           Brak zapisanych uczestników w tej edycji wyzwania.
                         </td>
                       </tr>
@@ -3023,7 +3030,7 @@ export default function AnalizaFormyPage() {
                       <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
                         <td className="p-3 font-black text-sky-950 whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
-                            {b.nowa_interpretacja && appRole === 'klubowicz' && (
+                            {b.nowa_interpretacja && (
                               <span className="relative flex h-2.5 w-2.5">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
