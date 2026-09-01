@@ -20,7 +20,7 @@ export interface ZamowienieKoszulki {
   nazwisko: string;
   email?: string;
   rozmiar: string;
-  typ?: string; // np. "męska", "damska", "dziecięca"
+  typ?: string;
   status_platnosci?: KoszulkaPaymentStatus;
   data_zamowienia?: string;
 }
@@ -46,7 +46,6 @@ interface Wydarzenie {
   status: string;
   uczestnicy?: Uczestnik[];
   
-  // Moduły strefy uczestnika sterowane checkboxami
   pokaz_whatsapp?: boolean;
   whatsapp_url?: string | null;
   
@@ -63,7 +62,6 @@ interface Wydarzenie {
   pokaz_plan_grafika?: boolean;
   plan_grafiki?: string[];
 
-  // Moduł: Koszulki treningowe
   pokaz_koszulki?: boolean;
   koszulki_cena?: string | null;
   koszulki_termin?: string | null;
@@ -100,19 +98,15 @@ export default function WydarzeniaPage() {
   const [hasUnreadEvents, setHasUnreadEvents] = useState(false);
   const [readVersion, setReadVersion] = useState(0);
 
-  // Stany dla Modala Podglądu Klubowicza
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Wydarzenie | null>(null);
 
-  // Stan dla pełnoekranowego powiększenia obrazka (Lightbox)
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
-  // Modal zamawiania koszulki przez Klubowicza
   const [isMemberKoszulkaModalOpen, setIsMemberKoszulkaModalOpen] = useState(false);
   const [memberKoszulkaRozmiar, setMemberKoszulkaRozmiar] = useState("L");
   const [memberKoszulkaTyp, setMemberKoszulkaTyp] = useState("męska");
 
-  // Stany dla Modala Edycji / Dodawania Admina
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   
@@ -129,7 +123,6 @@ export default function WydarzeniaPage() {
     status: "wkrotce",
     uczestnicy: [] as Uczestnik[],
     
-    // Checkboxy i pola modułów
     pokaz_whatsapp: false,
     whatsapp_url: "",
     
@@ -146,7 +139,6 @@ export default function WydarzeniaPage() {
     pokaz_plan_grafika: false,
     plan_grafiki: [] as string[],
 
-    // Koszulki treningowe
     pokaz_koszulki: false,
     koszulki_cena: "",
     koszulki_termin: "",
@@ -156,12 +148,10 @@ export default function WydarzeniaPage() {
     koszulki_zamowienia: [] as ZamowienieKoszulki[]
   });
 
-  // Wyszukiwarki i pola ręcznego dopisywania uczestników wyjazdu
   const [klientSearch, setKlientSearch] = useState("");
   const [manualImie, setManualImie] = useState("");
   const [manualNazwisko, setManualNazwisko] = useState("");
 
-  // Pola dodawania zamówienia koszulki w formularzu admina
   const [koszulkaKlientSearch, setKoszulkaKlientSearch] = useState("");
   const [koszulkaManualImie, setKoszulkaManualImie] = useState("");
   const [koszulkaManualNazwisko, setKoszulkaManualNazwisko] = useState("");
@@ -213,7 +203,6 @@ export default function WydarzeniaPage() {
     if (typeof window === "undefined") return;
     localStorage.setItem(`seen_event_${eventId}`, "true");
     
-    // Oznaczamy przeczytane zamówienia koszulek dla admina
     if (isAdmin) {
       const ev = wydarzenia.find(w => w.id === eventId);
       if (ev && ev.koszulki_zamowienia) {
@@ -412,7 +401,6 @@ export default function WydarzeniaPage() {
     return w.uczestnicy.some(u => u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase());
   };
 
-  // Sprawdzenie czy zalogowany klubowicz złożył zamówienie na koszulkę
   const userKoszulkaZamowienie = useMemo(() => {
     if (!selectedEvent || !selectedEvent.koszulki_zamowienia || !currentUserEmail) return null;
     return selectedEvent.koszulki_zamowienia.find(
@@ -420,7 +408,6 @@ export default function WydarzeniaPage() {
     ) || null;
   }, [selectedEvent, currentUserEmail]);
 
-  // Statystyki rozmiarów dla Administratora
   const koszulkiSizeBreakdown = useMemo(() => {
     if (!selectedEvent?.koszulki_zamowienia) return [];
     const counts: Record<string, number> = {};
@@ -612,7 +599,6 @@ export default function WydarzeniaPage() {
     }));
   };
 
-  // --- OBSŁUGA UCZESTNIKÓW WYDARZENIA ---
   const handleAddParticipantFromDB = (k: KlientBaza) => {
     if (form.uczestnicy.some(u => (u.id && u.id === k.id) || (u.email && u.email.toLowerCase() === k.email?.toLowerCase()))) {
       return;
@@ -690,7 +676,6 @@ export default function WydarzeniaPage() {
     }
   };
 
-  // --- OBSŁUGA ZAMÓWIEŃ KOSZULEK PRZEZ ADMINA ---
   const handleAddKoszulkaFromDB = (k: KlientBaza) => {
     setForm(prev => ({
       ...prev,
@@ -765,7 +750,6 @@ export default function WydarzeniaPage() {
     }
   };
 
-  // --- SAMODZIELNY ZAPIS NA KOSZULKĘ PRZEZ KLUBOWICZA I PRZEKIEROWANIE AUTOPAY ---
   const handleMemberSubmitKoszulkaOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEvent) return;
@@ -1390,7 +1374,7 @@ export default function WydarzeniaPage() {
                         <div key={idx} className="bg-sky-50/70 border border-sky-100/90 px-3 py-2 rounded-xl flex items-center justify-between gap-2 transition-all">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0"></span>
-                            <span className="text-xs font-bold text-sky-950 truncate" title={formatUczestnikName(u, enrolledInSelected)}>
+                            <span className="text-xs font-bold text-sky-950 whitespace-normal leading-tight" title={formatUczestnikName(u, enrolledInSelected)}>
                               {formatUczestnikName(u, enrolledInSelected)} {isMe && "(Ty)"}
                             </span>
                           </div>
@@ -1609,26 +1593,26 @@ export default function WydarzeniaPage() {
                         )
                       )}
 
-                      {/* Nowy, kompaktowy panel zamówień koszulek dla Administratora */}
+                      {/* Lista zamówień koszulek dla Administratora w stylistyce tabeli uczestników */}
                       {isAdmin && (
-                        <div className="bg-slate-50 border border-indigo-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-xs">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/80 pb-2.5">
+                        <div className="bg-white p-5 sm:p-7 rounded-2xl sm:rounded-3xl shadow-sm border border-indigo-100 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-50 pb-3">
                             <div>
-                              <h4 className="font-black text-xs sm:text-sm text-indigo-950 uppercase tracking-wider flex items-center gap-2">
-                                <span>📋</span> Lista zamówień koszulek ({selectedEvent.koszulki_zamowienia?.length || 0})
+                              <h4 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
+                                <span>👕</span> Zamówienia koszulek ({selectedEvent.koszulki_zamowienia?.length || 0})
                               </h4>
-                              <p className="text-[10px] text-slate-500 font-medium">
-                                💡 Kliknij w status, aby przełączyć: Do wpłaty ➔ Opłacone (Klubowicze nie widzą tej listy).
+                              <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                                💡 Kliknij w status płatności, aby go szybko przełączyć. (Klubowicze widzą tylko swoje zamówienie)
                               </p>
                             </div>
                             
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {koszulkiSizeBreakdown.map(([rozmiar, count]) => (
-                                <span key={rozmiar} className="px-2 py-0.5 bg-white border border-indigo-200 rounded-md text-[10px] font-black text-indigo-900 shadow-2xs">
+                                <span key={rozmiar} className="px-2 py-0.5 bg-indigo-50 border border-indigo-200 rounded-md text-[10px] font-black text-indigo-900 shadow-2xs">
                                   {rozmiar}: {count}
                                 </span>
                               ))}
-                              <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-md text-[10px] font-black shadow-2xs">
+                              <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-md text-[10px] font-black">
                                 Opłacone: {(selectedEvent.koszulki_zamowienia || []).filter(z => z.status_platnosci === "calosc").length} / {selectedEvent.koszulki_zamowienia?.length || 0}
                               </span>
                             </div>
@@ -1641,13 +1625,14 @@ export default function WydarzeniaPage() {
                                 return (
                                   <div 
                                     key={zIdx} 
-                                    className="bg-white border border-slate-200/80 hover:border-indigo-300 px-3 py-2 rounded-xl flex items-center justify-between gap-2 shadow-2xs transition-all"
+                                    className="bg-sky-50/70 border border-sky-100/90 px-3 py-2 rounded-xl flex items-center justify-between gap-2 transition-all"
                                   >
                                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                                      <span className="font-bold text-xs text-slate-900 truncate">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0"></span>
+                                      <span className="text-xs font-bold text-sky-950 whitespace-normal leading-tight">
                                         {z.imie} {z.nazwisko}
                                       </span>
-                                      <span className="bg-indigo-50 border border-indigo-200/80 text-indigo-950 px-2 py-0.5 rounded-md text-[10px] font-black uppercase shrink-0">
+                                      <span className="bg-indigo-100 text-indigo-900 border border-indigo-200 px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0">
                                         {z.rozmiar} {z.typ && `• ${z.typ}`}
                                       </span>
                                     </div>
@@ -1655,13 +1640,13 @@ export default function WydarzeniaPage() {
                                     <button
                                       onClick={() => handleQuickKoszulkaPaymentToggle(zIdx)}
                                       title="Kliknij, aby przełączyć: Do wpłaty ➔ Opłacone"
-                                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-2xs hover:scale-105 shrink-0 ${
+                                      className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 shrink-0 ${
                                         isPaid 
-                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300' 
-                                          : 'bg-amber-50 text-amber-900 border-amber-300'
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100' 
+                                          : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
                                       }`}
                                     >
-                                      <span>{isPaid ? "🟢" : "🟡"}</span>
+                                      <span className="text-[9px]">{isPaid ? "🟢" : "🟡"}</span>
                                       <span>{isPaid ? "Opłacone" : "Do wpłaty"}</span>
                                     </button>
                                   </div>
@@ -1669,8 +1654,8 @@ export default function WydarzeniaPage() {
                               })}
                             </div>
                           ) : (
-                            <div className="text-xs text-slate-400 italic py-2 text-center">
-                              Brak zamówionych koszulek.
+                            <div className="text-xs text-slate-400 italic py-3 text-center">
+                              Brak złożonych zamówień na koszulki.
                             </div>
                           )}
                         </div>
