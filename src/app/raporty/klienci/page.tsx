@@ -890,7 +890,6 @@ export default function KlienciPage() {
       supabase.removeChannel(realtimeChannel);
     };
   }, []);
-
   const openProfile = async (clientToOpen: any) => {
     setProfileClient(clientToOpen);
   };
@@ -995,7 +994,7 @@ export default function KlienciPage() {
       if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
         cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
       } else {
-        cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 150;
+        cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
       }
       cenaKarnetu = `${cenaWartosc.toFixed(2)} PLN`;
 
@@ -1023,7 +1022,10 @@ export default function KlienciPage() {
         poczatkoweWejsc: parsedInitialWejscia
       });
     }
-    const poczatkowyStan = (parseFloat(newClient.wallet) || 0) - cenaWartosc;
+
+    // Zabezpieczenie: jeśli karnet kosztuje 0 zł (np. Medicover), portfel nie może wejść na minus
+    const wplataWlasna = parseFloat(newClient.wallet) || 0;
+    const poczatkowyStan = cenaWartosc > 0 ? (wplataWlasna - cenaWartosc) : wplataWlasna;
     const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
     const newClientId = Date.now();
 
@@ -1046,8 +1048,10 @@ export default function KlienciPage() {
       await supabase.from('transakcje').insert([{
         klient_id: newClientId,
         typ_operacji: 'zakup_karnetu',
-        kwota: -cenaWartosc,
-        opis: `Pierwszy karnet: ${newClient.selectedPass} (Zadłużono portfel)`
+        kwota: cenaWartosc > 0 ? -cenaWartosc : 0,
+        opis: cenaWartosc > 0 
+          ? `Pierwszy karnet: ${newClient.selectedPass} (Zadłużono portfel)` 
+          : `Pierwszy karnet: ${newClient.selectedPass} (Karnet bezpłatny / 0.00 PLN)`
       }]);
     }
 
@@ -1174,7 +1178,7 @@ export default function KlienciPage() {
     reader.readAsDataURL(file);
   };
 
-  // PRZEDŁUŻENIE KARNETU (GOTÓWKA vs PORTFEL)
+  // PRZEDŁUŻENIE KARNETU (DOLICZENIE RATY UMOWY + ZABEZPIECZENIE PORTFELA 0 PLN)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget) return;
 
@@ -1188,7 +1192,7 @@ export default function KlienciPage() {
     if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
       bazowaCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
     } else {
-      bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, ''));
+      bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
     }
 
     const cenaPoRabacie = isContract ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
@@ -1199,17 +1203,31 @@ export default function KlienciPage() {
     let logKwota = 0;
     let logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Zapłacono z góry / Gotówka)`;
 
-    if (paymentMethod === 'later') {
+    // Zabezpieczenie: jeśli karnet kosztuje 0 PLN (np. Medicover), nie minusujemy portfela
+    if (paymentMethod === 'later' && kwotaKarnetu > 0) {
       const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
       const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
       nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       logKwota = -kwotaKarnetu;
       logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Obciążenie portfela - do zapłaty)`;
+    } else if (kwotaKarnetu === 0) {
+      logKwota = 0;
+      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Karnet 0.00 PLN - portfel bez zmian)`;
     }
 
     let znizkaTekst = '';
     if (activeDiscount > 0 && !isContract) {
       znizkaTekst = `(-${activeDiscount}%)`;
+    }
+
+    // Inkrementacja numeru raty przy umowie 12M
+    let updatedRata = extendPassTarget.rata || '1 / 1';
+    if (isContract) {
+      const currentRataMatch = (extendPassTarget.rata || '0 / 12').match(/(\d+)\s*\/\s*(\d+)/);
+      const currentRataNum = currentRataMatch ? parseInt(currentRataMatch[1], 10) : 0;
+      const totalRat = currentRataMatch ? parseInt(currentRataMatch[2], 10) : 12;
+      const nextRataNum = Math.min(totalRat, currentRataNum + 1);
+      updatedRata = `${nextRataNum} / ${totalRat}`;
     }
 
     let metaExt: Record<string, any> = {};
@@ -1226,7 +1244,9 @@ export default function KlienciPage() {
           waznyDo: extendNewDate,
           cena: nowaCena,
           znizkaProcentowa: znizkaTekst,
-          statusTekst: isContract ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${extendNewDate}` : `Ważny do: ${extendNewDate}`,
+          rata: isContract ? updatedRata : (k.rata || '1 / 1'),
+          isContract12M: isContract,
+          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata}) - Ważny do: ${extendNewDate}` : `Ważny do: ${extendNewDate}`,
           pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? parsedExtWejscia : k.pozostaloWejsc),
           poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? parsedExtWejscia : k.poczatkoweWejsc)
         };
@@ -1247,10 +1267,12 @@ export default function KlienciPage() {
       klient_id: profileClient.id,
       typ_operacji: 'zakup_karnetu',
       kwota: logKwota,
-      opis: `${logOpis} ${znizkaTekst}`
+      opis: `${logOpis} ${znizkaTekst}`.trim()
     }]);
 
-    alert(paymentMethod === 'later' ? `Karnet przedłużony! Dopisano ${kwotaKarnetu.toFixed(2)} PLN do portfela.` : `Karnet przedłużony i opłacony gotówką!`);
+    alert(paymentMethod === 'later' && kwotaKarnetu > 0 
+      ? `Karnet przedłużony! Doliczono ratę (${updatedRata}) i dopisano ${kwotaKarnetu.toFixed(2)} PLN do portfela.` 
+      : `Karnet przedłużony! Doliczono ratę (${updatedRata}).`);
     setIsExtendPassModalOpen(false);
     loadData();
   };
@@ -1339,12 +1361,16 @@ export default function KlienciPage() {
     let logKwota = 0;
     let logOpis = `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Zapłacono z góry)`;
 
-    if (paymentMethod === 'later') {
+    // Zabezpieczenie: karnet 0 PLN nie obciąża portfela
+    if (paymentMethod === 'later' && kwotaKarnetu > 0) {
       const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
       const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
       nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       logKwota = -kwotaKarnetu;
       logOpis = `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Obciążenie portfela - do zapłaty)`;
+    } else if (kwotaKarnetu === 0) {
+      logKwota = 0;
+      logOpis = `Dodano karnet: ${selectedPassToAdd} (Karnet 0.00 PLN - portfel bez zmian)`;
     }
 
     const nowyKarnetObj = {
@@ -1396,50 +1422,89 @@ export default function KlienciPage() {
     loadData();
   };
 
+  // ZAWIESZENIE KARNETU: AUTOMATYCZNE WYDŁUŻENIE DATY WAŻNOŚCI ORAZ JEDEN SPÓJNY WPIS W HISTORII
   const handleConfirmSuspendPass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !suspendPassTarget) return;
 
     let sOd = suspendStartDate;
     let sDo = suspendEndDate;
+    let calculatedDays = 0;
 
     if (suspendMode === 'days') {
       sOd = todayStr;
-      const dni = parseInt(suspendPassDays || '0', 10);
-      if (dni <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
+      calculatedDays = parseInt(suspendPassDays || '0', 10);
+      if (calculatedDays <= 0) { alert("Liczba dni musi być większa od zera!"); return; }
       const endDate = new Date();
-      endDate.setDate(endDate.getDate() + dni);
+      endDate.setDate(endDate.getDate() + calculatedDays);
       sDo = endDate.toISOString().split('T')[0];
-    }
-    if (new Date(sDo) < new Date(sOd)) {
-      alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
-      return;
+    } else {
+      if (new Date(sDo) < new Date(sOd)) {
+        alert("Planowana data zakończenia zawieszenia musi być późniejsza lub równa dacie początkowej!");
+        return;
+      }
+      const diffMs = new Date(sDo).getTime() - new Date(sOd).getTime();
+      calculatedDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)) + 1);
     }
 
-    if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} (planowo do ${sDo})? System automatycznie wypisze klubowicza z zajęć w tym okresie i zwróci wejścia.`)) return;
+    if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} do ${sDo} (łącznie ${calculatedDays} dni)?\nData ważności karnetu zostanie automatycznie wydłużona o ${calculatedDays} dni.`)) return;
+
+    // Automatyczne wydłużenie daty ważności karnetu o liczbę dni zawieszenia
+    let currentExpDate = new Date(suspendPassTarget.waznyDo || todayStr);
+    currentExpDate.setDate(currentExpDate.getDate() + calculatedDays);
+    const newExtendedExpiry = currentExpDate.toISOString().split('T')[0];
+
+    // Aktualizacja puli zawieszenia dla umów 12M
+    let updatedSuspensionDaysLeft = suspendPassTarget.contractSuspensionDaysLeft;
+    if (suspendPassTarget.isContract12M) {
+      const currentPool = suspendPassTarget.contractSuspensionDaysLeft !== undefined ? suspendPassTarget.contractSuspensionDaysLeft : 30;
+      updatedSuspensionDaysLeft = Math.max(0, currentPool - calculatedDays);
+    }
+
+    const newSuspensionRecord = {
+      id: Date.now(),
+      od: sOd,
+      do: sDo,
+      dni: calculatedDays,
+      kto: 'Zarządca / Administrator',
+      status: 'aktywne',
+      created_at: new Date().toISOString()
+    };
 
     const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
     const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === suspendPassTarget.id) {
+        const passHist = safeJsonParse(k.historiaZawieszen, []);
         return {
           ...k,
+          waznyDo: newExtendedExpiry,
           zawieszonyOd: sOd,
-          zawieszonyDo: sDo
+          zawieszonyDo: sDo,
+          contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
+          statusTekst: k.isContract12M ? `Umowa 12M (${k.rata || '0 / 12'}) - Zawieszony do ${sDo}` : `Zawieszony do ${sDo}`,
+          historiaZawieszen: [newSuspensionRecord, ...passHist]
         };
       }
       return k;
     });
 
-    const { error } = await supabase.from('klienci').update({ karnetyKlubowicza: uaktualnioneKarnety }).eq('id', profileClient.id);
+    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
+    const { error } = await supabase.from('klienci').update({ 
+      karnetyKlubowicza: uaktualnioneKarnety,
+      Wygasa: latestExpiry 
+    }).eq('id', profileClient.id);
     
     if (!error) {
       await supabase.from('transakcje').insert([{
         klient_id: profileClient.id,
         typ_operacji: 'zawieszenie_karnetu',
-        opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (Zarządca / Panel)`
+        kwota: null,
+        opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (${calculatedDays} dni). Ważność wydłużono do ${newExtendedExpiry}.`
       }]);
+      
       await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
-      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony.`);
+      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony. Data ważności karnetu została wydłużona o ${calculatedDays} dni do ${newExtendedExpiry}.`);
       setIsSuspendModalOpen(false);
       loadData();
     } else {
@@ -1450,45 +1515,19 @@ export default function KlienciPage() {
   const handleOdwiesKarnet = async (karnetTarget: any) => {
     if (!profileClient || !karnetTarget.zawieszonyOd) return;
 
-    const dzisiaj = new Date();
-    const start = new Date(karnetTarget.zawieszonyOd);
-    dzisiaj.setHours(0, 0, 0, 0);
-    start.setHours(0, 0, 0, 0);
-    let diffDays = Math.floor((dzisiaj.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) diffDays = 0;
-
-    if (!confirm(`Karnet był zawieszony od ${karnetTarget.zawieszonyOd} (łącznie ${diffDays} dni). \nCzy na pewno chcesz go odwiesić i przedłużyć jego ważność o ${diffDays} dni?`)) return;
-
-    let currentExpDate = new Date(karnetTarget.waznyDo || new Date());
-    currentExpDate.setDate(currentExpDate.getDate() + diffDays);
-    const newExpDateStr = currentExpDate.toISOString().split('T')[0];
-
-    let updatedSuspensionDaysLeft = karnetTarget.contractSuspensionDaysLeft;
-    if (karnetTarget.isContract12M) {
-      const currentPool = karnetTarget.contractSuspensionDaysLeft !== undefined ? karnetTarget.contractSuspensionDaysLeft : 30;
-      updatedSuspensionDaysLeft = Math.max(0, currentPool - diffDays);
-    }
-
-    const historiaEntry = {
-      id: Date.now(),
-      od: karnetTarget.zawieszonyOd,
-      do: todayStr,
-      dni: diffDays,
-      kto: 'Zarządca (Panel Klienci)'
-    };
+    if (!confirm(`Czy na pewno chcesz odwiesić ten karnet przedterminowo?`)) return;
 
     const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
     const uaktualnioneKarnety = stareKarnety.map((k: any) => {
       if (k.id === karnetTarget.id) {
         const passHist = safeJsonParse(k.historiaZawieszen, []);
+        const updatedHist = passHist.map((h: any) => h.status === 'aktywne' ? { ...h, status: 'zakonczone', dataOdwieszenia: todayStr } : h);
         return {
           ...k,
-          waznyDo: newExpDateStr,
-          statusTekst: k.isContract12M ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${newExpDateStr}` : `Ważny do: ${newExpDateStr}`,
           zawieszonyOd: null,
           zawieszonyDo: null,
-          contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
-          historiaZawieszen: [historiaEntry, ...passHist]
+          statusTekst: k.isContract12M ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${k.waznyDo}` : `Ważny do: ${k.waznyDo}`,
+          historiaZawieszen: updatedHist
         };
       }
       return k;
@@ -1505,9 +1544,10 @@ export default function KlienciPage() {
       await supabase.from('transakcje').insert([{
         klient_id: profileClient.id,
         typ_operacji: 'odwieszenie_karnetu',
-        opis: `Odwieszono karnet ${karnetTarget.nazwa}. Przedłużono o ${diffDays} dni do ${newExpDateStr}.`
+        kwota: null,
+        opis: `Odwieszono karnet ${karnetTarget.nazwa}. Karnet jest ponownie aktywny.`
       }]);
-      alert(`Karnet został odwieszony! Ważność została przedłużona o ${diffDays} dni. Nowa data to ${newExpDateStr}.`);
+      alert(`Karnet został odwieszony.`);
       setIsSuspendModalOpen(false);
       loadData();
     } else {
@@ -1933,9 +1973,17 @@ export default function KlienciPage() {
                 const isContract = aktywnyKarnetObj?.isContract12M;
                 const dniZawLeft = aktywnyKarnetObj?.contractSuspensionDaysLeft ?? (isContract ? 30 : null);
 
-                // Wyliczenie wykorzystanych dni z historii zawieszeń
-                const histZaw = client.historiaZawieszen || [];
-                const lacznieWykorzystaneDni = histZaw.reduce((sum: number, item: any) => {
+                // Precyzyjne zliczenie wykorzystanych dni ze wszystkich zawieszeń (zarówno w obiekcie karnetu jak i profilu)
+                const passHistZaw = aktywnyKarnetObj ? safeJsonParse(aktywnyKarnetObj.historiaZawieszen, []) : [];
+                const globalHistZaw = client.historiaZawieszen || [];
+                const mergedUniqueZaw = [...passHistZaw];
+                globalHistZaw.forEach((gh: any) => {
+                  if (!mergedUniqueZaw.some(ph => ph.id === gh.id || (ph.od === gh.od && ph.do === gh.do))) {
+                    mergedUniqueZaw.push(gh);
+                  }
+                });
+
+                const lacznieWykorzystaneDni = mergedUniqueZaw.reduce((sum: number, item: any) => {
                   const d = parseInt(item.dni || item.planowane_dni || '0', 10);
                   return sum + (isNaN(d) ? 0 : d);
                 }, 0);
@@ -2012,12 +2060,17 @@ export default function KlienciPage() {
                     {/* KOLUMNA: ZAWIESZENIE */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-mono text-xs">
                       {isContract && dniZawLeft !== null ? (
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-col gap-0.5">
                           <span className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
                             dniZawLeft <= 5 ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-sky-50 text-sky-900 border-sky-200'
                           }`}>
                             Pula: {dniZawLeft} / 30 dni
                           </span>
+                          {lacznieWykorzystaneDni > 0 && (
+                            <span className="text-[10px] text-slate-500 font-sans">
+                              Wykorzystano: {lacznieWykorzystaneDni} dni
+                            </span>
+                          )}
                         </div>
                       ) : aktywnyKarnetZawieszony ? (
                         <div className="flex flex-col gap-0.5">
@@ -2047,7 +2100,6 @@ export default function KlienciPage() {
                         <span className="text-slate-800">{client.price}</span>
                       )}
                     </td>
-
                     {/* WYGASA */}
                     <td className="py-3.5 px-3 font-mono whitespace-nowrap">
                       {maKarnet && dataWygasnieciaKarnetu !== '-' ? (
@@ -3122,74 +3174,87 @@ export default function KlienciPage() {
                       );
                     })()}
 
-                    {/* 4. HISTORIA ZAWIESZEŃ KARNETU */}
+                    {/* 4. HISTORIA ZAWIESZEŃ KARNETU - PEŁNE SCALENIE BEZ DUBLI */}
                     {activeZapisyTab === 'zawieszenia' && (() => {
-                      const suspensionsList: any[] = [];
+                      const finalSuspensionList: any[] = [];
+                      const processedPeriodKeys = new Set<string>();
 
+                      // 1. Aktywne zawieszenia bezpośrednio na obiekcie karnetu
                       (profileClient.karnetyKlubowicza || []).forEach((karnet: any) => {
                         if (karnet.zawieszonyOd) {
-                          suspensionsList.push({
-                            id: `aktywne_${karnet.id}`,
+                          const periodKey = `${karnet.nazwa}_${karnet.zawieszonyOd}_${karnet.zawieszonyDo || ''}`;
+                          processedPeriodKeys.add(periodKey);
+
+                          let diffDaysText = 'W trakcie trwania';
+                          if (karnet.zawieszonyDo) {
+                            const dOd = new Date(karnet.zawieszonyOd);
+                            const dDo = new Date(karnet.zawieszonyDo);
+                            const diffDays = Math.max(1, Math.ceil((dDo.getTime() - dOd.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+                            diffDaysText = `${diffDays} dni (plan)`;
+                          }
+
+                          finalSuspensionList.push({
+                            id: `active_${karnet.id}`,
                             karnetNazwa: karnet.nazwa,
                             od: karnet.zawieszonyOd,
-                            do: karnet.zawieszonyDo || 'Planowane',
-                            dni: 'W trakcie trwania',
+                            do: karnet.zawieszonyDo || 'Do odwołania',
+                            dni: diffDaysText,
                             kto: '🛡️ Zarządca / Administrator',
                             status: '⏸️ TRWA ZAWIESZENIE',
                             statusKlasa: 'bg-amber-100 text-amber-900 border-amber-300',
                             dataOdwieszenia: '-'
                           });
                         }
+
+                        // Zakończone wpisy w historii obiektu karnetu
                         const passHist = safeJsonParse(karnet.historiaZawieszen, []);
                         passHist.forEach((hz: any) => {
-                          const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik') || hz.by?.toLowerCase().includes('user');
-                          suspensionsList.push({
-                            id: `hist_${hz.id || Math.random()}`,
-                            karnetNazwa: karnet.nazwa,
-                            od: hz.od,
-                            do: hz.do,
-                            dni: `${hz.dni} dni`,
-                            kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : `🛡️ ${hz.kto || 'Administrator'}`,
-                            status: '✅ ZAKOŃCZONE / ODWIESZONY',
-                            statusKlasa: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-                            dataOdwieszenia: hz.do
-                          });
-                        });
-                      });
-
-                      (profileClient.historiaZawieszen || []).forEach((hz: any) => {
-                        const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik') || hz.by?.toLowerCase().includes('user') || !hz.kto;
-                        suspensionsList.push({
-                          id: `hist_client_${hz.id || Math.random()}`,
-                          karnetNazwa: hz.karnet || hz.karnetNazwa || hz.nazwa || 'Karnet klubowicza',
-                          od: hz.od || hz.start_date || hz.od_dnia,
-                          do: hz.status === 'aktywne' ? (hz.planowane_do || hz.do || '-') : (hz.do || hz.end_date || hz.do_dnia || '-'),
-                          dni: hz.status === 'aktywne' ? `Plan. ${hz.planowane_dni || 0}` : (hz.dni ? `${hz.dni} dni` : '-'),
-                          kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : `🛡️ ${hz.kto || 'Administrator'}`,
-                          status: hz.status === 'aktywne' ? '⏳ Trwa' : '✅ ZAKOŃCZONE',
-                          statusKlasa: hz.status === 'aktywne' ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-emerald-100 text-emerald-800 border-emerald-200',
-                          dataOdwieszenia: hz.status === 'aktywne' ? '-' : (hz.do || '-')
-                        });
-                      });
-
-                      (wszystkieTransakcje || [])
-                        .filter((t: any) => String(t.klient_id) === String(profileClient.id))
-                        .forEach((t: any) => {
-                          if (t.typ_operacji === 'zawieszenie_karnetu' || (t.opis && t.opis.toLowerCase().includes('zawieszenie'))) {
-                            const isKlubowicz = t.opis?.toLowerCase().includes('klubowicz') || t.opis?.toLowerCase().includes('użytkownik') || t.opis?.toLowerCase().includes('aplikacj');
-                            suspensionsList.push({
-                              id: `trans_${t.id}`,
-                              karnetNazwa: t.opis || 'Karnet klubowicza',
-                              od: new Date(t.created_at).toISOString().split('T')[0],
-                              do: '-',
-                              dni: '-',
-                              kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : '🛡️ Panel Zarządcy',
-                              status: '📜 WPIS W BAZIE',
-                              statusKlasa: 'bg-slate-100 text-slate-700 border-slate-200',
-                              dataOdwieszenia: '-'
+                          const periodKey = `${karnet.nazwa}_${hz.od}_${hz.do}`;
+                          if (!processedPeriodKeys.has(periodKey)) {
+                            processedPeriodKeys.add(periodKey);
+                            const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik');
+                            const isTrwajace = hz.status === 'aktywne';
+                            
+                            finalSuspensionList.push({
+                              id: `hist_pass_${hz.id || Math.random()}`,
+                              karnetNazwa: karnet.nazwa,
+                              od: hz.od,
+                              do: hz.do,
+                              dni: `${hz.dni || 0} dni`,
+                              kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : `🛡️ ${hz.kto || 'Zarządca / Administrator'}`,
+                              status: isTrwajace ? '⏸️ TRWA ZAWIESZENIE' : '✅ ZAKOŃCZONE',
+                              statusKlasa: isTrwajace ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                              dataOdwieszenia: hz.dataOdwieszenia || (isTrwajace ? '-' : hz.do)
                             });
                           }
                         });
+                      });
+
+                      // 2. Globalna historia zawieszeń klienta
+                      (profileClient.historiaZawieszen || []).forEach((hz: any) => {
+                        const passName = hz.karnet || hz.karnetNazwa || hz.nazwa || 'Karnet klubowicza';
+                        const odDnia = hz.od || hz.start_date || hz.od_dnia;
+                        const doDnia = hz.do || hz.end_date || hz.do_dnia || hz.planowane_do;
+                        const periodKey = `${passName}_${odDnia}_${doDnia}`;
+
+                        if (odDnia && !processedPeriodKeys.has(periodKey)) {
+                          processedPeriodKeys.add(periodKey);
+                          const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik');
+                          const isTrwajace = hz.status === 'aktywne';
+
+                          finalSuspensionList.push({
+                            id: `hist_client_${hz.id || Math.random()}`,
+                            karnetNazwa: passName,
+                            od: odDnia,
+                            do: doDnia || '-',
+                            dni: hz.dni ? `${hz.dni} dni` : `${hz.planowane_dni || 0} dni`,
+                            kto: isKlubowicz ? '📱 Klubowicz (Aplikacja)' : `🛡️ ${hz.kto || 'Zarządca / Administrator'}`,
+                            status: isTrwajace ? '⏸️ TRWA ZAWIESZENIE' : '✅ ZAKOŃCZONE',
+                            statusKlasa: isTrwajace ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                            dataOdwieszenia: isTrwajace ? '-' : (hz.dataOdwieszenia || doDnia || '-')
+                          });
+                        }
+                      });
 
                       return (
                         <table className="w-full text-left text-xs min-w-[700px]">
@@ -3203,7 +3268,7 @@ export default function KlienciPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {suspensionsList.length > 0 ? suspensionsList.map((item: any, idx: number) => (
+                            {finalSuspensionList.length > 0 ? finalSuspensionList.map((item: any, idx: number) => (
                               <tr key={`${item.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
                                 <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">{item.karnetNazwa}</td>
                                 <td className="py-3 px-4 font-mono font-bold whitespace-nowrap">{item.od} do {item.do}</td>
@@ -3825,7 +3890,7 @@ export default function KlienciPage() {
                 <div>
                   <h4 className="font-black text-amber-900 text-xs uppercase flex items-center gap-2"><span>⏸️</span> Zawieś karnet</h4>
                   <p className="text-[10px] text-amber-800 leading-tight mt-1">
-                    Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>w momencie odwieszenia</strong> i doliczona do ważności.
+                    Zawieszenie automatycznie wydłuża termin ważności karnetu o liczbę zawieszonych dni i aktualizuje wykorzystanie.
                   </p>
                 </div>
                 
@@ -3835,10 +3900,10 @@ export default function KlienciPage() {
                       <div className="flex-1 py-1.5 text-center bg-amber-200 text-amber-900">Karnet zawieszony</div>
                     </div>
                     <div className="space-y-1">
-                      <label className="font-bold text-amber-900">Zawieszony od dnia</label>
-                      <div className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold font-mono">{suspendPassTarget.zawieszonyOd}</div>
+                      <label className="font-bold text-amber-900">Zawieszony w okresie</label>
+                      <div className="w-full bg-white border border-amber-200 rounded-xl px-3 py-2 font-bold font-mono">{suspendPassTarget.zawieszonyOd} do {suspendPassTarget.zawieszonyDo || 'Planowane'}</div>
                     </div>
-                    <button type="button" onClick={() => { handleOdwiesKarnet(suspendPassTarget); }} className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Odwieś karnet i dolicz dni</button>
+                    <button type="button" onClick={() => { handleOdwiesKarnet(suspendPassTarget); }} className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer">Odwieś karnet</button>
                   </div>
                 ) : (
                   <form onSubmit={handleConfirmSuspendPass} className="space-y-3 text-xs mt-4">
@@ -4078,4 +4143,3 @@ export default function KlienciPage() {
     </div>
   );
 }
-
