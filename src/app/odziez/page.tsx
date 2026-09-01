@@ -30,6 +30,7 @@ export default function OdziezPage() {
   const [editDescription, setEditDescription] = useState('Pamiątkowa koszulka klubowa dedykowana na to wydarzenie');
   const [editPrice, setEditPrice] = useState('110.00');
   const [editMinOsob, setEditMinOsob] = useState('5');
+  const [editStatus, setEditStatus] = useState('aktywny');
   const [editImgFront, setEditImgFront] = useState('/koszulka-przod.png');
   const [editImgBack, setEditImgBack] = useState('/koszulka-tyl.png');
   const [editImgSizeMale, setEditImgSizeMale] = useState('');
@@ -148,6 +149,7 @@ export default function OdziezPage() {
     setEditDescription(currentCamp.opis || 'Pamiątkowa koszulka klubowa dedykowana na to wydarzenie');
     setEditPrice(String(currentCamp.cena || '110.00'));
     setEditMinOsob(String(currentCamp.min_osob || '5'));
+    setEditStatus(currentCamp.status || 'aktywny');
     setEditImgFront(currentCamp.zdjecie_przod || '/koszulka-przod.png');
     setEditImgBack(currentCamp.zdjecie_tyl || '/koszulka-tyl.png');
     setEditImgSizeMale(currentCamp.tabela_rozmiarow_meska_img || '');
@@ -572,30 +574,51 @@ export default function OdziezPage() {
     setIsProcessing(true);
 
     try {
-      const payload = {
+      // Przygotowanie payloadu z obsługą potencjalnych braków kolumn
+      const payload: Record<string, any> = {
         tytul: editTitle.trim(),
         opis: editDescription.trim(),
         cena: parseFloat(editPrice) || 110.00,
         min_osob: parseInt(editMinOsob, 10) || 5,
+        status: editStatus || 'aktywny',
         zdjecie_przod: editImgFront,
         zdjecie_tyl: editImgBack,
         tabela_rozmiarow_meska_img: editImgSizeMale || null,
-        tabela_rozmiarow_damska_img: editImgSizeFemale || null,
-        status: 'aktywny'
+        tabela_rozmiarow_damska_img: editImgSizeFemale || null
       };
 
       if (campaign?.id) {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('odziez_kampanie')
           .update(payload)
           .eq('id', campaign.id);
 
+        // Fallback w razie braku kolumn tabel rozmiarów w bazie
+        if (error && error.message && error.message.includes('tabela_rozmiarow')) {
+          delete payload.tabela_rozmiarow_meska_img;
+          delete payload.tabela_rozmiarow_damska_img;
+          const fallbackRes = await supabase
+            .from('odziez_kampanie')
+            .update(payload)
+            .eq('id', campaign.id);
+          error = fallbackRes.error;
+        }
+
         if (error) throw error;
         alert("Pomyślnie zaktualizowano drop odzieży!");
       } else {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('odziez_kampanie')
           .insert([payload]);
+
+        if (error && error.message && error.message.includes('tabela_rozmiarow')) {
+          delete payload.tabela_rozmiarow_meska_img;
+          delete payload.tabela_rozmiarow_damska_img;
+          const fallbackRes = await supabase
+            .from('odziez_kampanie')
+            .insert([payload]);
+          error = fallbackRes.error;
+        }
 
         if (error) throw error;
 
@@ -745,7 +768,6 @@ export default function OdziezPage() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
             <div className="flex items-center gap-4">
               
-              {/* Miniaturka przedniej strony koszulki w nagłówku */}
               <div className="w-14 h-14 bg-sky-50 rounded-2xl flex items-center justify-center border border-sky-100 shadow-sm shrink-0 overflow-hidden relative group">
                 {campaign.zdjecie_przod ? (
                   <img 
@@ -765,7 +787,6 @@ export default function OdziezPage() {
                     {campaign.tytul || 'OFICJALNA KOSZULKA TRENINGOWA'}
                   </h1>
 
-                  {/* Dodatkowa mała plakietka z miniaturką i nazwą */}
                   {campaign.zdjecie_przod && (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700">
                       <img src={campaign.zdjecie_przod} alt="mini" className="w-4 h-4 object-contain rounded" />
@@ -990,7 +1011,7 @@ export default function OdziezPage() {
             </div>
           </div>
 
-          {/* 5. TABELA ROZMIARÓW (Z OBSŁUGĄ WGRANYCH ZDJĘĆ TABELI) */}
+          {/* 5. TABELA ROZMIARÓW */}
           <div className="space-y-4 pt-6 border-t border-slate-100">
             <div className="flex justify-between items-center">
               <h3 className="font-black text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -1017,7 +1038,7 @@ export default function OdziezPage() {
               </div>
             </div>
 
-            {/* TABELA MĘSKA: WGRANE ZDJĘCIE LUB TABELA */}
+            {/* TABELA MĘSKA */}
             {activeSizeTab === 'meska' ? (
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-4 space-y-3">
                 <div className="bg-sky-50 px-4 py-2 rounded-xl text-sky-900 font-bold text-xs uppercase flex items-center justify-between">
@@ -1070,7 +1091,7 @@ export default function OdziezPage() {
                 )}
               </div>
             ) : (
-              /* TABELA DAMSKA: WGRANE ZDJĘCIE LUB TABELA */
+              /* TABELA DAMSKA */
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-4 space-y-3">
                 <div className="bg-rose-50 px-4 py-2 rounded-xl text-rose-900 font-bold text-xs uppercase flex items-center justify-between">
                   <span>Tabela Damska (Wymiary w cm, tolerancja +/- 1 cm)</span>
@@ -1150,16 +1171,22 @@ export default function OdziezPage() {
 
       {/* 6. MODAL ZAMÓWIENIA KOSZULKI DLA KLUBOWICZA */}
       {isOrderModalOpen && campaign && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl space-y-5 border border-sky-100">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full max-h-[92vh] flex flex-col shadow-2xl border border-sky-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
               <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
                 <span>👕</span> Zamówienie koszulki
               </h3>
-              <button onClick={() => setIsOrderModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+              <button 
+                onClick={() => setIsOrderModalOpen(false)} 
+                className="text-slate-400 hover:text-slate-700 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleOrderSubmit} className="space-y-4 text-xs">
+            <form onSubmit={handleOrderSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 block">Wybierz wariant kroju *</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1244,15 +1271,17 @@ export default function OdziezPage() {
                 </button>
               </div>
             </form>
+
           </div>
         </div>
       )}
 
-      {/* 7. MODAL RĘCZNEGO DODAWANIA KLUBOWICZA PRZEZ ADMINA Z WYSZUKIWARKĄ */}
+      {/* 7. MODAL RĘCZNEGO DODAWANIA KLUBOWICZA PRZEZ ADMINA */}
       {isManualAddModalOpen && isAdmin && campaign && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-emerald-200 my-8">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-emerald-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
               <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
                 <span>➕</span> Dodaj klubowicza do zbiórki
               </h3>
@@ -1262,13 +1291,13 @@ export default function OdziezPage() {
                   setSelectedManualClient(null);
                   setClientSearchQuery('');
                 }} 
-                className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer transition-colors"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleManualAddSubmit} className="space-y-4 text-xs">
+            <form onSubmit={handleManualAddSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 block">Wyszukaj klubowicza z bazy *</label>
                 <input 
@@ -1394,19 +1423,30 @@ export default function OdziezPage() {
                 </button>
               </div>
             </form>
+
           </div>
         </div>
       )}
 
-      {/* 8. MODAL KREATORA / EDYCJI KOSZULKI DLA ADMINA */}
+      {/* 8. MODAL KREATORA / EDYCJI KOSZULKI DLA ADMINA (NAPRAWIONE OKNO) */}
       {isEditModalOpen && isAdmin && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-in fade-in overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200 my-8">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>👕</span> {campaign ? 'Edycja Koszulki Klubowej' : 'Dodaj Nową Koszulkę (Nowy Drop)'}
-              </h3>
-              <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-sky-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            
+            {/* PRZYPIĘTY, WIDOCZNY ZAWSZE NAGŁÓWEK MODALU */}
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">👕</span>
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                  {campaign ? 'Edycja Koszulki Klubowej' : 'Dodaj Nową Koszulkę (Nowy Drop)'}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setIsEditModalOpen(false)} 
+                className="text-slate-400 hover:text-slate-700 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
             </div>
 
             {/* Ukryte inputy wgrywania plików graficznych */}
@@ -1439,7 +1479,8 @@ export default function OdziezPage() {
               className="hidden" 
             />
 
-            <form onSubmit={handleSaveCampaignAdmin} className="space-y-4 text-xs">
+            {/* PRZEWIJANA ZAWARTOŚĆ FORMULARZA */}
+            <form onSubmit={handleSaveCampaignAdmin} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Tytuł Dropu / Koszulki *</label>
                 <input 
@@ -1489,14 +1530,30 @@ export default function OdziezPage() {
                 </div>
               </div>
 
+              {campaign && (
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Status dropu</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 font-bold focus:outline-none focus:border-blue-500 text-slate-900"
+                  >
+                    <option value="aktywny">Aktywny (Można zamawiać)</option>
+                    <option value="w_realizacji">W realizacji w szwalni (Zakończono zbieranie)</option>
+                    <option value="zakonczony">Zakończony (Rozdane koszulki)</option>
+                    <option value="anulowany">Anulowany (Wykonano zwroty)</option>
+                  </select>
+                </div>
+              )}
+
               {/* ZDJĘCIE PRZÓD */}
-              <div className="space-y-1.5 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <div className="space-y-1.5 p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-800 block">Zdjęcie Przód (Wizualizacja)</label>
                   <button
                     type="button"
                     onClick={() => frontFileInputRef.current?.click()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
                   >
                     📁 Wybierz z urządzenia
                   </button>
@@ -1519,13 +1576,13 @@ export default function OdziezPage() {
               </div>
 
               {/* ZDJĘCIE TYŁ */}
-              <div className="space-y-1.5 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <div className="space-y-1.5 p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-800 block">Zdjęcie Tył (Wizualizacja)</label>
                   <button
                     type="button"
                     onClick={() => backFileInputRef.current?.click()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
                   >
                     📁 Wybierz z urządzenia
                   </button>
@@ -1548,13 +1605,13 @@ export default function OdziezPage() {
               </div>
 
               {/* ZDJĘCIE TABELI ROZMIARÓW: MĘSKA */}
-              <div className="space-y-1.5 p-3 bg-sky-50/50 rounded-2xl border border-sky-200">
+              <div className="space-y-1.5 p-3.5 bg-sky-50/60 rounded-2xl border border-sky-200">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-sky-950 block">Grafika Tabeli Rozmiarów (Męska)</label>
                   <button
                     type="button"
                     onClick={() => sizeMaleFileInputRef.current?.click()}
-                    className="bg-sky-600 hover:bg-sky-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                    className="bg-sky-600 hover:bg-sky-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
                   >
                     📁 Wybierz z urządzenia
                   </button>
@@ -1577,13 +1634,13 @@ export default function OdziezPage() {
               </div>
 
               {/* ZDJĘCIE TABELI ROZMIARÓW: DAMSKA */}
-              <div className="space-y-1.5 p-3 bg-rose-50/50 rounded-2xl border border-rose-200">
+              <div className="space-y-1.5 p-3.5 bg-rose-50/60 rounded-2xl border border-rose-200">
                 <div className="flex items-center justify-between">
                   <label className="font-bold text-rose-950 block">Grafika Tabeli Rozmiarów (Damska)</label>
                   <button
                     type="button"
                     onClick={() => sizeFemaleFileInputRef.current?.click()}
-                    className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
                   >
                     📁 Wybierz z urządzenia
                   </button>
@@ -1605,6 +1662,7 @@ export default function OdziezPage() {
                 )}
               </div>
 
+              {/* PRZYPIĘTY DÓŁ Z PRZYCISKAMI */}
               <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
                 <button 
                   type="button" 
@@ -1622,6 +1680,7 @@ export default function OdziezPage() {
                 </button>
               </div>
             </form>
+
           </div>
         </div>
       )}
