@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 export type PaymentStatus = "nieoplacone" | "zadatek" | "calosc";
+export type KoszulkaPaymentStatus = "nieoplacone" | "calosc";
 
 interface Uczestnik {
   id?: string | number;
@@ -11,6 +12,16 @@ interface Uczestnik {
   nazwisko: string;
   email?: string;
   status_platnosci?: PaymentStatus;
+}
+
+export interface ZamowienieKoszulki {
+  id?: string | number;
+  imie: string;
+  nazwisko: string;
+  email?: string;
+  rozmiar: string;
+  typ?: string; // np. "męska", "damska", "dziecięca"
+  status_platnosci?: KoszulkaPaymentStatus;
 }
 
 interface KlientBaza {
@@ -58,6 +69,7 @@ interface Wydarzenie {
   koszulki_opis?: string | null;
   koszulki_grafika_glowna?: string | null;
   koszulki_grafiki?: string[];
+  koszulki_zamowienia?: ZamowienieKoszulki[];
 }
 
 export const parsePrice = (val?: string | null): number => {
@@ -131,12 +143,21 @@ export default function WydarzeniaPage() {
     koszulki_termin: "",
     koszulki_opis: "",
     koszulki_grafika_glowna: "" as string | null,
-    koszulki_grafiki: [] as string[]
+    koszulki_grafiki: [] as string[],
+    koszulki_zamowienia: [] as ZamowienieKoszulki[]
   });
 
+  // Wyszukiwarki i pola ręcznego dopisywania uczestników wyjazdu
   const [klientSearch, setKlientSearch] = useState("");
   const [manualImie, setManualImie] = useState("");
   const [manualNazwisko, setManualNazwisko] = useState("");
+
+  // Pola dodawania zamówienia koszulki w formularzu admina
+  const [koszulkaKlientSearch, setKoszulkaKlientSearch] = useState("");
+  const [koszulkaManualImie, setKoszulkaManualImie] = useState("");
+  const [koszulkaManualNazwisko, setKoszulkaManualNazwisko] = useState("");
+  const [koszulkaSelectedRozmiar, setKoszulkaSelectedRozmiar] = useState("L");
+  const [koszulkaSelectedTyp, setKoszulkaSelectedTyp] = useState("męska");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const planFileInputRef = useRef<HTMLInputElement>(null);
@@ -341,6 +362,14 @@ export default function WydarzeniaPage() {
     return w.uczestnicy.some(u => u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase());
   };
 
+  // Wyszukanie czy zalogowany klubowicz zamówił koszulkę
+  const userKoszulkaZamowienie = useMemo(() => {
+    if (!selectedEvent || !selectedEvent.koszulki_zamowienia || !currentUserEmail) return null;
+    return selectedEvent.koszulki_zamowienia.find(
+      z => z.email && z.email.toLowerCase() === currentUserEmail.toLowerCase()
+    ) || null;
+  }, [selectedEvent, currentUserEmail]);
+
   const handleOpenAdd = () => {
     setEditingId(null);
     setForm({ 
@@ -371,9 +400,11 @@ export default function WydarzeniaPage() {
       koszulki_termin: "", 
       koszulki_opis: "", 
       koszulki_grafika_glowna: null, 
-      koszulki_grafiki: [] 
+      koszulki_grafiki: [],
+      koszulki_zamowienia: []
     });
     setKlientSearch("");
+    setKoszulkaKlientSearch("");
     setIsAdminModalOpen(true);
   };
 
@@ -414,9 +445,11 @@ export default function WydarzeniaPage() {
       koszulki_termin: w.koszulki_termin || "",
       koszulki_opis: w.koszulki_opis || "",
       koszulki_grafika_glowna: w.koszulki_grafika_glowna || null,
-      koszulki_grafiki: Array.isArray(w.koszulki_grafiki) ? w.koszulki_grafiki : []
+      koszulki_grafiki: Array.isArray(w.koszulki_grafiki) ? w.koszulki_grafiki : [],
+      koszulki_zamowienia: Array.isArray(w.koszulki_zamowienia) ? w.koszulki_zamowienia.map(z => ({ ...z, status_platnosci: z.status_platnosci || "nieoplacone" })) : []
     });
     setKlientSearch("");
+    setKoszulkaKlientSearch("");
     setIsAdminModalOpen(true);
   };
 
@@ -518,6 +551,7 @@ export default function WydarzeniaPage() {
     }));
   };
 
+  // --- OBSŁUGA UCZESTNIKÓW WYDARZENIA ---
   const handleAddParticipantFromDB = (k: KlientBaza) => {
     if (form.uczestnicy.some(u => (u.id && u.id === k.id) || (u.email && u.email.toLowerCase() === k.email?.toLowerCase()))) {
       return;
@@ -595,6 +629,87 @@ export default function WydarzeniaPage() {
     }
   };
 
+  // --- OBSŁUGA ZAMÓWIEŃ KOSZULEK (DODAWANIE / EDYCJA / PŁATNOŚCI) ---
+  const handleAddKoszulkaFromDB = (k: KlientBaza) => {
+    setForm(prev => ({
+      ...prev,
+      koszulki_zamowienia: [
+        ...(prev.koszulki_zamowienia || []),
+        {
+          id: k.id,
+          imie: k.imie,
+          nazwisko: k.nazwisko,
+          email: k.email,
+          rozmiar: koszulkaSelectedRozmiar,
+          typ: koszulkaSelectedTyp,
+          status_platnosci: "nieoplacone"
+        }
+      ]
+    }));
+    setKoszulkaKlientSearch("");
+  };
+
+  const handleAddManualKoszulka = () => {
+    if (!koszulkaManualImie.trim()) return;
+    setForm(prev => ({
+      ...prev,
+      koszulki_zamowienia: [
+        ...(prev.koszulki_zamowienia || []),
+        {
+          id: Date.now(),
+          imie: koszulkaManualImie.trim(),
+          nazwisko: koszulkaManualNazwisko.trim(),
+          rozmiar: koszulkaSelectedRozmiar,
+          typ: koszulkaSelectedTyp,
+          status_platnosci: "nieoplacone"
+        }
+      ]
+    }));
+    setKoszulkaManualImie("");
+    setKoszulkaManualNazwisko("");
+  };
+
+  const handleRemoveKoszulkaZamowienie = (indexToRemove: number) => {
+    setForm(prev => ({
+      ...prev,
+      koszulki_zamowienia: (prev.koszulki_zamowienia || []).filter((_, idx) => idx !== indexToRemove)
+    }));
+  };
+
+  const handleUpdateKoszulkaPaymentInForm = (index: number, status: KoszulkaPaymentStatus) => {
+    setForm(prev => {
+      const updated = [...(prev.koszulki_zamowienia || [])];
+      updated[index] = { ...updated[index], status_platnosci: status };
+      return { ...prev, koszulki_zamowienia: updated };
+    });
+  };
+
+  const handleQuickKoszulkaPaymentToggle = async (orderIndex: number) => {
+    if (!isAdmin || !selectedEvent || !selectedEvent.koszulki_zamowienia) return;
+
+    const currentOrders = [...selectedEvent.koszulki_zamowienia];
+    const target = currentOrders[orderIndex];
+    const nextStatus: KoszulkaPaymentStatus = target.status_platnosci === "calosc" ? "nieoplacone" : "calosc";
+    
+    const updatedOrders = currentOrders.map((z, idx) => 
+      idx === orderIndex ? { ...z, status_platnosci: nextStatus } : z
+    );
+
+    setSelectedEvent({ ...selectedEvent, koszulki_zamowienia: updatedOrders });
+    setWydarzenia(prev => prev.map(w => w.id === selectedEvent.id ? { ...w, koszulki_zamowienia: updatedOrders } : w));
+
+    const { error } = await supabase
+      .from("wydarzenia")
+      .update({ koszulki_zamowienia: updatedOrders })
+      .eq("id", selectedEvent.id);
+
+    if (error) {
+      console.error("Błąd aktualizacji statusu płatności koszulki:", error);
+      setSelectedEvent({ ...selectedEvent, koszulki_zamowienia: currentOrders });
+      setWydarzenia(prev => prev.map(w => w.id === selectedEvent.id ? { ...w, koszulki_zamowienia: currentOrders } : w));
+    }
+  };
+
   const handleSaveEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
@@ -633,7 +748,8 @@ export default function WydarzeniaPage() {
       koszulki_termin: form.pokaz_koszulki ? (form.koszulki_termin || null) : null,
       koszulki_opis: form.pokaz_koszulki ? form.koszulki_opis : null,
       koszulki_grafika_glowna: form.pokaz_koszulki ? form.koszulki_grafika_glowna : null,
-      koszulki_grafiki: form.pokaz_koszulki ? form.koszulki_grafiki : []
+      koszulki_grafiki: form.pokaz_koszulki ? form.koszulki_grafiki : [],
+      koszulki_zamowienia: form.pokaz_koszulki ? (form.koszulki_zamowienia || []) : []
     };
 
     try {
@@ -693,6 +809,14 @@ export default function WydarzeniaPage() {
     );
   }, [klienciBaza, klientSearch]);
 
+  const filteredKoszulkaKlienci = useMemo(() => {
+    if (!koszulkaKlientSearch.trim()) return [];
+    const search = koszulkaKlientSearch.toLowerCase();
+    return klienciBaza.filter(k => 
+      `${k.imie} ${k.nazwisko} ${k.email || ""}`.toLowerCase().includes(search)
+    );
+  }, [klienciBaza, koszulkaKlientSearch]);
+
   const getPaymentBadge = (status?: PaymentStatus) => {
     switch (status) {
       case "calosc":
@@ -702,6 +826,16 @@ export default function WydarzeniaPage() {
       case "nieoplacone":
       default:
         return { text: "Oczekuje", bg: "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100", icon: "⭕" };
+    }
+  };
+
+  const getKoszulkaPaymentBadge = (status?: KoszulkaPaymentStatus) => {
+    switch (status) {
+      case "calosc":
+        return { text: "Opłacone", bg: "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100", icon: "🟢" };
+      case "nieoplacone":
+      default:
+        return { text: "Do wpłaty", bg: "bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100", icon: "🟡" };
     }
   };
 
@@ -717,9 +851,9 @@ export default function WydarzeniaPage() {
 
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie; isPast?: boolean }) => {
     const zamkniete = isZapisyZamkniete(w);
-    // Wyznaczamy stan nieprzeczytania w oparciu o localStorage
     const unread = !isPast && isEventUnread(w.id);
     const uczestnicyCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.length : 0;
+    const koszulkiCount = Array.isArray(w.koszulki_zamowienia) ? w.koszulki_zamowienia.length : 0;
     const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "zadatek").length : 0;
     const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "calosc").length : 0;
 
@@ -737,7 +871,6 @@ export default function WydarzeniaPage() {
           </div>
         )}
 
-        {/* Pulsujący wykrzyknik na plakacie/karcie */}
         {unread && (
           <div className={`absolute z-20 flex h-6 w-6 ${isAdmin ? 'top-3 left-3' : 'top-3 right-3'}`}>
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
@@ -782,21 +915,28 @@ export default function WydarzeniaPage() {
 
           <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{w.opis || "Brak dodatkowego opisu."}</p>
           
-          {uczestnicyCount > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5 items-center">
+          <div className="mt-3 flex flex-wrap gap-1.5 items-center">
+            {uczestnicyCount > 0 && (
               <div className="py-1 px-2.5 bg-sky-50 rounded-lg text-[11px] font-bold text-sky-800 flex items-center gap-1.5">
                 <span>👥</span>
                 <span>Zapisanych: <strong className="font-black">{uczestnicyCount}</strong></span>
               </div>
+            )}
 
-              {isAdmin && (oplaconeZadatekCount > 0 || oplaconeCaloscCount > 0) && (
-                <div className="py-1 px-2.5 bg-emerald-50 rounded-lg text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
-                  <span>💰</span>
-                  <span>Wpłaty: <strong>{oplaconeCaloscCount} pełne</strong> {oplaconeZadatekCount > 0 && `• ${oplaconeZadatekCount} zadatek`}</span>
-                </div>
-              )}
-            </div>
-          )}
+            {w.pokaz_koszulki && koszulkiCount > 0 && isAdmin && (
+              <div className="py-1 px-2.5 bg-indigo-50 rounded-lg text-[11px] font-bold text-indigo-900 flex items-center gap-1.5">
+                <span>👕</span>
+                <span>Koszulki: <strong>{koszulkiCount} szt.</strong></span>
+              </div>
+            )}
+
+            {isAdmin && (oplaconeZadatekCount > 0 || oplaconeCaloscCount > 0) && (
+              <div className="py-1 px-2.5 bg-emerald-50 rounded-lg text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
+                <span>💰</span>
+                <span>Wpłaty: <strong>{oplaconeCaloscCount} pełne</strong> {oplaconeZadatekCount > 0 && `• ${oplaconeZadatekCount} zadatek`}</span>
+              </div>
+            )}
+          </div>
 
           <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
             <div className="flex flex-col">
@@ -1242,7 +1382,7 @@ export default function WydarzeniaPage() {
 
                   {/* Moduł Koszulki Treningowe */}
                   {selectedEvent.pokaz_koszulki && (
-                    <div className="bg-white p-5 sm:p-7 rounded-2xl sm:rounded-3xl border-2 border-indigo-200 shadow-sm space-y-5">
+                    <div className="bg-white p-5 sm:p-7 rounded-2xl sm:rounded-3xl border-2 border-indigo-200 shadow-sm space-y-6">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-50 pb-4">
                         <div className="flex items-center gap-3">
                           <span className="text-3xl shrink-0">👕</span>
@@ -1269,6 +1409,81 @@ export default function WydarzeniaPage() {
                           )}
                         </div>
                       </div>
+
+                      {/* Informacja o zamówieniu dla zalogowanego klubowicza (Prywatne) */}
+                      {!isAdmin && userKoszulkaZamowienie && (
+                        <div className="bg-indigo-50/80 border-2 border-indigo-300 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">🏷️</span>
+                            <div>
+                              <div className="text-[10px] font-black uppercase text-indigo-800">Twoje zamówienie koszulki</div>
+                              <div className="font-black text-indigo-950 text-sm">
+                                Rozmiar: <span className="text-indigo-600 uppercase font-black">{userKoszulkaZamowienie.rozmiar}</span> {userKoszulkaZamowienie.typ && `(${userKoszulkaZamowienie.typ})`}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-500">Status wpłaty:</span>
+                            <span className={`px-2.5 py-1 rounded-xl text-xs font-black border flex items-center gap-1 ${getKoszulkaPaymentBadge(userKoszulkaZamowienie.status_platnosci).bg}`}>
+                              <span>{getKoszulkaPaymentBadge(userKoszulkaZamowienie.status_platnosci).icon}</span>
+                              <span>{getKoszulkaPaymentBadge(userKoszulkaZamowienie.status_platnosci).text}</span>
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Lista zamówień koszulek widoczna WYŁĄCZNIE dla Administratora */}
+                      {isAdmin && selectedEvent.koszulki_zamowienia && selectedEvent.koszulki_zamowienia.length > 0 && (
+                        <div className="bg-indigo-50/40 p-4 sm:p-6 rounded-2xl border border-indigo-200 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 pb-3">
+                            <div>
+                              <h4 className="font-black text-xs sm:text-sm text-indigo-950 uppercase tracking-wider flex items-center gap-2">
+                                <span>📋</span> Zamówienia koszulek ({selectedEvent.koszulki_zamowienia.length})
+                              </h4>
+                              <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                                💡 Kliknij w status, aby przełączyć: Do wpłaty ➔ Opłacone (Klubowicze nie widzą tej listy).
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                              <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-950 border border-emerald-200">
+                                Opłacone: {selectedEvent.koszulki_zamowienia.filter(z => z.status_platnosci === "calosc").length} / {selectedEvent.koszulki_zamowienia.length}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {selectedEvent.koszulki_zamowienia.map((z, zIdx) => {
+                              const badge = getKoszulkaPaymentBadge(z.status_platnosci);
+                              return (
+                                <div key={zIdx} className="bg-white border border-indigo-100 p-3 rounded-xl flex items-center justify-between gap-2 shadow-xs">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-bold text-xs text-indigo-950 truncate">
+                                      {z.imie} {z.nazwisko}
+                                    </div>
+                                    <div className="text-[10px] font-black text-indigo-700 mt-0.5 flex items-center gap-1.5">
+                                      <span className="bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded uppercase">
+                                        Rozmiar: {z.rozmiar}
+                                      </span>
+                                      {z.typ && (
+                                        <span className="text-slate-500 font-medium">({z.typ})</span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    onClick={() => handleQuickKoszulkaPaymentToggle(zIdx)}
+                                    title="Kliknij, aby przełączyć status płatności za koszulkę"
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 shrink-0 ${badge.bg}`}
+                                  >
+                                    <span className="text-[9px]">{badge.icon}</span>
+                                    <span>{badge.text}</span>
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       {selectedEvent.koszulki_opis && (
                         <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100 font-medium break-words">
@@ -1830,7 +2045,7 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
 
-                {/* 6. KOSZULKI TRENINGOWE */}
+                {/* 6. KOSZULKI TRENINGOWE & ZAMÓWIENIA */}
                 <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-indigo-200 space-y-4">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input 
@@ -1876,6 +2091,150 @@ export default function WydarzeniaPage() {
                           rows={2} 
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-indigo-500 resize-none" 
                         />
+                      </div>
+
+                      {/* ZARZĄDZANIE OSOBAMI I ROZMIARAMI KOSZULEK */}
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                          <label className="font-black text-indigo-950 text-xs uppercase tracking-wider block">
+                            👕 Lista zamówień koszulek ({form.koszulki_zamowienia?.length || 0})
+                          </label>
+                          <div className="text-[10px] font-bold text-indigo-900">
+                            🟢 Opłacone: {(form.koszulki_zamowienia || []).filter(z => z.status_platnosci === "calosc").length} / {form.koszulki_zamowienia?.length || 0}
+                          </div>
+                        </div>
+
+                        {/* Wyszukiwarka z bazy + wybór rozmiaru i typu */}
+                        <div className="space-y-2">
+                          <input 
+                            type="text" 
+                            value={koszulkaKlientSearch} 
+                            onChange={(e) => setKoszulkaKlientSearch(e.target.value)} 
+                            placeholder="🔍 Szukaj klubowicza z bazy do zamówienia koszulki..." 
+                            className="w-full bg-white border border-indigo-200 rounded-xl px-3.5 py-2 text-xs font-semibold focus:outline-none focus:border-indigo-500" 
+                          />
+                          {koszulkaKlientSearch.length > 0 && (
+                            <div className="max-h-40 overflow-y-auto bg-white border border-indigo-200 rounded-xl p-2 space-y-1 shadow-md">
+                              {filteredKoszulkaKlienci.slice(0, 10).map(k => (
+                                <div 
+                                  key={k.id} 
+                                  onClick={() => handleAddKoszulkaFromDB(k)} 
+                                  className="p-2 hover:bg-indigo-50 rounded-lg text-xs font-bold text-indigo-950 flex justify-between items-center cursor-pointer transition-colors"
+                                >
+                                  <span className="truncate pr-2">{k.imie} {k.nazwisko} <span className="text-slate-400 font-normal">({k.email || "brak e-mail"})</span></span>
+                                  <span className="text-indigo-600 font-black shrink-0">+ Dodaj (Rozmiar: {koszulkaSelectedRozmiar})</span>
+                                </div>
+                              ))}
+                              {filteredKoszulkaKlienci.length === 0 && (
+                                <div className="text-xs text-slate-400 p-2 text-center">Brak klubowiczów</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Ręczne dopisanie osoby i rozmiaru */}
+                        <div className="flex flex-wrap sm:flex-nowrap gap-2 items-center">
+                          <input 
+                            type="text" 
+                            placeholder="Imię" 
+                            value={koszulkaManualImie} 
+                            onChange={(e) => setKoszulkaManualImie(e.target.value)} 
+                            className="w-full sm:flex-1 min-w-0 bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-indigo-500" 
+                          />
+                          <input 
+                            type="text" 
+                            placeholder="Nazwisko" 
+                            value={koszulkaManualNazwisko} 
+                            onChange={(e) => setKoszulkaManualNazwisko(e.target.value)} 
+                            className="w-full sm:flex-1 min-w-0 bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:border-indigo-500" 
+                          />
+                          <select
+                            value={koszulkaSelectedRozmiar}
+                            onChange={(e) => setKoszulkaSelectedRozmiar(e.target.value)}
+                            className="bg-white border border-indigo-200 rounded-xl px-2.5 py-2 text-xs font-bold text-indigo-950 cursor-pointer focus:outline-none shrink-0"
+                          >
+                            <option value="XS">XS</option>
+                            <option value="S">S</option>
+                            <option value="M">M</option>
+                            <option value="L">L</option>
+                            <option value="XL">XL</option>
+                            <option value="XXL">XXL</option>
+                            <option value="3XL">3XL</option>
+                          </select>
+                          <select
+                            value={koszulkaSelectedTyp}
+                            onChange={(e) => setKoszulkaSelectedTyp(e.target.value)}
+                            className="bg-white border border-indigo-200 rounded-xl px-2.5 py-2 text-xs font-bold text-indigo-950 cursor-pointer focus:outline-none shrink-0"
+                          >
+                            <option value="męska">Męska</option>
+                            <option value="damska">Damska</option>
+                            <option value="dziecięca">Dziecięca</option>
+                            <option value="inna">Inna</option>
+                          </select>
+                          <button 
+                            type="button" 
+                            onClick={handleAddManualKoszulka} 
+                            className="w-full sm:w-auto bg-indigo-900 hover:bg-indigo-950 text-white font-bold px-4 py-2 rounded-xl text-xs cursor-pointer transition-colors shrink-0"
+                          >
+                            Dopisz
+                          </button>
+                        </div>
+
+                        {/* Lista zamówionych koszulek */}
+                        {(form.koszulki_zamowienia || []).length > 0 && (
+                          <div className="space-y-2 pt-2 border-t border-indigo-200/60 max-h-60 overflow-y-auto pr-1">
+                            {(form.koszulki_zamowienia || []).map((z, index) => {
+                              const currentStatus: KoszulkaPaymentStatus = z.status_platnosci || "nieoplacone";
+                              return (
+                                <div key={index} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white border border-indigo-100 p-2.5 rounded-xl text-xs font-bold text-indigo-950 shadow-xs">
+                                  <div className="flex items-center gap-2 truncate">
+                                    <span className="truncate">{z.imie} {z.nazwisko}</span>
+                                    <span className="bg-indigo-50 text-indigo-900 border border-indigo-200 px-1.5 py-0.5 rounded text-[10px] uppercase font-black shrink-0">
+                                      {z.rozmiar} {z.typ && `• ${z.typ}`}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                                    <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 gap-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateKoszulkaPaymentInForm(index, "nieoplacone")}
+                                        className={`px-2 py-1 rounded-md text-[10px] font-black cursor-pointer transition-all ${
+                                          currentStatus === "nieoplacone" 
+                                            ? "bg-amber-500 text-slate-950 shadow-xs" 
+                                            : "text-amber-800/60 hover:text-amber-900"
+                                        }`}
+                                      >
+                                        Do wpłaty
+                                      </button>
+                                      
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateKoszulkaPaymentInForm(index, "calosc")}
+                                        className={`px-2 py-1 rounded-md text-[10px] font-black cursor-pointer transition-all ${
+                                          currentStatus === "calosc" 
+                                            ? "bg-emerald-600 text-white shadow-xs" 
+                                            : "text-emerald-700/60 hover:text-emerald-800"
+                                        }`}
+                                      >
+                                        🟢 Opłacone
+                                      </button>
+                                    </div>
+
+                                    <button 
+                                      type="button" 
+                                      onClick={() => handleRemoveKoszulkaZamowienie(index)} 
+                                      className="text-rose-500 hover:text-rose-700 p-1 font-black cursor-pointer ml-1" 
+                                      title="Usuń zamówienie"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       <div className="space-y-1">
