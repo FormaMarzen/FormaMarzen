@@ -42,7 +42,7 @@ const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | 
   return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
-// KULOODPORNY PARSER DAT Z CLASS_KEY (ZGODNY Z ZAKŁADKĄ MOJE ZAPISY)
+// KULOODPORNY PARSER DAT Z CLASS_KEY (OBSŁUGUJE 7_07/09, 7_07/09/2026, 7_2026-09-07)
 const parseDateFromClassKey = (classKey: string): Date => {
   const parts = classKey ? String(classKey).split('_') : [];
   const datePart = parts[1] || '';
@@ -78,7 +78,7 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
-// KULOODPORNY PARSER DAT STRING (DD.MM.YYYY, YYYY-MM-DD, DD/MM/YYYY, DD/MM)
+// KULOODPORNY PARSER DAT STRING
 const parseClassDate = (dateStr: string): number => {
   if (!dateStr) return 0;
   let d = String(dateStr).trim();
@@ -396,10 +396,8 @@ export default function KlienciPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
-        const classDateMs = parseClassDate(signup.class_key?.split('_')[1] || '');
-        const classDate = classDateMs ? new Date(classDateMs) : todayBeginning;
-
-        if (classDate >= todayBeginning) {
+        const dateObj = parseDateFromClassKey(signup.class_key);
+        if (dateObj >= todayBeginning) {
           await supabase
             .from('zapisy_zajec')
             .delete()
@@ -446,26 +444,21 @@ export default function KlienciPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
-        const parts = (signup.class_key || '').split('_');
-        const dateStr = parts[1];
-        if (dateStr) {
-          const classTimeMs = parseClassDate(dateStr);
-          const classDate = classTimeMs ? new Date(classTimeMs) : todayBeginning;
-          const classDateStr = classDate.toISOString().split('T')[0];
+        const classDate = parseDateFromClassKey(signup.class_key);
+        const classDateStr = classDate.toISOString().split('T')[0];
 
-          const isAfterStart = classDateStr >= zawieszonyOd;
-          const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
+        const isAfterStart = classDateStr >= zawieszonyOd;
+        const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
 
-          if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .eq('class_key', signup.class_key)
-              .eq('klient_id', klientId);
-            cancelledCount++;
+        if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
+          await supabase
+            .from('zapisy_zajec')
+            .delete()
+            .eq('class_key', signup.class_key)
+            .eq('klient_id', klientId);
+          cancelledCount++;
 
-            await promoteWaitlistForClass(signup.class_key);
-          }
+          await promoteWaitlistForClass(signup.class_key);
         }
       }
     }
@@ -562,7 +555,7 @@ export default function KlienciPage() {
       opis: `Wypisano z zajęć: ${zajecieItem.zajecia} (${zajecieItem.data})${zwrocicWejscie ? ' - zwrócono 1 wejście' : ''}`
     }]);
 
-    loadData();
+    await loadData(profileClient.id);
   };
 
   const handleWypiszWszystkieNadchodzace = async (upcomingItems: any[]) => {
@@ -632,9 +625,9 @@ export default function KlienciPage() {
     }]);
 
     alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
-    loadData();
+    await loadData(profileClient.id);
   };
-  const loadData = async () => {
+  const loadData = async (specificClientId?: number) => {
     const [
       { data: klienciData },
       { data: karnetyData },
@@ -648,12 +641,12 @@ export default function KlienciPage() {
     ] = await Promise.all([
       supabase.from('klienci').select('*'),
       supabase.from('karnety').select('*'),
-      supabase.from('transakcje').select('*').order('created_at', { ascending: false }),
+      supabase.from('transakcje').select('*').order('created_at', { ascending: false }).limit(5000),
       supabase.from('trenerzy').select('*'),
       supabase.from('grafik_zajec').select('*'),
       supabase.from('zajecia_jednorazowe').select('*'),
       supabase.from('nadpisania_zajec').select('*'),
-      supabase.from('zapisy_zajec').select('*'),
+      supabase.from('zapisy_zajec').select('*').order('id', { ascending: false }).limit(10000),
       supabase.from('automatyczne_zapisy').select('*')
     ]);
 
@@ -845,8 +838,9 @@ export default function KlienciPage() {
       setClients(enriched);
 
       setProfileClient((prevProfile: any) => {
-        if (!prevProfile) return null;
-        const currentActive = enriched.find((c: any) => String(c.id) === String(prevProfile.id));
+        const targetId = specificClientId || prevProfile?.id;
+        if (!targetId) return null;
+        const currentActive = enriched.find((c: any) => String(c.id) === String(targetId));
         return currentActive || prevProfile;
       });
     }
@@ -873,6 +867,7 @@ export default function KlienciPage() {
 
   const openProfile = async (clientToOpen: any) => {
     setProfileClient(clientToOpen);
+    loadData(clientToOpen.id);
   };
 
   const handleToggleClientTrainer = async (client: any) => {
@@ -1004,7 +999,6 @@ export default function KlienciPage() {
       });
     }
 
-    // Zabezpieczenie: jeśli karnet kosztuje 0 zł (np. Medicover), portfel nie może wejść na minus
     const wplataWlasna = parseFloat(newClient.wallet) || 0;
     const poczatkowyStan = cenaWartosc > 0 ? (wplataWlasna - cenaWartosc) : wplataWlasna;
     const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
@@ -1689,20 +1683,16 @@ export default function KlienciPage() {
 
       if (userSignups && userSignups.length > 0) {
         for (const signup of userSignups) {
-          const parts = (signup.class_key || '').split('_');
-          const dateStr = parts[1];
-          if (dateStr) {
-            const classTimeMs = parseClassDate(dateStr);
-            if (classTimeMs && classTimeMs > now.getTime()) {
-              await supabase
-                .from('zapisy_zajec')
-                .delete()
-                .eq('class_key', signup.class_key)
-                .eq('klient_id', profileClient.id);
-              cancelledCount++;
+          const classDate = parseDateFromClassKey(signup.class_key);
+          if (classDate && classDate.getTime() > now.getTime()) {
+            await supabase
+              .from('zapisy_zajec')
+              .delete()
+              .eq('class_key', signup.class_key)
+              .eq('klient_id', profileClient.id);
+            cancelledCount++;
 
-              await promoteWaitlistForClass(signup.class_key);
-            }
+            await promoteWaitlistForClass(signup.class_key);
           }
         }
       }
@@ -2687,7 +2677,7 @@ export default function KlienciPage() {
 
                   <div className="overflow-x-auto w-full">
                     
-                    {/* 1. NADCHODZĄCE ZAJĘCIA - ZGODNE Z MOJE ZAPISY */}
+                    {/* 1. NADCHODZĄCE ZAJĘCIA */}
                     {activeZapisyTab === 'nadchodzace' && (() => {
                       const now = new Date();
                       const upcomingMap = new Map<string, any>();
@@ -2779,7 +2769,6 @@ export default function KlienciPage() {
                           }
                         });
 
-                      // Uzupełnienie z lokalnego stanu profilu (jeśli nie występuje w tabeli głównej)
                       (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(item.data);
                         if (classStartMs >= now.getTime()) {
@@ -3201,7 +3190,6 @@ export default function KlienciPage() {
                       const finalSuspensionList: any[] = [];
                       const processedPeriodKeys = new Set<string>();
 
-                      // 1. Aktywne zawieszenia bezpośrednio na obiekcie karnetu
                       (profileClient.karnetyKlubowicza || []).forEach((karnet: any) => {
                         if (karnet.zawieszonyOd) {
                           const periodKey = `${karnet.nazwa}_${karnet.zawieszonyOd}_${karnet.zawieszonyDo || ''}`;
@@ -3228,7 +3216,6 @@ export default function KlienciPage() {
                           });
                         }
 
-                        // Zakończone wpisy w historii obiektu karnetu
                         const passHist = safeJsonParse(karnet.historiaZawieszen, []);
                         passHist.forEach((hz: any) => {
                           const periodKey = `${karnet.nazwa}_${hz.od}_${hz.do}`;
@@ -3252,7 +3239,6 @@ export default function KlienciPage() {
                         });
                       });
 
-                      // 2. Globalna historia zawieszeń klienta
                       (profileClient.historiaZawieszen || []).forEach((hz: any) => {
                         const passName = hz.karnet || hz.karnetNazwa || hz.nazwa || 'Karnet klubowicza';
                         const odDnia = hz.od || hz.start_date || hz.od_dnia;
