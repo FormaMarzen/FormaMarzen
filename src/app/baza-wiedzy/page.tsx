@@ -121,6 +121,9 @@ export default function BazaWiedzyPage() {
   const [originatingSugestiaId, setOriginatingSugestiaId] = useState<number | null>(null);
   const [originatingSugestiaEmail, setOriginatingSugestiaEmail] = useState<string | null>(null);
 
+  // Stan pomocniczy do wymuszania re-renderu po oznaczeniu jako przeczytane
+  const [readVersion, setReadVersion] = useState(0);
+
   const [form, setForm] = useState({
     nazwa: "",
     kategorie: ["witaminy"] as string[],
@@ -254,29 +257,55 @@ export default function BazaWiedzyPage() {
     if (typeof window === "undefined") return;
     const key = `${getStorageKeyPrefix(tab)}${item.id}`;
     localStorage.setItem(key, "true");
+    setReadVersion((v) => v + 1);
+  };
+
+  // Dedykowana funkcja: oznacz wszystkie pozycje z danej zakładki jako przeczytane
+  const handleMarkAllAsSeenForCurrentTab = (tab: TabType) => {
+    if (typeof window === "undefined") return;
+
+    let itemsToMark: any[] = [];
+    if (tab === "suplementy") itemsToMark = suplementy;
+    else if (tab === "sport") itemsToMark = sportWpisy;
+    else if (tab === "odzywianie") itemsToMark = odzywianieWpisy;
+    else if (tab === "przepisy") itemsToMark = przepisy;
+
+    itemsToMark.forEach((item) => {
+      const key = `${getStorageKeyPrefix(tab)}${item.id}`;
+      localStorage.setItem(key, "true");
+    });
+
+    setReadVersion((v) => v + 1);
   };
 
   const hasUnreadSuplementy = useMemo(() => {
     const unreadItems = suplementy.some((item) => isItemUnread(item, "suplementy"));
     const unreadSugestie = isAdmin && sugestie.length > 0;
     return unreadItems || unreadSugestie;
-  }, [suplementy, sugestie, isAdmin]);
+  }, [suplementy, sugestie, isAdmin, readVersion]);
 
   const hasUnreadSport = useMemo(() => {
     return sportWpisy.some((item) => isItemUnread(item, "sport"));
-  }, [sportWpisy]);
+  }, [sportWpisy, readVersion]);
 
   const hasUnreadOdzywianie = useMemo(() => {
     return odzywianieWpisy.some((item) => isItemUnread(item, "odzywianie"));
-  }, [odzywianieWpisy]);
+  }, [odzywianieWpisy, readVersion]);
 
   const hasUnreadPrzepisy = useMemo(() => {
     return przepisy.some((item) => isItemUnread(item, "przepisy"));
-  }, [przepisy]);
+  }, [przepisy, readVersion]);
 
   const hasAnyUnreadOverall = useMemo(() => {
     return hasUnreadSuplementy || hasUnreadSport || hasUnreadOdzywianie || hasUnreadPrzepisy;
   }, [hasUnreadSuplementy, hasUnreadSport, hasUnreadOdzywianie, hasUnreadPrzepisy]);
+
+  const isCurrentTabHavingUnread = useMemo(() => {
+    if (activeTab === "suplementy") return hasUnreadSuplementy;
+    if (activeTab === "sport") return hasUnreadSport;
+    if (activeTab === "odzywianie") return hasUnreadOdzywianie;
+    return hasUnreadPrzepisy;
+  }, [activeTab, hasUnreadSuplementy, hasUnreadSport, hasUnreadOdzywianie, hasUnreadPrzepisy]);
 
   const getAutorDisplay = (item: Przepis) => {
     const emailKey = (item.autor_email || "").toLowerCase().trim();
@@ -767,14 +796,26 @@ export default function BazaWiedzyPage() {
           </p>
         </div>
 
-        {(isAdmin || activeTab === "przepisy") && (
-          <button
-            onClick={handleOpenAdd}
-            className="bg-sky-900 hover:bg-sky-950 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
-          >
-            <span>+</span> DODAJ {activeTab === "przepisy" ? "PRZEPIS" : "WPIS"}
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {isCurrentTabHavingUnread && (
+            <button
+              onClick={() => handleMarkAllAsSeenForCurrentTab(activeTab)}
+              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-300 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+              title="Oznacz wszystkie nieprzeczytane wpisy w tej zakładce"
+            >
+              <span>✓</span> Oznacz zakładkę jako przeczytaną
+            </button>
+          )}
+
+          {(isAdmin || activeTab === "przepisy") && (
+            <button
+              onClick={handleOpenAdd}
+              className="bg-sky-900 hover:bg-sky-950 text-white px-5 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+            >
+              <span>+</span> DODAJ {activeTab === "przepisy" ? "PRZEPIS" : "WPIS"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* SYSTEM 4 ZAKŁADEK */}
