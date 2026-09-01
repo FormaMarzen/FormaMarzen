@@ -82,6 +82,7 @@ export default function WydarzeniaPage() {
   const [wydarzenia, setWydarzenia] = useState<Wydarzenie[]>([]);
   const [klienciBaza, setKlienciBaza] = useState<KlientBaza[]>([]);
   const [hasUnreadEvents, setHasUnreadEvents] = useState(false);
+  const [readVersion, setReadVersion] = useState(0);
 
   // Stany dla Modala Podglądu Klubowicza
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -176,12 +177,22 @@ export default function WydarzeniaPage() {
   const markEventAsSeen = (eventId: number) => {
     if (typeof window === "undefined") return;
     localStorage.setItem(`seen_event_${eventId}`, "true");
+    setReadVersion(v => v + 1);
     checkUnreadEvents(wydarzenia);
   };
 
   const isEventUnread = (eventId: number) => {
     if (typeof window === "undefined") return false;
     return !localStorage.getItem(`seen_event_${eventId}`);
+  };
+
+  const handleMarkAllEventsAsSeen = () => {
+    if (typeof window === "undefined") return;
+    wydarzenia.forEach(w => {
+      localStorage.setItem(`seen_event_${w.id}`, "true");
+    });
+    setReadVersion(v => v + 1);
+    setHasUnreadEvents(false);
   };
 
   // Automatyczny system powiadomień wpisujący do czat_wiadomosci z konta nadawca_id: 5000 ("Forma Marzeń")
@@ -198,7 +209,6 @@ export default function WydarzeniaPage() {
       const diffTime = terminReszty.getTime() - dzisiaj.getTime();
       const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
-      // Sprawdzenie czy przypada termin 5 dni lub 2 dni przed końcem
       if (diffDays === 5 || diffDays === 2) {
         const nieoplaceni = w.uczestnicy.filter(u => u.status_platnosci !== "calosc");
         const kwotaReszty = obliczReszteKwoty(w.cena, w.zadatek);
@@ -707,6 +717,7 @@ export default function WydarzeniaPage() {
 
   const EventCard = ({ w, isPast = false }: { w: Wydarzenie; isPast?: boolean }) => {
     const zamkniete = isZapisyZamkniete(w);
+    // Wyznaczamy stan nieprzeczytania w oparciu o localStorage
     const unread = !isPast && isEventUnread(w.id);
     const uczestnicyCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.length : 0;
     const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "zadatek").length : 0;
@@ -726,10 +737,11 @@ export default function WydarzeniaPage() {
           </div>
         )}
 
+        {/* Pulsujący wykrzyknik na plakacie/karcie */}
         {unread && (
-          <div className="absolute top-3 right-3 z-10 flex h-6 w-6">
+          <div className={`absolute z-20 flex h-6 w-6 ${isAdmin ? 'top-3 left-3' : 'top-3 right-3'}`}>
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-6 w-6 bg-rose-600 text-xs font-black text-white items-center justify-center shadow-lg">
+            <span className="relative inline-flex rounded-full h-6 w-6 bg-rose-600 text-xs font-black text-white items-center justify-center shadow-lg border border-white">
               !
             </span>
           </div>
@@ -747,7 +759,7 @@ export default function WydarzeniaPage() {
           </div>
 
           {zamkniete && !isPast && (
-            <div className="absolute top-3 left-3 bg-rose-600 text-white px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 z-10 animate-pulse">
+            <div className={`absolute bg-rose-600 text-white px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 z-10 animate-pulse ${unread && !isAdmin ? 'top-11 right-3' : 'top-3 left-3'}`}>
               <span>🔒</span> Zapisy zamknięte
             </div>
           )}
@@ -755,7 +767,17 @@ export default function WydarzeniaPage() {
 
         <div className="p-5 flex flex-col flex-grow">
           <div className="flex items-center justify-between gap-2 mb-2">
-            <h3 className="font-black text-lg text-sky-950 leading-tight line-clamp-2">{w.tytul}</h3>
+            <h3 className="font-black text-lg text-sky-950 leading-tight line-clamp-2 flex items-center gap-2">
+              <span>{w.tytul}</span>
+              {unread && (
+                <span className="relative flex h-3.5 w-3.5 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600 text-[9px] font-black text-white items-center justify-center shadow">
+                    !
+                  </span>
+                </span>
+              )}
+            </h3>
           </div>
 
           <p className="text-sm text-slate-500 line-clamp-2 flex-grow">{w.opis || "Brak dodatkowego opisu."}</p>
@@ -846,14 +868,26 @@ export default function WydarzeniaPage() {
           </p>
         </div>
         
-        {isAdmin && (
-          <button 
-            onClick={handleOpenAdd}
-            className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
-          >
-            <span>+</span> DODAJ WYDARZENIE
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {hasUnreadEvents && (
+            <button
+              onClick={handleMarkAllEventsAsSeen}
+              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-300 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+              title="Oznacz wszystkie wydarzenia jako przeczytane"
+            >
+              <span>✓</span> Oznacz wszystkie jako przeczytane
+            </button>
+          )}
+
+          {isAdmin && (
+            <button 
+              onClick={handleOpenAdd}
+              className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+            >
+              <span>+</span> DODAJ WYDARZENIE
+            </button>
+          )}
+        </div>
       </div>
 
       {wydarzenia.length === 0 && (
@@ -871,7 +905,7 @@ export default function WydarzeniaPage() {
             <div className="h-px bg-sky-200 flex-grow"></div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {wkrotce.map(w => <EventCard key={w.id} w={w} />)}
+            {wkrotce.map(w => <EventCard key={`${w.id}-${readVersion}`} w={w} />)}
           </div>
         </div>
       )}
@@ -883,7 +917,7 @@ export default function WydarzeniaPage() {
             <div className="h-px bg-sky-200 flex-grow"></div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {planowane.map(w => <EventCard key={w.id} w={w} />)}
+            {planowane.map(w => <EventCard key={`${w.id}-${readVersion}`} w={w} />)}
           </div>
         </div>
       )}
@@ -895,7 +929,7 @@ export default function WydarzeniaPage() {
             <div className="h-px bg-slate-200 flex-grow"></div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {przeszle.map(w => <EventCard key={w.id} w={w} isPast={true} />)}
+            {przeszle.map(w => <EventCard key={`${w.id}-${readVersion}`} w={w} isPast={true} />)}
           </div>
         </div>
       )}
