@@ -9,7 +9,17 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { amount, orderId, userId, description, email, type, metadata } = body;
+    const { 
+      amount, 
+      orderId, 
+      userId, 
+      description, 
+      email, 
+      type, 
+      metadata, 
+      wydarzenie_id, 
+      edycja_id 
+    } = body;
 
     if (!amount || !orderId || !userId) {
       return NextResponse.json(
@@ -48,7 +58,14 @@ export async function POST(req: Request) {
       .trim()
       .substring(0, 100);
 
-    // 4. Zapis transakcji w tabeli autopay_transakcje z metadanymi zakupu
+    // 4. Budowa metadanych z uwzględnieniem wydarzeń i wyzwań
+    const combinedMetadata = {
+      ...(metadata || {}),
+      ...(wydarzenie_id ? { wydarzenie_id: Number(wydarzenie_id) } : {}),
+      ...(edycja_id ? { edycja_id: Number(edycja_id) } : {})
+    };
+
+    // 5. Zapis transakcji w tabeli autopay_transakcje
     const { error: dbError } = await supabase
       .from('autopay_transakcje')
       .insert([{
@@ -60,7 +77,9 @@ export async function POST(req: Request) {
         gateway_response: {
           opis: cleanDescription,
           email: customerEmail,
-          metadata: metadata || {},
+          wydarzenie_id: wydarzenie_id ? Number(wydarzenie_id) : null,
+          edycja_id: edycja_id ? Number(edycja_id) : null,
+          metadata: combinedMetadata,
           created_at: new Date().toISOString()
         }
       }]);
@@ -73,7 +92,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 5. Wyliczenie sumy kontrolnej Hash SHA-256
+    // 6. Wyliczenie sumy kontrolnej Hash SHA-256
     const hashDataArray: string[] = [
       serviceId,
       safeOrderId,
@@ -92,7 +111,7 @@ export async function POST(req: Request) {
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 6. Pola formularza bramki Autopay
+    // 7. Pola formularza bramki Autopay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: safeOrderId,
