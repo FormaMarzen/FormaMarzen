@@ -55,6 +55,7 @@ export default function RootLayout({
   const [hasUnreadRedukcja, setHasUnreadRedukcja] = useState<boolean>(false);
   const [hasUnreadWydarzenia, setHasUnreadWydarzenia] = useState<boolean>(false);
   const [hasUnreadBazaWiedzy, setHasUnreadBazaWiedzy] = useState<boolean>(false);
+  const [hasUnreadOdziez, setHasUnreadOdziez] = useState<boolean>(false);
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
@@ -126,9 +127,8 @@ export default function RootLayout({
         setHasUnreadWydarzenia(false);
       }
 
-      // 4. Baza Wiedzy (Propozycje suplementów dla admina oraz nowe wpisy w suplementach/sporcie/odżywianiu/przepisach)
+      // 4. Baza Wiedzy
       let unreadBaza = false;
-
       if (role === 'admin') {
         const { data: sugData } = await supabase
           .from('sugestie_suplementow')
@@ -155,6 +155,43 @@ export default function RootLayout({
         }
       }
       setHasUnreadBazaWiedzy(unreadBaza);
+
+      // 5. Odzież (czerwony wykrzyknik dla admina po nowym zamówieniu lub dla klubowicza przy nowym dropie)
+      let unreadOdziez = false;
+      if (role === 'admin') {
+        const { data: unreadOrders } = await supabase
+          .from('odziez_zamowienia')
+          .select('id')
+          .eq('status_platnosci', 'oplacone')
+          .eq('admin_odczytane', false)
+          .limit(1);
+
+        if (unreadOrders && unreadOrders.length > 0) {
+          unreadOdziez = true;
+        }
+      } else if (cId) {
+        const { data: latestCamp } = await supabase
+          .from('odziez_kampanie')
+          .select('id')
+          .in('status', ['aktywny', 'w_realizacji'])
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (latestCamp && latestCamp.length > 0) {
+          const campId = latestCamp[0].id;
+          const { data: viewData } = await supabase
+            .from('odziez_wyswietlenia')
+            .select('kampania_id')
+            .eq('klient_id', cId)
+            .eq('kampania_id', campId)
+            .maybeSingle();
+
+          if (!viewData) {
+            unreadOdziez = true;
+          }
+        }
+      }
+      setHasUnreadOdziez(unreadOdziez);
 
     } catch (err) {
       console.error("Błąd sprawdzania powiadomień w menu:", err);
@@ -482,6 +519,7 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
+  // 1. MENU DLA ADMINISTRATORA (Odzież jako ostatnia pozycja w sekcji Główne)
   const adminMenuSections = [
     {
       title: "Główne",
@@ -494,6 +532,7 @@ export default function RootLayout({
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
+        { href: '/odziez', label: 'Odzież', icon: '👕' },
       ]
     },
     {
@@ -532,6 +571,7 @@ export default function RootLayout({
     }
   ];
 
+  // 2. MENU DLA KLUBOWICZA (Odzież na 1. pozycji w sekcji Klub i Finanse)
   const klientMenuSections = [
     {
       title: "Główne",
@@ -554,6 +594,7 @@ export default function RootLayout({
     {
       title: "Klub i Finanse",
       items: [
+        { href: '/odziez', label: 'Odzież', icon: '👕' },
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
@@ -564,6 +605,7 @@ export default function RootLayout({
     }
   ];
 
+  // 3. MENU DLA TRENERA
   const trenerMenuSections = [
     {
       title: "Strefa Trenera",
@@ -580,6 +622,7 @@ export default function RootLayout({
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
+        { href: '/odziez', label: 'Odzież', icon: '👕' },
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
@@ -598,8 +641,8 @@ export default function RootLayout({
 
   // Główny stan pokazujący czy na przycisku otwarcia menu (hamburger) powinien być wykrzyknik
   const hasAnyBadgeInMenu = useMemo(() => {
-    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy;
-  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy]);
+    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez;
+  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez]);
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -821,6 +864,8 @@ export default function RootLayout({
                               showBadge = hasUnreadWydarzenia;
                             } else if (item.href === '/baza-wiedzy') {
                               showBadge = hasUnreadBazaWiedzy;
+                            } else if (item.href === '/odziez') {
+                              showBadge = hasUnreadOdziez;
                             }
 
                             return (
