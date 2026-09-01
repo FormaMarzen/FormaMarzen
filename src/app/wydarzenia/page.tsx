@@ -420,6 +420,17 @@ export default function WydarzeniaPage() {
     ) || null;
   }, [selectedEvent, currentUserEmail]);
 
+  // Statystyki rozmiarów dla Administratora
+  const koszulkiSizeBreakdown = useMemo(() => {
+    if (!selectedEvent?.koszulki_zamowienia) return [];
+    const counts: Record<string, number> = {};
+    selectedEvent.koszulki_zamowienia.forEach(z => {
+      const key = z.rozmiar ? z.rozmiar.toUpperCase() : 'B/D';
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [selectedEvent]);
+
   const handleOpenAdd = () => {
     setEditingId(null);
     setForm({ 
@@ -794,7 +805,6 @@ export default function WydarzeniaPage() {
     setIsProcessingAutopay(true);
 
     try {
-      // 1. Zapisujemy zamówienie w bazie wydarzenia
       const { error } = await supabase
         .from("wydarzenia")
         .update({ koszulki_zamowienia: updatedOrders })
@@ -802,7 +812,6 @@ export default function WydarzeniaPage() {
 
       if (error) throw new Error(error.message);
 
-      // 2. Inicjalizacja płatności Autopay (bez obciążania portfela)
       const orderId = `TSH-${selectedEvent.id}-${uId}-${Date.now()}`.substring(0, 32);
       const opisOperacji = `Koszulka: ${selectedEvent.tytul} (${memberKoszulkaRozmiar}, ${memberKoszulkaTyp})`;
 
@@ -826,7 +835,6 @@ export default function WydarzeniaPage() {
         throw new Error(data.error || 'Nie udało się zainicjalizować płatności Autopay.');
       }
 
-      // 3. Przekierowanie formularzem do Autopay
       const payForm = document.createElement('form');
       payForm.method = 'POST';
       payForm.action = data.gatewayUrl;
@@ -1601,52 +1609,60 @@ export default function WydarzeniaPage() {
                         )
                       )}
 
-                      {/* Lista zamówień koszulek widoczna WYŁĄCZNIE dla Administratora */}
+                      {/* Nowy, kompaktowy panel zamówień koszulek dla Administratora */}
                       {isAdmin && (
-                        <div className="bg-indigo-50/40 p-4 sm:p-6 rounded-2xl border border-indigo-200 space-y-4">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 pb-3">
+                        <div className="bg-slate-50 border border-indigo-200/80 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/80 pb-2.5">
                             <div>
                               <h4 className="font-black text-xs sm:text-sm text-indigo-950 uppercase tracking-wider flex items-center gap-2">
                                 <span>📋</span> Lista zamówień koszulek ({selectedEvent.koszulki_zamowienia?.length || 0})
                               </h4>
-                              <p className="text-[11px] text-slate-400 font-medium mt-0.5">
-                                💡 Kliknij w status, aby przełączyć: Do wpłaty ➔ Opłacone (Klubowicze widzą tylko swoje zamówienie).
+                              <p className="text-[10px] text-slate-500 font-medium">
+                                💡 Kliknij w status, aby przełączyć: Do wpłaty ➔ Opłacone (Klubowicze nie widzą tej listy).
                               </p>
                             </div>
-                            <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                              <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-950 border border-emerald-200">
+                            
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {koszulkiSizeBreakdown.map(([rozmiar, count]) => (
+                                <span key={rozmiar} className="px-2 py-0.5 bg-white border border-indigo-200 rounded-md text-[10px] font-black text-indigo-900 shadow-2xs">
+                                  {rozmiar}: {count}
+                                </span>
+                              ))}
+                              <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-md text-[10px] font-black shadow-2xs">
                                 Opłacone: {(selectedEvent.koszulki_zamowienia || []).filter(z => z.status_platnosci === "calosc").length} / {selectedEvent.koszulki_zamowienia?.length || 0}
                               </span>
                             </div>
                           </div>
 
                           {(selectedEvent.koszulki_zamowienia || []).length > 0 ? (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {selectedEvent.koszulki_zamowienia?.map((z, zIdx) => {
-                                const badge = getKoszulkaPaymentBadge(z.status_platnosci);
+                                const isPaid = z.status_platnosci === "calosc";
                                 return (
-                                  <div key={zIdx} className="bg-white border border-indigo-100 p-3 rounded-xl flex items-center justify-between gap-2 shadow-xs">
-                                    <div className="min-w-0 flex-1">
-                                      <div className="font-bold text-xs text-indigo-950 truncate">
+                                  <div 
+                                    key={zIdx} 
+                                    className="bg-white border border-slate-200/80 hover:border-indigo-300 px-3 py-2 rounded-xl flex items-center justify-between gap-2 shadow-2xs transition-all"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                      <span className="font-bold text-xs text-slate-900 truncate">
                                         {z.imie} {z.nazwisko}
-                                      </div>
-                                      <div className="text-[10px] font-black text-indigo-700 mt-0.5 flex items-center gap-1.5">
-                                        <span className="bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded uppercase">
-                                          Rozmiar: {z.rozmiar}
-                                        </span>
-                                        {z.typ && (
-                                          <span className="text-slate-500 font-medium">({z.typ})</span>
-                                        )}
-                                      </div>
+                                      </span>
+                                      <span className="bg-indigo-50 border border-indigo-200/80 text-indigo-950 px-2 py-0.5 rounded-md text-[10px] font-black uppercase shrink-0">
+                                        {z.rozmiar} {z.typ && `• ${z.typ}`}
+                                      </span>
                                     </div>
 
                                     <button
                                       onClick={() => handleQuickKoszulkaPaymentToggle(zIdx)}
-                                      title="Kliknij, aby przełączyć status płatności za koszulkę"
-                                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 shrink-0 ${badge.bg}`}
+                                      title="Kliknij, aby przełączyć: Do wpłaty ➔ Opłacone"
+                                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-2xs hover:scale-105 shrink-0 ${
+                                        isPaid 
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300' 
+                                          : 'bg-amber-50 text-amber-900 border-amber-300'
+                                      }`}
                                     >
-                                      <span className="text-[9px]">{badge.icon}</span>
-                                      <span>{badge.text}</span>
+                                      <span>{isPaid ? "🟢" : "🟡"}</span>
+                                      <span>{isPaid ? "Opłacone" : "Do wpłaty"}</span>
                                     </button>
                                   </div>
                                 );
@@ -1745,7 +1761,7 @@ export default function WydarzeniaPage() {
                 <select
                   value={memberKoszulkaRozmiar}
                   onChange={(e) => setMemberKoszulkaRozmiar(e.target.value)}
-                  className="w-full p-3 border border-indigo-200 rounded-xl font-bold bg-slate-50 text-indigo-950 focus:bg-white focus:outline-none"
+                  className="w-full p-3 border border-indigo-200 rounded-xl font-bold bg-slate-50 text-indigo-950 focus:bg-white focus:outline-none cursor-pointer"
                 >
                   <option value="XS">Rozmiar XS</option>
                   <option value="S">Rozmiar S</option>
@@ -1762,7 +1778,7 @@ export default function WydarzeniaPage() {
                 <select
                   value={memberKoszulkaTyp}
                   onChange={(e) => setMemberKoszulkaTyp(e.target.value)}
-                  className="w-full p-3 border border-indigo-200 rounded-xl font-bold bg-slate-50 text-indigo-950 focus:bg-white focus:outline-none"
+                  className="w-full p-3 border border-indigo-200 rounded-xl font-bold bg-slate-50 text-indigo-950 focus:bg-white focus:outline-none cursor-pointer"
                 >
                   <option value="męska">Krój Męski</option>
                   <option value="damska">Krój Damski</option>
@@ -2429,7 +2445,7 @@ export default function WydarzeniaPage() {
                           </button>
                         </div>
 
-                        {/* Lista zamówionych koszulek */}
+                        {/* Lista zamówionych koszulek w modalu */}
                         {(form.koszulki_zamowienia || []).length > 0 && (
                           <div className="space-y-2 pt-2 border-t border-indigo-200/60 max-h-60 overflow-y-auto pr-1">
                             {(form.koszulki_zamowienia || []).map((z, index) => {
