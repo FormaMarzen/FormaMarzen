@@ -234,7 +234,6 @@ export default function RegistrationPassPage() {
         });
       }
 
-      // Automatyczny zapis zdarzenia w tabeli historia_powiadomien
       await supabase.from('historia_powiadomien').insert([
         {
           odbiorca: `Administratorzy (${subscriptions.length} urządz.)`,
@@ -315,6 +314,9 @@ export default function RegistrationPassPage() {
         lowerBuyName.includes('1 wejś') ? 1 : null
       );
 
+      // Inicjalizacja cyklu ciągłości: tylko jeśli karnet >= 150 PLN i nie jest umową
+      const initialCycle = (passCalc.finalPrice >= 150 && !passCalc.isContract) ? 1 : 0;
+
       const nowyKarnetObj = {
         id: Date.now(),
         nazwa: selectedPass.nazwa,
@@ -322,9 +324,15 @@ export default function RegistrationPassPage() {
         pozostaloWejsc: isTimePass ? null : wejsciaVal,
         poczatkoweWejsc: isTimePass ? null : wejsciaVal,
         cena: passCalc.finalPriceStr,
+        cykl: initialCycle,
         znizkaProcentowa: '',
         rata: passCalc.isContract ? '0 / 12' : '1 / 1',
         statusTekst: isTimePass ? `Ważny do: ${passCalc.expiryDateStr}` : `Pozostało wejść: ${wejsciaVal}`,
+        isContract12M: passCalc.isContract,
+        contractSuspensionDaysLeft: passCalc.isContract ? 30 : undefined,
+        totalSuspendedDaysUsed: passCalc.isContract ? 0 : undefined,
+        bonusActivated: false,
+        bonusClaimed: false,
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
@@ -332,10 +340,11 @@ export default function RegistrationPassPage() {
         historiaZawieszen: []
       };
 
-      const ujemnyPortfelStr = `-${passCalc.finalPrice.toFixed(2)} PLN`;
+      // Zabezpieczenie portfela: dla 0.00 PLN portfel = 0.00 PLN (brak ujemnego salda)
+      const portfelStr = passCalc.finalPrice > 0 ? `-${passCalc.finalPrice.toFixed(2)} PLN` : '0.00 PLN';
       const newClientId = Date.now();
 
-      // 4. Zapis do bazy danych 'klienci'
+      // 4. Zapis do bazy danych 'klienci' z wyzerowanym rabatem na start
       const payload: any = {
         id: newClientId,
         'Imię': firstName,
@@ -343,10 +352,17 @@ export default function RegistrationPassPage() {
         'E-mail': email,
         'Numer tel.': phone,
         'Zarejestrowany': new Date().toISOString().split('T')[0],
-        'karnetyKlubowicza': JSON.stringify([nowyKarnetObj]),
-        'Portfel': ujemnyPortfelStr,
+        'karnetyKlubowicza': [nowyKarnetObj],
+        'Portfel': portfelStr,
         'Cena': passCalc.finalPriceStr,
-        'Wygasa': passCalc.expiryDateStr
+        'Wygasa': passCalc.expiryDateStr,
+        'discount': '',
+        'rabat': 0,
+        'rabat_za_ciaglosc': '0%',
+        'hasLostContinuity': false,
+        'system_discount_offset': 0,
+        'cyklCiaglosci': initialCycle,
+        'historiaZawieszenGlobalna': []
       };
 
       const { error: dbError } = await supabase.from('klienci').insert([payload]);
@@ -370,9 +386,9 @@ export default function RegistrationPassPage() {
       } else {
         await supabase.from('transakcje').insert([{
           klient_id: newClientId,
-          typ_operacji: 'utworzenie_konta',
+          typ_operacji: 'zakup_karnetu',
           kwota: 0.00,
-          opis: `Rejestracja z darmowym karnetem: ${selectedPass.nazwa}`
+          opis: `Rejestracja z karnetem 0.00 PLN (np. Medicover): ${selectedPass.nazwa}`
         }]);
       }
 
