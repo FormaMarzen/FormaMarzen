@@ -18,7 +18,11 @@ export async function POST(req: Request) {
       type, 
       metadata, 
       wydarzenie_id, 
-      edycja_id 
+      edycja_id,
+      kampania_id,
+      zamowienie_id,
+      rozmiar,
+      wariant
     } = body;
 
     if (!amount || !orderId || !userId) {
@@ -51,18 +55,22 @@ export async function POST(req: Request) {
     const customerEmail = (email || '').trim().toLowerCase();
 
     // 3. Czyszczenie opisu ze znaków specjalnych
-    const cleanDescription = (description || `Płatność Forma Marzeń ${formattedAmount} PLN`)
+    const cleanDescription = (description || `Platnosc Forma Marzen ${formattedAmount} PLN`)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-zA-Z0-9 ._-]/g, '')
       .trim()
       .substring(0, 100);
 
-    // 4. Budowa metadanych z uwzględnieniem wydarzeń i wyzwań
+    // 4. Budowa połączonych metadanych transakcji
     const combinedMetadata = {
       ...(metadata || {}),
       ...(wydarzenie_id ? { wydarzenie_id: Number(wydarzenie_id) } : {}),
-      ...(edycja_id ? { edycja_id: Number(edycja_id) } : {})
+      ...(edycja_id ? { edycja_id: Number(edycja_id) } : {}),
+      ...(kampania_id ? { kampania_id: String(kampania_id) } : {}),
+      ...(zamowienie_id ? { zamowienie_id: String(zamowienie_id) } : {}),
+      ...(rozmiar ? { rozmiar: String(rozmiar) } : {}),
+      ...(wariant ? { wariant: String(wariant) } : {})
     };
 
     // 5. Zapis transakcji w tabeli autopay_transakcje
@@ -79,6 +87,8 @@ export async function POST(req: Request) {
           email: customerEmail,
           wydarzenie_id: wydarzenie_id ? Number(wydarzenie_id) : null,
           edycja_id: edycja_id ? Number(edycja_id) : null,
+          kampania_id: kampania_id || null,
+          zamowienie_id: zamowienie_id || null,
           metadata: combinedMetadata,
           created_at: new Date().toISOString()
         }

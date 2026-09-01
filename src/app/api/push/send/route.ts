@@ -41,16 +41,16 @@ export async function POST(request: Request) {
       message,
       url,
       type,
-      typ
+      typ,
+      sendToAdmins,
+      sendToAll,
+      targetRole
     } = bodyData;
 
     const tytulPowiadomienia = payload?.title || title || 'FORMA MARZEŃ';
     const trescPowiadomienia = payload?.body || body || message || payload?.message || '';
     const typPowiadomienia = payload?.typ || payload?.type || typ || type || 'PUSH';
     const docelowyUrl = payload?.url || url || '/';
-
-    const rawIds = clientIds || participantIds || userIds;
-    console.log('[PUSH] Otrzymano żądanie wysyłki dla ID:', rawIds, 'Tytuł:', tytulPowiadomienia);
 
     const targetsToSend: Array<{
       subObj: any;
@@ -72,7 +72,81 @@ export async function POST(request: Request) {
 
     const seenEndpoints = new Set<string>();
 
-    // 1. Wyszukiwanie subskrypcji po identyfikatorach ID w tabeli klienci
+    // Funkcja pomocnicza dodająca urządzenie do kolejki
+    const addTargetDevice = (sub: any, name: string, id: number | null, rowId?: number) => {
+      const cleanSub = sub?.subscription ? (typeof sub.subscription === 'string' ? JSON.parse(sub.subscription) : sub.subscription) : sub;
+      if (!cleanSub?.endpoint || !cleanSub?.keys?.p256dh || !cleanSub?.keys?.auth) return;
+
+      if (!seenEndpoints.has(cleanSub.endpoint)) {
+        seenEndpoints.add(cleanSub.endpoint);
+        targetsToSend.push({
+          subObj: cleanSub,
+          recipientName: name,
+          recipientId: id,
+          clientRowId: rowId,
+          endpoint: cleanSub.endpoint,
+        });
+      }
+    };
+
+    // 1. Wysyłka do Administratorów (np. nowe opłacone zamówienie odzieży)
+    if (sendToAdmins || targetRole === 'admin') {
+      const { data: adminSubs } = await supabase
+        .from('push_subscriptions')
+        .select('*')
+        .eq('role', 'admin');
+
+      if (adminSubs && adminSubs.length > 0) {
+        for (const row of adminSubs) {
+          addTargetDevice(row.subscription || row, 'Administrator', null);
+        }
+      }
+
+      const { data: adminClients } = await supabase
+        .from('klienci')
+        .select('id, push_subscription, "Imię", "Nazwisko", "E-mail", rola')
+        .or('rola.eq.admin,"E-mail".ilike.%admin%,"Imię".eq.Maciej');
+
+      if (adminClients && adminClients.length > 0) {
+        for (const c of adminClients) {
+          if (c.push_subscription) {
+            try {
+              const parsed = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
+              addTargetDevice(parsed, `${c.Imię || 'Admin'} ${c.Nazwisko || ''}`.trim(), c.id, c.id);
+            } catch (e) {}
+          }
+        }
+      }
+    }
+
+    // 2. Wysyłka do Wszystkich Klubowiczów (np. powiadomienie o nowym dropie koszulek)
+    if (sendToAll || targetRole === 'all') {
+      const { data: allClients } = await supabase
+        .from('klienci')
+        .select('id, push_subscription, "Imię", "Nazwisko", "E-mail"')
+        .not('push_subscription', 'is', null);
+
+      if (allClients && allClients.length > 0) {
+        for (const c of allClients) {
+          if (c.push_subscription) {
+            try {
+              const parsed = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
+              addTargetDevice(parsed, `${c.Imię || 'Klubowicz'} ${c.Nazwisko || ''}`.trim(), c.id, c.id);
+            } catch (e) {}
+          }
+        }
+      }
+
+      const { data: allSubs } = await supabase.from('push_subscriptions').select('*');
+      if (allSubs && allSubs.length > 0) {
+        for (const s of allSubs) {
+          addTargetDevice(s.subscription || s, 'Klubowicz', null);
+        }
+      }
+    }
+
+    // 3. Wyszukiwanie subskrypcji po identyfikatorach ID w tabeli klienci
+    const rawIds = clientIds || participantIds || userIds;
     if (rawIds && (Array.isArray(rawIds) ? rawIds.length > 0 : true)) {
       const idList = Array.isArray(rawIds) ? rawIds : [rawIds];
       const validNumericIds = idList
@@ -84,10 +158,6 @@ export async function POST(request: Request) {
           .from('klienci')
           .select('id, push_subscription, "Imię", "Nazwisko", "E-mail"')
           .in('id', validNumericIds);
-
-        if (clientsErr) {
-          console.error('[PUSH ERROR] Błąd pobierania klientów z bazy:', clientsErr);
-        }
 
         if (!clientsErr && clientsData && clientsData.length > 0) {
           for (const c of clientsData) {
@@ -103,12 +173,9 @@ export async function POST(request: Request) {
               try {
                 const parsed = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
                 if (parsed) userSubs.push(parsed);
-              } catch (e) {
-                console.error(`[PUSH ERROR] Nie udało się sparsować push_subscription dla klienta ${c.id}:`, e);
-              }
+              } catch (e) {}
             }
 
-            // Sprawdzenie w tabeli pomocniczej push_subscriptions
             try {
               let query = supabase.from('push_subscriptions').select('*');
               if (mail) {
@@ -131,30 +198,14 @@ export async function POST(request: Request) {
             let addedAnyDevice = false;
 
             for (const subItem of userSubs) {
-              const cleanSub = subItem?.subscription ? (typeof subItem.subscription === 'string' ? JSON.parse(subItem.subscription) : subItem.subscription) : subItem;
-              
-              if (!cleanSub?.endpoint) continue;
-
-              if (!cleanSub?.keys?.p256dh || !cleanSub?.keys?.auth) {
-                console.warn(`[PUSH WARN] Subskrypcja dla klienta ${c.id} nie posiada kluczy P256DH/Auth.`);
-                continue;
-              }
-
-              if (!seenEndpoints.has(cleanSub.endpoint)) {
-                seenEndpoints.add(cleanSub.endpoint);
-                targetsToSend.push({
-                  subObj: cleanSub,
-                  recipientName: odbiorcaTekst,
-                  recipientId: c.id,
-                  clientRowId: c.id,
-                  endpoint: cleanSub.endpoint,
-                });
+              const beforeCount = targetsToSend.length;
+              addTargetDevice(subItem, odbiorcaTekst, c.id, c.id);
+              if (targetsToSend.length > beforeCount) {
                 addedAnyDevice = true;
               }
             }
 
             if (!addedAnyDevice) {
-              console.warn(`[PUSH WARN] Brak poprawnej, aktywnej subskrypcji z kluczami dla użytkownika: ${odbiorcaTekst} (ID: ${c.id})`);
               logEntries.push({
                 odbiorca: odbiorcaTekst,
                 odbiorca_id: c.id,
@@ -166,13 +217,11 @@ export async function POST(request: Request) {
               });
             }
           }
-        } else {
-          console.warn('[PUSH WARN] Nie znaleziono klientów w bazie dla ID:', validNumericIds);
         }
       }
     }
 
-    // 2. Bezpośrednie subskrypcje przekazane w parametrze
+    // 4. Bezpośrednie subskrypcje przekazane w parametrze
     if (subscriptions && Array.isArray(subscriptions) && subscriptions.length > 0) {
       for (const rawSub of subscriptions) {
         let subObj = rawSub;
@@ -183,23 +232,13 @@ export async function POST(request: Request) {
           subObj = typeof subObj.subscription === 'string' ? JSON.parse(subObj.subscription) : subObj.subscription;
         }
 
-        if (subObj?.endpoint && subObj?.keys?.p256dh && subObj?.keys?.auth) {
-          if (!seenEndpoints.has(subObj.endpoint)) {
-            seenEndpoints.add(subObj.endpoint);
-            const recName = rawSub?.odbiorca || targetName || 'Klubowicz';
-            const recId = rawSub?.odbiorca_id || rawSub?.klient_id || null;
-            targetsToSend.push({
-              subObj,
-              recipientName: recName,
-              recipientId: recId ? Number(recId) : null,
-              endpoint: subObj.endpoint,
-            });
-          }
-        }
+        const recName = rawSub?.odbiorca || targetName || 'Klubowicz';
+        const recId = rawSub?.odbiorca_id || rawSub?.klient_id || null;
+        addTargetDevice(subObj, recName, recId ? Number(recId) : null);
       }
     }
 
-    // 3. Fallback po adresie E-mail
+    // 5. Fallback po adresie E-mail
     const recipientEmail = (targetEmail || email || '').toLowerCase().trim();
     if (targetsToSend.length === 0 && recipientEmail) {
       const { data: clientFound } = await supabase
@@ -215,40 +254,16 @@ export async function POST(request: Request) {
         const pelnaNazwa = `${imie} ${nazwisko}`.trim();
         const odbiorcaTekst = pelnaNazwa ? `${pelnaNazwa} (${recipientEmail})` : recipientEmail;
 
-        let parsedSub: any = null;
         if (clientFound.push_subscription) {
           try {
-            parsedSub = typeof clientFound.push_subscription === 'string' ? JSON.parse(clientFound.push_subscription) : clientFound.push_subscription;
+            const parsedSub = typeof clientFound.push_subscription === 'string' ? JSON.parse(clientFound.push_subscription) : clientFound.push_subscription;
+            addTargetDevice(parsedSub, odbiorcaTekst, clientFound.id, clientFound.id);
           } catch (e) {}
-        }
-
-        if (parsedSub?.endpoint && parsedSub?.keys?.p256dh && parsedSub?.keys?.auth) {
-          if (!seenEndpoints.has(parsedSub.endpoint)) {
-            seenEndpoints.add(parsedSub.endpoint);
-            targetsToSend.push({
-              subObj: parsedSub,
-              recipientName: odbiorcaTekst,
-              recipientId: clientFound.id,
-              clientRowId: clientFound.id,
-              endpoint: parsedSub.endpoint,
-            });
-          }
-        } else {
-          logEntries.push({
-            odbiorca: odbiorcaTekst,
-            odbiorca_id: clientFound.id,
-            tytul: tytulPowiadomienia,
-            tresc: trescPowiadomienia,
-            typ: typPowiadomienia,
-            status: 'Brak aktywnej subskrypcji lub brak kluczy P256DH/Auth',
-            created_at: new Date().toISOString(),
-          });
         }
       }
     }
 
     if (targetsToSend.length === 0) {
-      console.warn('[PUSH WARN] Nie znaleziono żadnego aktywnego urządzenia do wysyłki.');
       if (logEntries.length > 0) {
         await supabase.from('historia_powiadomien').insert(logEntries);
       }
@@ -276,8 +291,6 @@ export async function POST(request: Request) {
       urgency: 'high' as const,
     };
 
-    console.log(`[PUSH] Wysyłanie powiadomień do ${targetsToSend.length} urządzeń...`);
-
     const results = await Promise.allSettled(
       targetsToSend.map(async (target) => {
         try {
@@ -299,8 +312,6 @@ export async function POST(request: Request) {
             recipient: target.recipientName,
           };
         } catch (err: any) {
-          console.error(`[PUSH ERROR] Błąd dla ${target.recipientName}:`, err.statusCode, err.message);
-
           const isExpired = err.statusCode === 404 || err.statusCode === 410;
           const statusDesc = isExpired ? 'Brak aktywnej subskrypcji (Wygasła)' : `Błąd wysyłki: ${err.statusCode || err.message}`;
 
@@ -335,8 +346,6 @@ export async function POST(request: Request) {
 
     const delivered = results.filter((r) => r.status === 'fulfilled').length;
     const failed = results.filter((r) => r.status === 'rejected').length;
-
-    console.log(`[PUSH RESULT] Dostarczono: ${delivered}, Błędy: ${failed}`);
 
     return NextResponse.json({
       success: true,
