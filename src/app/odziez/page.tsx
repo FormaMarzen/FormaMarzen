@@ -32,11 +32,14 @@ export default function OdziezPage() {
   const [editMinOsob, setEditMinOsob] = useState('5');
   const [editImgFront, setEditImgFront] = useState('/koszulka-przod.png');
   const [editImgBack, setEditImgBack] = useState('/koszulka-tyl.png');
-  const [editBlik, setEditBlik] = useState('453 229 407');
+  const [editImgSizeMale, setEditImgSizeMale] = useState('');
+  const [editImgSizeFemale, setEditImgSizeFemale] = useState('');
 
-  // Referencje do ukrytych inputów wgrywania plików
+  // Referencje do ukrytych inputów wgrywania plików z urządzenia
   const frontFileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
+  const sizeMaleFileInputRef = useRef<HTMLInputElement>(null);
+  const sizeFemaleFileInputRef = useRef<HTMLInputElement>(null);
 
   // Formularz ręcznego dodawania klubowicza przez Admina z wyszukiwarką
   const [isManualAddModalOpen, setIsManualAddModalOpen] = useState(false);
@@ -87,7 +90,7 @@ export default function OdziezPage() {
         }
       }
 
-      // Weryfikacja roli administratora
+      // Weryfikacja uprawnień administratora
       const adminCheck = 
         cleanEmail === 'maciejklaput@gmail.com' ||
         cleanEmail === 'maciejklaput@icloud.com' ||
@@ -147,7 +150,8 @@ export default function OdziezPage() {
     setEditMinOsob(String(currentCamp.min_osob || '5'));
     setEditImgFront(currentCamp.zdjecie_przod || '/koszulka-przod.png');
     setEditImgBack(currentCamp.zdjecie_tyl || '/koszulka-tyl.png');
-    setEditBlik(currentCamp.blik_numer || '453 229 407');
+    setEditImgSizeMale(currentCamp.tabela_rozmiarow_meska_img || '');
+    setEditImgSizeFemale(currentCamp.tabela_rozmiarow_damska_img || '');
 
     const { data: ordersData } = await supabase
       .from('odziez_zamowienia')
@@ -301,7 +305,7 @@ export default function OdziezPage() {
   }, [campaign]);
 
   // Funkcja kompresji i odczytu zdjęcia z urządzenia
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'front' | 'back') => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'front' | 'back' | 'sizeMale' | 'sizeFemale') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -310,7 +314,7 @@ export default function OdziezPage() {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_DIM = 900;
+        const MAX_DIM = 1200;
         let width = img.width;
         let height = img.height;
 
@@ -334,8 +338,12 @@ export default function OdziezPage() {
         const compressedBase64 = canvas.toDataURL('image/jpeg', 0.85);
         if (target === 'front') {
           setEditImgFront(compressedBase64);
-        } else {
+        } else if (target === 'back') {
           setEditImgBack(compressedBase64);
+        } else if (target === 'sizeMale') {
+          setEditImgSizeMale(compressedBase64);
+        } else if (target === 'sizeFemale') {
+          setEditImgSizeFemale(compressedBase64);
         }
       };
       img.src = event.target?.result as string;
@@ -405,6 +413,7 @@ export default function OdziezPage() {
         }]);
 
         const { error: orderErr } = await supabase.from('odziez_zamowienia').insert([{
+          campaign_id: campaign.id,
           kampania_id: campaign.id,
           klient_id: currentUser.id,
           klient_imie_nazwisko: currentUser.fullName,
@@ -429,6 +438,7 @@ export default function OdziezPage() {
         const orderId = `TSHIRT-${currentUser.id}-${Date.now()}`.substring(0, 32);
 
         await supabase.from('odziez_zamowienia').insert([{
+          campaign_id: campaign.id,
           kampania_id: campaign.id,
           klient_id: currentUser.id,
           klient_imie_nazwisko: currentUser.fullName,
@@ -501,6 +511,7 @@ export default function OdziezPage() {
       const clientEmail = (selectedManualClient['E-mail'] || selectedManualClient.email || '').trim();
 
       const newOrderPayload = {
+        campaign_id: campaign.id,
         kampania_id: campaign.id,
         klient_id: selectedManualClient.id,
         klient_imie_nazwisko: clientFullName,
@@ -568,7 +579,8 @@ export default function OdziezPage() {
         min_osob: parseInt(editMinOsob, 10) || 5,
         zdjecie_przod: editImgFront,
         zdjecie_tyl: editImgBack,
-        blik_numer: editBlik.trim(),
+        tabela_rozmiarow_meska_img: editImgSizeMale || null,
+        tabela_rozmiarow_damska_img: editImgSizeFemale || null,
         status: 'aktywny'
       };
 
@@ -696,7 +708,7 @@ export default function OdziezPage() {
               <span className="bg-blue-500/30 text-sky-300 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black">1</span>
               Wybór i Bezpośrednia Płatność
             </div>
-            Wybierz wariant oraz rozmiar. Opłać zamówienie przez <strong>AutoPay</strong> lub środkami z <strong>Wirtualnego Portfela</strong>.
+            Wybierz wariant oraz rozmiar. Opłać zamówienie online przez <strong>AutoPay</strong> lub środkami z <strong>Wirtualnego Portfela</strong>.
           </div>
 
           <div className="bg-white/10 rounded-2xl p-4 backdrop-blur-xs border border-white/10">
@@ -729,17 +741,38 @@ export default function OdziezPage() {
       {campaign ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
           
-          {/* NAGŁÓWEK KOSZULKI */}
+          {/* NAGŁÓWEK KOSZULKI Z MINIATURKĄ PRZODU */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 bg-sky-50 rounded-2xl flex items-center justify-center text-3xl border border-sky-100 shadow-sm shrink-0">
-                👕
+              
+              {/* Miniaturka przedniej strony koszulki w nagłówku */}
+              <div className="w-14 h-14 bg-sky-50 rounded-2xl flex items-center justify-center border border-sky-100 shadow-sm shrink-0 overflow-hidden relative group">
+                {campaign.zdjecie_przod ? (
+                  <img 
+                    src={campaign.zdjecie_przod} 
+                    alt="Miniaturka przód" 
+                    className="w-full h-full object-contain p-1"
+                    onError={(e: any) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                ) : (
+                  <span className="text-3xl">👕</span>
+                )}
               </div>
+
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5 flex-wrap">
                   <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
                     {campaign.tytul || 'OFICJALNA KOSZULKA TRENINGOWA'}
                   </h1>
+
+                  {/* Dodatkowa mała plakietka z miniaturką i nazwą */}
+                  {campaign.zdjecie_przod && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-700">
+                      <img src={campaign.zdjecie_przod} alt="mini" className="w-4 h-4 object-contain rounded" />
+                      Przód
+                    </span>
+                  )}
+
                   {isAdmin && unreadAdminCount > 0 && (
                     <span className="bg-rose-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full animate-bounce">
                       ! {unreadAdminCount} nowe
@@ -868,7 +901,7 @@ export default function OdziezPage() {
                             )}
                           </div>
                           <div className="text-[10px] text-slate-400 font-mono">
-                            {order.metoda_platnosci === 'wallet' ? '👛 Portfel' : order.metoda_platnosci === 'autopay' ? '💳 AutoPay' : '💵 ' + order.metoda_platnosci} • {order.wariant} ({order.rozmiar})
+                            {order.metoda_platnosci === 'wallet' ? '👛 Portfel' : order.metoda_platnosci === 'autopay' ? '💳 AutoPay' : '💵 Gotówka'} • {order.wariant} ({order.rozmiar})
                           </div>
                         </div>
 
@@ -912,7 +945,7 @@ export default function OdziezPage() {
                         <div key={myOrder.id} className="bg-white border border-slate-200 rounded-2xl p-3.5 flex justify-between items-center shadow-xs">
                           <div>
                             <div className="font-bold text-xs text-slate-900">{myOrder.wariant} • Rozmiar {myOrder.rozmiar}</div>
-                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">Kwota: {myOrder.kwota} zł ({myOrder.metoda_platnosci})</div>
+                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">Kwota: {myOrder.kwota} zł ({myOrder.metoda_platnosci === 'wallet' ? 'Portfel' : 'AutoPay'})</div>
                           </div>
                           <span className={`text-[10px] font-black px-2.5 py-1 rounded-xl uppercase ${
                             myOrder.status_platnosci === 'oplacone' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
@@ -926,12 +959,6 @@ export default function OdziezPage() {
                 )}
               </div>
             )}
-
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-slate-600">
-              <div className="font-bold text-slate-900 mb-0.5">Płatność BLIK na telefon:</div>
-              <div>Numer telefonu: <strong>{campaign.blik_numer || '453 229 407'}</strong></div>
-              <div className="text-[11px] text-slate-500 mt-0.5">W opisie: Imię i Nazwisko - rozmiar (męska, damska)</div>
-            </div>
           </div>
 
           {/* 4. WIZUALIZACJA KOSZULKI */}
@@ -963,7 +990,7 @@ export default function OdziezPage() {
             </div>
           </div>
 
-          {/* 5. TABELA ROZMIARÓW */}
+          {/* 5. TABELA ROZMIARÓW (Z OBSŁUGĄ WGRANYCH ZDJĘĆ TABELI) */}
           <div className="space-y-4 pt-6 border-t border-slate-100">
             <div className="flex justify-between items-center">
               <h3 className="font-black text-xs uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -990,83 +1017,109 @@ export default function OdziezPage() {
               </div>
             </div>
 
+            {/* TABELA MĘSKA: WGRANE ZDJĘCIE LUB TABELA */}
             {activeSizeTab === 'meska' ? (
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                <div className="bg-sky-50 px-4 py-2 border-b border-sky-100 text-sky-900 font-bold text-xs uppercase">
-                  Tabela Męska (Wymiary w cm, tolerancja +/- 1 cm)
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-4 space-y-3">
+                <div className="bg-sky-50 px-4 py-2 rounded-xl text-sky-900 font-bold text-xs uppercase flex items-center justify-between">
+                  <span>Tabela Męska (Wymiary w cm, tolerancja +/- 1 cm)</span>
+                  {campaign.tabela_rozmiarow_meska_img && <span className="text-[10px] text-sky-700 font-bold">Grafika tabeli</span>}
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-slate-700">
-                    <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-200">
-                      <tr>
-                        <th className="py-2.5 px-3.5">Rozmiar</th>
-                        <th className="py-2.5 px-3.5">Klatka</th>
-                        <th className="py-2.5 px-3.5">Talia</th>
-                        <th className="py-2.5 px-3.5">Pas</th>
-                        <th className="py-2.5 px-3.5">Wysokość</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono">
-                      {[
-                        { r: 'XS', k: 47, t: 45, p: 47, w: 65 },
-                        { r: 'S', k: 49, t: 47, p: 49, w: 68 },
-                        { r: 'M', k: 51, t: 49, p: 51, w: 71 },
-                        { r: 'L', k: 53, t: 51, p: 53, w: 73 },
-                        { r: 'XL', k: 55, t: 54, p: 55, w: 74 },
-                        { r: '2XL', k: 58, t: 56, p: 58, w: 77 },
-                        { r: '3XL', k: 59, t: 57, p: 59, w: 79 },
-                        { r: '4XL', k: 61, t: 59, p: 61, w: 81 },
-                      ].map((row) => (
-                        <tr key={row.r} className="hover:bg-slate-50/50">
-                          <td className="py-2 px-3.5 font-bold font-sans text-slate-900">{row.r}</td>
-                          <td className="py-2 px-3.5">{row.k}</td>
-                          <td className="py-2 px-3.5">{row.t}</td>
-                          <td className="py-2 px-3.5">{row.p}</td>
-                          <td className="py-2 px-3.5">{row.w}</td>
+
+                {campaign.tabela_rozmiarow_meska_img ? (
+                  <div className="flex justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
+                    <img 
+                      src={campaign.tabela_rozmiarow_meska_img} 
+                      alt="Tabela rozmiarów męska" 
+                      className="max-h-96 object-contain rounded-lg shadow-xs"
+                    />
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-700">
+                      <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3.5">Rozmiar</th>
+                          <th className="py-2.5 px-3.5">Klatka</th>
+                          <th className="py-2.5 px-3.5">Talia</th>
+                          <th className="py-2.5 px-3.5">Pas</th>
+                          <th className="py-2.5 px-3.5">Wysokość</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {[
+                          { r: 'XS', k: 47, t: 45, p: 47, w: 65 },
+                          { r: 'S', k: 49, t: 47, p: 49, w: 68 },
+                          { r: 'M', k: 51, t: 49, p: 51, w: 71 },
+                          { r: 'L', k: 53, t: 51, p: 53, w: 73 },
+                          { r: 'XL', k: 55, t: 54, p: 55, w: 74 },
+                          { r: '2XL', k: 58, t: 56, p: 58, w: 77 },
+                          { r: '3XL', k: 59, t: 57, p: 59, w: 79 },
+                          { r: '4XL', k: 61, t: 59, p: 61, w: 81 },
+                        ].map((row) => (
+                          <tr key={row.r} className="hover:bg-slate-50/50">
+                            <td className="py-2 px-3.5 font-bold font-sans text-slate-900">{row.r}</td>
+                            <td className="py-2 px-3.5">{row.k}</td>
+                            <td className="py-2 px-3.5">{row.t}</td>
+                            <td className="py-2 px-3.5">{row.p}</td>
+                            <td className="py-2 px-3.5">{row.w}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                <div className="bg-rose-50 px-4 py-2 border-b border-rose-100 text-rose-900 font-bold text-xs uppercase">
-                  Tabela Damska (Wymiary w cm, tolerancja +/- 1 cm)
+              /* TABELA DAMSKA: WGRANE ZDJĘCIE LUB TABELA */
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs p-4 space-y-3">
+                <div className="bg-rose-50 px-4 py-2 rounded-xl text-rose-900 font-bold text-xs uppercase flex items-center justify-between">
+                  <span>Tabela Damska (Wymiary w cm, tolerancja +/- 1 cm)</span>
+                  {campaign.tabela_rozmiarow_damska_img && <span className="text-[10px] text-rose-700 font-bold">Grafika tabeli</span>}
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-slate-700">
-                    <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-200">
-                      <tr>
-                        <th className="py-2.5 px-3.5">Rozmiar</th>
-                        <th className="py-2.5 px-3.5">Klatka</th>
-                        <th className="py-2.5 px-3.5">Talia</th>
-                        <th className="py-2.5 px-3.5">Pas</th>
-                        <th className="py-2.5 px-3.5">Wysokość</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono">
-                      {[
-                        { r: 'XS', k: 41, t: 37, p: 41, w: 60 },
-                        { r: 'S', k: 43, t: 39, p: 43, w: 61 },
-                        { r: 'M', k: 45, t: 41, p: 45, w: 62 },
-                        { r: 'L', k: 47, t: 44, p: 49, w: 64 },
-                        { r: 'XL', k: 49, t: 46, p: 51, w: 66 },
-                        { r: '2XL', k: 51, t: 47, p: 53, w: 69 },
-                        { r: '3XL', k: 53, t: 49, p: 55, w: 71 },
-                        { r: '4XL', k: 55, t: 51, p: 57, w: 73 },
-                      ].map((row) => (
-                        <tr key={row.r} className="hover:bg-slate-50/50">
-                          <td className="py-2 px-3.5 font-bold font-sans text-slate-900">{row.r}</td>
-                          <td className="py-2 px-3.5">{row.k}</td>
-                          <td className="py-2 px-3.5">{row.t}</td>
-                          <td className="py-2 px-3.5">{row.p}</td>
-                          <td className="py-2 px-3.5">{row.w}</td>
+
+                {campaign.tabela_rozmiarow_damska_img ? (
+                  <div className="flex justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
+                    <img 
+                      src={campaign.tabela_rozmiarow_damska_img} 
+                      alt="Tabela rozmiarów damska" 
+                      className="max-h-96 object-contain rounded-lg shadow-xs"
+                    />
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-700">
+                      <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3.5">Rozmiar</th>
+                          <th className="py-2.5 px-3.5">Klatka</th>
+                          <th className="py-2.5 px-3.5">Talia</th>
+                          <th className="py-2.5 px-3.5">Pas</th>
+                          <th className="py-2.5 px-3.5">Wysokość</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {[
+                          { r: 'XS', k: 41, t: 37, p: 41, w: 60 },
+                          { r: 'S', k: 43, t: 39, p: 43, w: 61 },
+                          { r: 'M', k: 45, t: 41, p: 45, w: 62 },
+                          { r: 'L', k: 47, t: 44, p: 49, w: 64 },
+                          { r: 'XL', k: 49, t: 46, p: 51, w: 66 },
+                          { r: '2XL', k: 51, t: 47, p: 53, w: 69 },
+                          { r: '3XL', k: 53, t: 49, p: 55, w: 71 },
+                          { r: '4XL', k: 55, t: 51, p: 57, w: 73 },
+                        ].map((row) => (
+                          <tr key={row.r} className="hover:bg-slate-50/50">
+                            <td className="py-2 px-3.5 font-bold font-sans text-slate-900">{row.r}</td>
+                            <td className="py-2 px-3.5">{row.k}</td>
+                            <td className="py-2 px-3.5">{row.t}</td>
+                            <td className="py-2 px-3.5">{row.p}</td>
+                            <td className="py-2 px-3.5">{row.w}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1318,9 +1371,8 @@ export default function OdziezPage() {
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-bold focus:outline-none"
                   >
                     <option value="gotowka">💵 Gotówka (Recepcja)</option>
-                    <option value="blik">📱 BLIK na telefon</option>
                     <option value="wallet">👛 Wirtualny Portfel (Potrąć)</option>
-                    <option value="przelew">🏦 Przelew bankowy</option>
+                    <option value="autopay">💳 AutoPay (Online)</option>
                   </select>
                 </div>
               </div>
@@ -1357,7 +1409,7 @@ export default function OdziezPage() {
               <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
             </div>
 
-            {/* Ukryte inputy plików */}
+            {/* Ukryte inputy wgrywania plików graficznych */}
             <input 
               type="file" 
               ref={frontFileInputRef} 
@@ -1370,6 +1422,20 @@ export default function OdziezPage() {
               ref={backFileInputRef} 
               accept="image/*" 
               onChange={(e) => handleFileUpload(e, 'back')} 
+              className="hidden" 
+            />
+            <input 
+              type="file" 
+              ref={sizeMaleFileInputRef} 
+              accept="image/*" 
+              onChange={(e) => handleFileUpload(e, 'sizeMale')} 
+              className="hidden" 
+            />
+            <input 
+              type="file" 
+              ref={sizeFemaleFileInputRef} 
+              accept="image/*" 
+              onChange={(e) => handleFileUpload(e, 'sizeFemale')} 
               className="hidden" 
             />
 
@@ -1481,14 +1547,62 @@ export default function OdziezPage() {
                 )}
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Numer telefonu do wpłat BLIK</label>
+              {/* ZDJĘCIE TABELI ROZMIARÓW: MĘSKA */}
+              <div className="space-y-1.5 p-3 bg-sky-50/50 rounded-2xl border border-sky-200">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-sky-950 block">Grafika Tabeli Rozmiarów (Męska)</label>
+                  <button
+                    type="button"
+                    onClick={() => sizeMaleFileInputRef.current?.click()}
+                    className="bg-sky-600 hover:bg-sky-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                  >
+                    📁 Wybierz z urządzenia
+                  </button>
+                </div>
+
                 <input 
                   type="text" 
-                  value={editBlik}
-                  onChange={(e) => setEditBlik(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:border-blue-500 text-slate-900"
+                  value={editImgSizeMale}
+                  onChange={(e) => setEditImgSizeMale(e.target.value)}
+                  placeholder="Wklej link lub wybierz plik z urządzenia (opcjonalne)"
+                  className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 focus:outline-none focus:border-sky-500 text-slate-900 font-mono text-[10px]"
                 />
+
+                {editImgSizeMale && (
+                  <div className="flex items-center gap-3 pt-1">
+                    <img src={editImgSizeMale} alt="Tabela męska" className="w-12 h-12 object-contain rounded-lg border border-sky-200 bg-white" />
+                    <span className="text-[10px] text-emerald-700 font-bold">✓ Grafika tabeli męskiej gotowa</span>
+                  </div>
+                )}
+              </div>
+
+              {/* ZDJĘCIE TABELI ROZMIARÓW: DAMSKA */}
+              <div className="space-y-1.5 p-3 bg-rose-50/50 rounded-2xl border border-rose-200">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-rose-950 block">Grafika Tabeli Rozmiarów (Damska)</label>
+                  <button
+                    type="button"
+                    onClick={() => sizeFemaleFileInputRef.current?.click()}
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-colors cursor-pointer"
+                  >
+                    📁 Wybierz z urządzenia
+                  </button>
+                </div>
+
+                <input 
+                  type="text" 
+                  value={editImgSizeFemale}
+                  onChange={(e) => setEditImgSizeFemale(e.target.value)}
+                  placeholder="Wklej link lub wybierz plik z urządzenia (opcjonalne)"
+                  className="w-full bg-white border border-rose-200 rounded-xl px-3 py-2 focus:outline-none focus:border-rose-500 text-slate-900 font-mono text-[10px]"
+                />
+
+                {editImgSizeFemale && (
+                  <div className="flex items-center gap-3 pt-1">
+                    <img src={editImgSizeFemale} alt="Tabela damska" className="w-12 h-12 object-contain rounded-lg border border-rose-200 bg-white" />
+                    <span className="text-[10px] text-emerald-700 font-bold">✓ Grafika tabeli damskiej gotowa</span>
+                  </div>
+                )}
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
