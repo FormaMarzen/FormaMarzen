@@ -117,7 +117,7 @@ const getContractRataInfo = (karnet: any) => {
   };
 };
 
-// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY (Znika dopiero po minięciu daty ważności)
+// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY
 const isPassActive = (k: any) => {
   if (!k) return false;
   const today = new Date().toISOString().split('T')[0];
@@ -127,7 +127,7 @@ const isPassActive = (k: any) => {
   return true;
 };
 
-// POMOCNICZE FUNKCJE GRAMATYCZNE I DYNAMICZNEGO PRZELICZANIA WAŻNOŚCI KARNETÓW
+// POMOCNICZE FUNKCJE GRAMATYCZNE I PRZELICZANIA WAŻNOŚCI KARNETÓW
 const formatOkresGramatyka = (ilosc: number, jednostka: string): string => {
   if (jednostka === 'Dzień') {
     return ilosc === 1 ? 'dzień' : 'dni';
@@ -154,7 +154,7 @@ const parsujOkresZDlugosci = (dlugoscStr: string) => {
   return { ilosc: '1', jednostka: 'Miesiąc' };
 };
 
-// DYNAMICZNY I NIEZAWODNY KALKULATOR DATY WYGAŚNIĘCIA KARNETU
+// DYNAMICZNY KALKULATOR DATY WYGAŚNIĘCIA KARNETU
 const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date => {
   let meta: Record<string, any> = {};
   if (passDef?.inne_ustawienia) {
@@ -229,6 +229,7 @@ const getPeriodKey = (date: Date) => {
   const q = Math.floor(m / 3) + 1;
   return { key: `${y}_Q${q}`, label: `Kwartał ${q} (${y})`, isVacation: false, maxCount: 2 };
 };
+
 export default function KarnetyPage() {
   const [karnety, setKarnety] = useState<any[]>([]);
   const [isMounted, setIsMounted] = useState(false);
@@ -236,7 +237,6 @@ export default function KarnetyPage() {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
   
-  // NOWOCZESNY SYSTEM POWIADOMIEŃ TOAST
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -246,11 +246,9 @@ export default function KarnetyPage() {
     }, 4000);
   };
 
-  // Stany dla strefy klubowicza
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
 
-  // Stany dla modali w strefie klienta
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [isSuspendInfoModalOpen, setIsSuspendInfoModalOpen] = useState(false);
   const [isUnsuspendModalOpen, setIsUnsuspendModalOpen] = useState(false);
@@ -265,13 +263,11 @@ export default function KarnetyPage() {
   const [selectedBuyPass, setSelectedBuyPass] = useState('');
   const [activationMode, setActivationMode] = useState<'today' | 'after'>('today');
 
-  // PŁATNOŚĆ HYBRYDOWA - UŻYCIE ŚRODKÓW Z PORTFELA
   const [useWalletFunds, setUseWalletFunds] = useState(false);
 
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [passToExtend, setPassToExtend] = useState<any>(null);
 
-  // KODY RABATOWE
   const [discountCodeInput, setDiscountCodeInput] = useState('');
   const [appliedDiscountCode, setAppliedDiscountCode] = useState<any>(null);
   const [discountCodeStatus, setDiscountCodeStatus] = useState({ type: '', message: '' });
@@ -285,7 +281,7 @@ export default function KarnetyPage() {
     setUseWalletFunds(false);
   };
 
-  // 🎂 OBSŁUGA URODZIN (20% RABATU PRZEZ 5 DNI - DOKŁADNIE 1 RAZ W ROKU)
+  // URODZINY (-20% PRZEZ 5 DNI - 1 RAZ W ROKU)
   const checkBirthdayStatus = (birthDateStr: string | null | undefined, urodzinyRabatRok?: number | null) => {
     if (!birthDateStr) return { isBirthdayWindow: false, daysLeft: 0, isToday: false, alreadyUsedThisYear: false };
 
@@ -337,7 +333,6 @@ export default function KarnetyPage() {
     return { isBirthdayWindow: false, daysLeft: 0, isToday: false, alreadyUsedThisYear: isUsed };
   };
 
-  // 💬 WYSYŁANIE WIADOMOŚCI URODZINOWEJ NA CZAT
   const sendBirthdayChatMessage = async (client: any) => {
     if (!client || !client.id) return;
     const currentYear = new Date().getFullYear();
@@ -369,7 +364,6 @@ export default function KarnetyPage() {
     } catch (e) {}
   };
 
-  // 🏷️ WERYFIKACJA I NALICZANIE KODU RABATOWEGO
   const handleApplyDiscountCode = async (e: React.MouseEvent) => {
     e.preventDefault();
     setDiscountCodeStatus({ type: 'loading', message: 'Sprawdzanie kodu...' });
@@ -478,7 +472,6 @@ export default function KarnetyPage() {
     }]);
   };
 
-  // KALKULACJA RABATU SYSTEMOWEGO (ZA CIĄGŁOŚĆ)
   const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
 
@@ -631,7 +624,6 @@ export default function KarnetyPage() {
     };
   };
 
-  // POMOCNICZA FUNKCJA DO PRZEKIEROWANIA DO AUTOPAY
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata: any) => {
     setIsProcessingPayment(true);
     try {
@@ -678,7 +670,6 @@ export default function KarnetyPage() {
     }
   };
 
-  // POBIERANIE DANYCH Z SUPABASE
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -825,7 +816,6 @@ export default function KarnetyPage() {
         }
       }
 
-      // Pobieranie karnetów
       const karnetyData = await fetchAllFromSupabase('karnety', 'id', false, 5);
 
       if (karnetyData && karnetyData.length > 0) {
@@ -866,7 +856,6 @@ export default function KarnetyPage() {
         setDostepneKarnety(parsedData);
       }
 
-      // Pobieranie rodzajów zajęć
       const rodzajeData = await fetchAllFromSupabase('rodzaje_zajec', 'nazwa', true, 5);
 
       if (rodzajeData && rodzajeData.length > 0) {
@@ -889,7 +878,6 @@ export default function KarnetyPage() {
     setIsMounted(true);
     loadData();
 
-    // Sprawdzenie powrotu po udanej płatności Autopay
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
       if (urlParams.get('status') === 'success') {
@@ -902,7 +890,6 @@ export default function KarnetyPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  // Stany formularza administratora
   const [nazwa, setNazwa] = useState('');
   const [cena, setCena] = useState('');
   const [stawkaVat, setStawkaVat] = useState('8%');
@@ -1010,7 +997,6 @@ export default function KarnetyPage() {
     reader.readAsDataURL(file);
   };
 
-  // POBIERANIE WSZYSTKICH AKTYWNYCH KARNETÓW KLIENTA
   const rawKarnetyList = Array.isArray(currentUser?.karnetyKlubowicza) ? currentUser.karnetyKlubowicza : [];
   const activeKarnetyList = rawKarnetyList.filter(isPassActive);
   const karnetyList = [...activeKarnetyList].sort((a: any, b: any) => {
@@ -1044,7 +1030,6 @@ export default function KarnetyPage() {
     karnetNazwa: susp.karnetNazwa || 'Karnet'
   })).sort((a: any, b: any) => new Date(b.utworzono || 0).getTime() - new Date(a.utworzono || 0).getTime());
 
-  // REGUŁY SPRZEDAŻY ONLINE
   const dostepneKarnetyDoZakupu = dostepneKarnety.filter((defKarnetu) => {
     if (defKarnetu.dostepnyOnline === false) return false;
 
@@ -1145,7 +1130,7 @@ export default function KarnetyPage() {
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
     const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
-    const walletDeduction = (!isBonus13thPeriod && useWalletFunds) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
+    const walletDeduction = (!isBonus13thPeriod && useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
     const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
@@ -1253,8 +1238,11 @@ export default function KarnetyPage() {
       return;
     }
 
+    const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
+
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
+      Wygasa: latestExpiryDate
     };
     
     if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
@@ -1319,6 +1307,7 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
+      Wygasa: latestExpiryDate,
       urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
       rabat: finalRabatInt,
       cyklCiaglosci: finalCyklInt,
@@ -1366,7 +1355,7 @@ export default function KarnetyPage() {
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
     const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
-    const walletDeduction = useWalletFunds ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
+    const walletDeduction = (useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
     const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
@@ -1406,7 +1395,8 @@ export default function KarnetyPage() {
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
-        zawieszonyDo: null
+        zawieszonyDo: null,
+        historiaZawieszen: []
       };
       updatedKarnetyList.push(nowyKarnetObj);
 
@@ -1438,7 +1428,8 @@ export default function KarnetyPage() {
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
-        zawieszonyDo: null
+        zawieszonyDo: null,
+        historiaZawieszen: []
       };
       updatedKarnetyList.push(nowyKarnetObj);
     }
@@ -1483,8 +1474,11 @@ export default function KarnetyPage() {
       return;
     }
 
+    const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
+
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
+      Wygasa: latestExpiryDate
     };
     
     if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
@@ -1535,6 +1529,7 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
+      Wygasa: latestExpiryDate,
       urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
       rabat: finalRabatInt,
       cyklCiaglosci: finalCyklInt,
@@ -1557,6 +1552,7 @@ export default function KarnetyPage() {
     date2.setHours(0, 0, 0, 0);
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
+
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1640,6 +1636,7 @@ export default function KarnetyPage() {
     }
   };
 
+  // ZATWIERDZENIE ZAWIESZENIA (NATYCHMIASTOWE WYDŁUŻENIE I ODJĘCIE Z PULI)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -1674,7 +1671,6 @@ export default function KarnetyPage() {
 
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
 
-    // 1. SPRAWDZENIE KOLIZJI TERMINÓW Z INNYMI ZAWIESZENIAMI
     const reqStartStr = suspendStartDate;
     const reqEndStr = suspendEndDate;
 
@@ -1682,7 +1678,6 @@ export default function KarnetyPage() {
       const sStart = susp.od;
       const sEnd = susp.status === 'aktywne' ? susp.planowane_do : (susp.do && susp.do !== '-' ? susp.do : susp.planowane_do);
       if (sStart && sEnd) {
-        // Kolizja występuje, gdy przedziały na siebie nachodzą: startA <= endB && endA >= startB
         if (reqStartStr <= sEnd && reqEndStr >= sStart) {
           setSuspendError(`Wybrany termin (${reqStartStr} do ${reqEndStr}) koliduje z wcześniej zarejestrowanym zawieszeniem (od ${sStart} do ${sEnd}).`);
           return;
@@ -1690,19 +1685,22 @@ export default function KarnetyPage() {
       }
     }
 
+    let newDaysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
+    let newTotalUsed = targetKarnet.totalSuspendedDaysUsed || (30 - newDaysLeft);
+
     if (isContract) {
-      const daysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
-      if (requestedDays > daysLeft) {
-        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${daysLeft} dni z rocznej puli 30 dni.`);
+      if (requestedDays > newDaysLeft) {
+        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${newDaysLeft} dni z rocznej puli 30 dni.`);
         return;
       }
+      newDaysLeft = Math.max(0, newDaysLeft - requestedDays);
+      newTotalUsed += requestedDays;
     } else {
       if (requestedDays > 14) {
         setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
         return;
       }
 
-      // 2. PODZIAŁ DNI NA KWARTAŁY / MIESIĄCE WAKACYJNE DZIEŃ PO DNIU
       const newPeriodDays: Record<string, { days: number; label: string; maxCount: number; isVacation: boolean }> = {};
       const curr = new Date(suspendStartDate);
       const end = new Date(suspendEndDate);
@@ -1729,7 +1727,6 @@ export default function KarnetyPage() {
         dayIndex++;
       }
 
-      // Obliczenie dotychczas zużytych dni i operacji w historii
       const historyPeriodDays: Record<string, number> = {};
       const historyPeriodCounts: Record<string, number> = {};
       let vacationUsedThisYear = false;
@@ -1744,7 +1741,6 @@ export default function KarnetyPage() {
         sStart.setHours(0, 0, 0, 0);
         sEnd.setHours(0, 0, 0, 0);
 
-        // Operacja zaliczana jest do okresu, w którym się rozpoczęła
         const startPInfo = getPeriodKey(sStart);
         historyPeriodCounts[startPInfo.key] = (historyPeriodCounts[startPInfo.key] || 0) + 1;
 
@@ -1759,13 +1755,11 @@ export default function KarnetyPage() {
         }
       });
 
-      // Sprawdzenie reguły września (brak zawieszenia we wrześniu, jeśli zawieszano w lipcu/sierpniu)
       if (hasSeptemberDay && vacationUsedThisYear) {
         setSuspendError('Zgodnie z regulaminem, jeśli karnet był zawieszany w wakacje (lipiec/sierpień), nie możesz zawiesić go we wrześniu.');
         return;
       }
 
-      // Sprawdzenie limitu liczby zawieszeń (operacji) w kwartale rozpoczęcia
       const currentStartCount = historyPeriodCounts[reqStartPeriodKey] || 0;
       const maxAllowedCount = newPeriodDays[reqStartPeriodKey]?.maxCount ?? 2;
       if (currentStartCount >= maxAllowedCount) {
@@ -1773,7 +1767,6 @@ export default function KarnetyPage() {
         return;
       }
 
-      // Sprawdzenie limitu 14 dni dla każdego z kwartałów / miesięcy objętych zawieszeniem
       for (const key of Object.keys(newPeriodDays)) {
         const used = historyPeriodDays[key] || 0;
         const adding = newPeriodDays[key].days;
@@ -1785,12 +1778,40 @@ export default function KarnetyPage() {
       }
     }
 
+    // Automatyczne i natychmiastowe wydłużenie daty ważności karnetu o dni zawieszenia
+    let newExtendedExpiry = targetKarnet.waznyDo;
+    if (targetKarnet.waznyDo) {
+      const parts = targetKarnet.waznyDo.split('-');
+      if (parts.length === 3) {
+        const expDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        expDate.setDate(expDate.getDate() + requestedDays);
+        newExtendedExpiry = `${expDate.getFullYear()}-${String(expDate.getMonth() + 1).padStart(2, '0')}-${String(expDate.getDate()).padStart(2, '0')}`;
+      }
+    }
+
+    const newPassSuspensionRecord = {
+      id: Date.now(),
+      od: suspendStartDate,
+      do: suspendEndDate,
+      dni: requestedDays,
+      kto: '📱 Klubowicz (Aplikacja)',
+      status: 'aktywne'
+    };
+
+    const passHist = targetKarnet.historiaZawieszen || [];
+
     let updatedKarnetyList = [...karnetyList];
     updatedKarnetyList[karnetIndex] = {
       ...targetKarnet,
       zawieszonyOd: suspendStartDate,
       zawieszonyDo: suspendEndDate,
-      statusTekst: `Zawieszony (od ${suspendStartDate} do ${suspendEndDate})`
+      waznyDo: newExtendedExpiry,
+      contractSuspensionDaysLeft: isContract ? newDaysLeft : undefined,
+      totalSuspendedDaysUsed: isContract ? newTotalUsed : undefined,
+      historiaZawieszen: [newPassSuspensionRecord, ...passHist],
+      statusTekst: isContract 
+        ? `Umowa 12M (${targetKarnet.rata || '0 / 12'}) - Zawieszony (od ${suspendStartDate} do ${suspendEndDate})`
+        : `Zawieszony (od ${suspendStartDate} do ${suspendEndDate})`
     };
 
     const newGlobalSuspension = {
@@ -1799,19 +1820,21 @@ export default function KarnetyPage() {
       karnetNazwa: targetKarnet.nazwa,
       od: suspendStartDate,
       planowane_do: suspendEndDate,
-      do: '-',
+      do: suspendEndDate,
       planowane_dni: requestedDays,
-      dni: 0,
+      dni: requestedDays,
       status: 'aktywne',
       utworzono: new Date().toISOString(),
       isContract: isContract || false
     };
 
     const updatedGlobalHistory = [...globalHistory, newGlobalSuspension];
+    const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || newExtendedExpiry;
 
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
-      historiaZawieszenGlobalna: updatedGlobalHistory
+      historiaZawieszenGlobalna: updatedGlobalHistory,
+      Wygasa: latestExpiryDate
     };
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
@@ -1826,15 +1849,17 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
-      historiaZawieszenGlobalna: updatedGlobalHistory
+      historiaZawieszenGlobalna: updatedGlobalHistory,
+      Wygasa: latestExpiryDate
     });
 
-    showToast(`Pomyślnie zawieszono karnet na okres ${requestedDays} dni.`, 'success');
+    showToast(`Pomyślnie zawieszono karnet na okres ${requestedDays} dni. Data ważności została wydłużona do ${newExtendedExpiry}.`, 'success');
     setIsSuspendModalOpen(false);
     setSuspendStartDate('');
     setSuspendEndDate('');
   };
 
+  // ODWIESZENIE KARNETU PRZED CZASEM (KOREKTA DNI I ZWROT DO PULI)
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -1858,18 +1883,21 @@ export default function KarnetyPage() {
       actualEnd = plannedEnd; 
     }
 
+    const plannedDays = getDaysBetween(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
     let actualDays = 0;
     if (today >= start) {
       actualDays = getDaysBetween(targetKarnet.zawieszonyOd, actualEnd.toISOString().split('T')[0]);
     }
 
-    let nowaDataWygasnieciaStr = targetKarnet.waznyDo;
-    if (actualDays > 0 && targetKarnet.waznyDo) {
+    const unusedDaysRefund = Math.max(0, plannedDays - actualDays);
+
+    let correctedExpiryDate = targetKarnet.waznyDo;
+    if (unusedDaysRefund > 0 && targetKarnet.waznyDo) {
       const parts = targetKarnet.waznyDo.split('-');
       if (parts.length === 3) {
-        const oldExpDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-        oldExpDate.setDate(oldExpDate.getDate() + actualDays);
-        nowaDataWygasnieciaStr = `${oldExpDate.getFullYear()}-${String(oldExpDate.getMonth() + 1).padStart(2, '0')}-${String(oldExpDate.getDate()).padStart(2, '0')}`;
+        const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        currentExp.setDate(currentExp.getDate() - unusedDaysRefund);
+        correctedExpiryDate = `${currentExp.getFullYear()}-${String(currentExp.getMonth() + 1).padStart(2, '0')}-${String(currentExp.getDate()).padStart(2, '0')}`;
       }
     }
 
@@ -1878,9 +1906,22 @@ export default function KarnetyPage() {
 
     if (targetKarnet.isContract12M) {
       const currentPool = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
-      updatedSuspensionDaysLeft = Math.max(0, currentPool - actualDays);
-      updatedTotalSuspendedDaysUsed += actualDays;
+      updatedSuspensionDaysLeft = Math.min(30, currentPool + unusedDaysRefund);
+      updatedTotalSuspendedDaysUsed = Math.max(0, updatedTotalSuspendedDaysUsed - unusedDaysRefund);
     }
+
+    const passHist = targetKarnet.historiaZawieszen || [];
+    const updatedPassHist = passHist.map((h: any) => {
+      if (h.status === 'aktywne') {
+        return {
+          ...h,
+          do: actualEnd.toISOString().split('T')[0],
+          dni: actualDays,
+          status: 'zakończone'
+        };
+      }
+      return h;
+    });
 
     const globalHistory = currentUser?.historiaZawieszenGlobalna || [];
     const updatedGlobalHistory = globalHistory.map((susp: any) => {
@@ -1900,19 +1941,23 @@ export default function KarnetyPage() {
       ...targetKarnet,
       zawieszonyOd: null,
       zawieszonyDo: null,
-      waznyDo: nowaDataWygasnieciaStr,
+      waznyDo: correctedExpiryDate,
       contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
       totalSuspendedDaysUsed: updatedTotalSuspendedDaysUsed,
+      historiaZawieszen: updatedPassHist,
       statusTekst: targetKarnet.isContract12M 
         ? (targetKarnet.rata === 'Bonus / 12' 
-            ? `Umowa 12M (Bonus z zawieszenia • Ważny do: ${nowaDataWygasnieciaStr})`
-            : `Umowa 12M (Rata ${targetKarnet.rata || '0 / 12'} • Ważny do: ${nowaDataWygasnieciaStr})`)
-        : `Ważny do: ${nowaDataWygasnieciaStr}`
+            ? `Umowa 12M (Bonus z zawieszenia • Ważny do: ${correctedExpiryDate})`
+            : `Umowa 12M (Rata ${targetKarnet.rata || '0 / 12'} • Ważny do: ${correctedExpiryDate})`)
+        : `Ważny do: ${correctedExpiryDate}`
     };
+
+    const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || correctedExpiryDate;
 
     const dbPayload: any = {
       karnetyKlubowicza: updatedKarnetyList,
-      historiaZawieszenGlobalna: updatedGlobalHistory
+      historiaZawieszenGlobalna: updatedGlobalHistory,
+      Wygasa: latestExpiryDate
     };
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
@@ -1925,13 +1970,13 @@ export default function KarnetyPage() {
     setCurrentUser({
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
-      historiaZawieszenGlobalna: updatedGlobalHistory
+      historiaZawieszenGlobalna: updatedGlobalHistory,
+      Wygasa: latestExpiryDate
     });
 
-    showToast(`Karnet odwieszony! Ważność przedłużona do: ${nowaDataWygasnieciaStr}`, 'success');
+    showToast(`Karnet odwieszony! ${unusedDaysRefund > 0 ? `Zwrócono ${unusedDaysRefund} dni do puli.` : ''} Ważność karnetu: ${correctedExpiryDate}`, 'success');
     setIsUnsuspendModalOpen(false);
   };
-
   const activePassesForSuspend = karnetyList.filter((k: any) => {
     const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd && k.waznyDo;
     return isActive;
