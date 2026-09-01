@@ -109,7 +109,7 @@ export default function ClubChat() {
 
   const [newMessage, setNewMessage] = useState("");
 
-  // STAN DLA WSKAŹNIKA PISANIA NA ŻYWO (TYPING INDICATOR)
+  // Wskaźnik pisania na żywo (Typing Indicator)
   const [typingUsers, setTypingUsers] = useState<{ [key: string]: { name: string; timestamp: number } }>({});
   const typingTimeoutRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
   const lastTypingSentTimeRef = useRef<number>(0);
@@ -166,7 +166,6 @@ export default function ClubChat() {
     scrollToBottom();
   }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab, typingUsers]);
 
-  // Pomocnicza funkcja zliczająca uczestników grupy
   const getGroupMembersCount = (group: any): number => {
     if (!group) return 0;
     let raw = group.czlonkowie_ids;
@@ -181,7 +180,6 @@ export default function ClubChat() {
     return new Set(raw.map(String)).size;
   };
 
-  // Wczytywanie pamięci stanu
   useEffect(() => {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
@@ -430,7 +428,6 @@ export default function ClubChat() {
     }
   };
 
-  // Inicjalizacja pozycji dymka
   useEffect(() => {
     if (typeof window !== "undefined") {
       const handleResize = () => {
@@ -813,7 +810,7 @@ export default function ClubChat() {
     }
   };
 
-  // SUBSKRYPCJA REALTIME: WIADOMOŚCI ORAZ PISANIE NA ŻYWO (BROADCAST TYPING)
+  // SUBSKRYPCJA REALTIME: BŁYSKAWICZNA AKTUALIZACJA WIADOMOŚCI ORAZ LISTY ODBIORCÓW
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -833,20 +830,37 @@ export default function ClubChat() {
         (payload) => {
           if (payload.eventType === "INSERT") {
             const newRow = payload.new;
-            // Natychmiastowe usunięcie wskaźnika pisania dla nadawcy
             const senderKey = String(newRow.nadawca_id);
+            const myActualIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+
+            // Wyczyszczenie wskaźnika pisania
             setTypingUsers((prev) => {
               const updated = { ...prev };
               delete updated[senderKey];
               return updated;
             });
 
-            // Natychmiastowe dopisanie nowej wiadomości do stanu bez opóźnienia
+            // Odblokowanie czatu jeśli był wcześniej usunięty z widoku przez użytkownika
+            if (myActualIds.includes(String(newRow.odbiorca_id))) {
+              setDeletedDirectChatTimestamps((prev) => {
+                if (prev[senderKey]) {
+                  const copy = { ...prev };
+                  delete copy[senderKey];
+                  const uid = secondaryUserId || currentUserId;
+                  if (uid) localStorage.setItem(`chat_deleted_${uid}`, JSON.stringify(copy));
+                  return copy;
+                }
+                return prev;
+              });
+            }
+
+            // Natychmiastowe dopisanie nowej wiadomości do stanu globalnego (aktualizuje listę odbiorców)
             setMessages((prev) => {
               if (prev.some((m) => m.id === newRow.id)) return prev;
               return [...prev, newRow];
             });
 
+            // Jeśli otwarta jest dana grupa, dopisujemy natychmiast do widoku grupy
             if (selectedGroupRef.current && String(newRow.grupa_id) === String(selectedGroupRef.current.id)) {
               setGroupMessages((prev) => {
                 if (prev.some((m) => m.id === newRow.id)) return prev;
@@ -934,7 +948,6 @@ export default function ClubChat() {
     }
   }, [selectedGroup?.id]);
 
-  // Sygnalizacja pisania wiadomości (Throttled Broadcast)
   const handleTypingBroadcast = () => {
     const now = Date.now();
     if (now - lastTypingSentTimeRef.current < 1500) return;
@@ -955,7 +968,6 @@ export default function ClubChat() {
     });
   };
 
-  // Oznaczanie wiadomości 1-na-1 jako przeczytane
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -1000,7 +1012,6 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
 
-  // Oznaczanie wiadomości w grupie/treningu jako przeczytane
   useEffect(() => {
     if (isOpen && selectedGroup && currentUserId) {
       const markGroupAsRead = async () => {
@@ -1022,7 +1033,6 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedGroup?.id, currentUserId, secondaryUserId]);
 
-  // Obsługa plików
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1905,8 +1915,9 @@ export default function ClubChat() {
     groupPendingRequestIds.includes(String(k.id))
   );
 
-  const latestMessageMap = new Map();
-  const latestMessageTextMap = new Map();
+  // KULOODPORNE MAPOWANIE ZAWSZE NA STRINGU DLA BŁYSKAWICZNEGO ODŚWIEŻANIA LISTY ODBIORCÓW
+  const latestMessageMap = new Map<string, number>();
+  const latestMessageTextMap = new Map<string, string>();
   const latestGroupMessageTimeMap = new Map<string, number>();
 
   messages.forEach((m: any) => {
@@ -1918,39 +1929,45 @@ export default function ClubChat() {
         latestGroupMessageTimeMap.set(gId, msgTime);
       }
     } else {
-      let otherId = effectiveIds.includes(String(m.nadawca_id)) ? m.odbiorca_id : m.nadawca_id;
-      if (otherId === null || otherId === undefined) otherId = SYSTEM_ID;
+      const sId = String(m.nadawca_id ?? SYSTEM_ID);
+      const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+      let otherId = effectiveIds.includes(sId) ? rId : sId;
 
-      if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)) {
+      if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)!) {
         latestMessageMap.set(otherId, msgTime);
         latestMessageTextMap.set(otherId, m.tresc || (m.attachment_url ? "📎 Załącznik" : ""));
       }
     }
   });
 
-  const chattedUserIds = new Set<string | number>();
+  const chattedUserIds = new Set<string>();
   messages.forEach((m: any) => {
-    if (effectiveIds.includes(String(m.nadawca_id))) {
-      chattedUserIds.add(m.odbiorca_id);
-    } else if (effectiveIds.includes(String(m.odbiorca_id))) {
-      chattedUserIds.add(m.nadawca_id ?? SYSTEM_ID);
+    if (!m.grupa_id) {
+      const sId = String(m.nadawca_id ?? SYSTEM_ID);
+      const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+      if (effectiveIds.includes(sId)) {
+        chattedUserIds.add(rId);
+      } else if (effectiveIds.includes(rId)) {
+        chattedUserIds.add(sId);
+      }
     }
   });
 
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
+      const kIdStr = String(k.id);
       if (Number(k.id) === SYSTEM_ID) return true;
 
       const q = searchQuery.trim().toLowerCase();
       if (!q) {
-        const deletedTimestamp = deletedDirectChatTimestamps[String(k.id)];
-        const lastMsgTime = latestMessageMap.get(k.id) || 0;
+        const deletedTimestamp = deletedDirectChatTimestamps[kIdStr];
+        const lastMsgTime = latestMessageMap.get(kIdStr) || 0;
         if (deletedTimestamp && lastMsgTime <= deletedTimestamp) {
           return false;
         }
 
-        return chattedUserIds.has(k.id);
+        return chattedUserIds.has(kIdStr);
       }
 
       const fName = (k.firstName || "").toLowerCase();
@@ -1970,8 +1987,8 @@ export default function ClubChat() {
       return k.name?.toLowerCase().includes(q);
     })
     .sort((a, b) => {
-      const timeA = latestMessageMap.get(a.id) || 0;
-      const timeB = latestMessageMap.get(b.id) || 0;
+      const timeA = latestMessageMap.get(String(a.id)) || 0;
+      const timeB = latestMessageMap.get(String(b.id)) || 0;
       return timeB - timeA;
     });
 
@@ -2450,7 +2467,7 @@ export default function ClubChat() {
       return String(m.nadawca_id) === String(user.id);
     }).length;
 
-    const lastMessageText = latestMessageTextMap.get(user.id);
+    const lastMessageText = latestMessageTextMap.get(String(user.id));
 
     return (
       <div
@@ -2812,7 +2829,7 @@ export default function ClubChat() {
             </div>
           </div>
 
-          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE: TYLKO IKONY */}
+          {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE */}
           {selectedGroup && (
             <div className="bg-slate-900 border-t border-slate-800 px-3 py-1.5 flex items-center justify-center gap-3 text-base shrink-0">
               <button
@@ -2860,7 +2877,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1: TYLKO IKONY */}
+          {/* PRZEŁĄCZNIK W AKTYWNEJ ROZMOWIE 1-NA-1 */}
           {selectedUser && (
             <div className="bg-slate-900 border-t border-slate-800 px-4 py-1.5 flex items-center justify-center gap-3 text-base shrink-0">
               <button
@@ -2992,6 +3009,7 @@ export default function ClubChat() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
+                    {/* SEKCJA: CZATY GRUPOWE W ZAKŁADCE PRYWATNE */}
                     {directTabGroupChats.length > 0 && (
                       <div className="space-y-1 mb-2 bg-slate-100/60 p-2 rounded-2xl border border-slate-200">
                         <div className="flex items-center justify-between px-1 pb-1">
@@ -3015,6 +3033,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
+                    {/* PRZYPIĘTE ROZMOWY 1-NA-1 */}
                     {pinnedDirectUsers.length > 0 && (
                       <div className="space-y-1 mb-2">
                         <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
@@ -3024,6 +3043,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
+                    {/* POZOSTAŁE ROZMOWY 1-NA-1 */}
                     {regularDirectUsers.length > 0 && (
                       <div className="space-y-1">
                         {(pinnedDirectUsers.length > 0 || directTabGroupChats.length > 0) && (
@@ -3042,6 +3062,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
+                    {/* SEKCJA ARCHIWUM TYLKO DLA ADMINA */}
                     {isAdmin && archivedDirectUsers.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
@@ -3097,6 +3118,7 @@ export default function ClubChat() {
                 </>
               )}
 
+              {/* LISTA GRUP */}
               {activeTab === "groups" && (
                 <div className="flex-1 flex flex-col overflow-hidden space-y-2 min-h-0">
                   <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-1.5 text-xs font-bold shrink-0">
