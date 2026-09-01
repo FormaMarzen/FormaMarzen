@@ -1593,7 +1593,7 @@ export default function WydarzeniaPage() {
                         )
                       )}
 
-                      {/* Lista zamówień koszulek dla Administratora w stylistyce tabeli uczestników */}
+                      {/* Lista zamówień koszulek dla Administratora - rozmiar nad przyciskiem statusu */}
                       {isAdmin && (
                         <div className="bg-white p-5 sm:p-7 rounded-2xl sm:rounded-3xl shadow-sm border border-indigo-100 space-y-4">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-50 pb-3">
@@ -1619,36 +1619,39 @@ export default function WydarzeniaPage() {
                           </div>
 
                           {(selectedEvent.koszulki_zamowienia || []).length > 0 ? (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                               {selectedEvent.koszulki_zamowienia?.map((z, zIdx) => {
                                 const isPaid = z.status_platnosci === "calosc";
                                 return (
                                   <div 
                                     key={zIdx} 
-                                    className="bg-sky-50/70 border border-sky-100/90 px-3 py-2 rounded-xl flex items-center justify-between gap-2 transition-all"
+                                    className="bg-sky-50/70 border border-sky-100/90 px-3.5 py-2.5 rounded-2xl flex items-center justify-between gap-3 transition-all"
                                   >
                                     <div className="flex items-center gap-2 min-w-0 flex-1">
                                       <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0"></span>
                                       <span className="text-xs font-bold text-sky-950 whitespace-normal leading-tight">
                                         {z.imie} {z.nazwisko}
                                       </span>
-                                      <span className="bg-indigo-100 text-indigo-900 border border-indigo-200 px-1.5 py-0.5 rounded text-[9px] font-black uppercase shrink-0">
-                                        {z.rozmiar} {z.typ && `• ${z.typ}`}
-                                      </span>
                                     </div>
 
-                                    <button
-                                      onClick={() => handleQuickKoszulkaPaymentToggle(zIdx)}
-                                      title="Kliknij, aby przełączyć: Do wpłaty ➔ Opłacone"
-                                      className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 shrink-0 ${
-                                        isPaid 
-                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100' 
-                                          : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
-                                      }`}
-                                    >
-                                      <span className="text-[9px]">{isPaid ? "🟢" : "🟡"}</span>
-                                      <span>{isPaid ? "Opłacone" : "Do wpłaty"}</span>
-                                    </button>
+                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                      <span className="bg-indigo-100/90 text-indigo-950 border border-indigo-200 px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider shadow-2xs">
+                                        {z.rozmiar} {z.typ && `• ${z.typ}`}
+                                      </span>
+
+                                      <button
+                                        onClick={() => handleQuickKoszulkaPaymentToggle(zIdx)}
+                                        title="Kliknij, aby przełączyć: Do wpłaty ➔ Opłacone"
+                                        className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 ${
+                                          isPaid 
+                                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100' 
+                                            : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                                        }`}
+                                      >
+                                        <span className="text-[9px]">{isPaid ? "🟢" : "🟡"}</span>
+                                        <span>{isPaid ? "Opłacone" : "Do wpłaty"}</span>
+                                      </button>
+                                    </div>
                                   </div>
                                 );
                               })}
@@ -2354,7 +2357,6 @@ export default function WydarzeniaPage() {
                           </div>
                         </div>
 
-                        {/* Wyszukiwarka z bazy + wybór rozmiaru i typu */}
                         <div className="space-y-2">
                           <input 
                             type="text" 
@@ -2382,7 +2384,6 @@ export default function WydarzeniaPage() {
                           )}
                         </div>
 
-                        {/* Ręczne dopisanie osoby i rozmiaru */}
                         <div className="flex flex-wrap sm:flex-nowrap gap-2 items-center">
                           <input 
                             type="text" 
@@ -2430,7 +2431,6 @@ export default function WydarzeniaPage() {
                           </button>
                         </div>
 
-                        {/* Lista zamówionych koszulek w modalu */}
                         {(form.koszulki_zamowienia || []).length > 0 && (
                           <div className="space-y-2 pt-2 border-t border-indigo-200/60 max-h-60 overflow-y-auto pr-1">
                             {(form.koszulki_zamowienia || []).map((z, index) => {
