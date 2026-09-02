@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { supabase } from "../raporty/klienci/supabase";
+import { createClient } from "@supabase/supabase-js";
+
+// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
 const SYSTEM_ID = 5000;
@@ -12,7 +17,7 @@ const fetchAllFromSupabase = async (
   selectQuery: string = '*', 
   orderBy: string = 'id', 
   ascending: boolean = false, 
-  maxPages: number = 5
+  maxPages: number = 10
 ) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
@@ -62,7 +67,7 @@ export default function WyzwaniaPage() {
   const [selectedWinnerId, setSelectedWinnerId] = useState<any | null>(null);
   const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
   
-  // Nowy stan do powiększania odznaki w okienku modalnym
+  // Stan do powiększania odznaki w okienku modalnym
   const [selectedBadgeForZoom, setSelectedBadgeForZoom] = useState<any | null>(null);
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -272,20 +277,25 @@ export default function WyzwaniaPage() {
     if (data) setOdznakiHistoria(data);
   };
 
-  // Obliczanie obu rankingów
+  // Obliczanie obu rankingów z mapami O(1) i deduplikacją
   const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
     const challengesData = await fetchAllFromSupabase("klub_wyzwania_historia", "zwyciezca_id", "id", false, 5);
     
+    // Mapa klientów O(1)
+    const clientsMap = new Map<string, any>();
+    clientsData.forEach((c: any) => clientsMap.set(String(c.id), c));
+
     // 1. Ranking pojedynków
     if (challengesData && clientsData.length > 0) {
       const winsCount: { [key: string]: number } = {};
       challengesData.forEach((item: any) => {
         if (item.zwyciezca_id) {
-          winsCount[item.zwyciezca_id] = (winsCount[item.zwyciezca_id] || 0) + 1;
+          const zId = String(item.zwyciezca_id);
+          winsCount[zId] = (winsCount[zId] || 0) + 1;
         }
       });
       const winsRanking = Object.keys(winsCount).map((clientId) => {
-        const client = clientsData.find((c: any) => String(c.id) === String(clientId));
+        const client = clientsMap.get(clientId);
         return {
           id: clientId,
           name: client ? client.name : "Klubowicz",
@@ -296,13 +306,20 @@ export default function WyzwaniaPage() {
       setRankingList(winsRanking);
     }
 
-    // 2. Ranking odznak według punktów
+    // 2. Ranking odznak według punktów z deduplikacją
     const sourceBadges = badgesData || wszystkiePrzydzieloneOdznaki;
     if (clientsData.length > 0 && sourceBadges) {
       const badgeScores: { [key: string]: { points: number; count: number } } = {};
+      const seenBadgeAssignments = new Set<string>();
       
       sourceBadges.forEach((item: any) => {
         const uId = String(item.klient_id);
+        const badgeDefId = item.odznaka_id || item.klub_odznaki_definicje?.id;
+        const assignmentKey = `${uId}_${badgeDefId}`;
+
+        if (seenBadgeAssignments.has(assignmentKey)) return;
+        seenBadgeAssignments.add(assignmentKey);
+
         const pts = Number(item.klub_odznaki_definicje?.punkty) || 1;
         if (!badgeScores[uId]) {
           badgeScores[uId] = { points: 0, count: 0 };
@@ -312,7 +329,7 @@ export default function WyzwaniaPage() {
       });
 
       const bRanking = Object.keys(badgeScores).map((clientId) => {
-        const client = clientsData.find((c: any) => String(c.id) === String(clientId));
+        const client = clientsMap.get(clientId);
         return {
           id: clientId,
           name: client ? client.name : "Klubowicz",
@@ -900,7 +917,7 @@ export default function WyzwaniaPage() {
             <div className="bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 text-white space-y-8 shadow-xl">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <button 
-                  onClick={() => setSelectedMemberForComparison(null)}
+                  onClick={() => setSelectedMemberForComparison(null)} 
                   className="bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-colors cursor-pointer flex items-center gap-2"
                 >
                   ← Wróć do gabloty
