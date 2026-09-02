@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../klienci/supabase';
 
-// Definicja interfejsu dla pojedynczego wpisu historii
 interface AuditLogEntry {
   id: string | number;
   dataOperacji: string;
@@ -11,6 +10,9 @@ interface AuditLogEntry {
   klientId: number | string;
   klientImieNazwisko: string;
   klientEmail: string;
+  zajeciaNazwa: string;
+  zajeciaDzien: string;
+  zajeciaGodzina: string;
   zajeciaInfo: string;
   typAkcji: 'ZAPIS' | 'WYPIS' | 'OBECNOŚĆ' | 'NIEOBECNOŚĆ';
   opis: string;
@@ -21,7 +23,6 @@ interface AuditLogEntry {
 export default function ClassesReportPage() {
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Domyślne daty - np. od początku bieżącego miesiąca do końca
   const today = new Date();
   const defaultStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
   const defaultEnd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
@@ -35,46 +36,94 @@ export default function ClassesReportPage() {
   
   const datePickerRef = useRef<HTMLDivElement>(null);
 
-  // Funkcja wyciągająca detale (kto, co, jak) z treści opisu zapisywanego do transakcji
-  const parseOpisTransakcji = (opis: string, typOryginalny: string): { typZnormalizowany: AuditLogEntry['typAkcji'], zrodlo: string, zdekodowaneZajecia: string } => {
+  const parseSzczegolyTransakcji = (t: any): { 
+    typZnormalizowany: AuditLogEntry['typAkcji'];
+    zrodlo: string;
+    nazwaZajec: string;
+    dzienZajec: string;
+    godzinaZajec: string;
+    pelneInfo: string;
+  } => {
+    const opis: string = t.opis || '';
+    const typOryginalny: string = t.typ_operacji || '';
+
+    // 1. Detekcja typu akcji
     let typZnormalizowany: AuditLogEntry['typAkcji'] = 'ZAPIS';
     let zrodlo = 'Klubowicz (Aplikacja)';
-    let zdekodowaneZajecia = 'Zajęcia';
 
-    // Detekcja typu
-    if (opis.includes('NIEOBECNY') || opis.includes('nieobecny')) {
+    if (opis.toLowerCase().includes('nieobecny')) {
       typZnormalizowany = 'NIEOBECNOŚĆ';
       zrodlo = 'Trener / Zarządca';
-    } else if (opis.includes('wypisano') || opis.includes('Wypisano') || typOryginalny === 'zajecia_wypis' || opis.includes('Wypisanie')) {
+    } else if (opis.toLowerCase().includes('wypis') || typOryginalny === 'zajecia_wypis') {
       typZnormalizowany = 'WYPIS';
-    } else if (opis.includes('Zapisano') || opis.includes('zapisano') || typOryginalny === 'zajecia_zapis') {
+    } else if (opis.toLowerCase().includes('zapis') || typOryginalny === 'zajecia_zapis') {
       typZnormalizowany = 'ZAPIS';
     } else {
       typZnormalizowany = 'OBECNOŚĆ';
     }
 
-    // Detekcja źródła
-    if (opis.includes('Zarządcę') || opis.includes('Trener') || opis.includes('przez klub') || opis.includes('NIEOBECNY')) {
+    if (opis.includes('Zarządcę') || opis.includes('Trener') || opis.includes('przez klub') || typZnormalizowany === 'NIEOBECNOŚĆ') {
       zrodlo = 'Trener / Zarządca (Panel)';
     }
 
-    // Ekstrakcja nazwy zajęć
-    const regexZajecia = /(?:zajęciach|zajęć|zajęcia)[:\s]+([^.]+)/i;
-    const match = opis.match(regexZajecia);
-    if (match && match[1]) {
-      zdekodowaneZajecia = match[1].replace(/\(.*\)/g, '').trim();
-    } else {
-       zdekodowaneZajecia = opis.split('-')[1]?.trim() || opis;
+    // 2. Pobieranie danych z kolumn bezpośrednich tabeli transakcje (jeśli istnieją w Supabase)
+    let nazwaZajec = t.nazwa_zajec || t.zajecia_nazwa || t.tytul || '';
+    let dzienZajec = t.data_zajec || t.zajecia_data || t.dzien || '';
+    let godzinaZajec = t.godzina_zajec || t.zajecia_godzina || t.godzina || '';
+
+    // 3. Fallback: Ekstrakcja danych z tekstu pola opis
+    // Przykłady formatów:
+    // "Zapisano na zajęcia: Tabata, 2026-09-04 18:00"
+    // "Zapisano na: Trening Obwodowy | Dzień: 2026-09-05 | Godz: 19:00"
+    if (!nazwaZajec) {
+      const matchNazwa = opis.match(/(?:zajęcia|zajęciach|zajęć|na:)\s*[:\-]?\s*([^,\-|.(]+)/i);
+      if (matchNazwa && matchNazwa[1] && !matchNazwa[1].toLowerCase().includes('obłożenie')) {
+        nazwaZajec = matchNazwa[1].trim();
+      }
     }
 
-    return { typZnormalizowany, zrodlo, zdekodowaneZajecia };
+    if (!dzienZajec) {
+      const matchData = opis.match(/(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})/);
+      if (matchData) {
+        dzienZajec = matchData[1];
+      }
+    }
+
+    if (!godzinaZajec) {
+      const matchGodzina = opis.match(/(?:godz\.?|o\s+)?(\d{1,2}:\d{2})/i);
+      if (matchGodzina) {
+        godzinaZajec = matchGodzina[1];
+      }
+    }
+
+    // Jeżeli opis to starszy format (np. "Izabela - Zapisano na zajęcia. Obłożenie: 4/6")
+    if (!nazwaZajec) {
+      if (opis.includes('Obłożenie:')) {
+        nazwaZajec = 'Zajęcia grupowe';
+      } else {
+        nazwaZajec = opis.split('-')[1]?.trim() || opis || 'Zajęcia fitness';
+      }
+    }
+
+    let pelneInfo = nazwaZajec;
+    if (dzienZajec) pelneInfo += ` (${dzienZajec}`;
+    if (godzinaZajec) pelneInfo += ` ${godzinaZajec})`;
+    else if (dzienZajec) pelneInfo += `)`;
+
+    return {
+      typZnormalizowany,
+      zrodlo,
+      nazwaZajec,
+      dzienZajec,
+      godzinaZajec,
+      pelneInfo
+    };
   };
 
   const fetchLogs = async () => {
     setIsLoading(true);
     try {
-      // 1. Pobieramy transakcje związane z zajęciami
-      const { data: transakcjeDataRaw } = await supabase
+      const { data: transakcjeDataRaw, error: transakcjeError } = await supabase
         .from('transakcje')
         .select('*')
         .in('typ_operacji', ['zajecia_zapis', 'zajecia_wypis'])
@@ -82,12 +131,14 @@ export default function ClassesReportPage() {
         .lte('created_at', `${endDate}T23:59:59`)
         .order('created_at', { ascending: false });
 
-      // 2. Pobieramy klientów (używamy *, aby ominąć błąd ParserError TypeScriptu dla polskich znaków)
-      const { data: klienciDataRaw } = await supabase
+      if (transakcjeError) throw transakcjeError;
+
+      const { data: klienciDataRaw, error: klienciError } = await supabase
         .from('klienci')
         .select('*');
 
-      // Rzutowanie na any[], aby swobodnie operować na danych
+      if (klienciError) throw klienciError;
+
       const transakcjeData = transakcjeDataRaw as any[] | null;
       const klienciData = klienciDataRaw as any[] | null;
 
@@ -95,7 +146,7 @@ export default function ClassesReportPage() {
 
       if (transakcjeData && klienciData) {
         logsToSet = transakcjeData.map((t: any) => {
-          const klient = klienciData.find((k: any) => k.id === t.klient_id);
+          const klient = klienciData.find((k: any) => String(k.id) === String(t.klient_id));
           const imieNazwisko = klient ? `${klient.Imię || ''} ${klient.Nazwisko || ''}`.trim() : 'Nieznany klient';
           const email = klient ? klient['E-mail'] || '' : '';
           
@@ -103,9 +154,15 @@ export default function ClassesReportPage() {
           const dataOperacji = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
           const godzinaOperacji = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
 
-          const { typZnormalizowany, zrodlo, zdekodowaneZajecia } = parseOpisTransakcji(t.opis || '', t.typ_operacji);
+          const { 
+            typZnormalizowany, 
+            zrodlo, 
+            nazwaZajec, 
+            dzienZajec, 
+            godzinaZajec, 
+            pelneInfo 
+          } = parseSzczegolyTransakcji(t);
 
-          // Dobieramy kolor
           let kolor = 'text-slate-600 bg-slate-100 border-slate-200';
           if (typZnormalizowany === 'ZAPIS') kolor = 'text-emerald-800 bg-emerald-100 border-emerald-200';
           if (typZnormalizowany === 'WYPIS') kolor = 'text-rose-800 bg-rose-100 border-rose-200';
@@ -119,7 +176,10 @@ export default function ClassesReportPage() {
             klientId: t.klient_id,
             klientImieNazwisko: imieNazwisko,
             klientEmail: email,
-            zajeciaInfo: zdekodowaneZajecia,
+            zajeciaNazwa: nazwaZajec,
+            zajeciaDzien: dzienZajec,
+            zajeciaGodzina: godzinaZajec,
+            zajeciaInfo: pelneInfo,
             typAkcji: typZnormalizowany,
             opis: t.opis || '',
             zrodlo,
@@ -130,12 +190,11 @@ export default function ClassesReportPage() {
 
       setAuditLogs(logsToSet);
     } catch (err) {
-      console.error("Błąd pobierania historii zapisów", err);
+      console.error("Błąd pobierania historii zapisów:", err);
     }
     setIsLoading(false);
   };
 
-  // Nasłuchiwanie zamykania date-pickera
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (datePickerRef.current && !datePickerRef.current.contains(event.target as Node)) {
@@ -146,7 +205,6 @@ export default function ClassesReportPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Pobieranie przy wejściu oraz zmianie dat
   useEffect(() => {
     fetchLogs();
   }, [startDate, endDate]);
@@ -155,7 +213,9 @@ export default function ClassesReportPage() {
     const query = searchQuery.toLowerCase();
     return (
       log.klientImieNazwisko.toLowerCase().includes(query) ||
-      log.zajeciaInfo.toLowerCase().includes(query) ||
+      log.zajeciaNazwa.toLowerCase().includes(query) ||
+      log.zajeciaDzien.toLowerCase().includes(query) ||
+      log.zajeciaGodzina.toLowerCase().includes(query) ||
       log.opis.toLowerCase().includes(query)
     );
   });
@@ -163,7 +223,6 @@ export default function ClassesReportPage() {
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 relative">
       
-      {/* Pasek Nagłówka */}
       <div className="flex justify-between items-center border-b border-sky-200 pb-4">
         <div>
           <h1 className="text-xl font-black uppercase tracking-wider text-sky-950">
@@ -180,20 +239,18 @@ export default function ClassesReportPage() {
         </button>
       </div>
 
-      {/* Wyszukiwanie i Interaktywny Kalendarz Zakresu Dat */}
       <div className="flex flex-col sm:flex-row gap-4 justify-between items-center relative bg-white p-4 rounded-2xl border border-sky-200 shadow-sm">
         <div className="relative flex-1 w-full">
           <span className="absolute left-4 top-3 text-slate-400">🔍</span>
           <input 
             type="text"
-            placeholder="Szukaj po imieniu, nazwisku lub zajęciach..."
+            placeholder="Szukaj po nazwisku, zajęciach, dacie lub godzinie..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-sky-50 border border-sky-100 rounded-xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
           />
         </div>
 
-        {/* PRZYCISK KALENDARZA ZAKRESU DAT */}
         <div className="relative" ref={datePickerRef}>
           <button 
             onClick={() => setIsDatePickerOpen(!isDatePickerOpen)}
@@ -204,7 +261,6 @@ export default function ClassesReportPage() {
             <span className="text-sky-600">▾</span>
           </button>
 
-          {/* ROZWIWANE OKNO KALENDARZA */}
           {isDatePickerOpen && (
             <div className="absolute right-0 mt-3 w-80 bg-white border border-sky-200 rounded-3xl shadow-2xl p-6 z-50 space-y-5 animate-in fade-in zoom-in-95 duration-150">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider border-b border-sky-100 pb-3">
@@ -246,7 +302,6 @@ export default function ClassesReportPage() {
         </div>
       </div>
 
-      {/* Tabela Historii (Audyt) */}
       <div className="bg-white border border-sky-200 rounded-3xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -276,6 +331,7 @@ export default function ClassesReportPage() {
                     </td>
                     <td className="py-4 px-6">
                       <div className="font-black text-sky-950 text-sm">{log.klientImieNazwisko}</div>
+                      {log.klientEmail && <div className="text-[10px] text-slate-400">{log.klientEmail}</div>}
                     </td>
                     <td className="py-4 px-6 whitespace-nowrap">
                       <span className={`px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-wider border ${log.kolor}`}>
@@ -283,8 +339,29 @@ export default function ClassesReportPage() {
                       </span>
                     </td>
                     <td className="py-4 px-6">
-                      <div className="font-bold text-slate-800">{log.zajeciaInfo}</div>
-                      <div className="text-[10px] text-slate-500 mt-1 leading-snug">{log.opis}</div>
+                      <div className="font-black text-slate-900 text-sm flex items-center gap-1.5">
+                        <span className="text-sky-600 font-bold">📌</span>
+                        <span>{log.zajeciaNazwa}</span>
+                      </div>
+
+                      {(log.zajeciaDzien || log.zajeciaGodzina) ? (
+                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                          {log.zajeciaDzien && (
+                            <span className="inline-flex items-center gap-1 bg-sky-50 border border-sky-200 text-sky-900 font-bold text-[10px] px-2 py-0.5 rounded-md">
+                              <span>🗓️</span> {log.zajeciaDzien}
+                            </span>
+                          )}
+                          {log.zajeciaGodzina && (
+                            <span className="inline-flex items-center gap-1 bg-amber-50 border border-amber-200 text-amber-900 font-bold text-[10px] px-2 py-0.5 rounded-md">
+                              <span>⏰</span> {log.zajeciaGodzina}
+                            </span>
+                          )}
+                        </div>
+                      ) : null}
+
+                      <div className="text-[10px] text-slate-400 mt-1.5 leading-snug">
+                        {log.opis}
+                      </div>
                     </td>
                     <td className="py-4 px-6 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -307,7 +384,6 @@ export default function ClassesReportPage() {
           </table>
         </div>
 
-        {/* Stopka tabeli z podsumowaniem */}
         {!isLoading && (
           <div className="bg-slate-50 px-6 py-4 border-t border-sky-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 font-medium">
             <div>
