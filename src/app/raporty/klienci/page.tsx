@@ -42,6 +42,67 @@ const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | 
   return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+// KULOODPORNY KALKULATOR PRZEDŁUŻANIA KARNETU Z PRAWDZIWEGO KALENDARZA
+const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): string => {
+  const today = new Date().toISOString().split('T')[0];
+  let base = startDateStr && startDateStr !== '-' ? startDateStr : today;
+  if (base < today) base = today;
+
+  const parts = base.split('-').map(num => parseInt(num, 10));
+  const y = parts[0];
+  const m = parts[1];
+  const d = parts[2];
+
+  const limit = (limitCzasowyStr || '1 miesiąc').toLowerCase().trim();
+
+  let monthsToAdd = 0;
+  let daysToAdd = 0;
+
+  if (limit.includes('rok') || limit.includes('12 m')) {
+    monthsToAdd = 12;
+  } else if (limit.includes('6 m')) {
+    monthsToAdd = 6;
+  } else if (limit.includes('3 m')) {
+    monthsToAdd = 3;
+  } else if (limit.includes('2 m')) {
+    monthsToAdd = 2;
+  } else if (limit.includes('miesiąc') || limit.includes('miesiac') || limit.includes('1 m')) {
+    monthsToAdd = 1;
+  } else if (limit.includes('42 dni')) {
+    daysToAdd = 42;
+  } else if (limit.includes('14 dni')) {
+    daysToAdd = 14;
+  } else if (limit.includes('7 dni')) {
+    daysToAdd = 7;
+  } else if (limit.includes('dni') || limit.includes('dzień')) {
+    const numMatch = limit.match(/\d+/);
+    daysToAdd = numMatch ? parseInt(numMatch[0], 10) : 30;
+  } else {
+    monthsToAdd = 1;
+  }
+
+  if (monthsToAdd > 0) {
+    const targetMonthIndex = (m - 1) + monthsToAdd;
+    const targetYear = y + Math.floor(targetMonthIndex / 12);
+    const targetMonth = targetMonthIndex % 12;
+    const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+    const targetDay = Math.min(d, daysInTargetMonth);
+
+    const res = new Date(targetYear, targetMonth, targetDay);
+    const resYear = res.getFullYear();
+    const resMonth = String(res.getMonth() + 1).padStart(2, '0');
+    const resDay = String(res.getDate()).padStart(2, '0');
+    return `${resYear}-${resMonth}-${resDay}`;
+  } else {
+    const res = new Date(y, m - 1, d);
+    res.setDate(res.getDate() + daysToAdd);
+    const resYear = res.getFullYear();
+    const resMonth = String(res.getMonth() + 1).padStart(2, '0');
+    const resDay = String(res.getDate()).padStart(2, '0');
+    return `${resYear}-${resMonth}-${resDay}`;
+  }
+};
+
 // KULOODPORNY PARSER DAT Z CLASS_KEY (OBSŁUGUJE 7_07/09, 7_07/09/2026, 7_2026-09-07)
 const parseDateFromClassKey = (classKey: string): Date => {
   const parts = classKey ? String(classKey).split('_') : [];
@@ -199,7 +260,10 @@ export default function KlienciPage() {
   const [editingClient, setEditingClient] = useState<any | null>(null);
   const [profileClient, setProfileClient] = useState<any | null>(null);
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
+  
+  // Stan pływającego menu 3 kropek (na wierzchu)
   const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
+  const [actionMenuPos, setActionMenuPos] = useState<{ top: number; right: number; client: any } | null>(null);
 
   const [isExtendPassModalOpen, setIsExtendPassModalOpen] = useState(false);
   const [extendPassTarget, setExtendPassTarget] = useState<any | null>(null);
@@ -627,6 +691,7 @@ export default function KlienciPage() {
     alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
     await loadData(profileClient.id);
   };
+
   const loadData = async (specificClientId?: number) => {
     const [
       { data: klienciData },
@@ -695,7 +760,7 @@ export default function KlienciPage() {
 
       const enrichedPromises = klienciData.map(async (c: any) => {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => String(t.klient_id) === String(c.id)) : [];
-        const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
+        const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
         
         let parsedKarnety = safeJsonParse(c.karnetyKlubowicza || c.karnetyklubowicza, []);
 
@@ -803,6 +868,7 @@ export default function KlienciPage() {
 
         return {
           ...c,
+          _rawKeys: Object.keys(c),
           id: c.id,
           rabat: c.rabat,
           systemDiscountOffset: currentOffset,
@@ -873,7 +939,7 @@ export default function KlienciPage() {
   const handleToggleClientTrainer = async (client: any) => {
     if (!client.isTrainer) {
       const { error } = await supabase.from('trenerzy').insert([{
-        imie_nazwisko: `${client.firstName} ${client.lastName}`,
+        imie_nazwisko: `${client.firstName} ${client.lastName}`.trim(),
         email: client.email,
         telefon: client.phone
       }]);
@@ -950,22 +1016,8 @@ export default function KlienciPage() {
       const defKarnetu = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
       const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
       const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
-      let dniWażności = 30;
       
-      if (defKarnetu && defKarnetu.limitCzasowy) {
-        const limit = defKarnetu.limitCzasowy.toLowerCase();
-        if (limit.includes('1 miesiąc') || limit.includes('miesiąc')) dniWażności = 30;
-        else if (limit.includes('3 miesiące')) dniWażności = 90;
-        else if (limit.includes('6 miesięcy')) dniWażności = 180;
-        else if (limit.includes('1 rok')) dniWażności = 365;
-        else if (limit.includes('42 dni')) dniWażności = 42;
-        else if (limit.includes('14 dni')) dniWażności = 14;
-        else if (limit.includes('7 dni')) dniWażności = 7;
-      }
-
-      const dataWygasniecia = new Date();
-      dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-      dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+      dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
 
       if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
         cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
@@ -1054,24 +1106,86 @@ export default function KlienciPage() {
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingClient) return;
-    await supabase.from('klienci').update({ Imię: editingClient.firstName, Nazwisko: editingClient.lastName }).eq('id', editingClient.id);
+
+    const rawKeys = editingClient._rawKeys || [];
+    const payload: Record<string, any> = {};
+
+    if (rawKeys.includes('Imię')) payload['Imię'] = editingClient.firstName;
+    else if (rawKeys.includes('firstName')) payload['firstName'] = editingClient.firstName;
+    else payload['Imię'] = editingClient.firstName;
+
+    if (rawKeys.includes('Nazwisko')) payload['Nazwisko'] = editingClient.lastName;
+    else if (rawKeys.includes('lastName')) payload['lastName'] = editingClient.lastName;
+    else payload['Nazwisko'] = editingClient.lastName;
+
+    const { error } = await supabase.from('klienci').update(payload).eq('id', editingClient.id);
+    if (error) {
+      alert(`Błąd zapisu edycji: ${error.message}`);
+      return;
+    }
     setEditingClient(null);
     loadData();
   };
 
+  // KULOODPORNA EDYCJA DANYCH KONTA (IMIĘ, NAZWISKO, TELEFON, EMAIL, PŁEĆ, URODZINY)
   const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient) return;
-    await supabase.from('klienci').update({ 
-      Imię: profileClient.firstName, 
-      Nazwisko: profileClient.lastName, 
-      telefon: profileClient.phone, 
-      email: profileClient.email, 
-      płeć: profileClient.gender, 
-      Urodziny: profileClient.birthDate 
-    }).eq('id', profileClient.id);
+
+    const rawKeys = profileClient._rawKeys || [];
+    const payload: Record<string, any> = {};
+
+    // 1. Imię
+    if (rawKeys.includes('Imię')) payload['Imię'] = profileClient.firstName;
+    else if (rawKeys.includes('firstName')) payload['firstName'] = profileClient.firstName;
+    else payload['Imię'] = profileClient.firstName;
+
+    // 2. Nazwisko
+    if (rawKeys.includes('Nazwisko')) payload['Nazwisko'] = profileClient.lastName;
+    else if (rawKeys.includes('lastName')) payload['lastName'] = profileClient.lastName;
+    else payload['Nazwisko'] = profileClient.lastName;
+
+    // 3. Telefon
+    if (rawKeys.includes('Numer tel.')) payload['Numer tel.'] = profileClient.phone;
+    else if (rawKeys.includes('telefon')) payload['telefon'] = profileClient.phone;
+    else if (rawKeys.includes('phone')) payload['phone'] = profileClient.phone;
+    else payload['Numer tel.'] = profileClient.phone;
+
+    // 4. Email
+    if (rawKeys.includes('E-mail')) payload['E-mail'] = profileClient.email;
+    else if (rawKeys.includes('email')) payload['email'] = profileClient.email;
+    else payload['E-mail'] = profileClient.email;
+
+    // 5. Płeć
+    if (rawKeys.includes('płeć')) payload['płeć'] = profileClient.gender;
+    else if (rawKeys.includes('plec')) payload['plec'] = profileClient.gender;
+    else if (rawKeys.includes('gender')) payload['gender'] = profileClient.gender;
+    else payload['płeć'] = profileClient.gender;
+
+    // 6. Urodziny
+    if (rawKeys.includes('Urodziny')) payload['Urodziny'] = profileClient.birthDate;
+    else if (rawKeys.includes('urodziny')) payload['urodziny'] = profileClient.birthDate;
+    else if (rawKeys.includes('birthDate')) payload['birthDate'] = profileClient.birthDate;
+    else payload['Urodziny'] = profileClient.birthDate;
+
+    const { error } = await supabase.from('klienci').update(payload).eq('id', profileClient.id);
+    if (error) {
+      alert(`Błąd zapisu danych klubowicza w Supabase: ${error.message}`);
+      return;
+    }
+
+    // Synchronizacja profilu trenera jeżeli powiązany
+    if (profileClient.isTrainer && profileClient.email) {
+      await supabase.from('trenerzy').update({
+        imie_nazwisko: `${profileClient.firstName} ${profileClient.lastName}`.trim(),
+        telefon: profileClient.phone
+      }).eq('email', profileClient.email);
+    }
+
+    setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, ...profileClient } : c));
     setIsEditProfileInfoOpen(false);
-    loadData();
+    alert("Dane klubowicza zostały pomyślnie zaktualizowane w bazie!");
+    loadData(profileClient.id);
   };
 
   const handleDeleteClient = async (id: number) => {
@@ -1089,6 +1203,7 @@ export default function KlienciPage() {
       
       setTableActionClient(null);
       setOpenDropdownId(null);
+      setActionMenuPos(null);
       if (profileClient && profileClient.id === id) setProfileClient(null);
       loadData();
     }
@@ -1099,6 +1214,7 @@ export default function KlienciPage() {
       alert("Konto zostało dezaktywowane.");
       setTableActionClient(null);
       setOpenDropdownId(null);
+      setActionMenuPos(null);
     }
   };
 
@@ -1109,6 +1225,7 @@ export default function KlienciPage() {
         alert(`Zaplanowano dezaktywację konta na dzień ${dataWyb}.`);
         setTableActionClient(null);
         setOpenDropdownId(null);
+        setActionMenuPos(null);
       }
     }
   };
@@ -1153,7 +1270,7 @@ export default function KlienciPage() {
     reader.readAsDataURL(file);
   };
 
-  // PRZEDŁUŻENIE KARNETU (DOLICZENIE RATY UMOWY + ZABEZPIECZENIE PORTFELA 0 PLN)
+  // PRZEDŁUŻENIE KARNETU (KALKULACJA KALENDARZOWA + RATY + ZABEZPIECZENIE PORTFELA)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget) return;
 
@@ -1247,7 +1364,7 @@ export default function KlienciPage() {
       ? `Karnet przedłużony! Doliczono ratę (${updatedRata}) i dopisano ${kwotaKarnetu.toFixed(2)} PLN do portfela.` 
       : `Karnet przedłużony! Doliczono ratę (${updatedRata}).`);
     setIsExtendPassModalOpen(false);
-    loadData();
+    loadData(profileClient.id);
   };
 
   // SPŁATA CAŁKOWITEGO ZADŁUŻENIA PORTFELA
@@ -1282,9 +1399,8 @@ export default function KlienciPage() {
 
     setProfileClient((prev: any) => ({ ...prev, wallet: '0.00 PLN' }));
     alert("Zadłużenie zostało spłacone. Stan portfela wynosi 0.00 PLN.");
-    loadData();
+    loadData(profileClient.id);
   };
-
   const handleAddSecondPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !selectedPassToAdd) return;
 
@@ -1292,21 +1408,8 @@ export default function KlienciPage() {
     const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
     const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
     
-    let dniWażności = 30;
-    if (defKarnetu && defKarnetu.limitCzasowy) {
-      const limit = defKarnetu.limitCzasowy.toLowerCase();
-      if (limit.includes('1 miesiąc') || limit.includes('miesiąc')) dniWażności = 30;
-      else if (limit.includes('3 miesiące')) dniWażności = 90;
-      else if (limit.includes('6 miesięcy')) dniWażności = 180;
-      else if (limit.includes('1 rok')) dniWażności = 365;
-      else if (limit.includes('42 dni')) dniWażności = 42;
-      else if (limit.includes('14 dni')) dniWażności = 14;
-      else if (limit.includes('7 dni')) dniWażności = 7;
-    }
-
-    const dataWygasniecia = new Date();
-    dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
-    const dataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+    // Obliczenie terminu kalendarzowego z rzeczywistego kalendarza
+    const dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
     
     const activeDiscount = getEffectiveDiscount(profileClient, isContract);
     
@@ -1391,7 +1494,7 @@ export default function KlienciPage() {
     setNewPassCustomSuspensionDays('30');
     setNewPassCustomPrice('');
     setIsAddSecondPassModalOpen(false);
-    loadData();
+    loadData(profileClient.id);
   };
 
   // ZAWIESZENIE KARNETU: AUTOMATYCZNE WYDŁUŻENIE DATY WAŻNOŚCI ORAZ JEDEN SPÓJNY WPIS W HISTORII
@@ -1476,7 +1579,7 @@ export default function KlienciPage() {
       await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
       alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony. Data ważności karnetu została wydłużona o ${calculatedDays} dni do ${newExtendedExpiry}.`);
       setIsSuspendModalOpen(false);
-      loadData();
+      loadData(profileClient.id);
     } else {
       alert(`Błąd: ${error.message}`);
     }
@@ -1519,7 +1622,7 @@ export default function KlienciPage() {
       }]);
       alert(`Karnet został odwieszony.`);
       setIsSuspendModalOpen(false);
-      loadData();
+      loadData(profileClient.id);
     } else {
       alert(`Błąd: ${error.message}`);
     }
@@ -1575,7 +1678,7 @@ export default function KlienciPage() {
       await handleAutoWypiszPoZablokowaniu(profileClient.id, profileClient, powod);
       alert(`Karnet został zablokowany do ${bDo}.`);
       setIsSuspendModalOpen(false);
-      loadData();
+      loadData(profileClient.id);
     } else {
       alert(`Błąd: ${error.message}`);
     }
@@ -1604,7 +1707,7 @@ export default function KlienciPage() {
       setProfileClient((prev: any) => ({ ...prev, blokadaDo: null, powodBlokady: null, karnetyKlubowicza: uaktualnioneKarnety }));
       alert("Blokada konta i karnetu została całkowicie odwołana.");
       setIsSuspendModalOpen(false);
-      loadData();
+      loadData(profileClient.id);
     } else {
       alert(`Błąd podczas odwoływania blokady: ${error.message}`);
     }
@@ -1666,7 +1769,7 @@ export default function KlienciPage() {
 
     setEditingPassModal(null);
     alert("Karnet został zaktualizowany!");
-    loadData();
+    loadData(profileClient.id);
   };
 
   const handleConfirmDeletePass = async (passId: number) => {
@@ -1726,7 +1829,7 @@ export default function KlienciPage() {
       setEditingPassModal(null);
       setIsGlobalPassMenuOpen(false);
       alert(cancelledCount > 0 ? `Karnet usunięty. Wypisano z ${cancelledCount} przyszłych zajęć.` : "Karnet został usunięty!");
-      loadData();
+      loadData(profileClient.id);
     }
   };
 
@@ -1753,7 +1856,7 @@ export default function KlienciPage() {
     setWalletAmountInput('');
     setWalletReasonInput('');
     setIsTopUpWalletOpen(false);
-    loadData();
+    loadData(profileClient.id);
   };
 
   const filteredClients = clients.filter(c => 
@@ -1971,7 +2074,7 @@ export default function KlienciPage() {
                     </td>
                     <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">{client.lastName}</td>
                     
-                    {/* KARNET */}
+                    {/* KARNET ORAZ LICZNIK POZOSTAŁYCH WEJŚĆ */}
                     <td className="py-3.5 px-3 whitespace-nowrap">
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -1982,6 +2085,22 @@ export default function KlienciPage() {
                             </span>
                           )}
                         </div>
+
+                        {/* WIDOK POZOSTAŁYCH WEJŚĆ DLA KARNETÓW ILOŚCIOWYCH */}
+                        {aktywnyKarnetObj?.pozostaloWejsc !== null && aktywnyKarnetObj?.pozostaloWejsc !== undefined && (
+                          <div className="pt-0.5">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black border tracking-wider shadow-sm ${
+                              aktywnyKarnetObj.pozostaloWejsc <= 2
+                                ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                : 'bg-sky-100 text-sky-900 border-sky-300'
+                            }`}>
+                              <span>🎟️ Pozostało:</span>
+                              <span className="underline decoration-2">{aktywnyKarnetObj.pozostaloWejsc}</span>
+                              <span className="text-slate-500 font-semibold">/ {aktywnyKarnetObj.poczatkoweWejsc || aktywnyKarnetObj.pozostaloWejsc} wejść</span>
+                            </span>
+                          </div>
+                        )}
+
                         {aktywnyKarnetZawieszony && (
                           <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-200 inline-block w-fit whitespace-nowrap">
                             ⏸️ Zawieszony: {aktywnyKarnetZawieszony.zawieszonyOd} - {aktywnyKarnetZawieszony.zawieszonyDo}
@@ -2089,56 +2208,29 @@ export default function KlienciPage() {
                       </span>
                     </td>
 
-                    {/* AKCJE */}
-                    <td className="py-3.5 px-3 text-right whitespace-nowrap relative">
-                      <div className="relative inline-block text-left">
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenDropdownId(openDropdownId === client.id ? null : client.id);
-                          }} 
-                          className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-900 flex items-center justify-center font-bold text-base transition-colors cursor-pointer"
-                          title="Więcej opcji"
-                        >
-                          •••
-                        </button>
-
-                        {openDropdownId === client.id && (
-                          <div 
-                            className="absolute right-0 mt-1.5 w-44 bg-white rounded-xl shadow-xl border border-sky-200 py-1.5 z-50 text-xs font-semibold text-slate-700 animate-in fade-in zoom-in-95"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <button 
-                              onClick={() => {
-                                setOpenDropdownId(null);
-                                openProfile(client);
-                              }} 
-                              className="w-full text-left px-3.5 py-2 hover:bg-sky-50 flex items-center gap-2 cursor-pointer text-slate-800"
-                            >
-                              <span>👤</span> Profil klubowicza
-                            </button>
-                            <button 
-                              onClick={() => {
-                                setOpenDropdownId(null);
-                                setTableActionClient(client);
-                              }} 
-                              className="w-full text-left px-3.5 py-2 hover:bg-amber-50 text-amber-900 flex items-center gap-2 cursor-pointer font-bold"
-                            >
-                              <span>✏️</span> Edycja / Narzędzia
-                            </button>
-                            <div className="border-t border-slate-100 my-1"></div>
-                            <button 
-                              onClick={() => {
-                                setOpenDropdownId(null);
-                                handleDeleteClient(client.id);
-                              }} 
-                              className="w-full text-left px-3.5 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-bold"
-                            >
-                              <span>🗑️</span> Usuń klubowicza
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                    {/* AKCJE: PRZYCISK 3 KROPEK */}
+                    <td className="py-3.5 px-3 text-right whitespace-nowrap">
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (openDropdownId === client.id) {
+                            setOpenDropdownId(null);
+                            setActionMenuPos(null);
+                          } else {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setOpenDropdownId(client.id);
+                            setActionMenuPos({
+                              top: rect.bottom + 4,
+                              right: window.innerWidth - rect.right,
+                              client: client
+                            });
+                          }
+                        }} 
+                        className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-900 flex items-center justify-center font-bold text-base transition-colors cursor-pointer"
+                        title="Więcej opcji"
+                      >
+                        •••
+                      </button>
                     </td>
                   </tr>
                 );
@@ -2147,6 +2239,56 @@ export default function KlienciPage() {
           </table>
         </div>
       </div>
+
+      {/* PŁYWAJĄCE MENU 3 KROPEK (RENDEROWANE NA WIERZCHU Z-INDEX 9999) */}
+      {actionMenuPos && (
+        <>
+          <div 
+            className="fixed inset-0 z-[9998] bg-transparent" 
+            onClick={() => { setOpenDropdownId(null); setActionMenuPos(null); }}
+          />
+          <div 
+            className="fixed z-[9999] w-48 bg-white rounded-xl shadow-2xl border border-sky-200 py-1.5 text-xs font-semibold text-slate-700 animate-in fade-in zoom-in-95"
+            style={{ top: `${actionMenuPos.top}px`, right: `${actionMenuPos.right}px` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button 
+              onClick={() => {
+                const c = actionMenuPos.client;
+                setOpenDropdownId(null);
+                setActionMenuPos(null);
+                openProfile(c);
+              }} 
+              className="w-full text-left px-3.5 py-2 hover:bg-sky-50 flex items-center gap-2 cursor-pointer text-slate-800"
+            >
+              <span>👤</span> Profil klubowicza
+            </button>
+            <button 
+              onClick={() => {
+                const c = actionMenuPos.client;
+                setOpenDropdownId(null);
+                setActionMenuPos(null);
+                setTableActionClient(c);
+              }} 
+              className="w-full text-left px-3.5 py-2 hover:bg-amber-50 text-amber-900 flex items-center gap-2 cursor-pointer font-bold"
+            >
+              <span>✏️</span> Edycja / Narzędzia
+            </button>
+            <div className="border-t border-slate-100 my-1"></div>
+            <button 
+              onClick={() => {
+                const c = actionMenuPos.client;
+                setOpenDropdownId(null);
+                setActionMenuPos(null);
+                handleDeleteClient(c.id);
+              }} 
+              className="w-full text-left px-3.5 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2 cursor-pointer font-bold"
+            >
+              <span>🗑️</span> Usuń klubowicza
+            </button>
+          </div>
+        </>
+      )}
 
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM Z TABELI */}
       {tableActionClient && (
@@ -2207,12 +2349,12 @@ export default function KlienciPage() {
                 <button onClick={() => { 
                   openProfile(tableActionClient); 
                   if(tableActionClient.karnetyKlubowicza?.length > 0) {
-                    setExtendPassTarget(tableActionClient.karnetyKlubowicza[0]);
-                    setExtendSelectedNewPassName(tableActionClient.karnetyKlubowicza[0].nazwa);
-                    setExtendCustomPriceInput(tableActionClient.karnetyKlubowicza[0].cena ? tableActionClient.karnetyKlubowicza[0].cena.replace(/[^0-9.]/g, '') : '');
-                    const curDate = new Date(tableActionClient.karnetyKlubowicza[0].waznyDo || Date.now());
-                    curDate.setMonth(curDate.getMonth() + 1);
-                    setExtendNewDate(curDate.toISOString().split('T')[0]);
+                    const pass = tableActionClient.karnetyKlubowicza[0];
+                    setExtendPassTarget(pass);
+                    setExtendSelectedNewPassName(pass.nazwa);
+                    setExtendCustomPriceInput(pass.cena ? pass.cena.replace(/[^0-9.]/g, '') : '');
+                    const defK = dostepneKarnety.find(dk => dk.nazwa === pass.nazwa);
+                    setExtendNewDate(getCalendarExpiryDate(pass.waznyDo, defK?.limitCzasowy));
                   }
                   setIsExtendPassModalOpen(true); 
                   setTableActionClient(null); 
@@ -2419,12 +2561,12 @@ export default function KlienciPage() {
                         <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[70] text-xs">
                           <button onClick={() => { 
                             if(profileClient.karnetyKlubowicza?.length > 0) {
-                              setExtendPassTarget(profileClient.karnetyKlubowicza[0]);
-                              setExtendSelectedNewPassName(profileClient.karnetyKlubowicza[0].nazwa);
-                              setExtendCustomPriceInput(profileClient.karnetyKlubowicza[0].cena ? profileClient.karnetyKlubowicza[0].cena.replace(/[^0-9.]/g, '') : '');
-                              const curDate = new Date(profileClient.karnetyKlubowicza[0].waznyDo || Date.now());
-                              curDate.setMonth(curDate.getMonth() + 1);
-                              setExtendNewDate(curDate.toISOString().split('T')[0]);
+                              const pass = profileClient.karnetyKlubowicza[0];
+                              setExtendPassTarget(pass);
+                              setExtendSelectedNewPassName(pass.nazwa);
+                              setExtendCustomPriceInput(pass.cena ? pass.cena.replace(/[^0-9.]/g, '') : '');
+                              const defK = dostepneKarnety.find(dk => dk.nazwa === pass.nazwa);
+                              setExtendNewDate(getCalendarExpiryDate(pass.waznyDo, defK?.limitCzasowy));
                               setIsExtendPassModalOpen(true);
                             } else {
                               alert("Brak aktywnego karnetu do przedłużenia.");
@@ -2553,9 +2695,8 @@ export default function KlienciPage() {
                                   setExtendPassTarget(karnet);
                                   setExtendSelectedNewPassName(karnet.nazwa);
                                   setExtendCustomPriceInput(karnet.cena ? karnet.cena.replace(/[^0-9.]/g, '') : '');
-                                  const curDate = new Date(karnet.waznyDo || Date.now());
-                                  curDate.setMonth(curDate.getMonth() + 1);
-                                  setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                  const defK = dostepneKarnety.find(dk => dk.nazwa === karnet.nazwa);
+                                  setExtendNewDate(getCalendarExpiryDate(karnet.waznyDo, defK?.limitCzasowy));
                                   setIsExtendPassModalOpen(true);
                                 }}
                                 className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
@@ -2643,6 +2784,7 @@ export default function KlienciPage() {
                   </div>
                 </div>
               </div>
+
               {/* SEKCJA: AKTYWNOŚĆ KLUBOWICZA */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Aktywność klubowicza</h3>
@@ -2674,7 +2816,6 @@ export default function KlienciPage() {
                       ⏸️ HISTORIA ZAWIESZEŃ
                     </button>
                   </div>
-
                   <div className="overflow-x-auto w-full">
                     
                     {/* 1. NADCHODZĄCE ZAJĘCIA */}
@@ -3352,6 +3493,8 @@ export default function KlienciPage() {
                           const val = e.target.value;
                           setExtendSelectedNewPassName(val);
                           const def = dostepneKarnety.find(k => k.nazwa === val);
+                          // Prawidłowe wyliczenie daty z kalendarza dla nowego typu
+                          setExtendNewDate(getCalendarExpiryDate(extendPassTarget?.waznyDo, def?.limitCzasowy));
                           if (def && !extendCustomPriceInput) {
                             setExtendCustomPriceInput(def.cena);
                           }
@@ -3440,13 +3583,13 @@ export default function KlienciPage() {
 
                 <div className="flex items-center justify-between">
                   <div className="flex-1 whitespace-nowrap">
-                    <span className="font-bold text-slate-700">Data: </span>
+                    <span className="font-bold text-slate-700">Data ważności: </span>
                     {isEditingNewDate ? (
                       <input 
                         type="date"
                         value={extendNewDate}
                         onChange={(e) => setExtendNewDate(e.target.value)}
-                        className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800"
+                        className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
                       />
                     ) : (
                       <span className="font-mono font-bold text-slate-900 whitespace-nowrap">{extendNewDate}</span>
@@ -3477,7 +3620,7 @@ export default function KlienciPage() {
         </div>
       )}
 
-      {/* MODAL: EDYCJA DANYCH KONTA */}
+      {/* MODAL: EDYCJA DANYCH KONTA (NAPRAWIONY ZAPIS DANYCH OSOBOWYCH) */}
       {isEditProfileInfoOpen && profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -3488,18 +3631,20 @@ export default function KlienciPage() {
             <form onSubmit={handleSaveProfileInfoSubmit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Imię</label>
+                  <label className="font-bold text-slate-700">Imię *</label>
                   <input 
                     type="text" 
+                    required
                     value={profileClient.firstName || ''} 
                     onChange={(e) => setProfileClient({...profileClient, firstName: e.target.value})} 
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Nazwisko</label>
+                  <label className="font-bold text-slate-700">Nazwisko *</label>
                   <input 
                     type="text" 
+                    required
                     value={profileClient.lastName || ''} 
                     onChange={(e) => setProfileClient({...profileClient, lastName: e.target.value})} 
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
@@ -3549,7 +3694,7 @@ export default function KlienciPage() {
                   type="date" 
                   value={profileClient.birthDate || ''} 
                   onChange={(e) => setProfileClient({...profileClient, birthDate: e.target.value})} 
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer" 
                 />
               </div>
 
@@ -4034,8 +4179,8 @@ export default function KlienciPage() {
             </div>
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1"><label className="font-bold text-slate-700 whitespace-nowrap">Imię</label><input type="text" value={editingClient.firstName || ''} onChange={(e) => setEditingClient({...editingClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold" /></div>
-                <div className="space-y-1"><label className="font-bold text-slate-700 whitespace-nowrap">Nazwisko</label><input type="text" value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold" /></div>
+                <div className="space-y-1"><label className="font-bold text-slate-700 whitespace-nowrap">Imię *</label><input type="text" required value={editingClient.firstName || ''} onChange={(e) => setEditingClient({...editingClient, firstName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold" /></div>
+                <div className="space-y-1"><label className="font-bold text-slate-700 whitespace-nowrap">Nazwisko *</label><input type="text" required value={editingClient.lastName || ''} onChange={(e) => setEditingClient({...editingClient, lastName: e.target.value})} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold" /></div>
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setEditingClient(null)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer whitespace-nowrap">Anuluj</button>
