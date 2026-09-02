@@ -105,7 +105,7 @@ export default function MojeZapisyPage() {
         supabase.from('grafik_zajec').select('*'),
         supabase.from('zajecia_jednorazowe').select('*'),
         supabase.from('nadpisania_zajec').select('*'),
-        supabase.from('zapisy_zajec').select('*'),
+        supabase.from('zapisy_zajec').select('*').order('id', { ascending: false }).limit(10000),
         supabase.from('klienci').select('*')
       ]);
 
@@ -167,12 +167,39 @@ export default function MojeZapisyPage() {
           };
           setCurrentUser(parsedClient);
 
-          const userZapisy = allRecords.filter((z: any) => z.klient_id === rawClient.id);
+          // Bezpośrednie dociągnięcie zapisów danego klubowicza
+          let userZapisyRaw: any[] = [];
+          try {
+            const { data: directData } = await supabase
+              .from('zapisy_zajec')
+              .select('*')
+              .eq('klient_id', rawClient.id)
+              .order('id', { ascending: false });
+            
+            userZapisyRaw = directData && directData.length > 0 
+              ? directData 
+              : allRecords.filter((z: any) => String(z.klient_id) === String(rawClient.id));
+          } catch (e) {
+            userZapisyRaw = allRecords.filter((z: any) => String(z.klient_id) === String(rawClient.id));
+          }
+
+          // Eliminacja ewentualnych duplikatów zapisów
+          const uniqueUserZapisy: any[] = [];
+          const seenUserClassKeys = new Set<string>();
+
+          userZapisyRaw.forEach((z: any) => {
+            const key = z.class_key ? String(z.class_key) : `id_${z.id}`;
+            if (!seenUserClassKeys.has(key)) {
+              seenUserClassKeys.add(key);
+              uniqueUserZapisy.push(z);
+            }
+          });
+
           const nadchodzace: any[] = [];
           const przeszle: any[] = [];
           const now = new Date();
 
-          userZapisy.forEach((z: any) => {
+          uniqueUserZapisy.forEach((z: any) => {
             const parts = z.class_key ? String(z.class_key).split('_') : [];
             const classId = parts[0];
             let znalezionaNazwa = z.tytul || z.zajecia || null;
@@ -243,14 +270,18 @@ export default function MojeZapisyPage() {
         }
       }
 
-      // 3. Budowanie globalnego rankingu klubowiczów O(1) per wpis
+      // 3. Budowanie globalnego rankingu klubowiczów O(1) z eliminacją duplikatów
       const rankingMap: Record<string, any> = {};
+      const seenAttendanceKeys = new Set<string>();
 
       allRecords.forEach((r: any) => {
         const isPresent = r.obecny === true || r.obecny === 1 || String(r.obecny).toLowerCase() === 'true';
         if (!isPresent) return;
 
         const kIdStr = String(r.klient_id);
+        const attendanceKey = `${kIdStr}_${r.class_key || r.id}`;
+        if (seenAttendanceKeys.has(attendanceKey)) return;
+        seenAttendanceKeys.add(attendanceKey);
 
         if (!rankingMap[kIdStr]) {
           const client = clientMap.get(kIdStr);
