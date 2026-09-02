@@ -31,6 +31,67 @@ const fetchAllFromSupabase = async (table: string, orderBy: string = 'id', ascen
   return result;
 };
 
+// KULOODPORNY KALKULATOR PRZEDŁUŻANIA KARNETU Z PRAWDZIWEGO KALENDARZA
+const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): string => {
+  const today = new Date().toISOString().split('T')[0];
+  let base = startDateStr && startDateStr !== '-' ? startDateStr : today;
+  if (base < today) base = today;
+
+  const parts = base.split('-').map(num => parseInt(num, 10));
+  const y = parts[0];
+  const m = parts[1];
+  const d = parts[2];
+
+  const limit = (limitCzasowyStr || '1 miesiąc').toLowerCase().trim();
+
+  let monthsToAdd = 0;
+  let daysToAdd = 0;
+
+  if (limit.includes('rok') || limit.includes('12 m')) {
+    monthsToAdd = 12;
+  } else if (limit.includes('6 m')) {
+    monthsToAdd = 6;
+  } else if (limit.includes('3 m')) {
+    monthsToAdd = 3;
+  } else if (limit.includes('2 m')) {
+    monthsToAdd = 2;
+  } else if (limit.includes('miesiąc') || limit.includes('miesiac') || limit.includes('1 m')) {
+    monthsToAdd = 1;
+  } else if (limit.includes('42 dni')) {
+    daysToAdd = 42;
+  } else if (limit.includes('14 dni')) {
+    daysToAdd = 14;
+  } else if (limit.includes('7 dni')) {
+    daysToAdd = 7;
+  } else if (limit.includes('dni') || limit.includes('dzień') || limit.includes('d')) {
+    const numMatch = limit.match(/\d+/);
+    daysToAdd = numMatch ? parseInt(numMatch[0], 10) : 30;
+  } else {
+    monthsToAdd = 1;
+  }
+
+  if (monthsToAdd > 0) {
+    const targetMonthIndex = (m - 1) + monthsToAdd;
+    const targetYear = y + Math.floor(targetMonthIndex / 12);
+    const targetMonth = targetMonthIndex % 12;
+    const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+    const targetDay = Math.min(d, daysInTargetMonth);
+
+    const res = new Date(targetYear, targetMonth, targetDay);
+    const resYear = res.getFullYear();
+    const resMonth = String(res.getMonth() + 1).padStart(2, '0');
+    const resDay = String(res.getDate()).padStart(2, '0');
+    return `${resYear}-${resMonth}-${resDay}`;
+  } else {
+    const res = new Date(y, m - 1, d);
+    res.setDate(res.getDate() + daysToAdd);
+    const resYear = res.getFullYear();
+    const resMonth = String(res.getMonth() + 1).padStart(2, '0');
+    const resDay = String(res.getDate()).padStart(2, '0');
+    return `${resYear}-${resMonth}-${resDay}`;
+  }
+};
+
 // POMOCNICZA FUNKCJA DO PEWNEGO ODCZYTU RABATU CIĄGŁOŚCI OD ADMINA
 const extractClientContinuityDiscount = (client: any): number | null => {
   if (!client) return null;
@@ -154,7 +215,7 @@ const parsujOkresZDlugosci = (dlugoscStr: string) => {
   return { ilosc: '1', jednostka: 'Miesiąc' };
 };
 
-// DYNAMICZNY KALKULATOR DATY WYGAŚNIĘCIA KARNETU
+// PRECYZYJNY KALKULATOR DATY WYGAŚNIĘCIA OPARTY O PRAWDZIWY KALENDARZ
 const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date => {
   let meta: Record<string, any> = {};
   if (passDef?.inne_ustawienia) {
@@ -163,6 +224,11 @@ const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date 
     } catch(e) {}
   }
 
+  const baseYear = baseDate.getFullYear();
+  const baseMonth = String(baseDate.getMonth() + 1).padStart(2, '0');
+  const baseDay = String(baseDate.getDate()).padStart(2, '0');
+  const baseStr = `${baseYear}-${baseMonth}-${baseDay}`;
+
   const typ = passDef?.typKarnetu || passDef?.typ_karnetu;
   const czasIlosc = parseInt(String(passDef?.czasIlosc || meta?.czasIlosc || ''), 10);
   const czasJednostka = passDef?.czasJednostka || meta?.czasJednostka;
@@ -170,54 +236,17 @@ const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date 
   const limitIlosc = parseInt(String(passDef?.limitIlosc || meta?.limitIlosc || ''), 10);
   const limitOkres = passDef?.limitOkres || meta?.limitOkres;
 
-  const targetDate = new Date(baseDate.getTime());
+  let limitDescription = passDef?.dlugosc || passDef?.limitCzasowy || '';
 
   if (typ === 'Na czas' && !isNaN(czasIlosc) && czasIlosc > 0) {
-    if (czasJednostka === 'Dzień') {
-      targetDate.setDate(targetDate.getDate() + czasIlosc);
-      return targetDate;
-    } else {
-      targetDate.setMonth(targetDate.getMonth() + czasIlosc);
-      return targetDate;
-    }
+    limitDescription = `${czasIlosc} ${czasJednostka || 'Miesiąc'}`;
+  } else if (typ === 'Na ilość treningów' && !isNaN(limitIlosc) && limitIlosc > 0) {
+    limitDescription = `${limitIlosc} ${limitOkres || 'Miesiąc'}`;
   }
 
-  if (typ === 'Na ilość treningów' && !isNaN(limitIlosc) && limitIlosc > 0) {
-    if (limitOkres === 'Dzień') {
-      targetDate.setDate(targetDate.getDate() + limitIlosc);
-      return targetDate;
-    } else {
-      targetDate.setMonth(targetDate.getMonth() + limitIlosc);
-      return targetDate;
-    }
-  }
-
-  const dlugoscStr = (passDef?.dlugosc || passDef?.limitCzasowy || '').toLowerCase();
-  
-  const matchMonths = dlugoscStr.match(/(\d+)\s*(mies|m-c|rok|lat)/i);
-  if (matchMonths) {
-    let months = parseInt(matchMonths[1], 10) || 1;
-    if (matchMonths[2].toLowerCase().startsWith('rok') || matchMonths[2].toLowerCase().startsWith('lat')) {
-      months *= 12;
-    }
-    targetDate.setMonth(targetDate.getMonth() + months);
-    return targetDate;
-  }
-
-  const matchDays = dlugoscStr.match(/(\d+)\s*(dni|dzień|d)/i);
-  if (matchDays) {
-    const days = parseInt(matchDays[1], 10) || 30;
-    targetDate.setDate(targetDate.getDate() + days);
-    return targetDate;
-  }
-
-  if (dlugoscStr.includes('rok')) {
-    targetDate.setFullYear(targetDate.getFullYear() + 1);
-    return targetDate;
-  }
-
-  targetDate.setMonth(targetDate.getMonth() + 1);
-  return targetDate;
+  const calcIsoStr = getCalendarExpiryDate(baseStr, limitDescription);
+  const parts = calcIsoStr.split('-').map(n => parseInt(n, 10));
+  return new Date(parts[0], parts[1] - 1, parts[2]);
 };
 
 // POMOCNIK OKREŚLANIA KWARTAŁU / MIESIĄCA WAKACYJNEGO
@@ -623,7 +652,6 @@ export default function KarnetyPage() {
       endOfContractStr
     };
   };
-
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata: any) => {
     setIsProcessingPayment(true);
     try {
@@ -1059,7 +1087,7 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M
+  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M Z KALENDARZEM
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend) return;
@@ -1104,31 +1132,14 @@ export default function KarnetyPage() {
         const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
         nextRataStr = `${nextRataNum} / 12`;
 
-        let baseDate = new Date();
-        if (passToExtend.waznyDo) {
-          const parts = passToExtend.waznyDo.split('-');
-          if (parts.length === 3) {
-            const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            if (exp > baseDate) baseDate = exp;
-          }
-        }
-        const nextMonthDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0);
-        nowaDataWygasnieciaStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
+        let baseDateStr = passToExtend.waznyDo && passToExtend.waznyDo >= todayStr ? passToExtend.waznyDo : todayStr;
+        nowaDataWygasnieciaStr = getCalendarExpiryDate(baseDateStr, '1 miesiąc');
       }
     } else {
-      let baseDate = new Date();
       const isExpiredOrFinished = (passToExtend.waznyDo && passToExtend.waznyDo < todayStr) || (passToExtend.pozostaloWejsc !== null && passToExtend.pozostaloWejsc <= 0);
-
-      if (passToExtend.waznyDo && !isExpiredOrFinished) {
-        const parts = passToExtend.waznyDo.split('-');
-        if (parts.length === 3) {
-          const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-          if (currentExp > baseDate) baseDate = currentExp;
-        }
-      }
+      const baseDateStr = (!isExpiredOrFinished && passToExtend.waznyDo) ? passToExtend.waznyDo : todayStr;
       
-      const calcTargetDate = calculatePassValidityDaysOrEndDate(baseDate, defKarnetu || passToExtend);
-      nowaDataWygasnieciaStr = `${calcTargetDate.getFullYear()}-${String(calcTargetDate.getMonth() + 1).padStart(2, '0')}-${String(calcTargetDate.getDate()).padStart(2, '0')}`;
+      nowaDataWygasnieciaStr = getCalendarExpiryDate(baseDateStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || passToExtend.dlugosc || passToExtend.limitCzasowy || '1 miesiąc');
     }
 
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
@@ -1264,7 +1275,7 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // Bezpieczna aktualizacja portfela (obsługa kolumn typu numeric i text)
+    // Bezpieczna aktualizacja portfela
     if ('portfel' in currentUser) {
       dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
         ? nowyStanPortfela
@@ -1275,7 +1286,7 @@ export default function KarnetyPage() {
         : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
     }
 
-    // Bezpieczna aktualizacja ceny (obsługa kolumn typu numeric i text)
+    // Bezpieczna aktualizacja ceny
     if (!isBonus13thPeriod) {
       if ('Cena' in currentUser) {
         dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
@@ -1364,7 +1375,8 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-  // ZAKUP NOWEGO KARNETU
+
+  // ZAKUP NOWEGO KARNETU Z KALENDARZEM
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -1437,14 +1449,12 @@ export default function KarnetyPage() {
       updatedKarnetyList.push(nowyKarnetObj);
 
     } else {
-      let baseStartDate = new Date(); 
+      let baseStartDateStr = todayStr;
       if (activationMode === 'after' && maxDateStr) {
-        const parts = maxDateStr.split('-');
-        baseStartDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        baseStartDateStr = maxDateStr;
       }
 
-      const calcTargetDate = calculatePassValidityDaysOrEndDate(baseStartDate, defKarnetu);
-      nowaDataWygasnieciaStr = `${calcTargetDate.getFullYear()}-${String(calcTargetDate.getMonth() + 1).padStart(2, '0')}-${String(calcTargetDate.getDate()).padStart(2, '0')}`;
+      nowaDataWygasnieciaStr = getCalendarExpiryDate(baseStartDateStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
 
       statusTekst = activationMode === 'after' 
         ? `Oczekujący (Ważny od: ${maxDateStr} do: ${nowaDataWygasnieciaStr})`
@@ -1527,7 +1537,7 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // Bezpieczna aktualizacja portfela (obsługa kolumn typu numeric i text)
+    // Bezpieczna aktualizacja portfela
     if ('portfel' in currentUser) {
       dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
         ? nowyStanPortfela
@@ -1538,7 +1548,7 @@ export default function KarnetyPage() {
         : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
     }
 
-    // Bezpieczna aktualizacja ceny (obsługa kolumn typu numeric i text)
+    // Bezpieczna aktualizacja ceny
     if ('Cena' in currentUser) {
       dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
         ? cenaPoRabacie
@@ -1620,7 +1630,6 @@ export default function KarnetyPage() {
     date2.setHours(0, 0, 0, 0);
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
-
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -2631,6 +2640,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         )}
+
         {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
