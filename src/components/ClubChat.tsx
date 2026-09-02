@@ -686,7 +686,13 @@ export default function ClubChat() {
       const adminLogged = ADMIN_EMAILS.includes(userEmail);
       setIsAdmin(adminLogged);
 
-      const { data: klienciData } = await supabase.from("klienci").select("*");
+      // Pobranie klientów bez ucinania wierszy (do 5000)
+      const { data: klienciData } = await supabase
+        .from("klienci")
+        .select("*")
+        .order("id", { ascending: false })
+        .limit(5000);
+
       if (klienciData) {
         const enriched = klienciData.map((c: any) => ({
           id: c.id,
@@ -771,9 +777,12 @@ export default function ClubChat() {
 
       if (grafikData) setGrafikZajec(grafikData);
 
+      // POBIERAMY ZAPISY Z LIMITEM DO 10 000 I OD NAJNOWSZYCH DLA TRAFNEGO DOPASOWANIA UCZESTNIKÓW
       const { data: zapisyData } = await supabase
         .from("zapisy_zajec")
-        .select("*");
+        .select("*")
+        .order("id", { ascending: false })
+        .limit(10000);
 
       if (zapisyData) setZapisyZajec(zapisyData);
     } catch (err) {
@@ -785,14 +794,16 @@ export default function ClubChat() {
     const targetGroupId = groupId || selectedGroupRef.current?.id;
     if (!targetGroupId) return;
     try {
+      // Pobieramy do 2000 najnowszych wiadomości z grupy i odwracamy chronologicznie
       const { data, error } = await supabase
         .from("czat_wiadomosci")
         .select("*")
-        .order("created_at", { ascending: true })
-        .eq("grupa_id", targetGroupId);
+        .eq("grupa_id", targetGroupId)
+        .order("created_at", { ascending: false })
+        .limit(2000);
 
       if (!error && data) {
-        setGroupMessages(data);
+        setGroupMessages([...data].reverse());
       }
     } catch (err) {
       console.error("Błąd pobierania wiadomości grupy:", err);
@@ -802,11 +813,15 @@ export default function ClubChat() {
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
-    let query = supabase.from("czat_wiadomosci").select("*");
-    const { data, error } = await query.order("created_at", { ascending: true });
+    // Pobieramy do 5000 najnowszych wiadomości z bazy i odwracamy chronologicznie
+    const { data, error } = await supabase
+      .from("czat_wiadomosci")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(5000);
 
     if (!error && data) {
-      setMessages(data);
+      setMessages([...data].reverse());
     }
   };
 
@@ -854,7 +869,7 @@ export default function ClubChat() {
               });
             }
 
-            // Natychmiastowe dopisanie nowej wiadomości do stanu globalnego (aktualizuje listę odbiorców)
+            // Natychmiastowe dopisanie nowej wiadomości do stanu globalnego
             setMessages((prev) => {
               if (prev.some((m) => m.id === newRow.id)) return prev;
               return [...prev, newRow];
@@ -1366,6 +1381,7 @@ export default function ClubChat() {
 
     setIsUploading(false);
   };
+
   // Przypinanie wiadomości wewnątrz czatu
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
@@ -1915,7 +1931,6 @@ export default function ClubChat() {
     groupPendingRequestIds.includes(String(k.id))
   );
 
-  // KULOODPORNE MAPOWANIE ZAWSZE NA STRINGU DLA BŁYSKAWICZNEGO ODŚWIEŻANIA LISTY ODBIORCÓW
   const latestMessageMap = new Map<string, number>();
   const latestMessageTextMap = new Map<string, string>();
   const latestGroupMessageTimeMap = new Map<string, number>();
@@ -2298,7 +2313,6 @@ export default function ClubChat() {
       </div>
     );
   };
-
   const isPositioned = position !== null;
   const modalWidth = 410;
   const modalHeight = 560;
