@@ -736,6 +736,15 @@ export default function KarnetyPage() {
 
             const rawContinuity = extractClientContinuityDiscount(c);
 
+            // Bezpieczne parsowanie salda portfela
+            let displayWallet = '0.00 PLN';
+            const rawWallet = c.Portfel ?? c.portfel ?? c.wallet;
+            if (typeof rawWallet === 'number') {
+              displayWallet = `${rawWallet.toFixed(2)} PLN`;
+            } else if (typeof rawWallet === 'string' && rawWallet.trim() !== '') {
+              displayWallet = rawWallet.includes('PLN') ? rawWallet : `${(parseFloat(rawWallet) || 0).toFixed(2)} PLN`;
+            }
+
             return {
               ...c,
               id: c.id,
@@ -753,7 +762,7 @@ export default function KarnetyPage() {
               system_discount_offset: c.system_discount_offset || 0,
               karnetyKlubowicza: verifiedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
-              wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN'
+              wallet: displayWallet
             };
           }));
           
@@ -770,7 +779,7 @@ export default function KarnetyPage() {
                Nazwisko: 'Klubowicz',
                "E-mail": userEmail,
                "Numer tel.": '-',
-               Portfel: '0.00 PLN',
+               Portfel: 0,
                discount: '',
                Urodziny: null,
                urodziny_rabat_rok: null,
@@ -1255,12 +1264,28 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
-    else dbPayload.Portfel = nowyStanPortfelaStr;
+    // Bezpieczna aktualizacja portfela (obsługa kolumn typu numeric i text)
+    if ('portfel' in currentUser) {
+      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
+        ? nowyStanPortfela
+        : (typeof currentUser.portfel === 'string' && currentUser.portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
+    } else if ('Portfel' in currentUser) {
+      dbPayload.Portfel = (typeof currentUser.Portfel === 'number' || currentUser.Portfel === null)
+        ? nowyStanPortfela
+        : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
+    }
 
+    // Bezpieczna aktualizacja ceny (obsługa kolumn typu numeric i text)
     if (!isBonus13thPeriod) {
-      if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
-      else dbPayload.cena = cenaStr;
+      if ('Cena' in currentUser) {
+        dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
+          ? cenaPoRabacie
+          : (typeof currentUser.Cena === 'string' && currentUser.Cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+      } else if ('cena' in currentUser) {
+        dbPayload.cena = (typeof currentUser.cena === 'number' || currentUser.cena === null)
+          ? cenaPoRabacie
+          : (typeof currentUser.cena === 'string' && currentUser.cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+      }
     }
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
@@ -1339,7 +1364,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   // ZAKUP NOWEGO KARNETU
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1503,11 +1527,27 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    if (currentUser.portfel !== undefined) dbPayload.portfel = nowyStanPortfelaStr;
-    else dbPayload.Portfel = nowyStanPortfelaStr;
+    // Bezpieczna aktualizacja portfela (obsługa kolumn typu numeric i text)
+    if ('portfel' in currentUser) {
+      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
+        ? nowyStanPortfela
+        : (typeof currentUser.portfel === 'string' && currentUser.portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
+    } else if ('Portfel' in currentUser) {
+      dbPayload.Portfel = (typeof currentUser.Portfel === 'number' || currentUser.Portfel === null)
+        ? nowyStanPortfela
+        : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
+    }
 
-    if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr;
-    else dbPayload.cena = cenaStr;
+    // Bezpieczna aktualizacja ceny (obsługa kolumn typu numeric i text)
+    if ('Cena' in currentUser) {
+      dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
+        ? cenaPoRabacie
+        : (typeof currentUser.Cena === 'string' && currentUser.Cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+    } else if ('cena' in currentUser) {
+      dbPayload.cena = (typeof currentUser.cena === 'number' || currentUser.cena === null)
+        ? cenaPoRabacie
+        : (typeof currentUser.cena === 'string' && currentUser.cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+    }
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
@@ -2591,7 +2631,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         )}
-
         {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ */}
         {isExtendModalOpen && passToExtend && (() => {
           const isContract = passToExtend.isContract12M;
@@ -3610,14 +3649,14 @@ export default function KarnetyPage() {
 
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-sky-100">
                 <button 
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  type="button" 
+                  onClick={() => setIsModalOpen(false)} 
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
                 >
                   Anuluj
                 </button>
                 <button 
-                  type="submit"
+                  type="submit" 
                   className="bg-amber-800 hover:bg-amber-900 text-white font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer"
                 >
                   {editingId !== null ? 'ZAKTUALIZUJ' : 'ZAPISZ'}
