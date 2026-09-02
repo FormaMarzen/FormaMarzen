@@ -18,12 +18,18 @@ interface WynikUzytkownika {
   cwiczenie_id: number;
   najlepszy_wynik: string;
   data_rekordu: string;
+  serie?: string;
+  powtorzenia?: string;
 }
 
 interface KlientInfo {
+  id?: number;
   "E-mail"?: string;
+  email?: string;
   "Imię"?: string;
+  imie?: string;
   "Nazwisko"?: string;
+  nazwisko?: string;
   avatarUrl?: string;
   [key: string]: any;
 }
@@ -48,8 +54,11 @@ export default function MojeWynikiPage() {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [wybraneCwiczenie, setWybraneCwiczenie] = useState<CwiczenieDefinicja | null>(null);
   const [nowyWynikWartosc, setNowyWynikWartosc] = useState<string>("");
+  const [nowyWynikSerie, setNowyWynikSerie] = useState<string>("");
+  const [nowyWynikPowtorzenia, setNowyWynikPowtorzenia] = useState<string>("");
   const [nowyWynikData, setNowyWynikData] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
+  // Stan modali administracyjnych kafelek
   const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
   const [editingCwiczenieId, setEditingCwiczenieId] = useState<number | null>(null);
   const [adminForm, setAdminForm] = useState({
@@ -59,6 +68,14 @@ export default function MojeWynikiPage() {
     typ: "waga" as "waga" | "czas" | "ilosc"
   });
 
+  // Stan dla panelu administratora edycji osiągnięć klubowicza
+  const [isAdminClientModalOpen, setIsAdminClientModalOpen] = useState<boolean>(false);
+  const [adminSzukanaFraza, setAdminSzukanaFraza] = useState<string>("");
+  const [adminWybranyKlientEmail, setAdminWybranyKlientEmail] = useState<string>("");
+  const [adminEdytowaneWyniki, setAdminEdytowaneWyniki] = useState<{
+    [cwiczenieId: number]: { wartosc: string; serie: string; powtorzenia: string; data: string }
+  }>({});
+
   // --- RÓWNOLEGŁA INICJALIZACJA DANYCH ---
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -67,7 +84,7 @@ export default function MojeWynikiPage() {
       const [sessionRes, cwiczeniaRes, klienciRes, wynikiRes] = await Promise.all([
         supabase.auth.getSession(),
         supabase.from('cwiczenia_slownik').select('*').order('id', { ascending: true }),
-        supabase.from('klienci').select('id, "Imię", "Nazwisko", "E-mail", avatarUrl'),
+        supabase.from('klienci').select('*'),
         supabase.from('wyniki_klubowiczow').select('*')
       ]);
 
@@ -153,6 +170,8 @@ export default function MojeWynikiPage() {
     const aktualnyWynik = wynikiUzytkownika.find(w => w.cwiczenie_id === cwiczenie.id);
     
     setNowyWynikWartosc(aktualnyWynik ? aktualnyWynik.najlepszy_wynik : "");
+    setNowyWynikSerie(aktualnyWynik?.serie || "");
+    setNowyWynikPowtorzenia(aktualnyWynik?.powtorzenia || "");
     setNowyWynikData(aktualnyWynik ? aktualnyWynik.data_rekordu : new Date().toISOString().split('T')[0]);
     setIsModalOpen(true);
   };
@@ -173,6 +192,8 @@ export default function MojeWynikiPage() {
       email_klienta: userEmail,
       cwiczenie_id: wybraneCwiczenie.id,
       najlepszy_wynik: nowyWynikWartosc.trim(),
+      serie: nowyWynikSerie.trim(),
+      powtorzenia: nowyWynikPowtorzenia.trim(),
       data_rekordu: nowyWynikData
     };
 
@@ -184,7 +205,6 @@ export default function MojeWynikiPage() {
           .eq('id', istniejacyWynik.id);
 
         if (error) throw error;
-
         setWszystkieWyniki(prev => prev.map(w => w.id === istniejacyWynik.id ? { ...w, ...payload } : w));
       } else {
         const { data, error } = await supabase
@@ -209,7 +229,7 @@ export default function MojeWynikiPage() {
     }
   };
 
-  // --- OBSŁUGA ADMINA ---
+  // --- OBSŁUGA ADMINA: ZARZĄDZANIE KAFELKAMI ---
   const handleOpenAdminAddModal = () => {
     setEditingCwiczenieId(null);
     setAdminForm({ nazwa: "", kategoria: "Siła", jednostka: "kg", typ: "waga" });
@@ -304,9 +324,8 @@ export default function MojeWynikiPage() {
     }
   };
 
-  // Usuwanie pojedynczego wyniku klubowicza przez admina (Zabezpieczenie przed fałszywymi wynikami)
   const handleDeleteWynikKlubowicza = async (wynikId: number) => {
-    const isConfirmed = window.confirm("Czy na pewno chcesz usunąć ten wynik klubowicza? (Zabezpieczenie przed fałszywym wynikiem)");
+    const isConfirmed = window.confirm("Czy na pewno chcesz usunąć ten wynik klubowicza?");
     if (!isConfirmed) return;
 
     setWszystkieWyniki(prev => prev.filter(w => w.id !== wynikId));
@@ -323,6 +342,92 @@ export default function MojeWynikiPage() {
       alert("Wynik został pomyślnie usunięty!");
     }
   };
+
+  // --- OBSŁUGA ADMINA: EDYCJA OSIĄGNIEĆ WYBRANEGO KLUBOWICZA ---
+  const handleOpenAdminClientModal = () => {
+    setAdminSzukanaFraza("");
+    setAdminWybranyKlientEmail("");
+    setAdminEdytowaneWyniki({});
+    setIsAdminClientModalOpen(true);
+  };
+
+  // Kiedy admin wybiera klubowicza w modalu edycji
+  const handleSelectAdminClient = (email: string) => {
+    const cleanEmail = email.toLowerCase().trim();
+    setAdminWybranyKlientEmail(cleanEmail);
+    
+    // Wstępne załadowanie aktualnych wyników tego klienta do stanu formularza
+    const wynikiKlienta = wszystkieWyniki.filter(w => w.email_klienta.toLowerCase() === cleanEmail);
+    const mapWynikow: { [id: number]: { wartosc: string; serie: string; powtorzenia: string; data: string } } = {};
+    
+    definicjeCwiczen.forEach(cw => {
+      const znaleziony = wynikiKlienta.find(w => w.cwiczenie_id === cw.id);
+      mapWynikow[cw.id] = {
+        wartosc: znaleziony ? znaleziony.najlepszy_wynik : "",
+        serie: znaleziony?.serie || "",
+        powtorzenia: znaleziony?.powtorzenia || "",
+        data: znaleziony ? znaleziony.data_rekordu : new Date().toISOString().split('T')[0]
+      };
+    });
+    setAdminEdytowaneWyniki(mapWynikow);
+  };
+
+  const handleAdminSaveClientResults = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminWybranyKlientEmail || isSaving) return;
+
+    setIsSaving(true);
+    try {
+      for (const cwiczenieIdStr of Object.keys(adminEdytowaneWyniki)) {
+        const cwiczenieId = parseInt(cwiczenieIdStr, 10);
+        const dane = adminEdytowaneWyniki[cwiczenieId];
+        
+        if (!dane || !dane.wartosc.trim()) {
+          // Jeśli pole jest puste, a istniał wynik – usuwamy go lub pomijamy
+          continue;
+        }
+
+        const istniejacy = wszystkieWyniki.find(
+          w => w.email_klienta.toLowerCase() === adminWybranyKlientEmail.toLowerCase() && w.cwiczenie_id === cwiczenieId
+        );
+
+        const payload = {
+          email_klienta: adminWybranyKlientEmail,
+          cwiczenie_id: cwiczenieId,
+          najlepszy_wynik: dane.wartosc.trim(),
+          serie: dane.serie.trim(),
+          powtorzenia: dane.powtorzenia.trim(),
+          data_rekordu: dane.data || new Date().toISOString().split('T')[0]
+        };
+
+        if (istniejacy && istniejacy.id) {
+          await supabase.from('wyniki_klubowiczow').update(payload).eq('id', istniejacy.id);
+        } else {
+          await supabase.from('wyniki_klubowiczow').insert([payload]);
+        }
+      }
+
+      await fetchData();
+      setIsAdminClientModalOpen(false);
+      alert("Osiągnięcia klubowicza zostały pomyślnie zaktualizowane przez administratora!");
+    } catch (err: any) {
+      alert("Błąd podczas zapisu osiągnięć: " + (err.message || ""));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Lista klubowiczów przefiltrowana w panelu admina
+  const filteredKlienciForAdmin = useMemo(() => {
+    if (!adminSzukanaFraza.trim()) return klienciList;
+    const q = adminSzukanaFraza.toLowerCase().trim();
+    return klienciList.filter(k => {
+      const email = (k['E-mail'] || k.email || '').toLowerCase();
+      const imie = (k['Imię'] || k.imie || '').toLowerCase();
+      const nazwisko = (k['Nazwisko'] || k.nazwisko || '').toLowerCase();
+      return email.includes(q) || imie.includes(q) || nazwisko.includes(q);
+    });
+  }, [klienciList, adminSzukanaFraza]);
 
   if (isLoading) {
     return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie wyników...</div>;
@@ -346,14 +451,22 @@ export default function MojeWynikiPage() {
             </p>
           </div>
           
-          {/* PANEL ADMINA */}
+          {/* PANEL ADMINA: PRZYCISKI AKCJĘ */}
           {isAdmin && (
-            <button 
-              onClick={handleOpenAdminAddModal}
-              className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
-            >
-              <span>+</span> DODAJ ĆWICZENIE
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button 
+                onClick={handleOpenAdminClientModal}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+              >
+                <span>🔍</span> ZARZĄDZAJ WYNIKAMI KLUBOWICZA
+              </button>
+              <button 
+                onClick={handleOpenAdminAddModal}
+                className="bg-sky-900 hover:bg-sky-950 text-white px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+              >
+                <span>+</span> DODAJ ĆWICZENIE
+              </button>
+            </div>
           )}
         </div>
 
@@ -432,21 +545,30 @@ export default function MojeWynikiPage() {
                     </span>
                   </div>
                   
-                  <h3 className="font-black text-lg text-sky-950 leading-tight mb-6 pr-20">
+                  <h3 className="font-black text-lg text-sky-950 leading-tight mb-4 pr-20">
                     {cwiczenie.nazwa}
                   </h3>
 
-                  <div className="space-y-1 mb-6">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Aktualny Rekord (PR)</div>
+                  <div className="space-y-2 mb-6 bg-sky-50/50 p-4 rounded-2xl border border-sky-100">
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Wynik (PR)</span>
+                      {(mojWynik?.serie || mojWynik?.powtorzenia) && (
+                        <span className="text-xs font-bold text-sky-900 bg-amber-200/60 px-2 py-0.5 rounded-lg">
+                          {mojWynik?.serie ? `${mojWynik.serie} ser.` : ""} {mojWynik?.powtorzenia ? `${mojWynik.powtorzenia} powt.` : ""}
+                        </span>
+                      )}
+                    </div>
+                    
                     <div className="flex items-baseline gap-2">
-                      <span className={`text-4xl font-black tracking-tighter ${mojWynik ? 'text-slate-800' : 'text-slate-300'}`}>
+                      <span className={`text-3xl font-black tracking-tighter ${mojWynik ? 'text-slate-800' : 'text-slate-300'}`}>
                         {mojWynik ? mojWynik.najlepszy_wynik : "--"}
                       </span>
                       <span className="text-sm font-bold text-slate-500">
                         {cwiczenie.jednostka}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-500 font-medium flex items-center gap-1.5 mt-2">
+
+                    <div className="text-xs text-slate-500 font-medium flex items-center gap-1.5 pt-1 border-t border-sky-100">
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                       Ustanowiono: {mojWynik ? mojWynik.data_rekordu : "Brak wpisu"}
                     </div>
@@ -519,17 +641,16 @@ export default function MojeWynikiPage() {
                     
                     const { nazwa: nazwaUzytkownika, avatar } = pobierzDaneKlubowicza(wynik.email_klienta);
 
-                    // Dynamiczne style dla poszczególnych miejsc
-                    let wrapperClasses = "flex items-center justify-between p-3 rounded-xl transition-all duration-300 ";
-                    let textClasses = "font-bold text-sm truncate max-w-[100px] sm:max-w-[150px] ";
+                    let wrapperClasses = "flex items-center justify-between p-3.5 rounded-2xl transition-all duration-300 ";
+                    let textClasses = "font-bold text-sm truncate max-w-[120px] sm:max-w-[160px] ";
                     let valueClasses = "font-black text-lg tracking-tighter ";
 
                     if (isTop1) {
-                      wrapperClasses += "bg-gradient-to-r from-yellow-100 to-yellow-50 border border-yellow-400 shadow-md transform scale-[1.03] my-3";
+                      wrapperClasses += "bg-gradient-to-r from-yellow-100 to-yellow-50 border border-yellow-400 shadow-md transform scale-[1.02] my-3";
                       textClasses += "text-yellow-900 text-base";
                       valueClasses += "text-yellow-700 text-xl";
                     } else if (isTop2) {
-                      wrapperClasses += "bg-gradient-to-r from-slate-200 to-slate-100 border border-slate-300 shadow-sm transform scale-[1.01] my-2";
+                      wrapperClasses += "bg-gradient-to-r from-slate-200 to-slate-100 border border-slate-300 shadow-sm my-2";
                       textClasses += "text-slate-800 text-base";
                       valueClasses += "text-slate-700 text-xl";
                     } else if (isTop3) {
@@ -542,18 +663,16 @@ export default function MojeWynikiPage() {
                       valueClasses += isMoje ? "text-sky-700" : "text-sky-950";
                     }
 
-                    // Ikonki miejsc
                     let Pozycja = <span className="w-6 inline-block text-center text-slate-400 text-sm font-bold">{index + 1}.</span>;
-                    if (isTop1) Pozycja = <span className="text-3xl drop-shadow-sm">🥇</span>;
-                    if (isTop2) Pozycja = <span className="text-3xl drop-shadow-sm">🥈</span>;
-                    if (isTop3) Pozycja = <span className="text-3xl drop-shadow-sm">🥉</span>;
+                    if (isTop1) Pozycja = <span className="text-2xl drop-shadow-sm">🥇</span>;
+                    if (isTop2) Pozycja = <span className="text-2xl drop-shadow-sm">🥈</span>;
+                    if (isTop3) Pozycja = <span className="text-2xl drop-shadow-sm">🥉</span>;
 
                     return (
                       <div key={wynik.id || `${wynik.email_klienta}_${index}`} className={wrapperClasses}>
                         <div className="flex items-center gap-3">
                           <div className="w-8 flex justify-center shrink-0">{Pozycja}</div>
                           
-                          {/* Wyświetlanie zdjęcia profilowego tylko dla top 3 */}
                           {isPodium && (
                             <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden border-2 shadow-sm shrink-0" style={{ borderColor: isTop1 ? '#fbbf24' : isTop2 ? '#cbd5e1' : '#fdba74' }}>
                               {avatar ? (
@@ -570,7 +689,14 @@ export default function MojeWynikiPage() {
                             <span className={textClasses}>
                               {nazwaUzytkownika} {isMoje && "(Ty)"}
                             </span>
-                            <span className="text-[10px] text-slate-400">{wynik.data_rekordu}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-400">{wynik.data_rekordu}</span>
+                              {(wynik.serie || wynik.powtorzenia) && (
+                                <span className="text-[10px] font-bold text-sky-800 bg-sky-200/50 px-1.5 py-0.2 rounded">
+                                  {wynik.serie ? `${wynik.serie}s` : ""} {wynik.powtorzenia ? `${wynik.powtorzenia}p` : ""}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -582,12 +708,11 @@ export default function MojeWynikiPage() {
                             <span className="text-xs font-bold text-slate-500">{cwiczenie.jednostka}</span>
                           </div>
 
-                          {/* Przycisk usuwania wyniku przez admina (Zabezpieczenie przed fałszywymi wynikami) */}
                           {isAdmin && wynik.id && (
                             <button
                               onClick={() => handleDeleteWynikKlubowicza(wynik.id!)}
                               className="w-8 h-8 flex items-center justify-center bg-rose-100 text-rose-700 rounded-lg hover:bg-rose-200 transition-colors shadow-sm border border-rose-200 cursor-pointer"
-                              title="Usuń fałszywy wynik klubowicza"
+                              title="Usuń wynik klubowicza"
                             >
                               🗑️
                             </button>
@@ -620,7 +745,7 @@ export default function MojeWynikiPage() {
         </div>
       )}
 
-      {/* MODAL KLUBOWICZA: AKTUALIZACJA WYNIKU */}
+      {/* MODAL KLUBOWICZA: AKTUALIZACJA WYNIKU Z SERIAMI I POWTÓRZENIAMI */}
       {isModalOpen && wybraneCwiczenie && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200">
@@ -632,9 +757,9 @@ export default function MojeWynikiPage() {
               <h3 className="font-black text-xl text-sky-950 leading-tight">Nowy Rekord</h3>
               <p className="text-sm font-bold text-amber-600 mt-1">{wybraneCwiczenie.nazwa}</p>
             </div>
-            <form onSubmit={handleSaveZapis} className="space-y-5">
-              <div className="space-y-2">
-                <label className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Twój nowy wynik</label>
+            <form onSubmit={handleSaveZapis} className="space-y-4">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Twój wynik ({wybraneCwiczenie.jednostka})</label>
                 <div className="relative">
                   <input 
                     type={wybraneCwiczenie.typ === 'czas' ? "text" : "number"} 
@@ -643,28 +768,52 @@ export default function MojeWynikiPage() {
                     value={nowyWynikWartosc}
                     onChange={(e) => setNowyWynikWartosc(e.target.value)}
                     placeholder={wybraneCwiczenie.typ === 'czas' ? "np. 12:45" : "np. 100"}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-4 py-3 text-2xl font-black text-slate-800 focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 transition-all pr-16"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-4 py-3 text-xl font-black text-slate-800 focus:outline-none focus:border-amber-500 transition-all pr-16"
                   />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">{wybraneCwiczenie.jednostka}</span>
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">{wybraneCwiczenie.jednostka}</span>
                 </div>
               </div>
-              <div className="space-y-2">
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Liczba serii</label>
+                  <input 
+                    type="number" 
+                    value={nowyWynikSerie}
+                    onChange={(e) => setNowyWynikSerie(e.target.value)}
+                    placeholder="np. 4"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Powtórzenia</label>
+                  <input 
+                    type="number" 
+                    value={nowyWynikPowtorzenia}
+                    onChange={(e) => setNowyWynikPowtorzenia(e.target.value)}
+                    placeholder="np. 8"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Data uzyskania wyniku</label>
                 <input 
                   type="date" 
                   required
                   value={nowyWynikData}
                   onChange={(e) => setNowyWynikData(e.target.value)}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 focus:outline-none focus:border-amber-500 transition-all"
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 focus:outline-none focus:border-amber-500"
                 />
               </div>
+
               <div className="pt-2">
                 <button 
                   type="submit" 
                   disabled={isSaving}
-                  className={`w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-4 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-3.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" /></svg>
                   {isSaving ? "Zapisywanie..." : "Zapisz wynik"}
                 </button>
               </div>
@@ -673,7 +822,155 @@ export default function MojeWynikiPage() {
         </div>
       )}
 
-      {/* MODAL ADMINA: DODAWANIE / EDYCJA KAFELKA */}
+      {/* MODAL ADMINA: ZARZĄDZANIE / EDYCJA OSIĄGNIEĆ WYBRANEGO KLUBOWICZA */}
+      {isAdminClientModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200 border-2 border-amber-500 max-h-[90vh] flex flex-col">
+            <button 
+              onClick={() => setIsAdminClientModalOpen(false)} 
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 p-2 cursor-pointer z-10"
+            >✕</button>
+
+            <div className="mb-4 pr-8">
+              <h3 className="font-black text-xl text-sky-950 leading-tight">Panel Administratora: Edycja Osiągnięć</h3>
+              <p className="text-sm font-bold text-slate-500 mt-1">Wyszukaj klubowicza i zmodyfikuj jego wyniki, serie oraz powtórzenia.</p>
+            </div>
+
+            {!adminWybranyKlientEmail ? (
+              <div className="space-y-4 flex-grow overflow-y-auto pr-1">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Wyszukaj klubowicza (imię, nazwisko lub e-mail)</label>
+                  <input 
+                    type="text" 
+                    value={adminSzukanaFraza}
+                    onChange={(e) => setAdminSzukanaFraza(e.target.value)}
+                    placeholder="Wpisz szukaną frazę..."
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <div className="space-y-2 mt-4 max-h-[350px] overflow-y-auto">
+                  {filteredKlienciForAdmin.map((klient) => {
+                    const email = (klient['E-mail'] || klient.email || '').toLowerCase().trim();
+                    const { nazwa, avatar } = pobierzDaneKlubowicza(email);
+                    if (!email) return null;
+
+                    return (
+                      <div 
+                        key={email}
+                        onClick={() => handleSelectAdminClient(email)}
+                        className="flex items-center justify-between p-3.5 bg-sky-50/60 hover:bg-amber-50 border border-sky-100 hover:border-amber-300 rounded-2xl cursor-pointer transition-all duration-200"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden border border-sky-200 shadow-sm shrink-0">
+                            {avatar ? (
+                              <img src={avatar} alt={nazwa} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-sky-900 font-bold text-xs uppercase">{nazwa.substring(0, 2)}</span>
+                            )}
+                          </div>
+                          <div>
+                            <div className="font-black text-sky-950 text-sm">{nazwa}</div>
+                            <div className="text-xs text-slate-500">{email}</div>
+                          </div>
+                        </div>
+                        <span className="text-xs font-black text-amber-600 bg-amber-100 px-3 py-1.5 rounded-xl">Wybierz →</span>
+                      </div>
+                    );
+                  })}
+                  {filteredKlienciForAdmin.length === 0 && (
+                    <div className="text-center py-8 text-slate-400 text-sm font-bold">Brak klubowiczów spełniających kryteria.</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleAdminSaveClientResults} className="flex flex-col flex-grow overflow-hidden">
+                <div className="flex items-center justify-between bg-sky-50 p-3 rounded-xl mb-4 border border-sky-200">
+                  <div className="text-xs font-bold text-sky-900">
+                    Edytujesz wyniki dla: <span className="font-black">{adminWybranyKlientEmail}</span>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setAdminWybranyKlientEmail("")}
+                    className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
+                  >
+                    ← Zmień klubowicza
+                  </button>
+                </div>
+
+                <div className="space-y-4 flex-grow overflow-y-auto pr-2 max-h-[400px]">
+                  {definicjeCwiczen.map((cwiczenie) => {
+                    const dane = adminEdytowaneWyniki[cwiczenie.id] || { wartosc: "", serie: "", powtorzenia: "", data: new Date().toISOString().split('T')[0] };
+
+                    return (
+                      <div key={cwiczenie.id} className="p-4 bg-slate-50 border border-sky-100 rounded-2xl space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="font-black text-sm text-sky-950">{cwiczenie.nazwa}</span>
+                          <span className="text-[10px] font-bold uppercase text-sky-600 bg-white px-2 py-0.5 rounded border border-sky-100">{cwiczenie.kategoria}</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                          <div className="sm:col-span-2">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Wynik ({cwiczenie.jednostka})</label>
+                            <input 
+                              type="text"
+                              value={dane.wartosc}
+                              onChange={(e) => setAdminEdytowaneWyniki({
+                                ...adminEdytowaneWyniki,
+                                [cwiczenie.id]: { ...dane, wartosc: e.target.value }
+                              })}
+                              placeholder="Wpisz wynik"
+                              className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Serie</label>
+                            <input 
+                              type="text"
+                              value={dane.serie}
+                              onChange={(e) => setAdminEdytowaneWyniki({
+                                ...adminEdytowaneWyniki,
+                                [cwiczenie.id]: { ...dane, serie: e.target.value }
+                              })}
+                              placeholder="np. 3"
+                              className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Powtórzenia</label>
+                            <input 
+                              type="text"
+                              value={dane.powtorzenia}
+                              onChange={(e) => setAdminEdytowaneWyniki({
+                                ...adminEdytowaneWyniki,
+                                [cwiczenie.id]: { ...dane, powtorzenia: e.target.value }
+                              })}
+                              placeholder="np. 10"
+                              className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-4 mt-2 border-t border-slate-200">
+                  <button 
+                    type="submit" 
+                    disabled={isSaving}
+                    className={`w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-3.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {isSaving ? "Zapisywanie..." : "Zapisz zmiany w osiągnięciach klubowicza"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ADMINA: DODAWANIE / EDYCJA KAFELKA ĆWICZENIA */}
       {isAdminModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200 border-2 border-sky-900">
