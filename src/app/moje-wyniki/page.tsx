@@ -132,17 +132,26 @@ export default function MojeWynikiPage() {
     const cleanEmail = email.toLowerCase().trim();
     const klient = klienciMap.get(cleanEmail);
     let nazwa = email.split('@')[0];
+    let pelnaNazwa = email.split('@')[0];
     let avatar = null;
 
     if (klient) {
       const imie = (klient['Imię'] || klient.imie || '').trim();
       const nazwiskoRaw = (klient['Nazwisko'] || klient.nazwisko || '').trim();
-      const nazwisko = nazwiskoRaw ? ` ${nazwiskoRaw.charAt(0)}.` : '';
-      if (imie) nazwa = `${imie}${nazwisko}`;
+      const nazwiskoSkrot = nazwiskoRaw ? ` ${nazwiskoRaw.charAt(0)}.` : '';
+      
+      if (imie) {
+        nazwa = `${imie}${nazwiskoSkrot}`;
+        pelnaNazwa = nazwiskoRaw ? `${imie} ${nazwiskoRaw}` : imie;
+      } else if (nazwiskoRaw) {
+        nazwa = nazwiskoRaw;
+        pelnaNazwa = nazwiskoRaw;
+      }
+
       if (klient.avatarUrl) avatar = klient.avatarUrl;
     }
 
-    return { nazwa, avatar };
+    return { nazwa, pelnaNazwa, avatar };
   }, [klienciMap]);
 
   const wynikiUzytkownika = useMemo(() => {
@@ -163,6 +172,20 @@ export default function MojeWynikiPage() {
       ? definicjeCwiczen 
       : definicjeCwiczen.filter((w) => w.kategoria === aktywnaKategoria);
   }, [aktywnaKategoria, definicjeCwiczen]);
+
+  // Posortowane ćwiczenia w rankingu globalnym według liczby wpisanych osób (malejąco)
+  const rankingWidoczneWyniki = useMemo(() => {
+    const licznikWpisow = new Map<number, number>();
+    wszystkieWyniki.forEach(w => {
+      licznikWpisow.set(w.cwiczenie_id, (licznikWpisow.get(w.cwiczenie_id) || 0) + 1);
+    });
+
+    return [...widoczneWyniki].sort((a, b) => {
+      const iloscA = licznikWpisow.get(a.id) || 0;
+      const iloscB = licznikWpisow.get(b.id) || 0;
+      return iloscB - iloscA;
+    });
+  }, [widoczneWyniki, wszystkieWyniki]);
 
   // --- OBSŁUGA KLUBOWICZA ---
   const handleOpenModal = (cwiczenie: CwiczenieDefinicja) => {
@@ -343,7 +366,7 @@ export default function MojeWynikiPage() {
     }
   };
 
-  // --- OBSŁUGA ADMINA: EDYCJA OSIĄGNIEĆ WYBRANEGO KLUBOWICZA ---
+  // --- OBSŁUGA ADMINA: EDYCJA OSIĄGNIĘĆ WYBRANEGO KLUBOWICZA ---
   const handleOpenAdminClientModal = () => {
     setAdminSzukanaFraza("");
     setAdminWybranyKlientEmail("");
@@ -351,12 +374,10 @@ export default function MojeWynikiPage() {
     setIsAdminClientModalOpen(true);
   };
 
-  // Kiedy admin wybiera klubowicza w modalu edycji
   const handleSelectAdminClient = (email: string) => {
     const cleanEmail = email.toLowerCase().trim();
     setAdminWybranyKlientEmail(cleanEmail);
     
-    // Wstępne załadowanie aktualnych wyników tego klienta do stanu formularza
     const wynikiKlienta = wszystkieWyniki.filter(w => w.email_klienta.toLowerCase() === cleanEmail);
     const mapWynikow: { [id: number]: { wartosc: string; serie: string; powtorzenia: string; data: string } } = {};
     
@@ -383,7 +404,6 @@ export default function MojeWynikiPage() {
         const dane = adminEdytowaneWyniki[cwiczenieId];
         
         if (!dane || !dane.wartosc.trim()) {
-          // Jeśli pole jest puste, a istniał wynik – usuwamy go lub pomijamy
           continue;
         }
 
@@ -417,7 +437,6 @@ export default function MojeWynikiPage() {
     }
   };
 
-  // Lista klubowiczów przefiltrowana w panelu admina
   const filteredKlienciForAdmin = useMemo(() => {
     if (!adminSzukanaFraza.trim()) return klienciList;
     const q = adminSzukanaFraza.toLowerCase().trim();
@@ -428,6 +447,11 @@ export default function MojeWynikiPage() {
       return email.includes(q) || imie.includes(q) || nazwisko.includes(q);
     });
   }, [klienciList, adminSzukanaFraza]);
+
+  const daneWybranegoKlubowiczaDoEdycji = useMemo(() => {
+    if (!adminWybranyKlientEmail) return null;
+    return pobierzDaneKlubowicza(adminWybranyKlientEmail);
+  }, [adminWybranyKlientEmail, pobierzDaneKlubowicza]);
 
   if (isLoading) {
     return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie wyników...</div>;
@@ -451,7 +475,7 @@ export default function MojeWynikiPage() {
             </p>
           </div>
           
-          {/* PANEL ADMINA: PRZYCISKI AKCJĘ */}
+          {/* PANEL ADMINA: PRZYCISKI AKCJI */}
           {isAdmin && (
             <div className="flex flex-wrap items-center gap-2">
               <button 
@@ -587,10 +611,10 @@ export default function MojeWynikiPage() {
         </div>
       )}
 
-      {/* WIDOK: RANKING GLOBALNY */}
+      {/* WIDOK: RANKING GLOBALNY - SORTOWANY OD NAJWIĘKSZEJ LICZBY OSÓB */}
       {aktywnaZakladka === "rankingi" && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          {widoczneWyniki.map((cwiczenie) => {
+          {rankingWidoczneWyniki.map((cwiczenie) => {
             const wynikiDlaCwiczenia = wszystkieWyniki.filter(w => w.cwiczenie_id === cwiczenie.id);
             
             if (wynikiDlaCwiczenia.length === 0) {
@@ -822,7 +846,7 @@ export default function MojeWynikiPage() {
         </div>
       )}
 
-      {/* MODAL ADMINA: ZARZĄDZANIE / EDYCJA OSIĄGNIEĆ WYBRANEGO KLUBOWICZA */}
+      {/* MODAL ADMINA: ZARZĄDZANIE / EDYCJA OSIĄGNIĘĆ WYBRANEGO KLUBOWICZA */}
       {isAdminClientModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative animate-in zoom-in-95 duration-200 border-2 border-amber-500 max-h-[90vh] flex flex-col">
@@ -852,7 +876,7 @@ export default function MojeWynikiPage() {
                 <div className="space-y-2 mt-4 max-h-[350px] overflow-y-auto">
                   {filteredKlienciForAdmin.map((klient) => {
                     const email = (klient['E-mail'] || klient.email || '').toLowerCase().trim();
-                    const { nazwa, avatar } = pobierzDaneKlubowicza(email);
+                    const { pelnaNazwa, avatar } = pobierzDaneKlubowicza(email);
                     if (!email) return null;
 
                     return (
@@ -864,13 +888,14 @@ export default function MojeWynikiPage() {
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden border border-sky-200 shadow-sm shrink-0">
                             {avatar ? (
-                              <img src={avatar} alt={nazwa} className="w-full h-full object-cover" />
+                              <img src={avatar} alt={pelnaNazwa} className="w-full h-full object-cover" />
                             ) : (
-                              <span className="text-sky-900 font-bold text-xs uppercase">{nazwa.substring(0, 2)}</span>
+                              <span className="text-sky-900 font-bold text-xs uppercase">{pelnaNazwa.substring(0, 2)}</span>
                             )}
                           </div>
                           <div>
-                            <div className="font-black text-sky-950 text-sm">{nazwa}</div>
+                            {/* Pełne imię i nazwisko widoczne dla administratora */}
+                            <div className="font-black text-sky-950 text-sm">{pelnaNazwa}</div>
                             <div className="text-xs text-slate-500">{email}</div>
                           </div>
                         </div>
@@ -887,7 +912,7 @@ export default function MojeWynikiPage() {
               <form onSubmit={handleAdminSaveClientResults} className="flex flex-col flex-grow overflow-hidden">
                 <div className="flex items-center justify-between bg-sky-50 p-3 rounded-xl mb-4 border border-sky-200">
                   <div className="text-xs font-bold text-sky-900">
-                    Edytujesz wyniki dla: <span className="font-black">{adminWybranyKlientEmail}</span>
+                    Edytujesz wyniki dla: <span className="font-black text-sky-950">{daneWybranegoKlubowiczaDoEdycji?.pelnaNazwa || adminWybranyKlientEmail}</span> ({adminWybranyKlientEmail})
                   </div>
                   <button 
                     type="button" 
