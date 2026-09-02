@@ -22,7 +22,7 @@ const DEFAULT_GROUP_CATEGORIES = [
 const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
+    viewBox="0 24 24"
     fill="none"
     stroke="currentColor"
     strokeWidth="2"
@@ -30,7 +30,7 @@ const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
     strokeLinejoin="round"
     className={className}
   >
-    <rect width="18" height="18" x="3" y="2" rx="2" ry="2" />
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
     <circle cx="9" cy="9" r="2" />
     <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
   </svg>
@@ -556,12 +556,15 @@ export default function ClubChat() {
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
 
-  const sendChatPushNotification = async (recipientId: number | string, senderName: string, messageText: string) => {
+  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH 1-NA-1 (Z OCHRONĄ PRZED WYSYŁKĄ GLOBALNĄ)
+  const sendChatPushNotification = async (recipientId: number | string | undefined | null, senderName: string, messageText: string) => {
     try {
-      if (Number(recipientId) === SYSTEM_ID) return;
+      if (!recipientId || recipientId === "undefined" || recipientId === "null") return;
+      const parsedNum = Number(recipientId);
+      if (parsedNum === SYSTEM_ID || isNaN(parsedNum) && !recipientId) return;
 
       let query = supabase.from("klienci").select("id, push_subscription");
-      if (Number(recipientId) === 999999999) {
+      if (parsedNum === 999999999) {
         query = query.in("E-mail", ADMIN_EMAILS);
       } else {
         query = query.eq("id", recipientId);
@@ -570,7 +573,12 @@ export default function ClubChat() {
       const { data: clients, error: clientErr } = await query;
       if (clientErr || !clients || clients.length === 0) return;
 
-      const subscriptions = clients
+      // DODATKOWA WALIDACJA: Upewniamy się, że nie wysyłamy do innych osób
+      const strictlyTargetedClients = parsedNum === 999999999
+        ? clients
+        : clients.filter((c: any) => String(c.id) === String(recipientId));
+
+      const subscriptions = strictlyTargetedClients
         .map((c: any) => {
           if (!c.push_subscription) return null;
           try {
@@ -600,17 +608,18 @@ export default function ClubChat() {
         }),
       });
     } catch (err) {
-      console.error("Błąd podczas wysyłania powiadomienia Push:", err);
+      console.error("Błąd podczas bezpiecznego wysyłania powiadomienia Push:", err);
     }
   };
 
+  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH GRUPOWEGO
   const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string, trainingObj?: any) => {
     try {
       let recipientIds: string[] = [];
 
       if (trainingObj) {
         const signups = getSignupsForTraining(trainingObj);
-        recipientIds = signups.map((z: any) => String(z.klient_id));
+        recipientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
       } else {
         const { data: groupData } = await supabase
           .from("czat_grupy")
@@ -626,11 +635,11 @@ export default function ClubChat() {
           const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
           const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
           const banned = Array.isArray(groupData.zbanowani_ids) ? groupData.zbanowani_ids.map(String) : [];
-          recipientIds = members.filter((id) => !muted.includes(id) && !banned.includes(id));
+          recipientIds = members.filter((id) => id && !muted.includes(id) && !banned.includes(id));
         }
       }
 
-      recipientIds = recipientIds.filter((id) => id !== String(senderId));
+      recipientIds = recipientIds.filter((id) => id && id !== String(senderId));
       if (recipientIds.length === 0) return;
 
       const { data: clients } = await supabase
@@ -640,7 +649,9 @@ export default function ClubChat() {
 
       if (!clients || clients.length === 0) return;
 
-      const subscriptions = clients
+      const strictlyTargeted = clients.filter((c: any) => recipientIds.includes(String(c.id)));
+
+      const subscriptions = strictlyTargeted
         .map((c: any) => {
           if (!c.push_subscription) return null;
           try {
@@ -686,7 +697,6 @@ export default function ClubChat() {
       const adminLogged = ADMIN_EMAILS.includes(userEmail);
       setIsAdmin(adminLogged);
 
-      // Pobranie klientów bez ucinania wierszy (do 5000)
       const { data: klienciData } = await supabase
         .from("klienci")
         .select("*")
@@ -777,7 +787,7 @@ export default function ClubChat() {
 
       if (grafikData) setGrafikZajec(grafikData);
 
-      // POBIERAMY ZAPISY Z LIMITEM DO 10 000 I OD NAJNOWSZYCH DLA TRAFNEGO DOPASOWANIA UCZESTNIKÓW
+      // POBIERANIE ZAPISÓW DO 10 000 DLA PEŁNEGO DOPASOWANIA
       const { data: zapisyData } = await supabase
         .from("zapisy_zajec")
         .select("*")
@@ -794,7 +804,6 @@ export default function ClubChat() {
     const targetGroupId = groupId || selectedGroupRef.current?.id;
     if (!targetGroupId) return;
     try {
-      // Pobieramy do 2000 najnowszych wiadomości z grupy i odwracamy chronologicznie
       const { data, error } = await supabase
         .from("czat_wiadomosci")
         .select("*")
@@ -810,29 +819,39 @@ export default function ClubChat() {
     }
   };
 
+  // BEZPIECZNE POBIERANIE WIADOMOŚCI - BRAK WYCIEKÓW MIĘDZY KLUBOWICZAMI
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
-    // Pobieramy do 5000 najnowszych wiadomości z bazy i odwracamy chronologicznie
-    const { data, error } = await supabase
-      .from("czat_wiadomosci")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(5000);
+    try {
+      const myIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+      let query = supabase.from("czat_wiadomosci").select("*").order("created_at", { ascending: false }).limit(5000);
 
-    if (!error && data) {
-      setMessages([...data].reverse());
+      // Jeżeli nie jest to administrator, klubowicz otrzymuje WYŁĄCZNIE wiadomości ze swoim udziałem lub grupy
+      if (!isAdmin) {
+        query = query.or(
+          `nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")}),grupa_id.not.is.null`
+        );
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        setMessages([...data].reverse());
+      }
+    } catch (err) {
+      console.error("Błąd bezpiecznego pobierania wiadomości:", err);
     }
   };
 
-  // SUBSKRYPCJA REALTIME: BŁYSKAWICZNA AKTUALIZACJA WIADOMOŚCI ORAZ LISTY ODBIORCÓW
+  // SUBSKRYPCJA REALTIME: BŁYSKAWICZNA AKTUALIZACJA NA ŻYWO Z OCHRONĄ PRYWATNOŚCI
   useEffect(() => {
     if (!currentUserId) return;
 
     fetchMessages();
     fetchGroupsAndTrainings();
 
-    const channel = supabase.channel("realtime-czat-live", {
+    const channelName = `realtime-chat-room-${currentUserId}-${Date.now()}`;
+    const channel = supabase.channel(channelName, {
       config: { broadcast: { self: false } },
     });
 
@@ -843,19 +862,31 @@ export default function ClubChat() {
         "postgres_changes",
         { event: "*", schema: "public", table: "czat_wiadomosci" },
         (payload) => {
+          const myActualIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+
           if (payload.eventType === "INSERT") {
             const newRow = payload.new;
             const senderKey = String(newRow.nadawca_id);
-            const myActualIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+            const isDirectMsg = !newRow.grupa_id;
 
-            // Wyczyszczenie wskaźnika pisania
+            // FILTR BEZPIECZEŃSTWA: Jeżeli to czat prywatny, a użytkownik nie jest nadawcą, odbiorcą ani adminem - wiadomość zostaje odrzucona
+            if (isDirectMsg && !isAdmin) {
+              const amISender = myActualIds.includes(String(newRow.nadawca_id));
+              const amIReceiver = myActualIds.includes(String(newRow.odbiorca_id));
+              if (!amISender && !amIReceiver) {
+                return;
+              }
+            }
+
+            // Czyszczenie wskaźnika pisania
             setTypingUsers((prev) => {
+              if (!prev[senderKey]) return prev;
               const updated = { ...prev };
               delete updated[senderKey];
               return updated;
             });
 
-            // Odblokowanie czatu jeśli był wcześniej usunięty z widoku przez użytkownika
+            // Odblokowanie czatu z listy usuniętych, jeśli przyszedł do mnie
             if (myActualIds.includes(String(newRow.odbiorca_id))) {
               setDeletedDirectChatTimestamps((prev) => {
                 if (prev[senderKey]) {
@@ -869,13 +900,13 @@ export default function ClubChat() {
               });
             }
 
-            // Natychmiastowe dopisanie nowej wiadomości do stanu globalnego
+            // Natychmiastowe dopisanie wiadomości do stanu
             setMessages((prev) => {
               if (prev.some((m) => m.id === newRow.id)) return prev;
               return [...prev, newRow];
             });
 
-            // Jeśli otwarta jest dana grupa, dopisujemy natychmiast do widoku grupy
+            // Aktualizacja aktywnej grupy na żywo
             if (selectedGroupRef.current && String(newRow.grupa_id) === String(selectedGroupRef.current.id)) {
               setGroupMessages((prev) => {
                 if (prev.some((m) => m.id === newRow.id)) return prev;
@@ -942,6 +973,16 @@ export default function ClubChat() {
       })
       .subscribe();
 
+    // Inteligentny polling w tle co 3.5 sekundy przy otwartym oknie czatu
+    const pollInterval = setInterval(() => {
+      if (isOpen) {
+        fetchMessages();
+        if (selectedGroupRef.current?.id) {
+          fetchGroupMessages(selectedGroupRef.current.id);
+        }
+      }
+    }, 3500);
+
     const checkDailyUpdate = () => {
       const now = new Date();
       if (now.getHours() === 1 && now.getMinutes() === 0) {
@@ -952,10 +993,11 @@ export default function ClubChat() {
 
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(pollInterval);
       clearInterval(dailyInterval);
       Object.values(typingTimeoutRef.current).forEach(clearTimeout);
     };
-  }, [currentUserId, secondaryUserId]);
+  }, [currentUserId, secondaryUserId, isOpen, isAdmin]);
 
   useEffect(() => {
     if (selectedGroup?.id) {
@@ -1139,6 +1181,7 @@ export default function ClubChat() {
     });
   };
 
+  // ROZBUDOWANE I DOKŁADNE DOPASOWANIE ZAPISANYCH UCZESTNIKÓW NA TRENING
   const getSignupsForTraining = (training: any) => {
     if (!training) return [];
     const tId = String(training.id || "").trim();
@@ -1153,10 +1196,20 @@ export default function ClubChat() {
     const todayDash = `${day}-${month}-${year}`;
 
     return zapisyZajec.filter((z: any) => {
-      if (!z) return false;
+      if (!z || !z.klient_id) return false;
       const st = String(z.status || "").toLowerCase();
       if (st === "odwolany" || st === "odwołany" || st === "anulowany" || st === "cancelled") {
         return false;
+      }
+
+      // Bezpośrednie dopasowanie po ID zajęć z grafiku
+      const zClassId = String(z.zajecia_id || z.grafik_id || z.training_id || z.trening_id || "").trim();
+      if (zClassId && zClassId === tId) {
+        const zDate = String(z.data || z.data_zajec || z.date || z.created_at || "").trim();
+        if (zDate) {
+          return zDate.includes(todayIso) || zDate.includes(todayPl) || zDate.includes(todayDash);
+        }
+        return true;
       }
 
       const ck = String(z.class_key || "").trim();
@@ -1187,12 +1240,13 @@ export default function ClubChat() {
     });
   };
 
+  // TWORZENIE LUB AKTUALIZACJA CZATU TRENINGOWEGO Z SYNCHRONIZACJĄ UCZESTNIKÓW
   const getOrCreateTrainingGroup = async (training: any) => {
     const todayStr = new Date().toLocaleDateString("pl-PL");
     const groupName = `Trening: ${training.title} (${todayStr} ${training.start})`;
 
     const signups = getSignupsForTraining(training);
-    const signedClientIds = signups.map((z: any) => String(z.klient_id));
+    const signedClientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
 
     const rawSenderId = secondaryUserId || currentUserId;
     const parsedCreatorId = !isNaN(Number(rawSenderId)) ? Number(rawSenderId) : null;
@@ -1824,7 +1878,6 @@ export default function ClubChat() {
         kategoria: editGroupCategory.trim() || "Ogólne",
         ikona: editGroupIcon,
       };
-
       let { error } = await supabase
         .from("czat_grupy")
         .update(payload)
@@ -1855,8 +1908,11 @@ export default function ClubChat() {
     secondaryUserId ? String(secondaryUserId) : null,
   ].filter(Boolean);
 
+  // ŚCIŚLE IZOLOWANE WIADOMOŚCI DLA AKTYWNEGO CZATU 1:1
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
+    if (m.grupa_id) return false;
+
     const isSenderMe = effectiveIds.includes(String(m.nadawca_id));
     const isReceiverMe = effectiveIds.includes(String(m.odbiorca_id));
     const isSelectedUserSystem = Number(selectedUser.id) === SYSTEM_ID;
@@ -1897,7 +1953,7 @@ export default function ClubChat() {
 
       if (matchedTraining) {
         const signups = getSignupsForTraining(matchedTraining);
-        const signedClientIds = signups.map((z: any) => String(z.klient_id));
+        const signedClientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
         const adminIds = klienci
           .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
           .map((k: any) => String(k.id));
@@ -1935,6 +1991,7 @@ export default function ClubChat() {
   const latestMessageTextMap = new Map<string, string>();
   const latestGroupMessageTimeMap = new Map<string, number>();
 
+  // NAPRAWIONE MAPOWANIE PODGLĄDU: CAŁKOWITA BLOKADA WIDOCZNOŚCI CUDZYCH WIADOMOŚCI PRYWATNYCH
   messages.forEach((m: any) => {
     const msgTime = new Date(m.created_at).getTime();
 
@@ -1946,7 +2003,15 @@ export default function ClubChat() {
     } else {
       const sId = String(m.nadawca_id ?? SYSTEM_ID);
       const rId = String(m.odbiorca_id ?? SYSTEM_ID);
-      let otherId = effectiveIds.includes(sId) ? rId : sId;
+      const isSenderMe = effectiveIds.includes(sId);
+      const isReceiverMe = effectiveIds.includes(rId);
+
+      // Warunek krytyczny: Jeśli bieżący użytkownik nie jest stroną rozmowy 1:1, wiadomość jest pomijana
+      if (!isSenderMe && !isReceiverMe && !isAdmin) {
+        return;
+      }
+
+      const otherId = isSenderMe ? rId : sId;
 
       if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)!) {
         latestMessageMap.set(otherId, msgTime);
@@ -2313,6 +2378,7 @@ export default function ClubChat() {
       </div>
     );
   };
+
   const isPositioned = position !== null;
   const modalWidth = 410;
   const modalHeight = 560;
@@ -3364,7 +3430,6 @@ export default function ClubChat() {
                             </div>
                           );
                         })}
-
                         {closedDiscoverGroups.length === 0 && (
                           <div className="py-12 text-center text-slate-400 text-xs space-y-1">
                             <div>Brak innych grup zamkniętych.</div>
@@ -3380,14 +3445,25 @@ export default function ClubChat() {
               {activeTab === "trainings" && (
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
                   {todayTrainingsList.map((training: any) => {
-                    const matchedGroup = groups.find((g: any) => g.nazwa?.includes(training.title) && g.nazwa?.includes(training.start));
+                    const matchedGroup = groups.find(
+                      (g: any) =>
+                        (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) &&
+                        g.nazwa?.includes(training.title) &&
+                        (g.nazwa?.includes(training.start) || !training.start)
+                    );
                     const trainingUnread = matchedGroup
-                      ? messages.filter((m: any) => String(m.grupa_id) === String(matchedGroup.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length
+                      ? messages.filter(
+                          (m: any) =>
+                            String(m.grupa_id) === String(matchedGroup.id) &&
+                            !effectiveIds.includes(String(m.nadawca_id)) &&
+                            !m.przeczytana
+                        ).length
                       : 0;
 
                     return (
                       <button
                         key={training.id}
+                        type="button"
                         onClick={async () => {
                           const trainingGroup = await getOrCreateTrainingGroup(training);
                           if (trainingGroup) {
@@ -3491,6 +3567,7 @@ export default function ClubChat() {
                 </span>
                 {(isAdmin || String(selectedGroup?.tworca_id) === String(secondaryUserId || currentUserId)) && selectedGroup?.typ !== "trening" && (
                   <button
+                    type="button"
                     onClick={() => {
                       setSelectedInviteMembers([]);
                       setShowInviteModal(true);
@@ -3513,12 +3590,14 @@ export default function ClubChat() {
                         <span className="font-bold text-slate-900 truncate max-w-[150px]">{pendingUser.name}</span>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
+                            type="button"
                             onClick={() => handleAcceptJoinRequest(selectedGroup, pendingUser.id)}
                             className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] px-2 py-0.5 rounded-lg cursor-pointer"
                           >
                             Akceptuj
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleRejectJoinRequest(selectedGroup, pendingUser.id)}
                             className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-[10px] px-2 py-0.5 rounded-lg cursor-pointer"
                           >
@@ -3570,6 +3649,7 @@ export default function ClubChat() {
                       {canManage && (
                         <div className="flex items-center gap-1 shrink-0">
                           <button
+                            type="button"
                             onClick={() => handleRemoveMemberFromGroup(member.id)}
                             className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-lg cursor-pointer"
                             title="Usuń z grupy"
@@ -3577,6 +3657,7 @@ export default function ClubChat() {
                             Usuń
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleBanUserFromGroup(member.id)}
                             className="text-[10px] font-black text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-1 rounded-lg cursor-pointer"
                             title="Zbanuj w grupie"
@@ -3601,6 +3682,7 @@ export default function ClubChat() {
                       >
                         <span className="text-slate-800 font-semibold truncate">{bannedUser.name}</span>
                         <button
+                          type="button"
                           onClick={() => handleUnbanUserFromGroup(bannedUser.id)}
                           className="bg-white border border-rose-300 text-rose-700 hover:bg-rose-100 font-bold text-[10px] px-2 py-0.5 rounded-lg cursor-pointer"
                         >
@@ -3771,6 +3853,7 @@ export default function ClubChat() {
                     <span className="font-semibold text-slate-800 truncate">{selectedFile.name}</span>
                   </div>
                   <button
+                    type="button"
                     onClick={() => {
                       setSelectedFile(null);
                       setFilePreview(null);
@@ -3848,6 +3931,7 @@ export default function ClubChat() {
                     ⬇️ Pobierz
                   </a>
                   <button
+                    type="button"
                     onClick={() => setFullscreenImage(null)}
                     className="text-slate-400 hover:text-white font-black text-sm bg-slate-800 w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
                   >
@@ -3874,7 +3958,7 @@ export default function ClubChat() {
                   <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
                     <span>⚙️</span> Zarządzanie Kategoriami
                   </div>
-                  <button onClick={() => setShowCategoryManagerModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+                  <button type="button" onClick={() => setShowCategoryManagerModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
                     ✕
                   </button>
                 </div>
@@ -4000,6 +4084,7 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* MODAL ZAPRASZANIA CZŁONKÓW */}
           {showInviteModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 animate-in fade-in">
               <div className="bg-white rounded-3xl p-4 w-full max-w-sm max-h-[88vh] flex flex-col shadow-2xl border border-slate-200 space-y-3">
@@ -4007,7 +4092,7 @@ export default function ClubChat() {
                   <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
                     <span>👥</span> Zaproś do grupy
                   </div>
-                  <button onClick={() => setShowInviteModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+                  <button type="button" onClick={() => setShowInviteModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
                     ✕
                   </button>
                 </div>
@@ -4076,6 +4161,7 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* MODAL EDYCJI GRUPY */}
           {showEditGroupModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 animate-in fade-in">
               <div className="bg-white rounded-3xl p-4 w-full max-w-sm max-h-[88vh] flex flex-col shadow-2xl border border-slate-200 space-y-3 overflow-hidden">
@@ -4083,7 +4169,7 @@ export default function ClubChat() {
                   <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
                     <span>✏️</span> Edytuj Grupę
                   </div>
-                  <button onClick={() => setShowEditGroupModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+                  <button type="button" onClick={() => setShowEditGroupModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
                     ✕
                   </button>
                 </div>
@@ -4202,6 +4288,7 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* MODAL WIADOMOŚCI BROADCAST */}
           {showBroadcastModal && (
             <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 animate-in fade-in">
               <div className="bg-white rounded-3xl p-4 w-full max-w-sm max-h-[88vh] flex flex-col shadow-2xl border border-slate-200 space-y-3 overflow-hidden">
@@ -4209,7 +4296,7 @@ export default function ClubChat() {
                   <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
                     <span>📢</span> Wiadomość do Wszystkich
                   </div>
-                  <button onClick={() => setShowBroadcastModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+                  <button type="button" onClick={() => setShowBroadcastModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
                     ✕
                   </button>
                 </div>
@@ -4270,7 +4357,7 @@ export default function ClubChat() {
                   <div className="font-black text-xs uppercase tracking-wider text-slate-900 flex items-center gap-2">
                     <span>👥</span> Nowy Czat Grupowy
                   </div>
-                  <button onClick={() => setShowCreateGroupModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+                  <button type="button" onClick={() => setShowCreateGroupModal(false)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
                     ✕
                   </button>
                 </div>
@@ -4496,6 +4583,7 @@ export default function ClubChat() {
 
       {/* PRZYCISK OTWARCIA CZATU (DYMEK) */}
       <button
+        type="button"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
