@@ -850,10 +850,9 @@ export default function ClubChat() {
     fetchMessages();
     fetchGroupsAndTrainings();
 
-    const channelName = `realtime-chat-room-${currentUserId}-${Date.now()}`;
-    const channel = supabase.channel(channelName, {
-      config: { broadcast: { self: false } },
-    });
+   const channel = supabase.channel("realtime-czat-live", {
+  config: { broadcast: { self: false } },
+});
 
     realtimeChannelRef.current = channel;
 
