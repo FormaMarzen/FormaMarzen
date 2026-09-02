@@ -156,7 +156,7 @@ export default function RootLayout({
       }
       setHasUnreadBazaWiedzy(unreadBaza);
 
-      // 5. Odzież (czerwony wykrzyknik dla admina po nowym zamówieniu lub dla klubowicza przy nowym dropie)
+      // 5. Odzież
       let unreadOdziez = false;
       if (role === 'admin') {
         const { data: unreadOrders } = await supabase
@@ -519,7 +519,7 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
-  // 1. MENU DLA ADMINISTRATORA (Odzież jako ostatnia pozycja w sekcji Główne)
+  // 1. MENU DLA ADMINISTRATORA
   const adminMenuSections = [
     {
       title: "Główne",
@@ -571,7 +571,7 @@ export default function RootLayout({
     }
   ];
 
-  // 2. MENU DLA KLUBOWICZA (Odzież na 1. pozycji w sekcji Klub i Finanse)
+  // 2. MENU DLA KLUBOWICZA
   const klientMenuSections = [
     {
       title: "Główne",
@@ -639,7 +639,6 @@ export default function RootLayout({
       ? trenerMenuSections 
       : klientMenuSections;
 
-  // Główny stan pokazujący czy na przycisku otwarcia menu (hamburger) powinien być wykrzyknik
   const hasAnyBadgeInMenu = useMemo(() => {
     return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez;
   }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez]);
@@ -740,7 +739,7 @@ export default function RootLayout({
           <link rel="manifest" href="/manifest.json?v=2" />
           <meta name="theme-color" content="#0284c7" />
         </head>
-        <body className="min-h-screen bg-sky-50/50 text-slate-800 flex flex-col items-center justify-center font-sans antialiased h-screen overflow-hidden">
+        <body className="min-h-[100dvh] bg-sky-50/50 text-slate-800 flex flex-col items-center justify-center font-sans antialiased h-[100dvh] overflow-hidden">
           <div className="flex flex-col items-center gap-3">
             <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
             <div className="text-sky-950 font-black text-sm tracking-wider uppercase animate-pulse">Forma Marzeń</div>
@@ -791,11 +790,11 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Forma Marzeń" />
       </head>
-      <body className="min-h-screen bg-sky-50/50 text-slate-800 flex font-sans antialiased h-screen overflow-hidden">
+      <body className="min-h-[100dvh] bg-sky-50/50 text-slate-800 flex font-sans antialiased h-[100dvh] overflow-hidden w-full">
         
         {/* Wskaźnik gestu Pull-to-Refresh */}
         <div 
-          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out"
+          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out pt-[env(safe-area-inset-top)]"
           style={{
             transform: `translateY(${pullDistance > 0 ? pullDistance : 0}px)`,
             opacity: pullDistance > 15 ? 1 : 0
@@ -811,7 +810,7 @@ export default function RootLayout({
 
         <AuthGuard>
           {isPublicPage ? (
-            <main className="flex-1 w-full h-screen overflow-y-auto bg-slate-50">
+            <main className="flex-1 w-full h-[100dvh] overflow-y-auto bg-slate-50 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
               {children}
             </main>
           ) : (
@@ -823,7 +822,7 @@ export default function RootLayout({
                 />
               )}
 
-              <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white p-4 flex flex-col justify-between shrink-0 z-30 transition-transform duration-300 ease-in-out h-screen overflow-y-auto ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
+              <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white p-4 flex flex-col justify-between shrink-0 z-30 transition-transform duration-300 ease-in-out h-[100dvh] overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
                 <div>
                   <div className="flex items-center justify-between mb-6 px-2 pt-2">
                     <span className="text-sm font-black text-sky-950 uppercase tracking-wider flex items-center flex-wrap">
@@ -856,7 +855,6 @@ export default function RootLayout({
                           {section.items.map((item) => {
                             const isActive = pathname === item.href.split('?')[0];
                             
-                            // Logika sprawdzania wykrzykników dla poszczególnych pozycji menu
                             let showBadge = false;
                             if (item.href === '/analiza-formy') {
                               showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja;
@@ -917,11 +915,11 @@ export default function RootLayout({
                 </div>
               </aside>
 
-              <div className="flex-1 flex flex-col h-screen overflow-hidden">
+              <div className="flex-1 flex flex-col h-[100dvh] overflow-hidden w-full">
                 
-                <header className="h-16 bg-white border-b border-sky-200 flex items-center justify-between px-4 md:px-6 shrink-0 shadow-sm relative">
+                <header className="bg-white border-b border-sky-200 flex items-center justify-between px-4 md:px-6 shrink-0 shadow-sm relative pt-[env(safe-area-inset-top)] min-h-[calc(4rem+env(safe-area-inset-top))]">
                   
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 py-3">
                     <button 
                       className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer relative"
                       onClick={() => setIsMenuOpen(true)}
@@ -944,7 +942,7 @@ export default function RootLayout({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 py-3">
                     
                     {appRole === 'admin' && (
                       <button 
@@ -1015,7 +1013,7 @@ export default function RootLayout({
 
                 </header>
 
-                <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+                <main className="flex-1 p-4 md:p-8 overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]">
                   {children}
                 </main>
               </div>
@@ -1028,7 +1026,7 @@ export default function RootLayout({
 
         {/* MODAL DODAJ KLUBOWICZA */}
         {isAddClientModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
@@ -1149,7 +1147,7 @@ export default function RootLayout({
 
         {/* MODAL MÓJ PROFIL */}
         {isProfileModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
               
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
@@ -1338,7 +1336,7 @@ export default function RootLayout({
 
         {/* MODAL USTAWIENIA KALENDARZA (ICS) */}
         {showCalendarSettings && (
-          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📅 Synchronizacja kalendarza</h3>
