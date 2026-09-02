@@ -2571,7 +2571,7 @@ export default function AnalizaFormyPage() {
                               ? 'bg-sky-900/80 text-sky-200 border-sky-600 hover:bg-sky-800'
                               : 'bg-amber-950/80 text-amber-300 border-amber-600 hover:bg-amber-900'
                           }`}
-                          title="Kliknij, aby zmienić widoczność swoich pomiarów przed innymi uczestnikami"
+                          title="Kliknij, aby pokazać lub ukryć swoje pomiary przed innymi uczestnikami"
                         >
                           <span>{activeUserParticipant.pokaz_pomiary !== false ? '👁️ Pomiary: Widoczne' : '🔒 Pomiary: Ukryte'}</span>
                         </button>
@@ -2600,7 +2600,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* NAGRODY */}
+          {/* NAGRODY W TEJ EDYCJI */}
           {activeEdycjaObj && (
             <div className="bg-white rounded-3xl border border-sky-200 shadow-sm p-6 space-y-4">
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
@@ -2617,7 +2617,7 @@ export default function AnalizaFormyPage() {
                       setNagrodaFormData({ miejsce: "1", tytul: "", opis: "" });
                       setIsAddNagrodaModalOpen(true);
                     }}
-                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] px-3 py-1.5 rounded-xl cursor-pointer"
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] px-3.5 py-2 rounded-xl cursor-pointer shadow-sm transition-all"
                   >
                     + Dodaj Nagrodę
                   </button>
@@ -2626,7 +2626,7 @@ export default function AnalizaFormyPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {(nagrodyRedukcji || []).map((n) => (
-                  <div key={n.id} className="bg-gradient-to-br from-amber-50/60 to-amber-100/40 border border-amber-200 p-4 rounded-2xl flex items-start justify-between relative group">
+                  <div key={n.id} className="bg-gradient-to-br from-amber-50/70 to-amber-100/40 border border-amber-200 p-4 rounded-2xl flex items-start justify-between relative shadow-xs">
                     <div className="flex items-start gap-3">
                       <span className="text-2xl">
                         {n.miejsce === 1 ? '🥇' : n.miejsce === 2 ? '🥈' : n.miejsce === 3 ? '🥉' : '🎖️'}
@@ -2640,18 +2640,21 @@ export default function AnalizaFormyPage() {
                       </div>
                     </div>
 
+                    {/* STALE WIDOCZNE IKONY EDYCJI I USUNIĘCIA DLA ADMINISTRATORA */}
                     {appRole === 'admin' && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
                         <button
+                          type="button"
                           onClick={() => handleOpenEditNagroda(n)}
-                          className="text-amber-600 hover:text-amber-800 font-bold text-xs opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer bg-amber-100/80 rounded-md"
+                          className="w-7 h-7 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-800 font-bold text-xs flex items-center justify-center transition-all shadow-xs cursor-pointer active:scale-95"
                           title="Edytuj tę nagrodę"
                         >
                           ✏️
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleDeleteNagroda(n.id)}
-                          className="text-rose-500 hover:text-rose-700 font-bold text-xs opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer bg-rose-100/80 rounded-md"
+                          className="w-7 h-7 rounded-lg bg-white border border-rose-300 hover:bg-rose-100 text-rose-600 font-bold text-xs flex items-center justify-center transition-all shadow-xs cursor-pointer active:scale-95"
                           title="Usuń tę nagrodę"
                         >
                           ✕
