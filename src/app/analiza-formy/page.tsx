@@ -68,6 +68,7 @@ interface RedukcjaUczestnik {
   oplacone: boolean;
   metoda_platnosci?: 'autopay' | 'gotowka' | 'inna';
   brak_pomiaru_koncowego?: boolean;
+  pokaz_pomiary?: boolean;
   punkty_calkowite: number;
   data_zapisu: string;
   klient?: Klient;
@@ -198,6 +199,7 @@ export default function AnalizaFormyPage() {
   const [isRedukcjaPomiarModalOpen, setIsRedukcjaPomiarModalOpen] = useState<boolean>(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState<boolean>(false);
   const [isAddNagrodaModalOpen, setIsAddNagrodaModalOpen] = useState<boolean>(false);
+  const [editingNagrodaId, setEditingNagrodaId] = useState<number | null>(null);
   const [isManualAddModalOpen, setIsManualAddModalOpen] = useState<boolean>(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'autopay' | 'gotowka'>('autopay');
   const [targetPomiarEtap, setTargetPomiarEtap] = useState<'start' | 'koniec'>('start');
@@ -1031,6 +1033,7 @@ export default function AnalizaFormyPage() {
       oplacone: manualAddOplacone,
       metoda_platnosci: manualAddMetoda,
       brak_pomiaru_koncowego: false,
+      pokaz_pomiary: true,
       punkty_calkowite: 0.00
     }]);
 
@@ -1049,24 +1052,55 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  const handleAddNagroda = async (e: React.FormEvent) => {
+  // Obsługa otwierania edycji nagrody
+  const handleOpenEditNagroda = (nagroda: RedukcjaNagroda) => {
+    setEditingNagrodaId(nagroda.id);
+    setNagrodaFormData({
+      miejsce: String(nagroda.miejsce),
+      tytul: nagroda.tytul,
+      opis: nagroda.opis || ""
+    });
+    setIsAddNagrodaModalOpen(true);
+  };
+
+  // Zapis nagrody (Dodanie lub Aktualizacja)
+  const handleSaveNagroda = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEdycjaId || !nagrodaFormData.tytul.trim()) return;
 
-    const { error } = await supabase.from('klub_redukcja_nagrody').insert([{
+    const payload = {
       edycja_id: selectedEdycjaId,
       miejsce: parseInt(nagrodaFormData.miejsce) || 1,
       tytul: nagrodaFormData.tytul.trim(),
       opis: nagrodaFormData.opis.trim() || null
-    }]);
+    };
 
-    if (!error) {
-      alert("Nagroda została dodana do tego wyzwania!");
-      setNagrodaFormData({ miejsce: "1", tytul: "", opis: "" });
-      setIsAddNagrodaModalOpen(false);
-      await loadEdycjaDetails(selectedEdycjaId);
+    if (editingNagrodaId) {
+      const { error } = await supabase
+        .from('klub_redukcja_nagrody')
+        .update(payload)
+        .eq('id', editingNagrodaId);
+
+      if (!error) {
+        alert("Nagroda została zaktualizowana!");
+        setEditingNagrodaId(null);
+        setNagrodaFormData({ miejsce: "1", tytul: "", opis: "" });
+        setIsAddNagrodaModalOpen(false);
+        await loadEdycjaDetails(selectedEdycjaId);
+      } else {
+        alert("Błąd aktualizacji nagrody: " + error.message);
+      }
     } else {
-      alert("Błąd dodawania nagrody: " + error.message);
+      const { error } = await supabase.from('klub_redukcja_nagrody').insert([payload]);
+
+      if (!error) {
+        alert("Nagroda została dodana do tego wyzwania!");
+        setNagrodaFormData({ miejsce: "1", tytul: "", opis: "" });
+        setIsAddNagrodaModalOpen(false);
+        await loadEdycjaDetails(selectedEdycjaId);
+      } else {
+        alert("Błąd dodawania nagrody: " + error.message);
+      }
     }
   };
 
@@ -1075,6 +1109,24 @@ export default function AnalizaFormyPage() {
     const { error } = await supabase.from('klub_redukcja_nagrody').delete().eq('id', nagrodaId);
     if (!error && selectedEdycjaId) {
       await loadEdycjaDetails(selectedEdycjaId);
+    }
+  };
+
+  // Przełącznik ukrywania / pokazywania pomiarów (dla klubowicza oraz admina)
+  const handleTogglePokazPomiary = async (uczestnikId: number, currentVal?: boolean) => {
+    const newVal = currentVal === false ? true : false;
+    setUczestnicyRedukcji(prev =>
+      prev.map(u => u.id === uczestnikId ? { ...u, pokaz_pomiary: newVal } : u)
+    );
+
+    const { error } = await supabase
+      .from('klub_redukcja_uczestnicy')
+      .update({ pokaz_pomiary: newVal })
+      .eq('id', uczestnikId);
+
+    if (error) {
+      alert("Błąd aktualizacji widoczności pomiarów: " + error.message);
+      if (selectedEdycjaId) await loadEdycjaDetails(selectedEdycjaId);
     }
   };
 
@@ -1144,6 +1196,7 @@ export default function AnalizaFormyPage() {
         oplacone: false,
         metoda_platnosci: 'autopay',
         brak_pomiaru_koncowego: false,
+        pokaz_pomiary: true,
         punkty_calkowite: 0.00
       }], { onConflict: 'edycja_id,klient_id' });
 
@@ -1155,6 +1208,7 @@ export default function AnalizaFormyPage() {
         oplacone: false,
         metoda_platnosci: 'gotowka',
         brak_pomiaru_koncowego: false,
+        pokaz_pomiary: true,
         punkty_calkowite: 0.00
       }], { onConflict: 'edycja_id,klient_id' });
 
@@ -1319,7 +1373,8 @@ export default function AnalizaFormyPage() {
         deltaWagaProc,
         deltaFatProc,
         deltaMuscleKg,
-        totalPkt
+        totalPkt,
+        pokaz_pomiary: uczestnik.pokaz_pomiary !== false
       };
     }).sort((a, b) => {
       if (a.brak_pomiaru_koncowego !== b.brak_pomiaru_koncowego) {
@@ -2342,7 +2397,6 @@ export default function AnalizaFormyPage() {
           </div>
         </div>
       )}
-
       {/* ZAKŁADKA 3: REDUKCJA */}
       {activeTab === 'redukcja' && (
         <div className="space-y-8">
@@ -2381,7 +2435,7 @@ export default function AnalizaFormyPage() {
                           : activeEdycjaObj.status === 'anulowane' 
                             ? 'bg-rose-950/80 text-rose-300 border-rose-800' 
                             : activeEdycjaObj.status === 'zapisy' 
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-400/40' 
                               : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
                       }`}>
                         {activeEdycjaObj.status === 'zakonczone' 
@@ -2497,13 +2551,31 @@ export default function AnalizaFormyPage() {
                 <div className="bg-sky-950/60 p-4 rounded-2xl border border-sky-800/60 flex flex-col justify-center items-center">
                   <span className="text-[10px] text-sky-300 uppercase font-bold block">Twój Status</span>
                   {isCurrentUserJoined ? (
-                    <div className="mt-1">
-                      <span className="text-xs font-black text-emerald-400 flex items-center justify-center gap-1">
-                        ✓ Zapisany
-                      </span>
-                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${activeUserParticipant?.oplacone ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
-                        {activeUserParticipant?.oplacone ? 'Opłacone' : 'Oczekuje na wpłatę'}
-                      </span>
+                    <div className="mt-1 space-y-1.5 flex flex-col items-center">
+                      <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-black text-emerald-400 flex items-center justify-center gap-1">
+                          ✓ Zapisany
+                        </span>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full inline-block ${activeUserParticipant?.oplacone ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                          {activeUserParticipant?.oplacone ? 'Opłacone' : 'Oczekuje na wpłatę'}
+                        </span>
+                      </div>
+                      
+                      {/* PRZEŁĄCZNIK WIDOCZNOŚCI DLA UCZESTNIKA */}
+                      {activeUserParticipant && (
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePokazPomiary(activeUserParticipant.id, activeUserParticipant.pokaz_pomiary)}
+                          className={`text-[10px] font-bold px-2.5 py-1 rounded-xl border flex items-center gap-1.5 cursor-pointer transition-all shadow-xs ${
+                            activeUserParticipant.pokaz_pomiary !== false
+                              ? 'bg-sky-900/80 text-sky-200 border-sky-600 hover:bg-sky-800'
+                              : 'bg-amber-950/80 text-amber-300 border-amber-600 hover:bg-amber-900'
+                          }`}
+                          title="Kliknij, aby zmienić widoczność swoich pomiarów przed innymi uczestnikami"
+                        >
+                          <span>{activeUserParticipant.pokaz_pomiary !== false ? '👁️ Pomiary: Widoczne' : '🔒 Pomiary: Ukryte'}</span>
+                        </button>
+                      )}
                     </div>
                   ) : activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' ? (
                     <button
@@ -2540,7 +2612,11 @@ export default function AnalizaFormyPage() {
                 </div>
                 {appRole === 'admin' && activeEdycjaObj.status !== 'zakonczone' && activeEdycjaObj.status !== 'anulowane' && (
                   <button
-                    onClick={() => setIsAddNagrodaModalOpen(true)}
+                    onClick={() => {
+                      setEditingNagrodaId(null);
+                      setNagrodaFormData({ miejsce: "1", tytul: "", opis: "" });
+                      setIsAddNagrodaModalOpen(true);
+                    }}
                     className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] px-3 py-1.5 rounded-xl cursor-pointer"
                   >
                     + Dodaj Nagrodę
@@ -2565,13 +2641,22 @@ export default function AnalizaFormyPage() {
                     </div>
 
                     {appRole === 'admin' && (
-                      <button
-                        onClick={() => handleDeleteNagroda(n.id)}
-                        className="text-rose-500 hover:text-rose-700 font-bold text-xs opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer"
-                        title="Usuń tę nagrodę"
-                      >
-                        ✕
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleOpenEditNagroda(n)}
+                          className="text-amber-600 hover:text-amber-800 font-bold text-xs opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer bg-amber-100/80 rounded-md"
+                          title="Edytuj tę nagrodę"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDeleteNagroda(n.id)}
+                          className="text-rose-500 hover:text-rose-700 font-bold text-xs opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer bg-rose-100/80 rounded-md"
+                          title="Usuń tę nagrodę"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -2704,9 +2789,11 @@ export default function AnalizaFormyPage() {
                     <span>🏆</span> Ranking Uczestników ({activeEdycjaObj.nazwa})
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    {isCurrentUserJoined || appRole === 'admin' 
-                      ? "Jako uczestnik widzisz pełne nazwiska rywali." 
-                      : "Nazwiska uczestników są zanonimizowane dla osób spoza wyzwania."}
+                    {appRole === 'admin'
+                      ? "Widok administratora: Pełna kontrola nad danymi oraz przełącznikami widoczności."
+                      : isCurrentUserJoined 
+                        ? "Jako uczestnik widzisz pełne nazwiska rywali oraz udostępnione pomiary." 
+                        : "Jako osoba spoza wyzwania widzisz wyłącznie pozycję w rankingu oraz wynik punktowy."}
                   </p>
                 </div>
                 <span className="text-xs font-bold text-slate-500">
@@ -2714,208 +2801,265 @@ export default function AnalizaFormyPage() {
                 </span>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left border-collapse min-w-[800px]">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] border-b border-sky-100">
-                      <th className="p-3 w-16">Miejsce</th>
-                      <th className="p-3">Klubowicz</th>
-                      {appRole === 'admin' && <th className="p-3 text-center">Wpisowe / Status</th>}
-                      <th className="p-3 text-center">Start ➔ Koniec (Waga)</th>
-                      <th className="p-3 text-center">Tk. Tłuszczowa</th>
-                      <th className="p-3 text-center">Masa Mięśniowa</th>
-                      <th className="p-3 text-center">Wisceralny</th>
-                      <th className="p-3 text-right">Punkty Procentowe</th>
-                      {appRole === 'admin' && <th className="p-3 text-center w-36">Zarządzanie (Admin)</th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-sky-50">
-                    {rankingRedukcji.map((row, idx) => (
-                      <tr key={row.id} className={`transition-colors ${row.brak_pomiaru_koncowego ? 'bg-slate-100/60 opacity-60' : 'hover:bg-slate-50/60'}`}>
-                        <td className="p-3 font-black text-slate-800">
-                          {row.brak_pomiaru_koncowego ? (
-                            <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded">DNF</span>
-                          ) : (
-                            idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `#${idx + 1}`
-                          )}
-                        </td>
-                        <td className="p-3 font-bold text-slate-900 flex items-center gap-2.5">
-                          {row.klientAvatar ? (
-                            <img src={row.klientAvatar} alt="Avatar" className="w-7 h-7 rounded-full object-cover border border-amber-400 shrink-0" />
-                          ) : (
-                            <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-900 font-bold text-[10px] flex items-center justify-center shrink-0">
-                              {row.klientName.charAt(0)}
-                            </div>
-                          )}
-                          <div>
-                            <div>{row.klientName}</div>
-                            {appRole === 'admin' && (
-                              <div className="text-[9px] text-slate-400 font-normal">
-                                Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : '💵 Gotówka'}
-                              </div>
-                            )}
-                          </div>
-                        </td>
+              {/* LOGIKA WIDOCZNOŚCI KOLUMN */}
+              {(() => {
+                const canSeeDetails = appRole === 'admin' || isCurrentUserJoined;
 
-                        {appRole === 'admin' && (
-                          <td className="p-3 text-center">
-                            <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all">
-                              <input
-                                type="checkbox"
-                                checked={row.oplacone}
-                                onChange={(e) => handleCheckboxPaymentToggle(row.id, e.target.checked)}
-                                className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
-                              />
-                              <span className={`text-[10px] font-black uppercase ${row.oplacone ? 'text-emerald-700' : 'text-rose-600'}`}>
-                                {row.oplacone ? 'Opłacone' : 'Do opłacenia'}
-                              </span>
-                            </label>
-                          </td>
-                        )}
-
-                        <td className="p-3 text-center font-bold text-slate-800">
-                          {row.brak_pomiaru_koncowego ? (
-                            <span className="text-rose-600 font-bold text-xs">Brak finału</span>
-                          ) : row.startP && row.koniecP ? (
-                            <div>
-                              <span>{row.startP.waga_kg} ➔ {row.koniecP.waga_kg} kg</span>
-                              <div className="text-[10px]">{renderTrendIndicator(row.deltaWagaKg, true, " kg")} ({row.deltaWagaProc.toFixed(1)}%)</div>
-                            </div>
-                          ) : row.startP ? (
-                            <span>{row.startP.waga_kg} kg (Start)</span>
-                          ) : (
-                            <span className="text-slate-400 font-normal">Brak startu</span>
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse min-w-[650px]">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] border-b border-sky-100">
+                          <th className="p-3 w-16">Miejsce</th>
+                          <th className="p-3">Klubowicz</th>
+                          {appRole === 'admin' && <th className="p-3 text-center">Wpisowe / Status</th>}
+                          {canSeeDetails && (
+                            <>
+                              <th className="p-3 text-center">Start ➔ Koniec (Waga)</th>
+                              <th className="p-3 text-center">Tk. Tłuszczowa</th>
+                              <th className="p-3 text-center">Masa Mięśniowa</th>
+                              <th className="p-3 text-center">Wisceralny</th>
+                            </>
                           )}
-                        </td>
-                        <td className="p-3 text-center">
-                          {row.brak_pomiaru_koncowego ? (
-                            <span className="text-slate-400">-</span>
-                          ) : row.startP && row.koniecP ? (
-                            <div>
-                              <span>{row.startP.fat_proc}% ➔ {row.koniecP.fat_proc}%</span>
-                              <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.fat_proc) - Number(row.startP.fat_proc), true, " %")}</div>
-                            </div>
-                          ) : row.startP ? (
-                            <span>{row.startP.fat_proc}%</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-center">
-                          {row.brak_pomiaru_koncowego ? (
-                            <span className="text-slate-400">-</span>
-                          ) : row.startP && row.koniecP ? (
-                            <div>
-                              <span>{row.startP.muscle_kg} ➔ {row.koniecP.muscle_kg} kg</span>
-                              <div className="text-[10px]">{renderTrendIndicator(row.deltaMuscleKg, false, " kg")}</div>
-                            </div>
-                          ) : row.startP ? (
-                            <span>{row.startP.muscle_kg} kg</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-center">
-                          {row.brak_pomiaru_koncowego ? (
-                            <span className="text-slate-400">-</span>
-                          ) : row.startP && row.koniecP ? (
-                            <div>
-                              <span>{row.startP.visceral_level} ➔ {row.koniecP.visceral_level}</span>
-                              <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.visceral_level) - Number(row.startP.visceral_level), true, " lvl")}</div>
-                            </div>
-                          ) : row.startP ? (
-                            <span>{row.startP.visceral_level}</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-right font-black text-sm">
-                          {row.brak_pomiaru_koncowego ? (
-                            <span className="text-rose-600 text-[10px] font-bold uppercase">Brak pomiaru (DNF)</span>
-                          ) : row.hasBoth ? (
-                            <span className="text-amber-600">{row.totalPkt} pkt</span>
-                          ) : (
-                            <span className="text-slate-400 font-normal text-xs">W trakcie</span>
-                          )}
-                        </td>
+                          <th className="p-3 text-right">Punkty Procentowe</th>
+                          {appRole === 'admin' && <th className="p-3 text-center w-44">Zarządzanie (Admin)</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-sky-50">
+                        {rankingRedukcji.map((row, idx) => {
+                          const isOwnRow = String(row.klient_id) === String(activeUserKlientId);
+                          const canViewUserMeasurements = appRole === 'admin' || isOwnRow || row.pokaz_pomiary;
 
-                        {appRole === 'admin' && (
-                          <td className="p-3 text-center relative">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                onClick={() => handleOpenRedukcjaPomiarModal('start', row.klient_id)}
-                                className="w-8 h-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
-                                title="Dodaj / Edytuj pomiar początkowy (Start)"
-                              >
-                                +
-                              </button>
-
-                              <button
-                                onClick={() => handleOpenRedukcjaPomiarModal('koniec', row.klient_id)}
-                                className="w-8 h-8 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
-                                title="Dodaj / Edytuj pomiar końcowy (Finał)"
-                              >
-                                +
-                              </button>
-
-                              <button
-                                onClick={() => handleToggleBrakPomiaru(row.id, !!row.brak_pomiaru_koncowego)}
-                                className={`w-8 h-8 rounded-xl font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 ${
-                                  row.brak_pomiaru_koncowego 
-                                    ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-600' 
-                                    : 'bg-amber-400 hover:bg-amber-500 text-slate-950'
-                                }`}
-                                title={row.brak_pomiaru_koncowego ? "Przywróć klubowicza do rankingu" : "Oznacz: Nie przystąpił do pomiarów (DNF)"}
-                              >
-                                -
-                              </button>
-
-                              <div className="relative inline-block text-left">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenDropdownId(openDropdownId === row.id ? null : row.id);
-                                  }}
-                                  className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs flex items-center justify-center transition-all cursor-pointer border border-slate-200 active:scale-95"
-                                  title="Więcej opcji"
-                                >
-                                  •••
-                                </button>
-
-                                {openDropdownId === row.id && (
-                                  <div 
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="absolute right-0 top-full mt-1.5 w-44 bg-white border border-slate-200 rounded-2xl shadow-2xl py-1.5 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
-                                  >
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setOpenDropdownId(null);
-                                        handleDeleteParticipant(row.id);
-                                      }}
-                                      className="w-full text-left px-3.5 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors cursor-pointer"
-                                    >
-                                      <span>🗑️</span> Usuń z wyzwania
-                                    </button>
+                          return (
+                            <tr key={row.id} className={`transition-colors ${row.brak_pomiaru_koncowego ? 'bg-slate-100/60 opacity-60' : 'hover:bg-slate-50/60'}`}>
+                              <td className="p-3 font-black text-slate-800">
+                                {row.brak_pomiaru_koncowego ? (
+                                  <span className="text-[10px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded">DNF</span>
+                                ) : (
+                                  idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `#${idx + 1}`
+                                )}
+                              </td>
+                              <td className="p-3 font-bold text-slate-900 flex items-center gap-2.5">
+                                {row.klientAvatar ? (
+                                  <img src={row.klientAvatar} alt="Avatar" className="w-7 h-7 rounded-full object-cover border border-amber-400 shrink-0" />
+                                ) : (
+                                  <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-900 font-bold text-[10px] flex items-center justify-center shrink-0">
+                                    {row.klientName.charAt(0)}
                                   </div>
                                 )}
-                              </div>
-                            </div>
-                          </td>
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span>{row.klientName}</span>
+                                    {isOwnRow && (
+                                      <span className="text-[9px] bg-sky-100 text-sky-800 font-bold px-1.5 py-0.2 rounded">Ty</span>
+                                    )}
+                                    {appRole === 'admin' && !row.pokaz_pomiary && (
+                                      <span className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 py-0.2 rounded" title="Pomiary ukryte przed innymi">
+                                        🔒 Ukryte
+                                      </span>
+                                    )}
+                                  </div>
+                                  {appRole === 'admin' && (
+                                    <div className="text-[9px] text-slate-400 font-normal">
+                                      Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : '💵 Gotówka'}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+
+                              {appRole === 'admin' && (
+                                <td className="p-3 text-center">
+                                  <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 transition-all">
+                                    <input
+                                      type="checkbox"
+                                      checked={row.oplacone}
+                                      onChange={(e) => handleCheckboxPaymentToggle(row.id, e.target.checked)}
+                                      className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 cursor-pointer"
+                                    />
+                                    <span className={`text-[10px] font-black uppercase ${row.oplacone ? 'text-emerald-700' : 'text-rose-600'}`}>
+                                      {row.oplacone ? 'Opłacone' : 'Do opłacenia'}
+                                    </span>
+                                  </label>
+                                </td>
+                              )}
+
+                              {/* KOLUMNY SZCZEGÓŁOWE - WIDOCZNE TYLKO DLA UCZESTNIKÓW I ADMINA */}
+                              {canSeeDetails && (
+                                <>
+                                  <td className="p-3 text-center font-bold text-slate-800">
+                                    {!canViewUserMeasurements ? (
+                                      <span className="text-slate-400 font-medium italic text-[11px]">🔒 Ukryte</span>
+                                    ) : row.brak_pomiaru_koncowego ? (
+                                      <span className="text-rose-600 font-bold text-xs">Brak finału</span>
+                                    ) : row.startP && row.koniecP ? (
+                                      <div>
+                                        <span>{row.startP.waga_kg} ➔ {row.koniecP.waga_kg} kg</span>
+                                        <div className="text-[10px]">{renderTrendIndicator(row.deltaWagaKg, true, " kg")} ({row.deltaWagaProc.toFixed(1)}%)</div>
+                                      </div>
+                                    ) : row.startP ? (
+                                      <span>{row.startP.waga_kg} kg (Start)</span>
+                                    ) : (
+                                      <span className="text-slate-400 font-normal">Brak startu</span>
+                                    )}
+                                  </td>
+
+                                  <td className="p-3 text-center">
+                                    {!canViewUserMeasurements ? (
+                                      <span className="text-slate-400 font-medium italic text-[11px]">🔒 Ukryte</span>
+                                    ) : row.brak_pomiaru_koncowego ? (
+                                      <span className="text-slate-400">-</span>
+                                    ) : row.startP && row.koniecP ? (
+                                      <div>
+                                        <span>{row.startP.fat_proc}% ➔ {row.koniecP.fat_proc}%</span>
+                                        <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.fat_proc) - Number(row.startP.fat_proc), true, " %")}</div>
+                                      </div>
+                                    ) : row.startP ? (
+                                      <span>{row.startP.fat_proc}%</span>
+                                    ) : (
+                                      <span className="text-slate-400">-</span>
+                                    )}
+                                  </td>
+
+                                  <td className="p-3 text-center">
+                                    {!canViewUserMeasurements ? (
+                                      <span className="text-slate-400 font-medium italic text-[11px]">🔒 Ukryte</span>
+                                    ) : row.brak_pomiaru_koncowego ? (
+                                      <span className="text-slate-400">-</span>
+                                    ) : row.startP && row.koniecP ? (
+                                      <div>
+                                        <span>{row.startP.muscle_kg} ➔ {row.koniecP.muscle_kg} kg</span>
+                                        <div className="text-[10px]">{renderTrendIndicator(row.deltaMuscleKg, false, " kg")}</div>
+                                      </div>
+                                    ) : row.startP ? (
+                                      <span>{row.startP.muscle_kg} kg</span>
+                                    ) : (
+                                      <span className="text-slate-400">-</span>
+                                    )}
+                                  </td>
+
+                                  <td className="p-3 text-center">
+                                    {!canViewUserMeasurements ? (
+                                      <span className="text-slate-400 font-medium italic text-[11px]">🔒 Ukryte</span>
+                                    ) : row.brak_pomiaru_koncowego ? (
+                                      <span className="text-slate-400">-</span>
+                                    ) : row.startP && row.koniecP ? (
+                                      <div>
+                                        <span>{row.startP.visceral_level} ➔ {row.koniecP.visceral_level}</span>
+                                        <div className="text-[10px]">{renderTrendIndicator(Number(row.koniecP.visceral_level) - Number(row.startP.visceral_level), true, " lvl")}</div>
+                                      </div>
+                                    ) : row.startP ? (
+                                      <span>{row.startP.visceral_level}</span>
+                                    ) : (
+                                      <span className="text-slate-400">-</span>
+                                    )}
+                                  </td>
+                                </>
+                              )}
+
+                              <td className="p-3 text-right font-black text-sm">
+                                {row.brak_pomiaru_koncowego ? (
+                                  <span className="text-rose-600 text-[10px] font-bold uppercase">Brak pomiaru (DNF)</span>
+                                ) : row.hasBoth ? (
+                                  <span className="text-amber-600">{row.totalPkt} pkt</span>
+                                ) : (
+                                  <span className="text-slate-400 font-normal text-xs">W trakcie</span>
+                                )}
+                              </td>
+
+                              {appRole === 'admin' && (
+                                <td className="p-3 text-center relative">
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    {/* PRZEŁĄCZNIK WIDOCZNOŚCI DLA ADMINA */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleTogglePokazPomiary(row.id, row.pokaz_pomiary)}
+                                      className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 border ${
+                                        row.pokaz_pomiary
+                                          ? 'bg-sky-50 text-sky-800 border-sky-200 hover:bg-sky-100'
+                                          : 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                                      }`}
+                                      title={row.pokaz_pomiary ? "Pomiary są widoczne dla innych uczestników. Kliknij, aby ukryć." : "Pomiary są ukryte przed innymi. Kliknij, aby pokazać."}
+                                    >
+                                      {row.pokaz_pomiary ? '👁️' : '🙈'}
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleOpenRedukcjaPomiarModal('start', row.klient_id)}
+                                      className="w-8 h-8 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
+                                      title="Dodaj / Edytuj pomiar początkowy (Start)"
+                                    >
+                                      +
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleOpenRedukcjaPomiarModal('koniec', row.klient_id)}
+                                      className="w-8 h-8 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
+                                      title="Dodaj / Edytuj pomiar końcowy (Finał)"
+                                    >
+                                      +
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleToggleBrakPomiaru(row.id, !!row.brak_pomiaru_koncowego)}
+                                      className={`w-8 h-8 rounded-xl font-black text-base flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 ${
+                                        row.brak_pomiaru_koncowego 
+                                          ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-600' 
+                                          : 'bg-amber-400 hover:bg-amber-500 text-slate-950'
+                                      }`}
+                                      title={row.brak_pomiaru_koncowego ? "Przywróć klubowicza do rankingu" : "Oznacz: Nie przystąpił do pomiarów (DNF)"}
+                                    >
+                                      -
+                                    </button>
+
+                                    <div className="relative inline-block text-left">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setOpenDropdownId(openDropdownId === row.id ? null : row.id);
+                                        }}
+                                        className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs flex items-center justify-center transition-all cursor-pointer border border-slate-200 active:scale-95"
+                                        title="Więcej opcji"
+                                      >
+                                        •••
+                                      </button>
+
+                                      {openDropdownId === row.id && (
+                                        <div 
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="absolute right-0 top-full mt-1.5 w-44 bg-white border border-slate-200 rounded-2xl shadow-2xl py-1.5 z-50 text-left animate-in fade-in zoom-in-95 duration-100"
+                                        >
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setOpenDropdownId(null);
+                                              handleDeleteParticipant(row.id);
+                                            }}
+                                            className="w-full text-left px-3.5 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors cursor-pointer"
+                                          >
+                                            <span>🗑️</span> Usuń z wyzwania
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                        {rankingRedukcji.length === 0 && (
+                          <tr>
+                            <td colSpan={appRole === 'admin' ? 9 : canSeeDetails ? 7 : 3} className="p-8 text-center text-slate-400 italic">
+                              Brak zapisanych uczestników w tej edycji wyzwania.
+                            </td>
+                          </tr>
                         )}
-                      </tr>
-                    ))}
-                    {rankingRedukcji.length === 0 && (
-                      <tr>
-                        <td colSpan={appRole === 'admin' ? 9 : 7} className="p-8 text-center text-slate-400 italic">
-                          Brak zapisanych uczestników w tej edycji wyzwania.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -3811,18 +3955,26 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: DODAWANIE NAGRODY */}
+      {/* MODAL: DODAWANIE / EDYCJA NAGRODY */}
       {isAddNagrodaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
-                Dodaj Nagrodę do Wyzwania
+                {editingNagrodaId ? "Edycja Nagrody" : "Dodaj Nagrodę do Wyzwania"}
               </h3>
-              <button onClick={() => setIsAddNagrodaModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+              <button 
+                onClick={() => {
+                  setIsAddNagrodaModalOpen(false);
+                  setEditingNagrodaId(null);
+                }} 
+                className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleAddNagroda} className="space-y-4 text-xs">
+            <form onSubmit={handleSaveNagroda} className="space-y-4 text-xs">
               <div>
                 <label className="font-bold text-slate-700 block mb-1">Miejsce / Kategoria *</label>
                 <select
@@ -3842,7 +3994,7 @@ export default function AnalizaFormyPage() {
                 <input
                   type="text"
                   required
-                  placeholder="np. Puchar + 500 zł + Zestaw Suplementów"
+                  placeholder="np. Puchar + 500 zł + Karnet OPEN"
                   value={nagrodaFormData.tytul}
                   onChange={(e) => setNagrodaFormData({...nagrodaFormData, tytul: e.target.value})}
                   className="w-full p-3 border rounded-xl font-bold bg-white"
@@ -3861,8 +4013,19 @@ export default function AnalizaFormyPage() {
               </div>
 
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setIsAddNagrodaModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="flex-1 bg-slate-900 text-white font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer">Zapisz Nagrodę</button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setIsAddNagrodaModalOpen(false);
+                    setEditingNagrodaId(null);
+                  }} 
+                  className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button type="submit" className="flex-1 bg-slate-900 text-white font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer">
+                  {editingNagrodaId ? "Zapisz Zmiany" : "Zapisz Nagrodę"}
+                </button>
               </div>
             </form>
           </div>
