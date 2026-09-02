@@ -39,14 +39,28 @@ export default function PortfelPage() {
       if (userEmail) {
         const normalizedEmail = userEmail.toLowerCase().trim();
         
-        const { data: klienciList } = await supabase
+        // Bezpośrednie wyszukiwanie klienta po e-mailu (omija limit 1000 wierszy i zapobiega tworzeniu duplikatów konta)
+        let { data: directClient } = await supabase
           .from('klienci')
-          .select('*');
-          
-        let klientData = klienciList ? klienciList.find((c: any) => 
-          (c['E-mail'] || '').toLowerCase().trim() === normalizedEmail || 
-          (c.email || '').toLowerCase().trim() === normalizedEmail
-        ) : null;
+          .select('*')
+          .or(`E-mail.ilike.${normalizedEmail},email.ilike.${normalizedEmail}`)
+          .maybeSingle();
+
+        let klientData = directClient;
+
+        // Fallback z limitem 5000 i sortowaniem od najnowszych
+        if (!klientData) {
+          const { data: klienciList } = await supabase
+            .from('klienci')
+            .select('*')
+            .order('id', { ascending: false })
+            .limit(5000);
+            
+          klientData = klienciList ? klienciList.find((c: any) => 
+            (c['E-mail'] || '').toLowerCase().trim() === normalizedEmail || 
+            (c.email || '').toLowerCase().trim() === normalizedEmail
+          ) : null;
+        }
 
         if (!klientData) {
           if (globalCreatingLock) return;
@@ -74,23 +88,26 @@ export default function PortfelPage() {
         if (klientData) {
           const rawClient = klientData as any;
 
-          // 1. Pobranie transakcji z bramki Autopay
+          // 1. Pobranie najnowszych transakcji z bramki Autopay (zwiększony limit)
           const { data: autopayData } = await supabase
             .from('autopay_transakcje')
             .select('*')
             .eq('user_id', rawClient.id)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(2000);
 
-          // 2. Pobranie transakcji ogólnych z bazy
+          // 2. Pobranie najnowszych transakcji ogólnych z bazy (zwiększony limit)
           const { data: localTransData } = await supabase
             .from('transakcje')
             .select('*')
             .eq('klient_id', rawClient.id)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(2000);
 
-          // 3. Połączenie i selekcja wyłącznie transakcji finansowych
+          // 3. Połączenie i selekcja wyłącznie transakcji finansowych z ochroną przed duplikatami
           const combinedHistory: any[] = [];
           const processedOrderIds = new Set<string>();
+          const processedUniqueSignatures = new Set<string>();
 
           // A. Filtrowanie tabeli ogólnej transakcje (wydatki z portfela, zakup karnetów, spłaty)
           if (localTransData && localTransData.length > 0) {
@@ -116,6 +133,9 @@ export default function PortfelPage() {
               if (isNaN(kwotaVal) || kwotaVal === 0) return;
 
               const isAutopayType = typ.includes('autopay');
+              const uniqueSig = `${t.created_at || t.data}_${kwotaVal}_${t.opis}`;
+              if (processedUniqueSignatures.has(uniqueSig)) return;
+              processedUniqueSignatures.add(uniqueSig);
               
               combinedHistory.push({
                 id: `loc-${t.id}`,
@@ -131,7 +151,7 @@ export default function PortfelPage() {
             });
           }
 
-          // B. Dołączanie transakcji online z tabeli autopay_transakcje
+          // B. Dołączanie transakcji online z tabeli autopay_transakcje bez duplikacji
           if (autopayData && autopayData.length > 0) {
             autopayData.forEach((a: any) => {
               const kwotaVal = Number(a.amount) || 0;
@@ -148,10 +168,15 @@ export default function PortfelPage() {
               else if (a.type === 'pass_purchase') defaultOpis = 'Zakup karnetu (Płatność Autopay)';
               else if (a.type === 'pass_extend') defaultOpis = 'Przedłużenie karnetu (Płatność Autopay)';
 
+              const itemOpis = gatewayInfo?.opis || defaultOpis;
+              const uniqueSig = `${a.created_at}_${kwotaVal}_${itemOpis}`;
+              if (processedUniqueSignatures.has(uniqueSig)) return;
+              processedUniqueSignatures.add(uniqueSig);
+
               combinedHistory.push({
                 id: `ap-${a.id}`,
                 data: a.created_at || new Date().toISOString(),
-                opis: gatewayInfo?.opis || defaultOpis,
+                opis: itemOpis,
                 zrodlo: 'Bramka Autopay',
                 kategoria: 'autopay',
                 kwota: a.type === 'wallet_topup' || a.type === 'wallet_settlement' ? Math.abs(kwotaVal) : (statusVal === 'success' ? Math.abs(kwotaVal) : kwotaVal),
