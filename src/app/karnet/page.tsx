@@ -496,8 +496,8 @@ export default function KarnetyPage() {
     }
 
     const rawKarnety = client.karnetyKlubowicza || [];
-    const karnety = rawKarnety.filter(isPassActive);
-    if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
+    const activePasses = rawKarnety.filter(isPassActive);
+    if (activePasses.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -505,7 +505,7 @@ export default function KarnetyPage() {
     let isContinuous = false;
     let maxCykl = 1;
 
-    for (const k of karnety) {
+    for (const k of activePasses) {
       if (k.isContract12M) continue;
 
       const passCycle = typeof k.cykl === 'number' ? k.cykl : 1;
@@ -1293,6 +1293,16 @@ export default function KarnetyPage() {
         opis: `Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu wykorzystanego zawieszenia dla umowy 12M: ${passToExtend.nazwa}`,
         kod_rabatowy: null
       }]);
+    } else {
+      const { data: transData } = await supabase.from('transakcje').insert([{
+        klient_id: currentUser.id,
+        typ_operacji: 'zakup_karnetu',
+        kwota: 0,
+        opis: `Przedłużenie bezpłatnego karnetu: ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+        kod_rabatowy: appliedDiscountCode?.kod || null
+      }]).select('id').maybeSingle();
+
+      if (transData?.id) createdTransactionId = transData.id;
     }
 
     if (appliedDiscountCode) {
@@ -1319,6 +1329,8 @@ export default function KarnetyPage() {
     
     if (isBonus13thPeriod) {
       showToast(`Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu zawieszenia karnetu!`, 'success');
+    } else if (cenaPoRabacie === 0) {
+      showToast(`Karnet "${passToExtend.nazwa}" został pomyślnie przedłużony (bezpłatnie).`, 'success');
     } else {
       showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} ze środków portfela (${cenaStr}).` : `Karnet "${passToExtend.nazwa}" został przedłużony ze środków portfela (${cenaStr}).`, 'success');
     }
@@ -1515,6 +1527,16 @@ export default function KarnetyPage() {
       }]).select('id').maybeSingle();
 
       if (transData?.id) createdTransactionId = transData.id;
+    } else {
+      const { data: transData } = await supabase.from('transakcje').insert([{
+        klient_id: currentUser.id,
+        typ_operacji: 'zakup_karnetu',
+        kwota: 0,
+        opis: `Aktywacja bezpłatnego karnetu: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+        kod_rabatowy: appliedDiscountCode?.kod || null
+      }]).select('id').maybeSingle();
+
+      if (transData?.id) createdTransactionId = transData.id;
     }
 
     if (appliedDiscountCode) {
@@ -1538,7 +1560,13 @@ export default function KarnetyPage() {
       portfel: dbPayload.portfel || currentUser.portfel,
       wallet: nowyStanPortfelaStr
     });
-    showToast(`Gratulacje! Aktywowano karnet ze środków portfela (${cenaStr}).`, 'success');
+
+    showToast(
+      cenaPoRabacie === 0 
+        ? `Pomyślnie dodano bezpłatny karnet "${selectedBuyPass}" do Twojego konta!` 
+        : `Gratulacje! Aktywowano karnet ze środków portfela (${cenaStr}).`, 
+      'success'
+    );
     setSelectedBuyPass('');
     setIsBuyPassModalOpen(false);
     resetDiscountState();
@@ -1778,7 +1806,6 @@ export default function KarnetyPage() {
       }
     }
 
-    // Automatyczne i natychmiastowe wydłużenie daty ważności karnetu o dni zawieszenia
     let newExtendedExpiry = targetKarnet.waznyDo;
     if (targetKarnet.waznyDo) {
       const parts = targetKarnet.waznyDo.split('-');
@@ -1977,6 +2004,7 @@ export default function KarnetyPage() {
     showToast(`Karnet odwieszony! ${unusedDaysRefund > 0 ? `Zwrócono ${unusedDaysRefund} dni do puli.` : ''} Ważność karnetu: ${correctedExpiryDate}`, 'success');
     setIsUnsuspendModalOpen(false);
   };
+
   const activePassesForSuspend = karnetyList.filter((k: any) => {
     const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd && k.waznyDo;
     return isActive;
@@ -2590,7 +2618,7 @@ export default function KarnetyPage() {
           const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
 
           const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
-          const walletDeduction = (!isBonus13Period && useWalletFunds) ? Math.min(currentWalletNum, finalPrice) : 0;
+          const walletDeduction = (!isBonus13Period && useWalletFunds && finalPrice > 0) ? Math.min(currentWalletNum, finalPrice) : 0;
           const amountToPayGateway = Math.max(0, finalPrice - walletDeduction);
 
           return (
@@ -2628,7 +2656,7 @@ export default function KarnetyPage() {
                     )}
                   </div>
 
-                  {!isBonus13Period && (
+                  {!isBonus13Period && finalPrice > 0 && (
                     <div className="space-y-1 mt-2">
                       <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
                       <div className="flex gap-2">
@@ -2665,7 +2693,7 @@ export default function KarnetyPage() {
                   )}
 
                   {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
-                  {currentWalletNum > 0 && !isBonus13Period && (
+                  {currentWalletNum > 0 && !isBonus13Period && finalPrice > 0 && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
                       <label className="flex items-center justify-between cursor-pointer">
                         <div className="flex items-center gap-2">
@@ -2702,9 +2730,9 @@ export default function KarnetyPage() {
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                     <div className="flex justify-between text-slate-600">
                       <span>{isBonus13Period ? 'Wartość bonusu:' : isContract ? 'Miesięczna kwota raty:' : 'Cena katalogowa:'}</span>
-                      <span className="font-bold">{isBonus13Period ? '0.00 PLN' : `${basePrice.toFixed(2)} PLN`}</span>
+                      <span className="font-bold">{isBonus13Period || finalPrice === 0 ? '0.00 PLN' : `${basePrice.toFixed(2)} PLN`}</span>
                     </div>
-                    {appliedLabel && !isBonus13Period && (
+                    {appliedLabel && !isBonus13Period && finalPrice > 0 && (
                       <div className="flex justify-between text-emerald-700 font-bold">
                         <span>Naliczony rabat:</span>
                         <span>{appliedLabel} (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
@@ -2717,8 +2745,22 @@ export default function KarnetyPage() {
                       </div>
                     )}
                     <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                      <span>{amountToPayGateway > 0 ? 'Do zapłaty przez Autopay:' : 'Do zapłaty (Portfel):'}</span>
-                      <span className="text-emerald-700 font-bold">{amountToPayGateway.toFixed(2)} PLN</span>
+                      <span>
+                        {isBonus13Period 
+                          ? 'Status:' 
+                          : finalPrice === 0 
+                          ? 'Do zapłaty:' 
+                          : amountToPayGateway > 0 
+                          ? 'Do zapłaty przez Autopay:' 
+                          : 'Do zapłaty (Portfel):'}
+                      </span>
+                      <span className="text-emerald-700 font-bold">
+                        {isBonus13Period 
+                          ? 'Bezpłatny' 
+                          : finalPrice === 0 
+                          ? '0.00 PLN (Bezpłatny)' 
+                          : `${amountToPayGateway.toFixed(2)} PLN`}
+                      </span>
                     </div>
                   </div>
 
@@ -2735,6 +2777,8 @@ export default function KarnetyPage() {
                         ? 'Łączenie...' 
                         : isBonus13Period 
                         ? `AKTYWUJ BONUS +${contractInfo.totalSuspUsed} DNI (0.00 PLN)` 
+                        : finalPrice === 0
+                        ? 'PRZEDŁUŻ KARNET BEZPŁATNIE (0.00 PLN)'
                         : amountToPayGateway > 0
                         ? `PŁACĘ PRZEZ AUTOPAY (${amountToPayGateway.toFixed(2)} PLN)`
                         : `OPŁAĆ ZE ŚRODKÓW PORTFELA (${finalPrice.toFixed(2)} PLN)`}
@@ -2764,7 +2808,7 @@ export default function KarnetyPage() {
           const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
 
           const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
-          const walletDeduction = useWalletFunds ? Math.min(currentWalletNum, discountedPrice) : 0;
+          const walletDeduction = (useWalletFunds && discountedPrice > 0) ? Math.min(currentWalletNum, discountedPrice) : 0;
           const amountToPayGateway = Math.max(0, discountedPrice - walletDeduction);
 
           return (
@@ -2806,9 +2850,11 @@ export default function KarnetyPage() {
                           ? (kDisplayPrice * (1 - kEffectiveDisc.percent / 100)).toFixed(2)
                           : kDisplayPrice.toFixed(2);
 
+                        const isFreePass = parseFloat(kFinalPrice) === 0;
+
                         return (
                           <option key={k.id} value={k.nazwa}>
-                            {k.nazwa} (Cena: {kFinalPrice} PLN {kIsContract ? '• Umowa 12M' : ''} {kEffectiveDisc.percent > 0 ? `| -${kEffectiveDisc.percent}%` : ''})
+                            {k.nazwa} {isFreePass ? '(Bezpłatny / 0.00 PLN)' : `(Cena: ${kFinalPrice} PLN)`} {kIsContract ? '• Umowa 12M' : ''} {(!isFreePass && kEffectiveDisc.percent > 0) ? `| -${kEffectiveDisc.percent}%` : ''}
                           </option>
                         );
                       })}
@@ -2835,7 +2881,7 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {selectedBuyPass && selectedPassDef && (
+                  {selectedBuyPass && selectedPassDef && discountedPrice > 0 && (
                     <div className="space-y-1 mt-2">
                       <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
                       <div className="flex gap-2">
@@ -2871,8 +2917,8 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
-                  {selectedBuyPass && selectedPassDef && currentWalletNum > 0 && (
+                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA TYLKO GDY KARNET JEST PŁATNY */}
+                  {selectedBuyPass && selectedPassDef && currentWalletNum > 0 && discountedPrice > 0 && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
                       <label className="flex items-center justify-between cursor-pointer">
                         <div className="flex items-center gap-2">
@@ -2910,23 +2956,33 @@ export default function KarnetyPage() {
                     <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                       <div className="flex justify-between text-slate-600">
                         <span>Płatność początkowa:</span>
-                        <span className="font-bold">{calculatedFirstPayment.toFixed(2)} PLN</span>
+                        <span className="font-bold">
+                          {discountedPrice === 0 ? '0.00 PLN (Bezpłatny)' : `${calculatedFirstPayment.toFixed(2)} PLN`}
+                        </span>
                       </div>
-                      {appliedLabel && (
+                      {appliedLabel && discountedPrice > 0 && (
                         <div className="flex justify-between text-emerald-700 font-bold">
                           <span>Naliczony rabat:</span>
                           <span>{appliedLabel} (-{(calculatedFirstPayment - discountedPrice).toFixed(2)} PLN)</span>
                         </div>
                       )}
-                      {useWalletFunds && walletDeduction > 0 && (
+                      {useWalletFunds && walletDeduction > 0 && discountedPrice > 0 && (
                         <div className="flex justify-between text-purple-700 font-bold">
                           <span>Pokryto z portfela:</span>
                           <span>-{walletDeduction.toFixed(2)} PLN</span>
                         </div>
                       )}
                       <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                        <span>{amountToPayGateway > 0 ? 'Do zapłaty przez Autopay:' : 'Do zapłaty (Portfel):'}</span>
-                        <span className="text-emerald-700 font-bold">{amountToPayGateway.toFixed(2)} PLN</span>
+                        <span>
+                          {discountedPrice === 0 
+                            ? 'Do zapłaty:' 
+                            : amountToPayGateway > 0 
+                            ? 'Do zapłaty przez Autopay:' 
+                            : 'Do zapłaty (Portfel):'}
+                        </span>
+                        <span className="text-emerald-700 font-bold">
+                          {discountedPrice === 0 ? '0.00 PLN (Bezpłatny)' : `${amountToPayGateway.toFixed(2)} PLN`}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -2977,6 +3033,8 @@ export default function KarnetyPage() {
                     >
                       {isProcessingPayment 
                         ? 'Łączenie...' 
+                        : discountedPrice === 0
+                        ? 'DODAJ KARNET DO KONTA (BEZPŁATNY)'
                         : amountToPayGateway > 0 
                         ? `PŁACĘ PRZEZ AUTOPAY (${amountToPayGateway.toFixed(2)} PLN)` 
                         : `OPŁAĆ ZE ŚRODKÓW PORTFELA (${discountedPrice.toFixed(2)} PLN)`}
