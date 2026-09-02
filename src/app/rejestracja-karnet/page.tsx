@@ -57,7 +57,6 @@ export default function RegistrationPassPage() {
   // Pobranie wszystkich karnetów i regulaminów przy załadowaniu
   useEffect(() => {
     const fetchInitialData = async () => {
-      // Pobieranie wszystkich karnetów z bazy
       const { data: karnetyData } = await supabase.from('karnety').select('*');
       if (karnetyData) {
         setDostepneKarnety(karnetyData.map((k: any) => ({
@@ -66,7 +65,6 @@ export default function RegistrationPassPage() {
         })));
       }
 
-      // Pobieranie regulaminów
       const { data: regData } = await supabase.from('regulations').select('*').order('id', { ascending: true });
       if (regData) {
         setRegulations(regData);
@@ -110,7 +108,6 @@ export default function RegistrationPassPage() {
       };
     }
 
-    // Standardowe karnety czasowe / wejściowe
     let dniWażności = 30;
     const dlugoscStr = (pass.dlugosc || '').toLowerCase();
     
@@ -202,7 +199,6 @@ export default function RegistrationPassPage() {
     });
   };
 
-  // Pomocnicza funkcja wysyłająca powiadomienie Push do administratorów i zapisująca wpis w historii
   const sendPushToAdmins = async (title: string, body: string, url: string = '/raporty/klienci') => {
     try {
       const { data: subs, error } = await supabase
@@ -314,7 +310,6 @@ export default function RegistrationPassPage() {
         lowerBuyName.includes('1 wejś') ? 1 : null
       );
 
-      // Inicjalizacja cyklu ciągłości: tylko jeśli karnet >= 150 PLN i nie jest umową
       const initialCycle = (passCalc.finalPrice >= 150 && !passCalc.isContract) ? 1 : 0;
 
       const nowyKarnetObj = {
@@ -340,11 +335,10 @@ export default function RegistrationPassPage() {
         historiaZawieszen: []
       };
 
-      // Zabezpieczenie portfela: dla 0.00 PLN portfel = 0.00 PLN (brak ujemnego salda)
       const portfelStr = passCalc.finalPrice > 0 ? `-${passCalc.finalPrice.toFixed(2)} PLN` : '0.00 PLN';
       const newClientId = Date.now();
 
-      // 4. Zapis do bazy danych 'klienci' z wyzerowanym rabatem na start
+      // 4. Bezpieczny zapis do bazy danych 'klienci' (tylko istniejące kolumny)
       const payload: any = {
         id: newClientId,
         'Imię': firstName,
@@ -357,12 +351,7 @@ export default function RegistrationPassPage() {
         'Cena': passCalc.finalPriceStr,
         'Wygasa': passCalc.expiryDateStr,
         'discount': '',
-        'rabat': 0,
-        'rabat_za_ciaglosc': '0%',
-        'hasLostContinuity': false,
-        'system_discount_offset': 0,
-        'cyklCiaglosci': initialCycle,
-        'historiaZawieszenGlobalna': []
+        'rabat': 0
       };
 
       const { error: dbError } = await supabase.from('klienci').insert([payload]);
@@ -403,7 +392,7 @@ export default function RegistrationPassPage() {
         }
       ]);
 
-      // 7. Wysłanie powiadomienia PUSH do administratora oraz zapis w historia_powiadomien
+      // 7. Wysłanie powiadomienia PUSH do administratora
       await sendPushToAdmins(
         'Nowy klubowicz i zakup karnetu! 💳',
         `${firstName} ${lastName} (${email}) zarejestrował(a) się i kupił(a) karnet: ${selectedPass.nazwa} (${passCalc.finalPriceStr}).`,
@@ -427,7 +416,6 @@ export default function RegistrationPassPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-8 font-sans antialiased text-slate-800 relative overflow-hidden">
       
-      {/* Tło dekoracyjne */}
       <div className="absolute top-0 right-0 w-[500px] h-[500px] opacity-10 pointer-events-none">
         <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
           <path fill="#0284c7" d="M44.7,-76.4C58.8,-69.3,71.8,-59.1,81.1,-46C90.4,-32.9,96,-16.5,95.5,-0.6C95,15.3,88.4,30.7,79.1,43.8C69.8,56.9,57.7,67.7,43.9,75.9C30.1,84.1,14.5,89.7,-0.7,90.8C-16,91.9,-31.9,88.4,-45.9,80.3C-59.9,72.2,-71.9,59.5,-80.4,45C-88.9,30.5,-93.8,14.3,-93.2,-1.4C-92.5,-17.1,-86.3,-32.3,-76.7,-44.9C-67.1,-57.5,-54.2,-67.5,-40.1,-74.7C-26,-81.9,-10.8,-86.3,3.3,-91.5C17.4,-96.7,30.6,-83.5,44.7,-76.4Z" transform="translate(100 100)" />
@@ -601,7 +589,6 @@ export default function RegistrationPassPage() {
                     )}
                   </div>
                   
-                  {/* Regulaminy */}
                   <div className="space-y-2.5 pt-2 text-[11px] text-slate-600 border-t border-slate-200 mt-2 pt-4">
                     {regulations.length > 0 ? (
                       regulations.map((reg) => (
@@ -635,7 +622,6 @@ export default function RegistrationPassPage() {
         </div>
       </div>
 
-      {/* Modal regulaminu */}
       {activeModalReg && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
@@ -651,7 +637,6 @@ export default function RegistrationPassPage() {
         </div>
       )}
 
-      {/* Modal potwierdzenia rejestracji i weryfikacji e-mail */}
       {isSuccessModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-md p-4 animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 text-center space-y-5 shadow-2xl border border-sky-200">
