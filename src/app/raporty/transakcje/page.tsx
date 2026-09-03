@@ -18,9 +18,8 @@ interface TransactionItem {
   klientImieNazwisko: string;
   klientEmail: string;
   typOperacji: string;
-  typKategoria: 'karnet' | 'portfel' | 'wyzwanie' | 'odziez' | 'sklep' | 'inne';
+  typKategoria: 'karnet' | 'portfel' | 'wyzwanie' | 'odziez' | 'sklep';
   kwota: number;
-  isRefund: boolean;
   opis: string;
 }
 
@@ -49,17 +48,16 @@ export default function TransactionsPage() {
   // Kategoryzacja transakcji na podstawie typu i opisu
   const detectCategory = useCallback((typ: string, opis: string): TransactionItem['typKategoria'] => {
     const raw = `${typ} ${opis}`.toLowerCase();
-    if (raw.includes('wyzwan') || raw.includes('challenge')) return 'wyzwanie';
-    if (raw.includes('odziez') || raw.includes('odzież') || raw.includes('ubran') || raw.includes('koszulk') || raw.includes('bluz') || raw.includes('leggins')) return 'odziez';
-    if (raw.includes('sklep') || raw.includes('produkt') || raw.includes('akcesori') || raw.includes('napój') || raw.includes('baton') || raw.includes('suplement')) return 'sklep';
-    if (raw.includes('karnet') || raw.includes('wejsc') || raw.includes('wejść') || raw.includes('karnetu') || raw.includes('rejestracja z zakupem')) return 'karnet';
-    if (raw.includes('portfel') || raw.includes('doładowanie') || raw.includes('doladowanie') || raw.includes('uzupelnienie') || raw.includes('splata') || raw.includes('korekta') || raw.includes('wplata') || raw.includes('wpłata')) return 'portfel';
-    return 'inne';
+    if (raw.includes('wyzwan') || raw.includes('redukcja') || raw.includes('challenge')) return 'wyzwanie';
+    if (raw.includes('odziez') || raw.includes('odzież') || raw.includes('koszulk') || raw.includes('tshirt') || raw.includes('ubran')) return 'odziez';
+    if (raw.includes('sklep') || raw.includes('produkt') || raw.includes('suplement') || raw.includes('baton') || raw.includes('napój')) return 'sklep';
+    if (raw.includes('portfel') || raw.includes('doładowanie') || raw.includes('doladowanie') || raw.includes('splata') || raw.includes('wplata') || raw.includes('wpłata')) return 'portfel';
+    return 'karnet';
   }, []);
 
-  // Inteligentne wyciąganie kwoty z rekordu lub opisu operacji (np. Autopay)
+  // Inteligentne wyciąganie kwoty z rekordu lub z opisu operacji (dla archiwalnych wpisów z kwotą 0)
   const extractAmount = (rawKwota: any, opis: string): number | null => {
-    let val = rawKwota !== null && rawKwota !== undefined ? parseFloat(String(rawKwota)) : null;
+    const val = rawKwota !== null && rawKwota !== undefined ? parseFloat(String(rawKwota)) : null;
     if (val !== null && !isNaN(val) && Math.abs(val) > 0) {
       return Math.abs(val);
     }
@@ -79,6 +77,7 @@ export default function TransactionsPage() {
     setIsLoading(true);
 
     try {
+      // Pobieramy transakcje oraz listę klientów
       const [transakcjeRes, klienciRes] = await Promise.all([
         supabase
           .from('transakcje')
@@ -102,7 +101,7 @@ export default function TransactionsPage() {
         clientsMap.set(String(k.id), k);
       });
 
-      // Czarna lista zdarzeń czysto administracyjnych, technicznych i audytowych
+      // Czarna lista zdarzeń czysto technicznych, modyfikacji i audytu
       const ignoredTypes = new Set([
         'zajecia_zapis',
         'zajecia_wypis',
@@ -125,22 +124,22 @@ export default function TransactionsPage() {
         const typLower = (t.typ_operacji || '').toLowerCase().trim();
         const opisLower = (t.opis || '').toLowerCase();
 
-        // Wykluczanie logów technicznych
+        // 1. Odrzucenie wpisów technicznych i audytowych
         if (ignoredTypes.has(typLower)) return;
         if (
           opisLower.includes('ręczna modyfikacja') ||
           opisLower.includes('ręczne usunięcie') ||
           opisLower.includes('automatyczne usunięcie') ||
           opisLower.includes('usunięto zajęcia') ||
-          opisLower.includes('odwołano zajęcia')
+          opisLower.includes('odwołano zajęcia') ||
+          opisLower.includes('aktywacja bezpłatnego karnetu')
         ) {
           return;
         }
 
-        // Kwota transakcji – sprawdzamy czy to rzeczywista transakcja finansowa
+        // 2. Weryfikacja kwoty - tylko rzeczywiste transakcje finansowe
         const parsedKwota = extractAmount(t.kwota, t.opis || '');
         if (parsedKwota === null || parsedKwota <= 0) {
-          // Odrzucenie transakcji zerowych i niefinansowych
           return;
         }
 
@@ -160,8 +159,6 @@ export default function TransactionsPage() {
           ? ''
           : `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
 
-        const isRefund = typLower.includes('zwrot') || opisLower.includes('zwrot');
-
         enriched.push({
           id: t.id,
           createdAt: t.created_at,
@@ -173,8 +170,7 @@ export default function TransactionsPage() {
           typOperacji: t.typ_operacji || 'płatność',
           typKategoria: detectCategory(t.typ_operacji || '', t.opis || ''),
           kwota: parsedKwota,
-          isRefund,
-          opis: t.opis || 'Transakcja finansowa'
+          opis: t.opis || 'Operacja finansowa'
         });
       });
 
@@ -201,6 +197,7 @@ export default function TransactionsPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Filtrowanie według wyszukiwarki i kategorii
   const filteredTransactions = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
     return transactions.filter(t => {
@@ -218,11 +215,9 @@ export default function TransactionsPage() {
     });
   }, [transactions, searchQuery, categoryFilter]);
 
-  // Podsumowanie finansowe (wszystkie transakcje przychodzące to zysk klubu)
+  // Podsumowanie finansowe (wszystkie transakcje to przychód dla klubu)
   const totalRevenue = useMemo(() => {
-    return filteredTransactions.reduce((acc, curr) => {
-      return curr.isRefund ? acc - curr.kwota : acc + curr.kwota;
-    }, 0);
+    return filteredTransactions.reduce((acc, curr) => acc + curr.kwota, 0);
   }, [filteredTransactions]);
 
   const totalTransactionsCount = filteredTransactions.length;
@@ -232,6 +227,7 @@ export default function TransactionsPage() {
     return totalRevenue / totalTransactionsCount;
   }, [totalRevenue, totalTransactionsCount]);
 
+  // Eksport do pliku CSV
   const handleExportCSV = () => {
     if (filteredTransactions.length === 0) {
       alert("Brak danych do wyeksportowania.");
@@ -246,7 +242,7 @@ export default function TransactionsPage() {
       `"${t.klientEmail.replace(/"/g, '""')}"`,
       t.typKategoria.toUpperCase(),
       `"${t.typOperacji.replace(/"/g, '""')}"`,
-      (t.isRefund ? -t.kwota : t.kwota).toFixed(2),
+      t.kwota.toFixed(2),
       `"${t.opis.replace(/"/g, '""')}"`
     ]);
 
@@ -255,7 +251,7 @@ export default function TransactionsPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `Transakcje_Finansowe_${startDate}_${endDate}.csv`);
+    link.setAttribute("download", `Wplywy_Finansowe_${startDate}_${endDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -303,10 +299,10 @@ export default function TransactionsPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-sky-200 pb-4">
         <div>
           <h1 className="text-xl font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
-            <span>💳</span> Rejestr Operacji Finansowych
+            <span>💳</span> Rejestr Transakcji Finansowych
           </h1>
           <p className="text-xs text-slate-500 font-medium mt-1">
-            Wpływy i rzeczywiste transakcje finansowe klubu: karnety, doładowania portfeli, wyzwania i odzież
+            Zestawienie rzeczywistych wpływów finansowych: karnety, portfel, wyzwania, odzież oraz sklep
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -336,7 +332,7 @@ export default function TransactionsPage() {
             +{totalRevenue.toFixed(2)} PLN
           </div>
           <div className="text-xs text-slate-500 font-medium">
-            Rzeczywisty przychód z transakcji
+            Suma wpłat i zakupów klubowiczów
           </div>
         </div>
 
@@ -347,27 +343,27 @@ export default function TransactionsPage() {
             {totalTransactionsCount}
           </div>
           <div className="text-xs text-slate-500 font-medium">
-            Zaksięgowane wpłaty i zakupy
+            Zarejestrowane operacje finansowe
           </div>
         </div>
 
         <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-20 h-20 bg-amber-50 rounded-bl-full -z-10 opacity-70"></div>
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Średnia wartość transakcji</span>
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Średnia wpłata</span>
           <div className="text-3xl font-black text-sky-900">
             {averageTransactionValue.toFixed(2)} PLN
           </div>
           <div className="text-xs text-slate-500 font-medium">
-            Średnia kwota wpłaty na klubowicza
+            Średnia wartość transakcji
           </div>
         </div>
       </div>
 
-      {/* Wyszukiwanie, Kategorie i Zakres Dat */}
+      {/* Wyszukiwarka, Zakładki Kategorii i Zakres Dat */}
       <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-4">
         <div className="flex flex-col lg:flex-row gap-4 justify-between items-center">
           
-          {/* Wyszukiwarka */}
+          {/* Szukajka */}
           <div className="relative flex-1 w-full">
             <span className="absolute left-4 top-3 text-slate-400">🔍</span>
             <input 
@@ -379,47 +375,47 @@ export default function TransactionsPage() {
             />
           </div>
 
-          {/* Zakładki kategorii */}
+          {/* Zakładki */}
           <div className="flex flex-wrap items-center gap-1.5 w-full lg:w-auto">
             <button
               onClick={() => setCategoryFilter('all')}
-              className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'all' ? 'bg-sky-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'all' ? 'bg-sky-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               Wszystkie
             </button>
             <button
               onClick={() => setCategoryFilter('karnet')}
-              className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'karnet' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'karnet' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               💳 Karnety
             </button>
             <button
               onClick={() => setCategoryFilter('portfel')}
-              className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'portfel' ? 'bg-sky-700 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'portfel' ? 'bg-sky-700 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               💰 Portfel
             </button>
             <button
               onClick={() => setCategoryFilter('wyzwanie')}
-              className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'wyzwanie' ? 'bg-purple-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'wyzwanie' ? 'bg-purple-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               🏆 Wyzwanie
             </button>
             <button
               onClick={() => setCategoryFilter('odziez')}
-              className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'odziez' ? 'bg-amber-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'odziez' ? 'bg-amber-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               👕 Odzież
             </button>
             <button
               onClick={() => setCategoryFilter('sklep')}
-              className={`px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'sklep' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${categoryFilter === 'sklep' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               🛍️ Sklep
             </button>
           </div>
 
-          {/* Zakres Dat */}
+          {/* Wybór zakresu dat */}
           <div className="relative w-full lg:w-auto" ref={datePickerRef}>
             <button 
               onClick={() => setIsDatePickerOpen(!isDatePickerOpen)}
@@ -511,13 +507,13 @@ export default function TransactionsPage() {
                       </span>
                     </td>
                     <td className="py-4 px-6 whitespace-nowrap">
-                      <span className={`font-black text-sm ${t.isRefund ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        {t.isRefund ? `-${t.kwota.toFixed(2)}` : `+${t.kwota.toFixed(2)}`} PLN
+                      <span className="font-black text-sm text-emerald-600 font-mono">
+                        +{t.kwota.toFixed(2)} PLN
                       </span>
                     </td>
                     <td className="py-4 px-6">
                       <div className="font-medium text-slate-800 leading-snug">{t.opis}</div>
-                      <div className="text-[9px] text-slate-400 font-mono uppercase mt-1">Metoda / Typ: {t.typOperacji}</div>
+                      <div className="text-[9px] text-slate-400 font-mono uppercase mt-1">Typ: {t.typOperacji}</div>
                     </td>
                   </tr>
                 ))
@@ -525,8 +521,8 @@ export default function TransactionsPage() {
                 <tr>
                   <td colSpan={5} className="py-16 text-center text-slate-400">
                     <div className="text-4xl mb-3">💳</div>
-                    <div className="font-bold text-slate-600 uppercase tracking-wider">Brak zarejestrowanych wpływów finansowych</div>
-                    <div className="text-xs mt-1">Zmień zakres dat lub filtr kategorii.</div>
+                    <div className="font-bold text-slate-600 uppercase tracking-wider">Brak operacji finansowych w wybranym okresie</div>
+                    <div className="text-xs mt-1">Wybierz inny zakres dat lub zmień filtr kategorii.</div>
                   </td>
                 </tr>
               )}
@@ -538,11 +534,11 @@ export default function TransactionsPage() {
         {!isLoading && (
           <div className="bg-slate-50 px-6 py-4 border-t border-sky-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 font-medium">
             <div>
-              Liczba pozycji: <span className="font-black text-sky-900 bg-sky-100 px-2.5 py-0.5 rounded-md border border-sky-200">{filteredTransactions.length}</span>
+              Liczba transakcji w zestawieniu: <span className="font-black text-sky-900 bg-sky-100 px-2.5 py-0.5 rounded-md border border-sky-200">{filteredTransactions.length}</span>
             </div>
-            <div className="flex items-center gap-1.5 opacity-70">
+            <div className="flex items-center gap-1.5 opacity-75">
               <span className="px-2.5 py-1 bg-white border border-slate-200 rounded shadow-sm text-[10px] uppercase font-bold text-emerald-700">
-                ✓ Tylko transakcje finansowe (wpływy)
+                ✓ Wyłącznie transakcje finansowe (przychody)
               </span>
             </div>
           </div>
