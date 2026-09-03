@@ -66,7 +66,6 @@ const fetchAllFromSupabase = async (
     
     if (error) {
       console.error(`Błąd pobierania tabeli ${table}:`, error);
-      // Fallback bez sortowania gdy dana kolumna nie istnieje
       if (orderBy && error.message?.includes('does not exist')) {
         const fallbackRes = await supabase
           .from(table)
@@ -114,7 +113,6 @@ export default function WyzwaniaPage() {
   const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
   const [selectedBadgeForZoom, setSelectedBadgeForZoom] = useState<any | null>(null);
   
-  // Wyszukiwarka przeciwnika do pojedynków
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
@@ -122,7 +120,6 @@ export default function WyzwaniaPage() {
   const [modalKategoria, setModalKategoria] = useState<'sport' | 'zywienie'>('sport');
   const [newDyscyplina, setNewDyscyplina] = useState("");
 
-  // Wyszukiwarka klubowiczów w gablocie odznak
   const [badgeMemberSearchQuery, setBadgeMemberSearchQuery] = useState("");
 
   // Stany formularza tworzenia nowej odznaki (Admin)
@@ -137,6 +134,7 @@ export default function WyzwaniaPage() {
   const [newBadgeParametrDodatkowy, setNewBadgeParametrDodatkowy] = useState("");
   const [isUploadingNewBadge, setIsUploadingNewBadge] = useState(false);
   const [selectedRuleCategoryFilter, setSelectedRuleCategoryFilter] = useState("Wszystkie");
+  const [isGlobalRecalculating, setIsGlobalRecalculating] = useState(false);
 
   // Stany edycji odznak (Admin)
   const [editingBadgeId, setEditingBadgeId] = useState<number | null>(null);
@@ -203,7 +201,7 @@ export default function WyzwaniaPage() {
 
   // SILNIK AUTOMATYCZNEJ WERYFIKACJI I NADAWANIA 21 REGUŁ ODZNAK
   const checkAndAwardAutomatedBadges = async (userId: number | string, allBadgeDefs: any[]) => {
-    if (!userId || !allBadgeDefs || allBadgeDefs.length === 0) return;
+    if (!userId || Number(userId) === SYSTEM_ID || !allBadgeDefs || allBadgeDefs.length === 0) return;
 
     try {
       const { data: userExistingBadges } = await supabase
@@ -219,7 +217,6 @@ export default function WyzwaniaPage() {
 
       if (badgesToEvaluate.length === 0) return;
 
-      // POBIERZ POTWIERDZONE OBECNOŚCI: TYLKO GDY obecny === true
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
         .select("id, class_key, obecny, created_at")
@@ -411,11 +408,36 @@ export default function WyzwaniaPage() {
     }
   };
 
+  // GLOBALNE PRZELICZANIE ODZNAK DLA WSZYSTKICH KLUBOWICZÓW (ADMIN)
+  const handleRunGlobalBadgeRecalculation = async () => {
+    if (!confirm("Czy na pewno chcesz uruchomić przeliczanie odznak dla wszystkich klubowiczów w bazie? Może to chwilę potrwać.")) return;
+    setIsGlobalRecalculating(true);
+    try {
+      const allDefs = await fetchAllOdznakiDef();
+      const { data: allClients } = await supabase.from('klienci').select('id');
+      if (allClients && allDefs) {
+        let count = 0;
+        for (const client of allClients) {
+          if (Number(client.id) === SYSTEM_ID) continue;
+          await checkAndAwardAutomatedBadges(client.id, allDefs);
+          count++;
+        }
+        alert(`Pomyślnie przeliczono odznaki dla ${count} klubowiczów!`);
+        const updatedBadges = await fetchWszystkiePrzydzieloneOdznakiDirect();
+        await fetchRankings(klienci, updatedBadges);
+      }
+    } catch (err) {
+      console.error("Błąd masowego przeliczania odznak:", err);
+      alert("Wystąpił błąd podczas masowego przeliczania odznak.");
+    } finally {
+      setIsGlobalRecalculating(false);
+    }
+  };
+
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
       try {
-        // POBRANIE WSZYSTKICH KOLUMN Z TABELI KLIENCI BEZ BŁĘDÓW SKŁADNIOWYCH
         const [sessionRes, klienciData] = await Promise.all([
           supabase.auth.getSession(),
           fetchAllFromSupabase('klienci', '*', 'id', true, 20)
@@ -432,7 +454,7 @@ export default function WyzwaniaPage() {
           }
         }
 
-        // KULOODPORNE MAPOWANIE ZAREJESTROWANYCH KLUBOWICZÓW
+        // Pomiń konto systemowe Forma Marzeń (ID 5000) z listy zwykłych klubowiczów
         const enriched = (klienciData || [])
           .filter((c: any) => c && c.id && Number(c.id) !== SYSTEM_ID)
           .map((c: any) => {
@@ -545,8 +567,14 @@ export default function WyzwaniaPage() {
       10
     );
     if (data) {
-      setWszystkiePrzydzieloneOdznaki(data);
-      return data;
+      // Wyklucz konto systemowe oraz domyślne wpisy "Klubowicz" z przypisanych odznak
+      const filtered = data.filter((item: any) => {
+        const uId = Number(item.klient_id);
+        const name = (item.klienci?.Imię || "").toLowerCase();
+        return uId !== SYSTEM_ID && name !== "klubowicz" && name !== "forma marzeń";
+      });
+      setWszystkiePrzydzieloneOdznaki(filtered);
+      return filtered;
     }
     return [];
   };
@@ -559,18 +587,30 @@ export default function WyzwaniaPage() {
       false, 
       5
     );
-    if (data) setOdznakiHistoria(data);
+    if (data) {
+      const filtered = data.filter((item: any) => {
+        const uId = Number(item.klient_id);
+        const name = (item.klienci?.Imię || "").toLowerCase();
+        return uId !== SYSTEM_ID && name !== "klubowicz";
+      });
+      setOdznakiHistoria(filtered);
+    }
   };
 
+  // RANKINGI Z CAŁKOWITYM POMINIĘCIEM KONTA SYSTEMOWEGO I NAZWY "KLUBOWICZ"
   const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
     const challengesData = await fetchAllFromSupabase("klub_wyzwania_historia", "zwyciezca_id", "id", false, 5);
     const clientsMap = new Map<string, any>();
-    clientsData.forEach((c: any) => clientsMap.set(String(c.id), c));
+    clientsData.forEach((c: any) => {
+      if (Number(c.id) !== SYSTEM_ID) {
+        clientsMap.set(String(c.id), c);
+      }
+    });
 
     if (challengesData && clientsData.length > 0) {
       const winsCount: { [key: string]: number } = {};
       challengesData.forEach((item: any) => {
-        if (item.zwyciezca_id) {
+        if (item.zwyciezca_id && Number(item.zwyciezca_id) !== SYSTEM_ID) {
           const zId = String(item.zwyciezca_id);
           winsCount[zId] = (winsCount[zId] || 0) + 1;
         }
@@ -583,7 +623,7 @@ export default function WyzwaniaPage() {
           avatar: client ? client.avatar : null,
           wins: winsCount[clientId]
         };
-      }).sort((a, b) => b.wins - a.wins);
+      }).filter(r => r.name.toLowerCase() !== "klubowicz").sort((a, b) => b.wins - a.wins);
       setRankingList(winsRanking);
     }
 
@@ -594,6 +634,11 @@ export default function WyzwaniaPage() {
       
       sourceBadges.forEach((item: any) => {
         const uId = String(item.klient_id);
+        if (Number(uId) === SYSTEM_ID) return;
+
+        const client = clientsMap.get(uId);
+        if (!client || client.name.toLowerCase() === "klubowicz") return;
+
         const badgeDefId = item.odznaka_id || item.klub_odznaki_definicje?.id;
         const assignmentKey = `${uId}_${badgeDefId}`;
 
@@ -617,7 +662,7 @@ export default function WyzwaniaPage() {
           points: badgeScores[clientId].points,
           count: badgeScores[clientId].count
         };
-      }).sort((a, b) => b.points - a.points || b.count - a.count);
+      }).filter(r => r.name.toLowerCase() !== "klubowicz").sort((a, b) => b.points - a.points || b.count - a.count);
       setBadgeRankingList(bRanking);
     }
   };
@@ -950,7 +995,7 @@ export default function WyzwaniaPage() {
   };
 
   const filteredOpponents = klienci
-    .filter((k: any) => String(k.id) !== String(currentUserId))
+    .filter((k: any) => String(k.id) !== String(currentUserId) && Number(k.id) !== SYSTEM_ID)
     .filter((k: any) => {
       const q = searchQuery.trim().toLowerCase();
       if (!q) return false;
@@ -960,29 +1005,32 @@ export default function WyzwaniaPage() {
     });
 
   const getClientName = (id: any) => {
+    if (Number(id) === SYSTEM_ID) return "Forma Marzeń";
     const found = klienci.find((c: any) => String(c.id) === String(id));
     return found ? found.name : "Klubowicz";
   };
 
-  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI (DO WYSZUKIWARKI I GABLOTY)
+  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI (BEZ KONTA SYSTEMOWEGO I BEZ NAZWY "KLUBOWICZ")
   const allMembersWithBadgeData = useMemo(() => {
-    return (klienci || []).map((k: any) => {
-      const userBadges = (wszystkiePrzydzieloneOdznaki || []).filter(
-        (item: any) => String(item.klient_id) === String(k.id)
-      );
-      return {
-        ...k,
-        badgesCount: userBadges.length,
-        badges: userBadges
-      };
-    });
+    return (klienci || [])
+      .filter((k: any) => Number(k.id) !== SYSTEM_ID && k.name.toLowerCase() !== "klubowicz")
+      .map((k: any) => {
+        const userBadges = (wszystkiePrzydzieloneOdznaki || []).filter(
+          (item: any) => String(item.klient_id) === String(k.id)
+        );
+        return {
+          ...k,
+          badgesCount: userBadges.length,
+          badges: userBadges
+        };
+      });
   }, [klienci, wszystkiePrzydzieloneOdznaki]);
 
   const membersWithBadges = useMemo(() => {
     return allMembersWithBadgeData.filter((k: any) => k.badgesCount > 0 && String(k.id) !== String(currentUserId));
   }, [allMembersWithBadgeData, currentUserId]);
 
-  // WYSZUKIWANIE DOWOLNEGO REJESTROWANEGO KLUBOWICZA W GABLOCIE
+  // WYSZUKIWANIE DOWOLNEGO KLUBOWICZA W GABLOCIE
   const searchedClubMembers = useMemo(() => {
     if (!badgeMemberSearchQuery.trim()) return [];
     const q = badgeMemberSearchQuery.toLowerCase().trim();
@@ -1315,7 +1363,7 @@ export default function WyzwaniaPage() {
                 <div className="space-y-3">
                   {getSortedBadgesForComparison().map((def: any) => {
                     const userHasIt = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
-                    const memberHasIt = (selectedMemberForComparison.badges || []).some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
+                    const memberHasIt = (selectedMemberForComparison.badges || []).some((o: any) => (o.klub_odznaki_definicje?.id === def.id) || (o.odznaka_id === def.id));
 
                     return (
                       <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
@@ -1430,7 +1478,7 @@ export default function WyzwaniaPage() {
                   <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
                   <input
                     type="text"
-                    placeholder="Wpisz imię, nazwisko lub email klubowicza (np. Joanna Kolańska)..."
+                    placeholder="Wpisz imię, nazwisko lub email klubowicza (np. Izabela Knap)..."
                     value={badgeMemberSearchQuery}
                     onChange={(e) => setBadgeMemberSearchQuery(e.target.value)}
                     className="w-full bg-white border border-sky-200 rounded-2xl pl-11 pr-10 py-3 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-sm"
@@ -1697,9 +1745,26 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* KAFELKOWY KATALOG I KREATOR REGUŁ */}
+          {/* KAFELKOWY KATALOG I KREATOR REGUŁ + PRZYCISK MASOWEGO PRZELICZANIA */}
           {adminSubTab === 'katalog_odznak' && (
             <div className="space-y-8">
+              {/* PRZYCISK MASOWEGO PRZELICZANIA ODZNAK */}
+              <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-6 rounded-3xl text-slate-950 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider flex items-center gap-2">
+                    <span>⚡</span> Automatyczny skaner odznak dla całej bazy
+                  </h3>
+                  <p className="text-xs text-slate-900/80 mt-1">Uruchom jednorazowe przeliczenie wszystkich 21 reguł dla każdego klubowicza w klubie.</p>
+                </div>
+                <button
+                  onClick={handleRunGlobalBadgeRecalculation}
+                  disabled={isGlobalRecalculating}
+                  className="bg-slate-950 hover:bg-slate-900 text-white font-black px-6 py-3.5 rounded-2xl text-xs uppercase tracking-wider transition-all shadow-md cursor-pointer shrink-0 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {isGlobalRecalculating ? "Przeliczanie..." : "🚀 Przelicz odznaki dla wszystkich"}
+                </button>
+              </div>
+
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-6">
                 <div>
                   <h3 className="font-black text-sm uppercase text-slate-900 flex items-center gap-2">
