@@ -76,7 +76,6 @@ export default function WyzwaniaPage() {
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
   const [currentUserName, setCurrentUserName] = useState<string>("");
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
-  const [currentUserData, setCurrentUserData] = useState<any>(null);
   const [userRole, setUserRole] = useState<'admin' | 'klubowicz'>('klubowicz');
 
   const [klienci, setKlienci] = useState<any[]>([]);
@@ -97,6 +96,7 @@ export default function WyzwaniaPage() {
   const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
   const [selectedBadgeForZoom, setSelectedBadgeForZoom] = useState<any | null>(null);
   
+  // Wyszukiwarka przeciwnika do pojedynków
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
@@ -104,7 +104,10 @@ export default function WyzwaniaPage() {
   const [modalKategoria, setModalKategoria] = useState<'sport' | 'zywienie'>('sport');
   const [newDyscyplina, setNewDyscyplina] = useState("");
 
-  // Stany formularza tworzenia nowej odznaki
+  // Wyszukiwarka klubowiczów w gablocie odznak
+  const [badgeMemberSearchQuery, setBadgeMemberSearchQuery] = useState("");
+
+  // Stany formularza tworzenia nowej odznaki (Admin)
   const [newBadgeNazwa, setNewBadgeNazwa] = useState("");
   const [newBadgeOpis, setNewBadgeOpis] = useState("");
   const [newBadgeWarunek, setNewBadgeWarunek] = useState("");
@@ -117,7 +120,7 @@ export default function WyzwaniaPage() {
   const [isUploadingNewBadge, setIsUploadingNewBadge] = useState(false);
   const [selectedRuleCategoryFilter, setSelectedRuleCategoryFilter] = useState("Wszystkie");
 
-  // Stany edycji odznak
+  // Stany edycji odznak (Admin)
   const [editingBadgeId, setEditingBadgeId] = useState<number | null>(null);
   const [editBadgeNazwa, setEditBadgeNazwa] = useState("");
   const [editBadgeOpis, setEditBadgeOpis] = useState("");
@@ -185,7 +188,6 @@ export default function WyzwaniaPage() {
     if (!userId || !allBadgeDefs || allBadgeDefs.length === 0) return;
 
     try {
-      // 1. Sprawdź odznaki, które klubowicz już zdobył
       const { data: userExistingBadges } = await supabase
         .from("klub_odznaki_klubowicze")
         .select("odznaka_id")
@@ -199,7 +201,7 @@ export default function WyzwaniaPage() {
 
       if (badgesToEvaluate.length === 0) return;
 
-      // 2. Pobierz historię obecności: TYLKO POTWIERDZONE OBECNOŚCI (obecny === true)
+      // POBIERZ POTWIERDZONE OBECNOŚCI: TYLKO GDY obecny === true
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
         .select("id, class_key, obecny, created_at")
@@ -208,7 +210,6 @@ export default function WyzwaniaPage() {
 
       const attendances = attendancesRaw || [];
 
-      // Pobierz grafik zajęć do identyfikacji dyscyplin treningowych
       const [grafikList, jednorazoweList, nadpisaniaList] = await Promise.all([
         fetchAllFromSupabase('grafik_zajec', 'id, title, nazwa', 'id', true, 5),
         fetchAllFromSupabase('zajecia_jednorazowe', 'id, title, nazwa, display_date', 'id', false, 5),
@@ -243,7 +244,6 @@ export default function WyzwaniaPage() {
         return { title, date: dateObj, dateStr };
       });
 
-      // 3. Pobierz historię pojedynków i wyzwań żywieniowych
       const { data: userChallengesRaw } = await supabase
         .from("klub_wyzwania")
         .select("id, tworca_id, przeciwnik_id, zwyciezca_id, status, kategoria_wyzwania, created_at")
@@ -252,7 +252,6 @@ export default function WyzwaniaPage() {
       const userChallenges = userChallengesRaw || [];
       const verifiedChallenges = userChallenges.filter((c: any) => c.status === 'zweryfikowane');
 
-      // 4. Pobierz staż klubowicza
       const { data: clientInfo } = await supabase
         .from("klienci")
         .select("id, Zarejestrowany, registered, created_at")
@@ -264,7 +263,6 @@ export default function WyzwaniaPage() {
       const today = new Date();
       const tenureDays = Math.max(0, Math.floor((today.getTime() - regDate.getTime()) / (1000 * 60 * 60 * 24)));
 
-      // 5. Pobierz wygrane redukcje
       const { data: reductionWinsRaw } = await supabase
         .from("klub_redukcja_uczestnicy")
         .select("id, status_koncowy, miejsce")
@@ -273,13 +271,9 @@ export default function WyzwaniaPage() {
       
       const reductionWinsCount = (reductionWinsRaw || []).length;
 
-      // OBLICZANIE WARTOŚCI DLA POSZCZEGÓLNYCH 21 REGUŁ
       const metricValues: Record<string, number> = {};
 
-      // 1. Łączne treningi z potwierdzoną obecnością
       metricValues["TRENINGI_OGOLNE"] = userConfirmedClassTitles.length;
-
-      // 2–8. Dyscypliny konkretne
       metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => c.title.includes("hyrox")).length;
       metricValues["TRENINGI_OGOLNOROZWOJOWE"] = userConfirmedClassTitles.filter(c => c.title.includes("ogólnorozwoj")).length;
       metricValues["TRENINGI_NOGI_POSLADKI"] = userConfirmedClassTitles.filter(c => c.title.includes("nogi") || c.title.includes("pośladk")).length;
@@ -288,20 +282,16 @@ export default function WyzwaniaPage() {
       metricValues["TRENINGI_SILOWE"] = userConfirmedClassTitles.filter(c => c.title.includes("siłow")).length;
       metricValues["TRENINGI_ROZCIAGANIE"] = userConfirmedClassTitles.filter(c => c.title.includes("rozciąg") || c.title.includes("mobilizacj")).length;
 
-      // 9–10. Pojedynki sportowe
       const sportChallenges = verifiedChallenges.filter((c: any) => (c.kategoria_wyzwania || 'sport') === 'sport');
       metricValues["POJEDYNKI_UDZIAL"] = sportChallenges.length;
       metricValues["POJEDYNKI_WYGRANE"] = sportChallenges.filter((c: any) => String(c.zwyciezca_id) === String(userId)).length;
 
-      // 11. Rejestracja
       metricValues["REJESTRACJA"] = 1;
 
-      // 12–13. Żywienie
       const nutritionChallenges = verifiedChallenges.filter((c: any) => c.kategoria_wyzwania === 'zywienie');
       metricValues["ZYWIENIE_UDZIAL"] = nutritionChallenges.length;
       metricValues["ZYWIENIE_WYGRANE"] = nutritionChallenges.filter((c: any) => String(c.zwyciezca_id) === String(userId)).length;
 
-      // 14. Treningi w 1 tygodniu (Pn–Nd)
       const weekCounts: Record<string, number> = {};
       userConfirmedClassTitles.forEach(c => {
         const d = new Date(c.date);
@@ -313,7 +303,6 @@ export default function WyzwaniaPage() {
       });
       metricValues["TRENINGI_TYDZIEN"] = Object.values(weekCounts).length > 0 ? Math.max(...Object.values(weekCounts)) : 0;
 
-      // 15. Treningi w 1 miesiącu kalendarzowym
       const monthCounts: Record<string, number> = {};
       userConfirmedClassTitles.forEach(c => {
         const key = c.dateStr.substring(0, 7);
@@ -321,7 +310,6 @@ export default function WyzwaniaPage() {
       });
       metricValues["TRENINGI_MIESIAC"] = Object.values(monthCounts).length > 0 ? Math.max(...Object.values(monthCounts)) : 0;
 
-      // 16. Treningi w 1 roku
       const yearCounts: Record<string, number> = {};
       userConfirmedClassTitles.forEach(c => {
         const key = c.dateStr.substring(0, 4);
@@ -329,14 +317,12 @@ export default function WyzwaniaPage() {
       });
       metricValues["TRENINGI_ROK"] = Object.values(yearCounts).length > 0 ? Math.max(...Object.values(yearCounts)) : 0;
 
-      // 17. Treningi w 1 dniu
       const dayCounts: Record<string, number> = {};
       userConfirmedClassTitles.forEach(c => {
         dayCounts[c.dateStr] = (dayCounts[c.dateStr] || 0) + 1;
       });
       metricValues["TRENINGI_DZIEN"] = Object.values(dayCounts).length > 0 ? Math.max(...Object.values(dayCounts)) : 0;
 
-      // 18. Wygrane pojedynki z rzędu (seria)
       let maxSportStreak = 0;
       let currentSportStreak = 0;
       sportChallenges.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
@@ -350,7 +336,6 @@ export default function WyzwaniaPage() {
       });
       metricValues["POJEDYNKI_SERIA"] = maxSportStreak;
 
-      // 19. Wygrane wyzwania żywieniowe z rzędu (seria)
       let maxNutrStreak = 0;
       let currentNutrStreak = 0;
       nutritionChallenges.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
@@ -364,13 +349,9 @@ export default function WyzwaniaPage() {
       });
       metricValues["ZYWIENIE_SERIA"] = maxNutrStreak;
 
-      // 20. Staż w dniach
       metricValues["STAZ_DNI"] = tenureDays;
-
-      // 21. Zwycięstwo w wyzwaniu redukcji
       metricValues["REDUKCJA_WYGRANA"] = reductionWinsCount;
 
-      // NADAWANIE ODZNAK SPEŁNIAJĄCYCH WARUNKI
       for (const badgeDef of badgesToEvaluate) {
         const ruleType = badgeDef.typ_reguly;
         const threshold = Number(badgeDef.wartosc_progowa) || 1;
@@ -427,15 +408,20 @@ export default function WyzwaniaPage() {
           return;
         }
 
-        const enriched = (klienciData || []).map((c: any) => ({
-          id: c.id,
-          firstName: c.Imię || c.firstName || "",
-          lastName: c.Nazwisko || c.lastName || "",
-          name: `${c.Imię || c.firstName || ""} ${c.Nazwisko || c.lastName || ""}`.trim() || c["E-mail"] || "Klubowicz",
-          email: (c["E-mail"] || c.email || "").toLowerCase().trim(),
-          avatar: c.avatarUrl || c.avatar || null,
-          registered: c.Zarejestrowany || c.registered || c.created_at
-        }));
+        const enriched = (klienciData || []).map((c: any) => {
+          const fName = c.Imię || c.firstName || "";
+          const lName = c.Nazwisko || c.lastName || "";
+          const fullName = `${fName} ${lName}`.trim() || c["E-mail"] || "Klubowicz";
+          return {
+            id: c.id,
+            firstName: fName,
+            lastName: lName,
+            name: fullName,
+            email: (c["E-mail"] || c.email || "").toLowerCase().trim(),
+            avatar: c.avatarUrl || c.avatar || null,
+            registered: c.Zarejestrowany || c.registered || c.created_at
+          };
+        });
 
         setKlienci(enriched);
 
@@ -448,7 +434,6 @@ export default function WyzwaniaPage() {
             myId = myProfile.id;
             setCurrentUserName(`${myProfile.name} (Admin)`);
             setCurrentUserAvatar(myProfile.avatar);
-            setCurrentUserData(myProfile);
           } else {
             myId = enriched.length > 0 ? enriched[0].id : 1;
             setCurrentUserName("Maciej Kłaput (Admin)");
@@ -457,7 +442,6 @@ export default function WyzwaniaPage() {
           myId = myProfile.id;
           setCurrentUserName(myProfile.name);
           setCurrentUserAvatar(myProfile.avatar);
-          setCurrentUserData(myProfile);
         }
 
         if (myId) {
@@ -474,7 +458,6 @@ export default function WyzwaniaPage() {
 
           await fetchRankings(enriched, assignedBadgesData);
 
-          // Uruchomienie automatycznego sprawdzania 21 reguł dla obecnego użytkownika
           if (allDefs && allDefs.length > 0) {
             await checkAndAwardAutomatedBadges(myId, allDefs);
           }
@@ -947,17 +930,50 @@ export default function WyzwaniaPage() {
     return found ? found.name : "Klubowicz";
   };
 
-  const membersWithBadges = klienci
-    .filter((k: any) => String(k.id) !== String(currentUserId))
-    .map((k: any) => {
-      const userBadges = wszystkiePrzydzieloneOdznaki.filter((item: any) => String(item.klient_id) === String(k.id));
-      return {
-        ...k,
-        badgesCount: userBadges.length,
-        badges: userBadges
-      };
-    })
-    .filter((k: any) => k.badgesCount > 0);
+  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI
+  const allMembersWithBadgeData = useMemo(() => {
+    return klienci
+      .filter((k: any) => String(k.id) !== String(currentUserId))
+      .map((k: any) => {
+        const userBadges = wszystkiePrzydzieloneOdznaki.filter(
+          (item: any) => String(item.klient_id) === String(k.id)
+        );
+        return {
+          ...k,
+          badgesCount: userBadges.length,
+          badges: userBadges
+        };
+      });
+  }, [klienci, wszystkiePrzydzieloneOdznaki, currentUserId]);
+
+  const membersWithBadges = useMemo(() => {
+    return allMembersWithBadgeData.filter((k: any) => k.badgesCount > 0);
+  }, [allMembersWithBadgeData]);
+
+  // WYSZUKIWANIE DOWOLNEGO REJESTROWANEGO KLUBOWICZA W GABLOCIE
+  const searchedClubMembers = useMemo(() => {
+    if (!badgeMemberSearchQuery.trim()) return [];
+    const q = badgeMemberSearchQuery.toLowerCase().trim();
+
+    return allMembersWithBadgeData.filter(k => 
+      k.name.toLowerCase().includes(q) ||
+      k.firstName.toLowerCase().includes(q) ||
+      k.lastName.toLowerCase().includes(q) ||
+      k.email.toLowerCase().includes(q)
+    );
+  }, [badgeMemberSearchQuery, allMembersWithBadgeData]);
+
+  const handleSelectMemberToInspect = (member: any) => {
+    const userBadges = wszystkiePrzydzieloneOdznaki.filter(
+      (item: any) => String(item.klient_id) === String(member.id)
+    );
+    setSelectedMemberForComparison({
+      ...member,
+      badgesCount: userBadges.length,
+      badges: userBadges
+    });
+    setBadgeMemberSearchQuery("");
+  };
 
   const renderBadgeGraphic = (iconStr: string | null | undefined, sizeClasses = "w-14 h-14", textClasses = "text-2xl") => {
     if (!iconStr) return <span className={textClasses}>🏆</span>;
@@ -980,9 +996,10 @@ export default function WyzwaniaPage() {
 
     return [...wszystkieOdznaki].sort((a, b) => {
       const aUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
-      const aMember = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
+      const aMember = (selectedMemberForComparison.badges || []).some((o: any) => o.klub_odznaki_definicje?.id === defId(o, a.id));
+
       const bUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
-      const bMember = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
+      const bMember = (selectedMemberForComparison.badges || []).some((o: any) => o.klub_odznaki_definicje?.id === defId(o, b.id));
 
       const aScore = (aUser ? 1 : 0) + (aMember ? 1 : 0);
       const bScore = (bUser ? 1 : 0) + (bMember ? 1 : 0);
@@ -990,6 +1007,10 @@ export default function WyzwaniaPage() {
       if (bScore !== aScore) return bScore - aScore;
       return (b.punkty || 0) - (a.punkty || 0);
     });
+  };
+
+  const defId = (assignedBadge: any, targetId: any) => {
+    return assignedBadge.klub_odznaki_definicje?.id === targetId || assignedBadge.odznaka_id === targetId ? targetId : null;
   };
 
   const formatRegulaLabel = (typ: string, prog?: number) => {
@@ -1174,13 +1195,16 @@ export default function WyzwaniaPage() {
                   onClick={() => setSelectedMemberForComparison(null)} 
                   className="bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-colors cursor-pointer flex items-center gap-2"
                 >
-                  ← Wróć do gabloty
+                  ← Wróć do mojej gabloty
                 </button>
-                <h2 className="text-sm font-black uppercase tracking-wider text-slate-300">Porównanie odznak</h2>
+                <h2 className="text-sm font-black uppercase tracking-wider text-slate-300">
+                  Gablota klubowicza: {selectedMemberForComparison.name}
+                </h2>
                 <div className="w-20"></div>
               </div>
 
-              <div className="grid grid-cols-2 gap-6 text-center items-center py-4 bg-slate-950/40 rounded-3xl p-6 border border-slate-800/80">
+              {/* Nagłówek profilu oglądanego klubowicza */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-center items-center py-4 bg-slate-950/50 rounded-3xl p-6 border border-slate-800/80">
                 <div className="flex flex-col items-center space-y-3">
                   {currentUserAvatar ? (
                     <img src={currentUserAvatar} alt={currentUserName} className="w-20 h-20 rounded-full object-cover border-2 border-amber-500 shadow-md" />
@@ -1190,9 +1214,9 @@ export default function WyzwaniaPage() {
                     </div>
                   )}
                   <div>
-                    <div className="font-black text-sm text-white">{currentUserName}</div>
+                    <div className="font-black text-sm text-white">{currentUserName} (Ty)</div>
                     <div className="text-xs text-amber-400 font-bold mt-1 flex items-center justify-center gap-1">
-                      <span>🏆</span> {odznaki.length} odznak
+                      <span>🏆</span> {odznaki.length} Twoich odznak
                     </div>
                   </div>
                 </div>
@@ -1206,20 +1230,64 @@ export default function WyzwaniaPage() {
                     </div>
                   )}
                   <div>
-                    <div className="font-black text-sm text-white">{selectedMemberForComparison.name}</div>
+                    <div className="font-black text-base text-white">{selectedMemberForComparison.name}</div>
+                    <div className="text-xs text-slate-400 font-mono mt-0.5">{selectedMemberForComparison.email || "Brak email"}</div>
                     <div className="text-xs text-sky-400 font-bold mt-1 flex items-center justify-center gap-1">
-                      <span>🏆</span> {selectedMemberForComparison.badges.length} odznak
+                      <span>🏆</span> {(selectedMemberForComparison.badges || []).length} zdobytych odznak
                     </div>
                   </div>
                 </div>
               </div>
 
+              {/* SEKCJA 1: ODZNAKI ZDOBYTE PRZEZ TEGO KLUBOWICZA */}
               <div className="space-y-4">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">Wszystkie odznaki w klubie (Otrzymane na górze)</h3>
+                <h3 className="text-xs font-black uppercase tracking-wider text-amber-400 px-2 flex items-center gap-2">
+                  <span>🎖️</span> Zdobyte odznaki przez: {selectedMemberForComparison.name} ({(selectedMemberForComparison.badges || []).length})
+                </h3>
+
+                {(selectedMemberForComparison.badges || []).length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {selectedMemberForComparison.badges.map((bItem: any) => {
+                      const def = bItem.klub_odznaki_definicje || {};
+                      return (
+                        <div key={bItem.id} className="bg-slate-950/80 rounded-2xl p-4 border border-slate-800 flex items-center gap-4">
+                          <div 
+                            onClick={() => setSelectedBadgeForZoom(def)}
+                            className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-400/40 flex items-center justify-center text-2xl shadow-inner shrink-0 overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                            title="Kliknij, aby powiększyć"
+                          >
+                            {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-black text-xs uppercase text-white truncate">{def.nazwa}</h4>
+                              <span className="text-[9px] bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded-full shrink-0">{def.punkty || 1} pkt</span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">{def.opis}</p>
+                            <div className="text-[9px] text-slate-500 font-mono mt-1 italic">
+                              Zdobyto: {bItem.przyznano_at ? new Date(bItem.przyznano_at).toLocaleDateString('pl-PL') : '-'}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="bg-slate-950/40 rounded-2xl p-8 text-center border border-slate-800 text-slate-500 text-xs italic">
+                    Ten klubowicz nie zdobył jeszcze żadnej odznaki.
+                  </div>
+                )}
+              </div>
+
+              {/* SEKCJA 2: PEŁNE PORÓWNANIE ZE WSZYSTKIMI ODZNAKAMI W KLUBIE */}
+              <div className="space-y-4 pt-6 border-t border-slate-800">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">
+                  Porównanie wszystkich odznak w klubie (Zdobyte na górze)
+                </h3>
                 <div className="space-y-3">
                   {getSortedBadgesForComparison().map((def: any) => {
                     const userHasIt = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
-                    const memberHasIt = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
+                    const memberHasIt = (selectedMemberForComparison.badges || []).some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
 
                     return (
                       <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
@@ -1259,7 +1327,7 @@ export default function WyzwaniaPage() {
                             )}
                           </div>
                           <div className="flex flex-col items-center">
-                            <span className="text-[9px] text-slate-500 mb-1">Klubowicz</span>
+                            <span className="text-[9px] text-slate-500 mb-1 truncate max-w-[80px] text-center">{selectedMemberForComparison.firstName || "Klubowicz"}</span>
                             {memberHasIt ? (
                               <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-400 text-xs font-bold">✓</div>
                             ) : (
@@ -1275,6 +1343,7 @@ export default function WyzwaniaPage() {
             </div>
           ) : (
             <div className="space-y-8">
+              {/* Sekcja 1: Twoja gablota odznak */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoja gablota odznak</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1314,37 +1383,125 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
+              {/* SEKCJA 2: WYSZUKIWARKA KLUBOWICZA ORAZ LISTA PROFILI */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
-                <h3 className="font-black text-xs uppercase text-slate-400 px-2">Klubowicze z odznakami (Kliknij, aby porównać)</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {membersWithBadges.map((member: any) => (
-                    <div 
-                      key={member.id} 
-                      onClick={() => setSelectedMemberForComparison(member)}
-                      className="bg-white rounded-3xl p-5 border border-sky-100 shadow-sm flex items-center justify-between hover:border-amber-400 transition-all cursor-pointer group"
-                    >
-                      <div className="flex items-center gap-3">
-                        {member.avatar ? (
-                          <img src={member.avatar} alt={member.name} className="w-12 h-12 rounded-full object-cover border border-sky-200" />
-                        ) : (
-                          <div className="w-12 h-12 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-sm">
-                            {member.name.charAt(0)}
-                          </div>
-                        )}
-                        <div>
-                          <div className="font-bold text-xs text-slate-900 group-hover:text-amber-600 transition-colors">{member.name}</div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">{member.badgesCount} zdobytych odznak</div>
-                        </div>
-                      </div>
-                      <span className="text-xs font-black bg-amber-50 text-amber-700 px-3 py-1.5 rounded-xl group-hover:bg-amber-500 group-hover:text-slate-950 transition-all">Porównaj ➔</span>
-                    </div>
-                  ))}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2">
+                  <div>
+                    <h3 className="font-black text-xs uppercase text-slate-700 tracking-wider flex items-center gap-2">
+                      <span>🔍</span> Sprawdź odznaki klubowicza
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Wyszukaj dowolnego zarejestrowanego klubowicza w bazie, aby zobaczyć jego gablotę.</p>
+                  </div>
+                  <span className="text-[10px] font-bold bg-sky-100 text-sky-800 px-3 py-1 rounded-full w-fit">
+                    Łącznie w bazie: {klienci.length} osób
+                  </span>
+                </div>
 
-                  {membersWithBadges.length === 0 && (
-                    <div className="col-span-full bg-white rounded-3xl p-8 text-center border border-sky-100 text-slate-400 text-xs italic">
-                      Brak innych klubowiczów z odznakami.
-                    </div>
+                {/* Pole wyszukiwarki klubowiczów */}
+                <div className="relative">
+                  <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
+                  <input
+                    type="text"
+                    placeholder="Wpisz imię, nazwisko lub email klubowicza (np. Izabela Knap)..."
+                    value={badgeMemberSearchQuery}
+                    onChange={(e) => setBadgeMemberSearchQuery(e.target.value)}
+                    className="w-full bg-white border border-sky-200 rounded-2xl pl-11 pr-10 py-3 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-sm"
+                  />
+                  {badgeMemberSearchQuery && (
+                    <button
+                      onClick={() => setBadgeMemberSearchQuery("")}
+                      className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                    >
+                      ✕
+                    </button>
                   )}
+                </div>
+
+                {/* Wyniki wyszukiwania na żywo */}
+                {badgeMemberSearchQuery.trim().length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-black uppercase text-slate-400 px-2">
+                      Wyniki wyszukiwania ({searchedClubMembers.length}):
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {searchedClubMembers.map((member: any) => (
+                        <div
+                          key={member.id}
+                          onClick={() => handleSelectMemberToInspect(member)}
+                          className="bg-white hover:bg-sky-50/50 rounded-2xl p-4 border border-sky-200 hover:border-amber-400 shadow-sm transition-all cursor-pointer flex items-center justify-between group"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            {member.avatar ? (
+                              <img src={member.avatar} alt={member.name} className="w-11 h-11 rounded-full object-cover border border-sky-200 shrink-0" />
+                            ) : (
+                              <div className="w-11 h-11 rounded-full bg-sky-100 text-sky-900 flex items-center justify-center font-bold text-sm shrink-0">
+                                {member.name.charAt(0)}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="font-black text-xs text-slate-900 group-hover:text-amber-600 transition-colors truncate">
+                                {member.name}
+                              </div>
+                              <div className="text-[10px] text-slate-400 truncate">
+                                {member.email || "Brak e-maila"}
+                              </div>
+                              <div className="text-[10px] font-bold text-amber-700 mt-0.5">
+                                🏆 Odznaki: {member.badgesCount}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2.5 py-1 rounded-xl shrink-0 group-hover:bg-amber-500 group-hover:text-slate-950 transition-all">
+                            Zobacz ➔
+                          </span>
+                        </div>
+                      ))}
+
+                      {searchedClubMembers.length === 0 && (
+                        <div className="col-span-full bg-white rounded-2xl p-6 text-center border border-sky-100 text-slate-400 text-xs">
+                          Nie znaleziono zarejestrowanego klubowicza o takich danych.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Klubowicze, którzy już posiadają odznaki */}
+                <div className="space-y-3 pt-2">
+                  <div className="text-[10px] font-black uppercase text-slate-400 px-2">
+                    Klubowicze ze zdobytymi odznakami ({membersWithBadges.length}):
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {membersWithBadges.map((member: any) => (
+                      <div 
+                        key={member.id} 
+                        onClick={() => handleSelectMemberToInspect(member)}
+                        className="bg-white rounded-3xl p-5 border border-sky-100 shadow-sm flex items-center justify-between hover:border-amber-400 transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {member.avatar ? (
+                            <img src={member.avatar} alt={member.name} className="w-12 h-12 rounded-full object-cover border border-sky-200 shrink-0" />
+                          ) : (
+                            <div className="w-12 h-12 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-sm shrink-0">
+                              {member.name.charAt(0)}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-bold text-xs text-slate-900 group-hover:text-amber-600 transition-colors truncate">{member.name}</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">{member.badgesCount} zdobytych odznak</div>
+                          </div>
+                        </div>
+                        <span className="text-xs font-black bg-amber-50 text-amber-700 px-3 py-1.5 rounded-xl group-hover:bg-amber-500 group-hover:text-slate-950 transition-all shrink-0">
+                          Gablota ➔
+                        </span>
+                      </div>
+                    ))}
+
+                    {membersWithBadges.length === 0 && (
+                      <div className="col-span-full bg-white rounded-3xl p-8 text-center border border-sky-100 text-slate-400 text-xs italic">
+                        Brak innych klubowiczów z odznakami. Skorzystaj z powyższej wyszukiwarki, aby sprawdzić profil dowolnej osoby z klubu.
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1512,7 +1669,7 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* PRZYJAZNY, KAFELKOWY KATALOG I KREATOR REGUŁ */}
+          {/* KAFELKOWY KATALOG I KREATOR REGUŁ */}
           {adminSubTab === 'katalog_odznak' && (
             <div className="space-y-8">
               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-6">
@@ -1592,7 +1749,7 @@ export default function WyzwaniaPage() {
                     </div>
                   </div>
 
-                  {/* FORMULARZ SZCZEGÓŁÓW ODZNAKI */}
+                  {/* FORMULARZ DANYCH ODZNAKI */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
                     <div className="sm:col-span-2 border-b border-slate-100 pb-2">
                       <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
@@ -1682,7 +1839,7 @@ export default function WyzwaniaPage() {
                 </form>
               </div>
 
-              {/* LISTA AKTYWNYCH ODZNAK W KATALOGU */}
+              {/* LISTA AKTYWNYCH ODZNAK */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-900">Aktualne odznaki w katalogu ({wszystkieOdznaki.length}):</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
