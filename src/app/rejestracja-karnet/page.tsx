@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../raporty/klienci/supabase';
@@ -41,7 +41,7 @@ export default function RegistrationPassPage() {
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
 
   // --- PRECYZYJNA LOGIKA WYKRYWANIA UMÓW ---
-  const isContractPass = (pass: any) => {
+  const isContractPass = useCallback((pass: any) => {
     if (!pass) return false;
     const name = (pass.nazwa || '').toLowerCase();
     const typ = (pass.typ_karnetu || '').toLowerCase();
@@ -52,34 +52,41 @@ export default function RegistrationPassPage() {
       name.includes('umow') ||
       name.includes('12m')
     );
-  };
+  }, []);
 
-  // Pobranie wszystkich karnetów i regulaminów przy załadowaniu
+  // Pobranie wszystkich karnetów i regulaminów równolegle przy załadowaniu
   useEffect(() => {
     const fetchInitialData = async () => {
-      const { data: karnetyData } = await supabase.from('karnety').select('*');
-      if (karnetyData) {
-        setDostepneKarnety(karnetyData.map((k: any) => ({
-          ...k,
-          cena: k.cena_brutto || k.cena || '0.00'
-        })));
-      }
+      try {
+        const [{ data: karnetyData }, { data: regData }] = await Promise.all([
+          supabase.from('karnety').select('*'),
+          supabase.from('regulations').select('*').order('id', { ascending: true })
+        ]);
 
-      const { data: regData } = await supabase.from('regulations').select('*').order('id', { ascending: true });
-      if (regData) {
-        setRegulations(regData);
-        const initialAccepted: { [key: string]: boolean } = {};
-        regData.forEach((reg: RegulationItem) => {
-          initialAccepted[reg.slug] = false;
-        });
-        setAcceptedRegulations(initialAccepted);
+        if (karnetyData) {
+          setDostepneKarnety(karnetyData.map((k: any) => ({
+            ...k,
+            cena: k.cena_brutto || k.cena || '0.00'
+          })));
+        }
+
+        if (regData) {
+          setRegulations(regData);
+          const initialAccepted: { [key: string]: boolean } = {};
+          regData.forEach((reg: RegulationItem) => {
+            initialAccepted[reg.slug] = false;
+          });
+          setAcceptedRegulations(initialAccepted);
+        }
+      } catch (err) {
+        console.error('Błąd ładowania danych początkowych:', err);
       }
     };
     fetchInitialData();
   }, []);
 
   // --- LOGIKA PRZELICZANIA I DAT DLA RÓŻNYCH TYPÓW KARNETÓW ---
-  const getPassCalculation = (pass: any) => {
+  const getPassCalculation = useCallback((pass: any) => {
     if (!pass) return { isContract: false, finalPrice: 0, finalPriceStr: '0.00 PLN', basePrice: 0, daysRemaining: 0, daysInMonth: 30, expiryDateStr: '' };
 
     const basePrice = parseFloat(pass.cena) || 0;
@@ -131,11 +138,18 @@ export default function RegistrationPassPage() {
       daysInMonth,
       expiryDateStr: standardExpiryDateStr
     };
-  };
+  }, [isContractPass]);
 
   const handleNextToStep2 = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firstName || !lastName || !email || !phone || !password) {
+    if (isLoading) return;
+
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPhone = phone.trim();
+
+    if (!cleanFirstName || !cleanLastName || !cleanEmail || !cleanPhone || !password) {
       setErrorMsg("Uzupełnij wszystkie wymagane pola.");
       return;
     }
@@ -147,20 +161,25 @@ export default function RegistrationPassPage() {
     setIsLoading(true);
     setErrorMsg('');
 
-    const { data: existingClientCheck } = await supabase
-      .from('klienci')
-      .select('id')
-      .eq('E-mail', email)
-      .maybeSingle();
+    try {
+      const { data: existingClientCheck } = await supabase
+        .from('klienci')
+        .select('id')
+        .ilike('E-mail', cleanEmail)
+        .maybeSingle();
 
-    if (existingClientCheck) {
-      setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+      if (existingClientCheck) {
+        setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(false);
-      return;
+      setStep(2);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Błąd podczas sprawdzania konta.");
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
-    setStep(2);
   };
 
   const handleNextToStep3 = () => {
@@ -220,14 +239,14 @@ export default function RegistrationPassPage() {
         .filter(Boolean);
 
       if (subscriptions.length > 0) {
-        await fetch('/api/push/send', {
+        fetch('/api/push/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             subscriptions,
             payload: { title, body, url }
           })
-        });
+        }).catch(e => console.error('Błąd wysyłania push:', e));
       }
 
       await supabase.from('historia_powiadomien').insert([
@@ -246,11 +265,18 @@ export default function RegistrationPassPage() {
   };
 
   const handleFinalSubmit = async () => {
+    if (isLoading) return;
+
     const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
     if (!allAccepted) {
       setErrorMsg("Musisz zaakceptować wszystkie wymagane zgody i regulaminy.");
       return;
     }
+
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPhone = phone.trim();
 
     setIsLoading(true);
     setErrorMsg('');
@@ -259,7 +285,7 @@ export default function RegistrationPassPage() {
       const { data: existingClientCheck } = await supabase
         .from('klienci')
         .select('id')
-        .eq('E-mail', email)
+        .ilike('E-mail', cleanEmail)
         .maybeSingle();
 
       if (existingClientCheck) {
@@ -268,8 +294,11 @@ export default function RegistrationPassPage() {
 
       // 1. Utworzenie konta Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: email,
+        email: cleanEmail,
         password: password,
+        options: {
+          data: { first_name: cleanFirstName, last_name: cleanLastName, phone: cleanPhone }
+        }
       });
 
       if (authError) {
@@ -279,18 +308,10 @@ export default function RegistrationPassPage() {
         throw new Error(`Błąd tworzenia konta: ${authError.message}`);
       }
 
-      // 2. Zapis akceptacji regulaminów
-      if (authData.user) {
-        const acceptanceInserts = regulations.map(reg => ({
-          user_id: authData.user!.id,
-          user_email: email,
-          regulation_slug: reg.slug,
-          accepted_at: new Date().toISOString()
-        }));
-        await supabase.from('regulation_acceptances').insert(acceptanceInserts);
-      }
+      const newUserId = authData.user?.id;
+      const newClientId = Date.now();
 
-      // 3. Przygotowanie danych karnetu
+      // 2. Przygotowanie danych karnetu
       const passCalc = getPassCalculation(selectedPass);
       const limitWejscBaza = selectedPass.ilosc_wejsc || selectedPass.limitWejsc || selectedPass.wejscia || null;
       const lowerBuyName = (selectedPass.nazwa || '').toLowerCase();
@@ -336,15 +357,13 @@ export default function RegistrationPassPage() {
       };
 
       const portfelStr = passCalc.finalPrice > 0 ? `-${passCalc.finalPrice.toFixed(2)} PLN` : '0.00 PLN';
-      const newClientId = Date.now();
 
-      // 4. Bezpieczny zapis do bazy danych 'klienci' (tylko istniejące kolumny)
       const payload: any = {
         id: newClientId,
-        'Imię': firstName,
-        'Nazwisko': lastName,
-        'E-mail': email,
-        'Numer tel.': phone,
+        'Imię': cleanFirstName,
+        'Nazwisko': cleanLastName,
+        'E-mail': cleanEmail,
+        'Numer tel.': cleanPhone,
         'Zarejestrowany': new Date().toISOString().split('T')[0],
         'karnetyKlubowicza': [nowyKarnetObj],
         'Portfel': portfelStr,
@@ -354,48 +373,48 @@ export default function RegistrationPassPage() {
         'rabat': 0
       };
 
-      const { error: dbError } = await supabase.from('klienci').insert([payload]);
+      const opisTransakcji = passCalc.finalPrice > 0
+        ? (passCalc.isContract
+            ? `Rejestracja z zakupem karnetu (Umowa 12M - wyrównanie pro-rata za ${passCalc.daysRemaining} dni): ${selectedPass.nazwa}`
+            : `Rejestracja z zakupem karnetu: ${selectedPass.nazwa}`)
+        : `Rejestracja z karnetem 0.00 PLN (np. Medicover): ${selectedPass.nazwa}`;
 
-      if (dbError) {
-        throw new Error(`Błąd zapisu do bazy klientów: ${dbError.message}`);
-      }
-
-      // 5. Zapis transakcji
-      if (passCalc.finalPrice > 0) {
-        const opisTransakcji = passCalc.isContract
-          ? `Rejestracja z zakupem karnetu (Umowa 12M - wyrównanie pro-rata za ${passCalc.daysRemaining} dni): ${selectedPass.nazwa}`
-          : `Rejestracja z zakupem karnetu: ${selectedPass.nazwa}`;
-
-        await supabase.from('transakcje').insert([{
+      // 3. Równoległe zapisy do bazy danych (Postgrest builder opakowany w Promise.resolve)
+      const databaseOperations: Promise<any>[] = [
+        Promise.resolve(supabase.from('klienci').insert([payload])),
+        Promise.resolve(supabase.from('transakcje').insert([{
           klient_id: newClientId,
           typ_operacji: 'zakup_karnetu',
-          kwota: -passCalc.finalPrice,
+          kwota: passCalc.finalPrice > 0 ? -passCalc.finalPrice : 0.00,
           opis: opisTransakcji
-        }]);
-      } else {
-        await supabase.from('transakcje').insert([{
-          klient_id: newClientId,
-          typ_operacji: 'zakup_karnetu',
-          kwota: 0.00,
-          opis: `Rejestracja z karnetem 0.00 PLN (np. Medicover): ${selectedPass.nazwa}`
-        }]);
-      }
-
-      // 6. Powiadomienie na czacie dla administratora
-      await supabase.from('czat_wiadomosci').insert([
-        {
+        }])),
+        Promise.resolve(supabase.from('czat_wiadomosci').insert([{
           nadawca_id: 5000,
           nadawca_nazwa: 'System / Administrator',
           odbiorca_id: 5000,
-          tresc: `Nowy użytkownik zarejestrowany z zakupem karnetu (${selectedPass.nazwa}): ${firstName} ${lastName} (${email}, tel: ${phone})`,
+          tresc: `Nowy użytkownik zarejestrowany z zakupem karnetu (${selectedPass.nazwa}): ${cleanFirstName} ${cleanLastName} (${cleanEmail}, tel: ${cleanPhone})`,
           przeczytana: false
-        }
-      ]);
+        }]))
+      ];
 
-      // 7. Wysłanie powiadomienia PUSH do administratora
-      await sendPushToAdmins(
+      if (newUserId && regulations.length > 0) {
+        const acceptanceInserts = regulations.map(reg => ({
+          user_id: newUserId,
+          user_email: cleanEmail,
+          regulation_slug: reg.slug,
+          accepted_at: new Date().toISOString()
+        }));
+        databaseOperations.push(
+          Promise.resolve(supabase.from('regulation_acceptances').insert(acceptanceInserts))
+        );
+      }
+
+      await Promise.all(databaseOperations);
+
+      // 4. Wysłanie powiadomienia PUSH do administratora w tle
+      sendPushToAdmins(
         'Nowy klubowicz i zakup karnetu! 💳',
-        `${firstName} ${lastName} (${email}) zarejestrował(a) się i kupił(a) karnet: ${selectedPass.nazwa} (${passCalc.finalPriceStr}).`,
+        `${cleanFirstName} ${cleanLastName} (${cleanEmail}) zarejestrował(a) się i kupił(a) karnet: ${selectedPass.nazwa} (${passCalc.finalPriceStr}).`,
         '/raporty/klienci'
       );
 

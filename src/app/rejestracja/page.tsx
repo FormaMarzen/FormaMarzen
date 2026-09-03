@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../raporty/klienci/supabase';
 
@@ -54,66 +54,85 @@ export default function FreeRegistrationPage() {
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
 
   useEffect(() => {
-    const savedLogo = localStorage.getItem('forma_marzen_logo');
-    if (savedLogo) setCustomLogo(savedLogo);
+    try {
+      const savedLogo = typeof window !== 'undefined' ? localStorage.getItem('forma_marzen_logo') : null;
+      if (savedLogo) setCustomLogo(savedLogo);
+    } catch (e) {
+      console.warn('Brak dostępu do localStorage:', e);
+    }
 
-    fetchGrafik(currentDate);
     fetchRegulations();
-  }, [currentDate]);
+  }, []);
 
-  const fetchGrafik = async (date: Date) => {
+  const fetchRegulations = async () => {
+    try {
+      const { data, error } = await supabase.from('regulations').select('*').order('id', { ascending: true });
+      if (data && !error) {
+        setRegulations(data);
+        const initialAccepted: { [key: string]: boolean } = {};
+        data.forEach((reg: RegulationItem) => {
+          initialAccepted[reg.slug] = false;
+        });
+        setAcceptedRegulations(initialAccepted);
+      }
+    } catch (err) {
+      console.error('Błąd pobierania regulaminów:', err);
+    }
+  };
+
+  const fetchGrafik = useCallback(async (date: Date) => {
     const dateStr = date.toISOString().split('T')[0];
     const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
 
-    const { data: cykliczne } = await supabase.from('grafik_zajec').select('*');
-    const { data: jednorazowe } = await supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr);
+    try {
+      // Równoległe pobranie zajęć cyklicznych oraz jednorazowych
+      const [{ data: cykliczne }, { data: jednorazowe }] = await Promise.all([
+        supabase.from('grafik_zajec').select('*'),
+        supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr)
+      ]);
 
-    const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
-    
-    let combined: ClassItem[] = [
-      ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
-      ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
-    ];
+      const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
+      
+      let combined: ClassItem[] = [
+        ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
+        ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
+      ];
 
-    // Sortowanie od najwcześniejszych do najpóźniejszych godzin danego dnia
-    combined.sort((a, b) => {
-      const timeA = a.time || a.godzina || a.start || '00:00';
-      const timeB = b.time || b.godzina || b.start || '00:00';
-      return timeA.localeCompare(timeB);
-    });
-
-    // Filtrowanie zajęć, które już minęły lub są z dni przeszłych
-    const now = new Date();
-    const selectedMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    if (selectedMidnight < todayMidnight) {
-      combined = [];
-    } else if (selectedMidnight.getTime() === todayMidnight.getTime()) {
-      const currentHours = now.getHours();
-      const currentMinutes = now.getMinutes();
-      const currentTimeStr = `${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}`;
-
-      combined = combined.filter(cls => {
-        const clsTime = cls.time || cls.godzina || cls.start || '00:00';
-        return clsTime >= currentTimeStr;
+      // Sortowanie od najwcześniejszych do najpóźniejszych godzin danego dnia
+      combined.sort((a, b) => {
+        const timeA = a.time || a.godzina || a.start || '00:00';
+        const timeB = b.time || b.godzina || b.start || '00:00';
+        return timeA.localeCompare(timeB);
       });
-    }
 
-    setClassesList(combined);
-  };
+      // Filtrowanie zajęć, które już minęły lub są z dni przeszłych
+      const now = new Date();
+      const selectedMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const fetchRegulations = async () => {
-    const { data, error } = await supabase.from('regulations').select('*').order('id', { ascending: true });
-    if (data && !error) {
-      setRegulations(data);
-      const initialAccepted: { [key: string]: boolean } = {};
-      data.forEach((reg: RegulationItem) => {
-        initialAccepted[reg.slug] = false;
-      });
-      setAcceptedRegulations(initialAccepted);
+      if (selectedMidnight < todayMidnight) {
+        combined = [];
+      } else if (selectedMidnight.getTime() === todayMidnight.getTime()) {
+        const currentHours = now.getHours();
+        const currentMinutes = now.getMinutes();
+        const currentTimeStr = `${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}`;
+
+        combined = combined.filter(cls => {
+          const clsTime = cls.time || cls.godzina || cls.start || '00:00';
+          return clsTime >= currentTimeStr;
+        });
+      }
+
+      setClassesList(combined);
+    } catch (err) {
+      console.error('Błąd pobierania grafiku:', err);
+      setClassesList([]);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchGrafik(currentDate);
+  }, [currentDate, fetchGrafik]);
 
   const changeDay = (days: number) => {
     const newDate = new Date(currentDate);
@@ -160,6 +179,7 @@ export default function FreeRegistrationPage() {
 
   const handleRegisterAndLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     
     const allAccepted = regulations.every(reg => acceptedRegulations[reg.slug]);
     if (!allAccepted) {
@@ -172,169 +192,197 @@ export default function FreeRegistrationPage() {
       return;
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    const cleanPhone = phone.trim();
+
     setIsLoading(true);
     setErrorMsg('');
 
-    // Weryfikacja czy adres e-mail już istnieje w tabeli klienci
-    const { data: existingClientCheck } = await supabase
-      .from('klienci')
-      .select('id')
-      .eq('E-mail', email)
-      .maybeSingle();
-
-    if (existingClientCheck) {
-      setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
-      setIsLoading(false);
-      return;
-    }
-
-    // 1. Rejestracja w Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: email,
-      password: password,
-      options: {
-        data: { first_name: firstName, last_name: lastName, phone: phone }
-      }
-    });
-
-    if (authError) {
-      if (authError.message.includes('already registered')) {
-        setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
-      } else {
-        setErrorMsg(authError.message);
-      }
-      setIsLoading(false);
-      return;
-    }
-
-    const newUserId = authData.user?.id;
-    const newClientId = Date.now();
-    const todayIsoStr = new Date().toISOString().split('T')[0];
-
-    // 2. Zapis akceptacji regulaminów z adresem e-mail
-    if (newUserId) {
-      const acceptanceInserts = regulations.map(reg => ({
-        user_id: newUserId,
-        user_email: email,
-        regulation_slug: reg.slug,
-        accepted_at: new Date().toISOString()
-      }));
-      await supabase.from('regulation_acceptances').insert(acceptanceInserts);
-    }
-
-    // 3. Dodanie klienta do tabeli "klienci" wraz z inicjalizacją portfela
-    const { error: klientError } = await supabase.from('klienci').insert([
-      {
-        id: newClientId,
-        Imię: firstName,
-        Nazwisko: lastName,
-        "Numer tel.": phone,
-        "E-mail": email,
-        Zarejestrowany: todayIsoStr,
-        Portfel: '0.00 PLN',
-        karnetyKlubowicza: [],
-        zapisyNadchodzace: [
-          {
-            id: Date.now(),
-            data: `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`,
-            zajecia: selectedClass?.title,
-            karnet: 'Pierwsze bezpłatne',
-            zapisujacy: 'Zapisany przez stronę www'
-          }
-        ]
-      }
-    ]);
-
-    if (klientError) {
-      console.error("Błąd zapisu klienta do bazy:", klientError);
-    }
-
-    // 4. Dodanie początkowej transakcji w tabeli transakcje
-    await supabase.from('transakcje').insert([
-      {
-        klient_id: newClientId,
-        typ_operacji: 'utworzenie_konta',
-        kwota: 0.00,
-        opis: 'Utworzenie nowego konta klubowicza (saldo startowe)'
-      }
-    ]);
-
-    // 5. Dodanie wpisu do tabeli zapisów na zajęcia
-    if (selectedClass?.id) {
-      const classKey = `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`;
-      await supabase.from('zapisy_zajec').insert([
-        {
-          class_key: classKey,
-          klient_id: newClientId,
-          status: 'zapisany',
-          obecny: false
-        }
-      ]);
-    }
-
-    // 6. Powiadomienie na czacie dla administratora (ID 5000)
-    await supabase.from('czat_wiadomosci').insert([
-      {
-        nadawca_id: 5000,
-        nadawca_nazwa: 'System / Administrator',
-        odbiorca_id: 5000,
-        tresc: `Nowy użytkownik zarejestrowany (darmowe zajęcia): ${firstName} ${lastName} (${email}, tel: ${phone})`,
-        przeczytana: false
-      }
-    ]);
-
-    // 7. Wysłanie powiadomienia Web Push do Administratora i rejestracja w historia_powiadomien
     try {
-      const { data: adminSubs } = await supabase
-        .from('push_subscriptions')
-        .select('subscription')
-        .eq('role', 'admin');
+      // Weryfikacja czy adres e-mail już istnieje w tabeli klienci (niewrażliwa na wielkość liter)
+      const { data: existingClientCheck } = await supabase
+        .from('klienci')
+        .select('id')
+        .ilike('E-mail', cleanEmail)
+        .maybeSingle();
 
-      const subscriptions = (adminSubs || [])
-        .map(s => {
-          if (!s.subscription) return null;
-          try {
-            return typeof s.subscription === 'string' ? JSON.parse(s.subscription) : s.subscription;
-          } catch (e) {
-            return null;
-          }
-        })
-        .filter(Boolean);
+      if (existingClientCheck) {
+        setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+        setIsLoading(false);
+        return;
+      }
 
-      const pushTitle = 'Nowy klubowicz zarejestrowany!';
-      const pushBody = `${firstName} ${lastName} (${email}) zarejestrował(a) się na bezpłatne zajęcia: ${selectedClass?.title || 'Zajęcia'} (${selectedClass?.date || todayIsoStr} ${selectedClass?.time || ''}).`;
+      // 1. Rejestracja w Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password: password,
+        options: {
+          data: { first_name: cleanFirstName, last_name: cleanLastName, phone: cleanPhone }
+        }
+      });
 
-      if (subscriptions.length > 0) {
-        await fetch('/api/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscriptions,
-            payload: {
-              title: pushTitle,
-              body: pushBody,
-              url: '/raporty/klienci'
+      if (authError) {
+        if (authError.message.includes('already registered')) {
+          setErrorMsg('Konto z tym adresem e-mail już istnieje! Przejdź do ekranu logowania.');
+        } else {
+          setErrorMsg(authError.message);
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      const newUserId = authData.user?.id;
+      const newClientId = Date.now();
+      const todayIsoStr = new Date().toISOString().split('T')[0];
+      const selectedClassDateIso = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
+      const classKey = selectedClass?.id 
+        ? `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`
+        : null;
+
+      // 2. Równoległe zapisy do bazy Supabase z pełnym wsparciem Promise dla TypeScript
+      const databaseOperations: Promise<any>[] = [
+        // 2a. Dodanie klienta do tabeli "klienci"
+        Promise.resolve(
+          supabase.from('klienci').insert([
+            {
+              id: newClientId,
+              Imię: cleanFirstName,
+              Nazwisko: cleanLastName,
+              "Numer tel.": cleanPhone,
+              "E-mail": cleanEmail,
+              Zarejestrowany: todayIsoStr,
+              Portfel: '0.00 PLN',
+              karnetyKlubowicza: [],
+              zapisyNadchodzace: [
+                {
+                  id: Date.now(),
+                  data: selectedClassDateIso,
+                  zajecia: selectedClass?.title,
+                  karnet: 'Pierwsze bezpłatne',
+                  zapisujacy: 'Zapisany przez stronę www'
+                }
+              ]
+            }
+          ])
+        ),
+
+        // 2b. Dodanie początkowej transakcji
+        Promise.resolve(
+          supabase.from('transakcje').insert([
+            {
+              klient_id: newClientId,
+              typ_operacji: 'utworzenie_konta',
+              kwota: 0.00,
+              opis: 'Utworzenie nowego konta klubowicza (saldo startowe)'
+            }
+          ])
+        ),
+
+        // 2c. Powiadomienie na czacie dla administratora (ID 5000)
+        Promise.resolve(
+          supabase.from('czat_wiadomosci').insert([
+            {
+              nadawca_id: 5000,
+              nadawca_nazwa: 'System / Administrator',
+              odbiorca_id: 5000,
+              tresc: `Nowy użytkownik zarejestrowany (darmowe zajęcia): ${cleanFirstName} ${cleanLastName} (${cleanEmail}, tel: ${cleanPhone})`,
+              przeczytana: false
+            }
+          ])
+        )
+      ];
+
+      // 2d. Zapis akceptacji regulaminów
+      if (newUserId && regulations.length > 0) {
+        const acceptanceInserts = regulations.map(reg => ({
+          user_id: newUserId,
+          user_email: cleanEmail,
+          regulation_slug: reg.slug,
+          accepted_at: new Date().toISOString()
+        }));
+        databaseOperations.push(
+          Promise.resolve(supabase.from('regulation_acceptances').insert(acceptanceInserts))
+        );
+      }
+
+      // 2e. Rezerwacja w tabeli zapisy_zajec
+      if (classKey) {
+        databaseOperations.push(
+          Promise.resolve(
+            supabase.from('zapisy_zajec').insert([
+              {
+                class_key: classKey,
+                klient_id: newClientId,
+                status: 'zapisany',
+                obecny: false
+              }
+            ])
+          )
+        );
+      }
+
+      // Wykonanie wszystkich operacji bazodanowych jednocześnie
+      await Promise.all(databaseOperations);
+
+      // 3. Wysłanie powiadomienia Web Push do Administratora w tle
+      try {
+        const { data: adminSubs } = await supabase
+          .from('push_subscriptions')
+          .select('subscription')
+          .eq('role', 'admin');
+
+        const subscriptions = (adminSubs || [])
+          .map(s => {
+            if (!s.subscription) return null;
+            try {
+              return typeof s.subscription === 'string' ? JSON.parse(s.subscription) : s.subscription;
+            } catch (e) {
+              return null;
             }
           })
-        });
+          .filter(Boolean);
+
+        const pushTitle = 'Nowy klubowicz zarejestrowany!';
+        const pushBody = `${cleanFirstName} ${cleanLastName} (${cleanEmail}) zarejestrował(a) się na bezpłatne zajęcia: ${selectedClass?.title || 'Zajęcia'} (${selectedClass?.date || todayIsoStr} ${selectedClass?.time || ''}).`;
+
+        if (subscriptions.length > 0) {
+          fetch('/api/push/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscriptions,
+              payload: {
+                title: pushTitle,
+                body: pushBody,
+                url: '/raporty/klienci'
+              }
+            })
+          }).catch(e => console.error('Błąd fetch /api/push/send:', e));
+        }
+
+        await supabase.from('historia_powiadomien').insert([
+          {
+            odbiorca: `Administratorzy (${subscriptions.length} urządz.)`,
+            odbiorca_id: null,
+            tytul: pushTitle,
+            tresc: pushBody,
+            typ: 'PUSH',
+            status: subscriptions.length > 0 ? 'Wysłano' : 'Brak aktywnych urządzeń'
+          }
+        ]);
+      } catch (pushErr) {
+        console.error('Błąd podczas wysyłania powiadomienia push:', pushErr);
       }
 
-      await supabase.from('historia_powiadomien').insert([
-        {
-          odbiorca: `Administratorzy (${subscriptions.length} urządz.)`,
-          odbiorca_id: null,
-          tytul: pushTitle,
-          tresc: pushBody,
-          typ: 'PUSH',
-          status: subscriptions.length > 0 ? 'Wysłano' : 'Brak aktywnych urządzeń'
-        }
-      ]);
-    } catch (pushErr) {
-      console.error('Błąd podczas wysyłania powiadomienia push do administratora:', pushErr);
+      setIsSuccessModalOpen(true);
+    } catch (err: any) {
+      console.error('Błąd procedury rejestracji:', err);
+      setErrorMsg(err.message || 'Wystąpił błąd podczas rejestracji. Spróbuj ponownie.');
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
-    setIsSuccessModalOpen(true);
   };
 
   const handleModalConfirmRedirect = () => {
