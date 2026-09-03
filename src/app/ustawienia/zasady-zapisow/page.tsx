@@ -22,6 +22,10 @@ interface KarnetDef {
 
 interface Klubowicz {
   id: string | number;
+  Imię?: string;
+  Nazwisko?: string;
+  "E-mail"?: string;
+  "Numer tel."?: string;
   imie?: string;
   nazwisko?: string;
   first_name?: string;
@@ -31,6 +35,7 @@ interface Klubowicz {
   email?: string;
   telefon?: string;
   phone?: string;
+  [key: string]: any;
 }
 
 interface IndywidualnyLimitZapisow {
@@ -137,7 +142,7 @@ export default function ZasadyZapisowPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Obsługa zamykania listy wyszukiwarki klubowiczów przy kliknięciu poza komponent
+  // Obsługa zamykania listy wyszukiwarki przy kliknięciu poza obszar
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (memberDropdownRef.current && !memberDropdownRef.current.contains(event.target as Node)) {
@@ -148,13 +153,16 @@ export default function ZasadyZapisowPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Pomocnicze pobieranie pełnego imienia i nazwiska klubowicza
+  // Pobieranie imienia i nazwiska z uwzględnieniem wielkich liter z tabeli klienci
   const getKlubowiczFullName = (k: Klubowicz): string => {
-    if (k.full_name && k.full_name.trim()) return k.full_name.trim();
-    const parts = [k.imie || k.first_name, k.nazwisko || k.last_name].filter(Boolean);
+    const imie = k['Imię'] || k.imie || k.first_name || '';
+    const nazwisko = k['Nazwisko'] || k.nazwisko || k.last_name || '';
+    const parts = [imie, nazwisko].filter(Boolean);
     if (parts.length > 0) return parts.join(' ').trim();
+    if (k.full_name && k.full_name.trim()) return k.full_name.trim();
     if (k.name && k.name.trim()) return k.name.trim();
-    if (k.email && k.email.trim()) return k.email.trim();
+    const email = k['E-mail'] || k.email || '';
+    if (email && email.trim()) return email.trim();
     return `Klubowicz #${k.id}`;
   };
 
@@ -175,31 +183,26 @@ export default function ZasadyZapisowPage() {
         setKarnety(karnetyData);
       }
 
-      // 3. Pobierz listę klubowiczów / klientów (sprawdzenie tabel klubowicze -> klienci -> profiles)
-      let fetchedMembers: Klubowicz[] = [];
-      const { data: klubowiczeData } = await supabase
-        .from('klubowicze')
-        .select('*')
-        .order('nazwisko', { ascending: true });
+      // 3. Pobierz listę klientów z tabeli 'klienci'
+      const { data: klienciData, error: klienciError } = await supabase
+        .from('klienci')
+        .select('*');
 
-      if (klubowiczeData && klubowiczeData.length > 0) {
-        fetchedMembers = klubowiczeData;
+      if (!klienciError && klienciData && klienciData.length > 0) {
+        // Sortowanie po nazwisku i imieniu w JavaScript
+        const sorted = [...klienciData].sort((a, b) => {
+          const nameA = getKlubowiczFullName(a).toLowerCase();
+          const nameB = getKlubowiczFullName(b).toLowerCase();
+          return nameA.localeCompare(nameB, 'pl');
+        });
+        setKlubowicze(sorted);
       } else {
-        const { data: klienciData } = await supabase
-          .from('klienci')
-          .select('*')
-          .order('nazwisko', { ascending: true });
-
-        if (klienciData && klienciData.length > 0) {
-          fetchedMembers = klienciData;
-        } else {
-          const { data: profilesData } = await supabase.from('profiles').select('*');
-          if (profilesData && profilesData.length > 0) {
-            fetchedMembers = profilesData;
-          }
+        // Zapasowe sprawdzenie innych tabel w razie potrzeby
+        const { data: altData } = await supabase.from('klubowicze').select('*');
+        if (altData && altData.length > 0) {
+          setKlubowicze(altData);
         }
       }
-      setKlubowicze(fetchedMembers);
 
       // 4. Pobierz indywidualne reguły zapisu klubowiczów
       const { data: limitsData, error: limitsError } = await supabase
@@ -211,7 +214,7 @@ export default function ZasadyZapisowPage() {
         setIndywidualneLimity(limitsData);
       }
 
-      // 5. Pobierz zasady nadrzędne
+      // 5. Pobierz zasady ogólne
       const { data: rulesData, error } = await supabase
         .from('club_booking_rules')
         .select('*')
@@ -305,7 +308,7 @@ export default function ZasadyZapisowPage() {
   const handleSaveMemberLimit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!memberForm.klubowicz_nazwa.trim()) {
-      showToast('Wybierz klubowicza z bazy', 'error');
+      showToast('Wybierz klubowicza z listy', 'error');
       return;
     }
 
@@ -473,11 +476,11 @@ export default function ZasadyZapisowPage() {
     (item.notatka && item.notatka.toLowerCase().includes(limitSearchQuery.toLowerCase()))
   );
 
-  // Filtrowana lista klubowiczów w modalu wyszukiwania
+  // Filtrowana lista klubowiczów w modalu wyszukiwania z uwzględnieniem schematu 'klienci'
   const searchCandidates = klubowicze.filter((k) => {
     const fullName = getKlubowiczFullName(k).toLowerCase();
-    const email = (k.email || '').toLowerCase();
-    const phone = (k.telefon || k.phone || '').toLowerCase();
+    const email = (k['E-mail'] || k.email || '').toLowerCase();
+    const phone = (k['Numer tel.'] || k.telefon || k.phone || '').toLowerCase();
     const query = searchMemberText.toLowerCase().trim();
     return fullName.includes(query) || email.includes(query) || phone.includes(query);
   });
@@ -485,7 +488,7 @@ export default function ZasadyZapisowPage() {
   if (loading) {
     return (
       <div className="max-w-[1250px] mx-auto p-12 text-center text-slate-500 font-bold text-xs animate-pulse">
-        Ładowanie reguł i bazy klubowiczów...
+        Ładowanie bazy klientów i reguł klubu...
       </div>
     );
   }
@@ -768,7 +771,7 @@ export default function ZasadyZapisowPage() {
           </div>
         </div>
 
-        {/* SEKCJA 5: INDYWIDUALNE OKNO ZAPISU DLA KLUBOWICZÓW (NOWA TABELA) */}
+        {/* SEKCJA 5: INDYWIDUALNE OKNO ZAPISU DLA KLUBOWICZÓW */}
         <div className="space-y-4 pt-6 border-t border-slate-100">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2.5">
@@ -990,7 +993,7 @@ export default function ZasadyZapisowPage() {
 
       </div>
 
-      {/* MODAL: DODAJ / EDYTUJ INDYWIDUALNY LIMIT Z WYSZUKIWARKĄ KLUBOWICZÓW */}
+      {/* MODAL: DODAJ / EDYTUJ INDYWIDUALNY LIMIT Z WYSZUKIWARKĄ KLIENTÓW */}
       {isLimitModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fadeIn">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-visible">
@@ -1017,14 +1020,14 @@ export default function ZasadyZapisowPage() {
             {/* Formularz */}
             <form onSubmit={handleSaveMemberLimit} className="p-6 space-y-5 text-xs text-slate-700">
               
-              {/* WYBÓR KLUBOWICZA Z WYSZUKIWARKĄ NA ŻYWO */}
+              {/* WYBÓR KLUBOWICZA Z BAZY KLIENTÓW */}
               <div className="relative" ref={memberDropdownRef}>
                 <label className="block font-bold text-slate-900 mb-1.5">
                   Wybierz Klubowicza <span className="text-rose-500">*</span>
                 </label>
 
                 {memberForm.klubowicz_nazwa ? (
-                  /* Wybrany klubowicz - kafelek potwierdzenia z opcją zmiany */
+                  /* Wybrany klubowicz */
                   <div className="flex items-center justify-between p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center font-black text-xs">
@@ -1050,7 +1053,7 @@ export default function ZasadyZapisowPage() {
                     )}
                   </div>
                 ) : (
-                  /* Pole wyszukiwania z rozwijaną listą wyników */
+                  /* Wyszukiwarka po bazie klientów */
                   <div className="relative">
                     <div className="relative">
                       <input
@@ -1071,11 +1074,13 @@ export default function ZasadyZapisowPage() {
                       </svg>
                     </div>
 
-                    {/* Menu rozwijane wyszukiwarki */}
+                    {/* Rozwijana lista wyników wyszukiwania */}
                     {isMemberDropdownOpen && (
                       <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl max-h-56 overflow-y-auto z-50 divide-y divide-slate-100 animate-fadeIn">
                         {searchCandidates.map((k) => {
                           const fullName = getKlubowiczFullName(k);
+                          const email = k['E-mail'] || k.email;
+                          const phone = k['Numer tel.'] || k.telefon || k.phone;
                           return (
                             <div
                               key={k.id}
@@ -1096,9 +1101,9 @@ export default function ZasadyZapisowPage() {
                                 </div>
                                 <div>
                                   <span className="font-bold text-slate-800 text-xs block">{fullName}</span>
-                                  {(k.email || k.telefon || k.phone) && (
+                                  {(email || phone) && (
                                     <span className="text-[10px] text-slate-400">
-                                      {[k.email, k.telefon || k.phone].filter(Boolean).join(' • ')}
+                                      {[email, phone].filter(Boolean).join(' • ')}
                                     </span>
                                   )}
                                 </div>
@@ -1111,47 +1116,23 @@ export default function ZasadyZapisowPage() {
                         })}
 
                         {searchCandidates.length === 0 && (
-                          <div className="p-4 text-center text-xs text-slate-400">
-                            {klubowicze.length === 0 ? (
-                              <div className="space-y-2">
-                                <p>Brak rekordów w tabeli klientów w Supabase.</p>
-                                {searchMemberText.trim() && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setMemberForm({
-                                        ...memberForm,
-                                        klubowicz_id: '',
-                                        klubowicz_nazwa: searchMemberText.trim(),
-                                      });
-                                      setIsMemberDropdownOpen(false);
-                                    }}
-                                    className="text-blue-700 font-bold underline cursor-pointer"
-                                  >
-                                    Użyj wpisanej nazwy: &quot;{searchMemberText}&quot;
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="space-y-2">
-                                <p>Nie znaleziono osoby pasującej do &quot;{searchMemberText}&quot;</p>
-                                {searchMemberText.trim() && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setMemberForm({
-                                        ...memberForm,
-                                        klubowicz_id: '',
-                                        klubowicz_nazwa: searchMemberText.trim(),
-                                      });
-                                      setIsMemberDropdownOpen(false);
-                                    }}
-                                    className="text-blue-700 font-bold underline cursor-pointer"
-                                  >
-                                    Użyj wpisanej nazwy ręcznie: &quot;{searchMemberText}&quot;
-                                  </button>
-                                )}
-                              </div>
+                          <div className="p-4 text-center text-xs text-slate-400 space-y-2">
+                            <p>Nie znaleziono klubowicza &quot;{searchMemberText}&quot;</p>
+                            {searchMemberText.trim() && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMemberForm({
+                                    ...memberForm,
+                                    klubowicz_id: '',
+                                    klubowicz_nazwa: searchMemberText.trim(),
+                                  });
+                                  setIsMemberDropdownOpen(false);
+                                }}
+                                className="text-blue-700 font-bold underline cursor-pointer"
+                              >
+                                Dodaj jako wpis ręczny: &quot;{searchMemberText}&quot;
+                              </button>
                             )}
                           </div>
                         )}
