@@ -26,7 +26,7 @@ const fetchAllFromSupabase = async (
   table: string,
   orderBy: string = 'created_at',
   ascending: boolean = false,
-  maxPages: number = 50 // Bezpieczny limit do 50 000 rekordów zamiast sztywnego 2000-5000
+  maxPages: number = 50 // Bezpieczny limit do 50 000 rekordów zamiast domyślnego limitu 1000
 ) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
@@ -37,7 +37,6 @@ const fetchAllFromSupabase = async (
       .range(i * 1000, (i + 1) * 1000 - 1);
     
     if (error) {
-      // Fallback jeśli tabela nie posiada kolumny np. created_at
       if (orderBy !== 'id' && error.message?.includes('does not exist')) {
         return fetchAllFromSupabase(table, 'id', ascending, maxPages);
       }
@@ -120,11 +119,8 @@ export default function DashboardPage() {
         .filter(id => !isNaN(id) && id > 0 && id !== 5000 && id !== 999999999);
 
       if (validIds.length === 0) {
-        console.warn('[PUSH CLIENT] Brak prawidłowych ID odbiorców do wysyłki.');
         return;
       }
-
-      console.log('[PUSH CLIENT] Wysyłanie powiadomienia do ID:', validIds, payload);
 
       const res = await fetch('/api/push/send', {
         method: 'POST',
@@ -140,8 +136,7 @@ export default function DashboardPage() {
         })
       });
 
-      const resData = await res.json();
-      console.log('[PUSH CLIENT] Odpowiedź serwera:', resData);
+      await res.json();
     } catch (err) {
       console.error('[PUSH CLIENT ERROR] Błąd wywołania sendPushNotification:', err);
     }
@@ -196,11 +191,16 @@ export default function DashboardPage() {
           url: '/'
         });
 
+        const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+        const dayOfWeekName = dayNames[classStartDateTime.getDay()];
+        const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+        const durationText = calculateDuration(classItem.start, classItem.end);
+
         await supabase.from('transakcje').insert([{ 
           klient_id: promotedUser.id, 
           typ_operacji: 'awans_z_krzesełka', 
           class_key: classKey, 
-          opis: `Automatyczny awans z listy rezerwowej na listę główną (trening: ${classItem.title} - ${displayDate} ${classItem.start}).` 
+          opis: `${promotedUser.firstName || 'Klubowicz'} ${promotedUser.lastName || ''} - Automatyczny awans z listy rezerwowej na listę główną: ${classItem.title} (${formattedFullDate} ${classItem.start}-${classItem.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
         }]);
         
         await supabase.from('booking_logs').insert([{
@@ -338,8 +338,15 @@ export default function DashboardPage() {
   };
 
   // STANY DANYCH I WIDOKU
+  const [adminViewTab, setAdminViewTab] = useState<'grafik' | 'operacje'>('grafik');
   const [salesPeriod, setSalesPeriod] = useState('Dziś');
   const [clientSearch, setClientSearch] = useState('');
+  const [operationsSearchQuery, setOperationsSearchQuery] = useState('');
+  const [operationsDateRange, setOperationsDateRange] = useState({
+    from: `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-01`,
+    to: todayStr
+  });
+
   const [klienciList, setKlienciList] = useState<any[]>([]);
   const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
@@ -349,6 +356,7 @@ export default function DashboardPage() {
   const [zapisyNaZajecia, setZapisyNaZajecia] = useState<{ [key: string]: any[] }>({});
   const [rodzajeZajec, setRodzajeZajec] = useState<any[]>([]);
   const [wszystkieTransakcje, setWszystkieTransakcje] = useState<any[]>([]);
+  const [indywidualneLimity, setIndywidualneLimity] = useState<any[]>([]);
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -425,10 +433,12 @@ export default function DashboardPage() {
   const [dupTrainer, setDupTrainer] = useState('');
   const [dupLimit, setDupLimit] = useState('12');
 
+  // MODAL WYDARZEŃ: JEDNODNIOWE I KILKUDNIOWE
   const [isMultiDayModalOpen, setIsMultiDayModalOpen] = useState(false);
+  const [eventModeType, setEventModeType] = useState<'jednodniowe' | 'kilkudniowe'>('kilkudniowe');
   const [multiDayTitle, setMultiDayTitle] = useState('OBÓZ W WAŁCZU');
-  const [multiDayFrom, setMultiDayFrom] = useState('2026-08-04');
-  const [multiDayTo, setMultiDayTo] = useState('2026-08-06');
+  const [multiDayFrom, setMultiDayFrom] = useState(todayStr);
+  const [multiDayTo, setMultiDayTo] = useState(todayStr);
 
   const [calendarViewDate, setCalendarViewDate] = useState<Date | null>(new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -452,7 +462,6 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
-
   // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
@@ -727,11 +736,16 @@ export default function DashboardPage() {
                 await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', wMember.id);
               }
 
+              const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+              const dayName = dayNames[classStartDateTime.getDay()];
+              const formattedDate = `${dayName}, ${col.date}.${classYear}`;
+              const durationText = calculateDuration(cls.start, cls.end);
+
               await supabase.from('transakcje').insert([{
                 klient_id: wMember.id,
                 typ_operacji: 'zajecia_wypis',
                 class_key: cls.classKey,
-                opis: `Automatyczne zwolnienie z krzesełka: "${cls.title}" (${col.date} ${cls.start}) - upłynął wybrany czas gotowości (${cutoffMin} min przed startem). Zwrócono 1 wejście.`
+                opis: `Automatyczne zwolnienie z krzesełka: ${cls.title} (${formattedDate} ${cls.start}-${cls.end || ''}, ${durationText}) - upłynął wybrany czas gotowości (${cutoffMin} min przed startem). Zwrócono 1 wejście.`
               }]);
             }
 
@@ -826,6 +840,11 @@ export default function DashboardPage() {
               }
 
               const participantIds: number[] = [];
+              const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+              const dayName = dayNames[classStartDateTime.getDay()];
+              const formattedDate = `${dayName}, ${col.date}.${classYear}`;
+              const durationText = calculateDuration(cls.start, cls.end);
+
               for (const participant of classSignups) {
                 participantIds.push(participant.id);
                 const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
@@ -851,7 +870,7 @@ export default function DashboardPage() {
                     klient_id: participant.id,
                     typ_operacji: 'zajecia_wypis',
                     class_key: cls.classKey,
-                    opis: `Automatyczne odwołanie zajęć: "${cls.title}" (${col.date} ${cls.start}) z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono 1 wejście.`
+                    opis: `Automatyczne odwołanie zajęć: ${cls.title} (${formattedDate} ${cls.start}-${cls.end || ''}, ${durationText}) z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono 1 wejście.`
                   }]);
                 }
               }
@@ -934,6 +953,11 @@ export default function DashboardPage() {
           }
 
           const participantIds: number[] = [];
+          const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+          const dayName = dayNames[classStartDateTime.getDay()];
+          const formattedDate = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+          const durationText = calculateDuration(classItem.start, classItem.end);
+
           for (const participant of currentRemainingSignups) {
             participantIds.push(participant.id);
             const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
@@ -959,7 +983,7 @@ export default function DashboardPage() {
                 klient_id: participant.id,
                 typ_operacji: 'zajecia_wypis',
                 class_key: classKey,
-                opis: `Automatyczne odwołanie zajęć: "${classItem.title}" (${displayDate} ${classItem.start}) po wypisaniu uczestnika (pozostało: ${activeSignups.length}/${minRequired} os.). Zwrócono 1 wejście.`
+                opis: `Automatyczne odwołanie zajęć: ${classItem.title} (${formattedDate} ${classItem.start}-${classItem.end || ''}, ${durationText}) po wypisaniu uczestnika (pozostało: ${activeSignups.length}/${minRequired} os.). Zwrócono 1 wejście.`
               }]);
             }
           }
@@ -1258,7 +1282,8 @@ export default function DashboardPage() {
         nadpisaniaData,
         zapisyData,
         rodzajeData,
-        rawWydarzeniaRes
+        rawWydarzeniaRes,
+        limityKlubowiczowData
       ] = await Promise.all([
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
         supabase.auth.getSession(),
@@ -1272,8 +1297,13 @@ export default function DashboardPage() {
         fetchAllFromSupabase('nadpisania_zajec', 'id', false, 50),
         fetchAllFromSupabase('zapisy_zajec', 'created_at', false, 50),
         fetchAllFromSupabase('rodzaje_zajec', 'id', true, 20),
-        supabase.from('wydarzenia_kilkudniowe').select('*').gte('date_to', twoWeeksAgoStr).lte('date_from', oneYearForwardStr).order('date_from', { ascending: true })
+        supabase.from('wydarzenia_kilkudniowe').select('*').gte('date_to', twoWeeksAgoStr).lte('date_from', oneYearForwardStr).order('date_from', { ascending: true }),
+        fetchAllFromSupabase('indywidualne_limity_zapisow', 'created_at', false, 20)
       ]);
+
+      if (limityKlubowiczowData) {
+        setIndywidualneLimity(limityKlubowiczowData);
+      }
 
       let parsedRules = { ...bookingRules };
       if (rulesRes.data) {
@@ -1366,7 +1396,7 @@ export default function DashboardPage() {
             return k;
           });
 
-          const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === c['E-mail']);
+          const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
           const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
 
           return {
@@ -1648,7 +1678,7 @@ export default function DashboardPage() {
         setRodzajeZajec(parsedRodzaje);
       }
       
-      // Wydarzenia kilkudniowe
+      // Wydarzenia jedno- i kilkudniowe
       const rawWydarzenia = rawWydarzeniaRes.data;
       if (rawWydarzenia && rawWydarzenia.length > 0) {
         setWydarzeniaKilkudniowe(rawWydarzenia.map((w: any) => ({ 
@@ -1686,6 +1716,7 @@ export default function DashboardPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wydarzenia_kilkudniowe' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'indywidualne_limity_zapisow' }, () => loadData())
       .subscribe();
 
     window.addEventListener('storage', loadData);
@@ -1712,7 +1743,7 @@ export default function DashboardPage() {
     }
   };
 
-  // OBSŁUGA WYDARZEŃ KILKUDNIOWYCH (OBOZY ITP.)
+  // OBSŁUGA WYDARZEŃ JEDNODNIOWYCH I KILKUDNIOWYCH (OBOZY, DNI SPECJALNE ITP.)
   const handleSaveMultiDayEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!multiDayTitle.trim()) {
@@ -1720,11 +1751,13 @@ export default function DashboardPage() {
       return;
     }
 
+    const effectiveDateTo = eventModeType === 'jednodniowe' ? multiDayFrom : multiDayTo;
+
     const { error } = await supabase.from('wydarzenia_kilkudniowe').insert([
       {
         title: multiDayTitle.toUpperCase(),
         date_from: multiDayFrom,
-        date_to: multiDayTo
+        date_to: effectiveDateTo
       }
     ]);
 
@@ -1744,12 +1777,13 @@ export default function DashboardPage() {
       return {
         key: keys[index],
         date: `${dayStr}/${monthStr}`,
-        isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`
+        isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`,
+        fullDate: dayDate
       };
     });
 
     for (const col of daysList) {
-      if (col.isoDate >= multiDayFrom && col.isoDate <= multiDayTo) {
+      if (col.isoDate >= multiDayFrom && col.isoDate <= effectiveDateTo) {
         const standardoweDnia = zapisaneZajecia
           .filter((item: any) => item.days && item.days[col.key])
           .map((item: any) => {
@@ -1767,6 +1801,11 @@ export default function DashboardPage() {
           const zapisani = zapisyNaZajecia[classKey] || [];
           const participantIds: number[] = [];
           
+          const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+          const dayName = dayNames[col.fullDate.getDay()];
+          const formattedDate = `${dayName}, ${col.date}.${col.fullDate.getFullYear()}`;
+          const durationText = calculateDuration(item.start, item.end);
+
           for (const u of zapisani) {
             participantIds.push(u.id);
             const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.id).maybeSingle();
@@ -1792,7 +1831,7 @@ export default function DashboardPage() {
                 klient_id: u.id,
                 typ_operacji: 'zajecia_wypis',
                 class_key: classKey,
-                opis: `Wypisano z zajęć "${item.title}" (${col.date} ${item.start}) z powodu wydarzenia "${multiDayTitle}". Zwrócono 1 wejście.`
+                opis: `Wypisano z zajęć: ${item.title} (${formattedDate} ${item.start}-${item.end || ''}, ${durationText}) z powodu wydarzenia "${multiDayTitle}". Zwrócono 1 wejście.`
               }]);
             }
           }
@@ -1817,7 +1856,7 @@ export default function DashboardPage() {
   };
 
   const handleDeleteMultiDayEvent = async (id: number) => {
-    if (confirm("Czy na pewno chcesz usunąć to wydarzenie kilkudniowe? Zajęcia zostaną przywrócone bez zapisanych użytkowników.")) {
+    if (confirm("Czy na pewno chcesz usunąć to wydarzenie? Zajęcia zostaną przywrócone bez zapisanych użytkowników.")) {
       await supabase.from('wydarzenia_kilkudniowe').delete().eq('id', id);
       loadData();
       showToast("Wydarzenie zostało usunięte.");
@@ -1848,10 +1887,11 @@ export default function DashboardPage() {
       });
     }
 
+    const durationText = calculateDuration(newStart, newEnd);
     await supabase.from('transakcje').insert([{
       typ_operacji: 'edycja_zajec',
       class_key: classKey,
-      opis: `Zmieniono dane zajęć: ${editClassModalData.title} (${editClassModalData.displayDate}). Limit: ${newLimitNum}, Trener: ${editTrainer}, Godziny: ${newStart}-${newEnd}`
+      opis: `Zmieniono dane zajęć: ${editClassModalData.title} (${editClassModalData.displayDate} ${newStart}-${newEnd}, ${durationText}). Limit: ${newLimitNum}, Trener: ${editTrainer}`
     }]);
 
     setEditClassModalData(null);
@@ -1916,6 +1956,20 @@ export default function DashboardPage() {
     await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
 
     if (nextOdwołaneState) {
+      let d = 1, m = 1;
+      if (displayDate.includes('/')) {
+        [d, m] = displayDate.split('/').map(Number);
+      } else if (displayDate.includes('-')) {
+        const p = displayDate.split('-').map(Number);
+        m = p[1]; d = p[2];
+      }
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const dayDate = new Date(classYear, m - 1, d);
+      const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+      const dayName = dayNames[dayDate.getDay()];
+      const formattedDate = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+      const durationText = calculateDuration(item.start, item.end);
+
       for (const u of zapisani) {
         const { data: clientData } = await supabase.from('klienci').select('*').eq('id', u.klient_id).maybeSingle();
         if (clientData) {
@@ -1940,7 +1994,7 @@ export default function DashboardPage() {
             klient_id: u.klient_id,
             typ_operacji: 'zajecia_wypis',
             class_key: classKey,
-            opis: `Odwołano zajęcia: "${item.title}" (${displayDate} ${item.start}). Wypisano uczestnika (${u.status === 'krzesełko' ? 'lista rezerwowa' : 'lista główna'}) i zwrócono wejście.`
+            opis: `Odwołano zajęcia: ${item.title} (${formattedDate} ${item.start}-${item.end || ''}, ${durationText}). Wypisano uczestnika (${u.status === 'krzesełko' ? '🪑 Lista rezerwowa' : '✅ Lista główna'}) i zwrócono wejście.`
           }]);
         }
       }
@@ -2862,7 +2916,6 @@ export default function DashboardPage() {
     setWalletAmountInput(''); setWalletReasonInput(''); setIsTopUpWalletOpen(false);
     showToast("Saldo portfela zostało zaktualizowane.");
   };
-
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -3059,22 +3112,41 @@ export default function DashboardPage() {
       return; 
     }
 
-    const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
-      ? currentUser.karnetyKlubowicza[0].nazwa
-      : (currentUser.pass || 'OPEN');
-    const bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
+    // SPRAWDZENIE NADRZĘDNEGO INDYWIDUALNEGO LIMITU ZAPISU W PRZÓD DLA KLUBOWICZA
+    const userFullName = `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase();
+    const userIndividualLimit = indywidualneLimity.find((l: any) => 
+      (l.klubowicz_id && String(l.klubowicz_id) === String(currentUser.id)) ||
+      (l.klubowicz_nazwa && l.klubowicz_nazwa.trim().toLowerCase() === userFullName)
+    );
+
+    let bookingWindowDays = 14;
+    let isIndividualRuleApplied = false;
+
+    if (userIndividualLimit && Number(userIndividualLimit.dni_w_przod) > 0) {
+      bookingWindowDays = Number(userIndividualLimit.dni_w_przod);
+      isIndividualRuleApplied = true;
+    } else {
+      const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
+        ? currentUser.karnetyKlubowicza[0].nazwa
+        : (currentUser.pass || 'OPEN');
+      bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
+    }
+
     const maxBookingDate = new Date();
     maxBookingDate.setDate(maxBookingDate.getDate() + bookingWindowDays);
     maxBookingDate.setHours(23, 59, 59, 999);
 
     if (classStartDateTime > maxBookingDate) {
-      const reason = `Dla karnetu "${passName}" zapisy otwierają się ${bookingWindowDays} dni przed terminem zajęć.`;
+      const reason = isIndividualRuleApplied
+        ? `Posiadasz indywidualne ograniczenie zapisów do ${bookingWindowDays} dni w przód.`
+        : `Dla Twojego karnetu zapisy otwierają się ${bookingWindowDays} dni przed terminem zajęć.`;
+
       await supabase.from('booking_logs').insert([{
         action_type: 'BOOKING_BLOCKED',
         status: 'BLOCKED',
         reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-        rule_applied: 'booking_window_per_pass',
-        payload: { klient_id: currentUser.id, class_key: classKey, pass: passName, window_days: bookingWindowDays }
+        rule_applied: isIndividualRuleApplied ? 'INDYWIDUALNY_LIMIT_ZAPISOW' : 'booking_window_per_pass',
+        payload: { klient_id: currentUser.id, class_key: classKey, window_days: bookingWindowDays, is_individual: isIndividualRuleApplied }
       }]);
       showToast(`Nie możesz się zapisać! ${reason}`, 'error');
       return;
@@ -3101,6 +3173,10 @@ export default function DashboardPage() {
         return;
       }
     }
+
+    const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
+      ? currentUser.karnetyKlubowicza[0].nazwa
+      : (currentUser.pass || 'OPEN');
 
     if (currentUser.expiresDate) {
       const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
@@ -3234,21 +3310,25 @@ export default function DashboardPage() {
       }
     }
 
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayOfWeekName = dayNames[classStartDateTime.getDay()];
+    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
     const oblozenieStr = `${liveGlownaCount + 1}/${limitZajec}`;
     
     await supabase.from('transakcje').insert([{ 
       klient_id: currentUser.id, 
       typ_operacji: 'zajecia_zapis', 
       class_key: classKey, 
-      opis: `${currentUser.firstName || 'Klubowicz'} - Zapisano na zajęcia: ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}). Obłożenie: ${oblozenieStr}` 
+      opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Zapis na trening: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Status: ✅ Lista główna. Obłożenie: ${oblozenieStr}` 
     }]);
 
     await supabase.from('booking_logs').insert([{
       action_type: 'BOOKING_SUCCESS',
       status: 'SUCCESS',
       reason: `${currentUser.firstName || 'Klubowicz'} zapisany do ${classKey} (zapisany)`,
-      rule_applied: 'VALIDATION_PASSED',
-      payload: { klient_id: currentUser.id, class_key: classKey, status: 'zapisany' }
+      rule_applied: isIndividualRuleApplied ? 'INDYWIDUALNY_LIMIT_ZAPISOW' : 'VALIDATION_PASSED',
+      payload: { klient_id: currentUser.id, class_key: classKey, status: 'zapisany', is_individual: isIndividualRuleApplied }
     }]);
 
     showToast("Zostałeś pomyślnie zapisany na zajęcia!");
@@ -3285,6 +3365,20 @@ export default function DashboardPage() {
       }
     }
 
+    let d = 1, m = 1;
+    if (selectedClass.displayDate.includes('/')) {
+      [d, m] = selectedClass.displayDate.split('/').map(Number);
+    } else if (selectedClass.displayDate.includes('-')) {
+      const p = selectedClass.displayDate.split('-').map(Number);
+      m = p[1]; d = p[2];
+    }
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const classDateObj = new Date(classYear, m - 1, d);
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayOfWeekName = dayNames[classDateObj.getDay()];
+    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+
     const rezerwaCount = aktualni.filter((u: any) => u.status === 'krzesełko').length + 1;
     const cutoffLabel = cutoffMinutes >= 60 ? `${cutoffMinutes / 60}h` : `${cutoffMinutes} min`;
 
@@ -3292,7 +3386,7 @@ export default function DashboardPage() {
       klient_id: currentUser.id, 
       typ_operacji: 'zajecia_zapis', 
       class_key: classKey, 
-      opis: `${currentUser.firstName || 'Klubowicz'} - Zapisano na listę rezerwową (krzesełko #${rezerwaCount}): ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}). Czas gotowości: ${cutoffLabel} przed startem.` 
+      opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Zapis na listę rezerwową (krzesełko #${rezerwaCount}): ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Czas gotowości: ${cutoffLabel} przed startem. Status: 🪑 Krzesełko.` 
     }]);
 
     await supabase.from('booking_logs').insert([{
@@ -3384,12 +3478,18 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
+    const classDateObj = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr));
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayOfWeekName = dayNames[classDateObj.getDay()];
+    const formattedFullDate = `${dayOfWeekName}, ${dStr}.${mStr}.${classYear}`;
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
         typ_operacji: 'zajecia_wypis', 
         class_key: classKey, 
-        opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}). Zwrócono 1 wejście.` 
+        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Samodzielne wypisanie z zajęć: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Zwrócono 1 wejście.` 
       },
       { 
         klient_id: currentUser.id, 
@@ -3496,12 +3596,16 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', currentUser.id);
 
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayName = dayNames[fullDateObj.getDay()];
+    const formattedFullDate = `${dayName}, ${dayStr}.${monthStr}.${yearStr}`;
+
     await supabase.from('transakcje').insert([
       { 
         klient_id: currentUser.id, 
         typ_operacji: 'zajecia_wypis', 
         class_key: classKey, 
-        opis: `${currentUser.firstName || 'Klubowicz'} - Samodzielne wypisanie z zajęć: ${title} (${dayStr}/${monthStr} ${startStr}). Zwrócono 1 wejście.` 
+        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Samodzielne wypisanie z zajęć: ${title} (${formattedFullDate} ${startStr}). Zwrócono 1 wejście.` 
       },
       { 
         klient_id: currentUser.id, 
@@ -3523,7 +3627,7 @@ export default function DashboardPage() {
       pozostaliUczestnicy
     );
 
-    // Zintegrowany awans z krzesełka połączony z powiadomieniami PUSH
+    // Awans z krzesełka połączony z powiadomieniami PUSH
     if (!autoCancelled) {
       await promoteWaitlistMember(
         classInfo || { id: classId, title, start: startStr, limit: limitZajec },
@@ -3687,14 +3791,18 @@ export default function DashboardPage() {
       }
     }
 
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayOfWeekName = dayNames[classDateObj.getDay()];
+    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classDateObj.getFullYear()}`;
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
     const oblozenieStr = `${glownaLiveCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
-    const typWydarzenia = statusZpisu === 'krzesełko' ? `Zapisano na listę rezerwową (krzesełko)` : `Zapisano na zajęcia`;
+    const statusLabel = statusZpisu === 'krzesełko' ? '🪑 Krzesełko (Lista rezerwowa)' : '✅ Lista główna';
     
     await supabase.from('transakcje').insert([{ 
       klient_id: klient.id, 
       typ_operacji: 'zajecia_zapis', 
       class_key: classKey, 
-      opis: `${klient.firstName} ${klient.lastName} - ${typWydarzenia}: ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}). Obłożenie: ${oblozenieStr}` 
+      opis: `${klient.firstName} ${klient.lastName} - Zapis na trening: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Status: ${statusLabel}. Obłożenie: ${oblozenieStr}` 
     }]);
 
     await sendPushNotification(klient.id, {
@@ -3758,12 +3866,18 @@ export default function DashboardPage() {
       zapisyNadchodzace: filteredNadchodzace
     }).eq('id', clientToUnregister.id);
 
+    const classDateObj = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr));
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayOfWeekName = dayNames[classDateObj.getDay()];
+    const formattedFullDate = `${dayOfWeekName}, ${dStr}.${mStr}.${classYear}`;
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+
     await supabase.from('transakcje').insert([
       { 
         klient_id: clientToUnregister.id, 
         typ_operacji: 'zajecia_wypis', 
         class_key: classKey, 
-        opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z zajęć przez klub: ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}).${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}` 
+        opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z treningu przez klub: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}).${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}` 
       },
       { 
         klient_id: clientToUnregister.id, 
@@ -3781,7 +3895,6 @@ export default function DashboardPage() {
       pozostaliUczestnicy
     );
 
-    // Zintegrowany awans z krzesełka po usunięciu klubowicza przez admina/trenera
     if (!autoCancelled) {
       await promoteWaitlistMember(selectedClass, selectedClass.displayDate, aktualni, clientToUnregister.id);
     }
@@ -3824,11 +3937,25 @@ export default function DashboardPage() {
     const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', clientToMarkAbsent.id);
     if (error) { showToast(`Nie udało się oznaczyć: ${error.message}`, 'error'); return; }
     
+    let d = 1, m = 1;
+    if (selectedClass.displayDate.includes('/')) {
+      [d, m] = selectedClass.displayDate.split('/').map(Number);
+    } else if (selectedClass.displayDate.includes('-')) {
+      const p = selectedClass.displayDate.split('-').map(Number);
+      m = p[1]; d = p[2];
+    }
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const classDateObj = new Date(classYear, m - 1, d);
+    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+    const dayOfWeekName = dayNames[classDateObj.getDay()];
+    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+
     await supabase.from('transakcje').insert([{ 
       klient_id: clientToMarkAbsent.id, 
       typ_operacji: 'zajecia_wypis', 
       class_key: classKey, 
-      opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Został oznaczony jako NIEOBECNY na zajęciach: ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}).` 
+      opis: `${clientToMarkAbsent.firstName} ${clientToMarkAbsent.lastName} - Oznaczono jako NIEOBECNY na treningu: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}).` 
     }]);
     
     if (blokadaZapisow) {
@@ -3973,7 +4100,7 @@ export default function DashboardPage() {
 
           if (classInfo) {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-              // pomijamy
+              // pomijamy usunięte dla klubowicza
             } else {
               const [sh = '00', sm = '00'] = (classInfo.start || '00:00').split(':');
               const classStartDateTime = new Date(
@@ -4018,6 +4145,24 @@ export default function DashboardPage() {
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+
+  // FILTROWANIE OPERACJI / TRANSAKCJI DLA TABELI OPERACJI W PANELU ZARZĄDZANIA
+  const filteredOperationsList = wszystkieTransakcje.filter(t => {
+    if (!t) return false;
+    const tDate = t.created_at ? t.created_at.split('T')[0] : '';
+    if (operationsDateRange.from && tDate < operationsDateRange.from) return false;
+    if (operationsDateRange.to && tDate > operationsDateRange.to) return false;
+
+    if (!operationsSearchQuery.trim()) return true;
+    const q = operationsSearchQuery.toLowerCase();
+    const opisText = (t.opis || '').toLowerCase();
+    const opTypeText = (t.typ_operacji || '').toLowerCase();
+    const clientObj = klienciList.find(c => c.id === t.klient_id);
+    const clientName = clientObj ? `${clientObj.firstName || ''} ${clientObj.lastName || ''}`.toLowerCase() : '';
+    const clientEmail = clientObj?.email ? clientObj.email.toLowerCase() : '';
+
+    return opisText.includes(q) || opTypeText.includes(q) || clientName.includes(q) || clientEmail.includes(q);
+  });
 
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
@@ -4207,6 +4352,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* WIDOK DLA KLUBOWICZA I TRENERA: TWOJE ZAPISY I KARNETY */}
       {['klubowicz', 'trener'].includes(appRole) && currentUser && (
         <div className="space-y-10 animate-in fade-in zoom-in-95">
           
@@ -4396,413 +4542,583 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* SEKCJA: GRAFIK ZAJĘĆ */}
-      <section className="space-y-4">
-        <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
-          <div className="flex items-center gap-3">
-            <h2 className={`font-medium uppercase tracking-wider ${['klubowicz', 'trener'].includes(appRole) ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
-              {['klubowicz', 'trener'].includes(appRole) ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
-            </h2>
-            {appRole === 'admin' && (
+      {/* PANEL GŁÓWNY: PRZEŁĄCZNIK WIDOKÓW DLA OBSŁUGI KLUBU (GRAFIK vs TABELA OPERACJI) */}
+      {(appRole === 'admin' || appRole === 'trener') && (
+        <div className="flex items-center justify-between bg-white border border-sky-200 p-3 rounded-2xl shadow-sm">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAdminViewTab('grafik')}
+              className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                adminViewTab === 'grafik'
+                  ? 'bg-sky-950 text-white shadow-md'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              📅 Grafik Zajęć
+            </button>
+            <button
+              onClick={() => setAdminViewTab('operacje')}
+              className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                adminViewTab === 'operacje'
+                  ? 'bg-sky-950 text-white shadow-md'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              📋 Tabela Operacji ({wszystkieTransakcje.length})
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {adminViewTab === 'grafik' && appRole === 'admin' && (
               <button 
-                onClick={() => setIsMultiDayModalOpen(true)}
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-1.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+                onClick={() => {
+                  setEventModeType('kilkudniowe');
+                  setIsMultiDayModalOpen(true);
+                }}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
               >
-                <span>⛺</span> + WYDARZENIE KILKUDNIOWE
+                <span>⛺</span> + WYDARZENIE KLUBU
               </button>
             )}
           </div>
-          
-          <div className="flex items-center justify-center gap-4 bg-white border border-slate-200 rounded-3xl p-2.5 shadow-sm self-start md:self-auto w-full md:w-auto">
-            <button onClick={() => shiftWeek(-1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
-            </button>
-            
-            <div className="flex flex-col items-center min-w-[150px]">
-              <label className="cursor-pointer flex flex-col items-center group relative">
-                <span className="text-xs font-black text-slate-800 uppercase tracking-wider text-center group-hover:text-sky-600 transition-colors">
-                  {(() => {
-                    const d1 = getMonday(selectedWeekDate);
-                    const d2 = new Date(d1); d2.setDate(d2.getDate() + 4);
-                    return `${d1.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })} - ${d2.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })}`;
-                  })()}
-                </span>
-                <div className="mt-1.5 p-1.5 bg-slate-100 rounded-full border border-slate-200 shadow-sm group-hover:bg-sky-50 transition-colors">
-                  ✏️
-                </div>
-                <input 
-                  type="date" 
-                  className="absolute opacity-0 inset-0 w-full h-full cursor-pointer" 
-                  value={selectedWeekDate.toISOString().split('T')[0]} 
-                  onChange={handleDateChange} 
-                />
-              </label>
+        </div>
+      )}
+
+      {/* ZAKŁADKA 1: TABELA OPERACJI I ZAPISÓW (PEŁNE PRECYZYJNE DANE Z GRAFIKU) */}
+      {(appRole === 'admin' || appRole === 'trener') && adminViewTab === 'operacje' && (
+        <section className="space-y-4 animate-in fade-in">
+          {/* Pasek wyszukiwania i filtrów ze zrzutu ekranu */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                placeholder="Szukaj po nazwisku, zajęciach, dacie lub godzinie..."
+                value={operationsSearchQuery}
+                onChange={(e) => setOperationsSearchQuery(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 font-medium"
+              />
+              <svg className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
             </div>
 
-            <button onClick={() => shiftWeek(1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500 hidden sm:inline">📅 Zakres dat:</span>
+              <input
+                type="date"
+                value={operationsDateRange.from}
+                onChange={(e) => setOperationsDateRange({ ...operationsDateRange, from: e.target.value })}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none"
+              />
+              <span className="text-slate-400 font-bold">-</span>
+              <input
+                type="date"
+                value={operationsDateRange.to}
+                onChange={(e) => setOperationsDateRange({ ...operationsDateRange, to: e.target.value })}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none"
+              />
+            </div>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
-          {dashboardDays.map((col, idx) => {
-            const isToday =
-              col.fullDate.getDate() === today.getDate() &&
-              col.fullDate.getMonth() === today.getMonth() &&
-              col.fullDate.getFullYear() === today.getFullYear();
-            const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
-            const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
-            
-            const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
-              .filter((item: any) => item.days && item.days[col.key])
-              .map((item: any) => {
-                const classKey = `${item.id}_${col.date}`;
-                const override = nadpisaneZajeciaDni[classKey];
-                return override ? { ...item, ...override } : item;
-              })
-              .filter((item: any) => {
-                if (appRole === 'klubowicz' && item.isUsunięte) return false;
-                return true;
-              });
+          {/* Tabela operacji */}
+          <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50/80 text-slate-500 uppercase text-[10px] font-black tracking-wider border-b border-slate-200">
+                  <tr>
+                    <th className="py-3.5 px-5 whitespace-nowrap">DATA OPERACJI</th>
+                    <th className="py-3.5 px-5 whitespace-nowrap">KLUBOWICZ</th>
+                    <th className="py-3.5 px-5 whitespace-nowrap">AKCJA</th>
+                    <th className="py-3.5 px-5">ZAJĘCIA I SZCZEGÓŁY</th>
+                    <th className="py-3.5 px-5 text-right whitespace-nowrap">ŹRÓDŁO OPERACJI</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                  {filteredOperationsList.map((op) => {
+                    const client = klienciList.find(c => c.id === op.klient_id);
+                    const clientName = client ? `${client.firstName || ''} ${client.lastName || ''}`.trim() : `Klubowicz #${op.klient_id}`;
+                    const clientEmail = client?.email || '';
+                    
+                    const opDate = op.created_at ? new Date(op.created_at) : new Date();
+                    const opDateFormatted = `${opDate.getFullYear()}-${String(opDate.getMonth() + 1).padStart(2, '0')}-${String(opDate.getDate()).padStart(2, '0')}`;
+                    const opTimeFormatted = `${String(opDate.getHours()).padStart(2, '0')}:${String(opDate.getMinutes()).padStart(2, '0')}`;
 
-            const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
-              .filter((item: any) => item.displayDate === col.date)
-              .map((item: any) => {
-                const classKey = `${item.id}_${col.date}`;
-                const override = nadpisaneZajeciaDni[classKey];
-                return override ? { ...item, ...override } : item;
-              })
-              .filter((item: any) => {
-                if (appRole === 'klubowicz' && item.isUsunięte) return false;
-                return true;
-              });
+                    // Rozszyfrowanie zajęć na wypadek generycznego opisu
+                    let classDetailsResolved: any = null;
+                    if (op.class_key && op.class_key.includes('_')) {
+                      const [cId, dPart] = op.class_key.split('_');
+                      classDetailsResolved = findClassDetails(cId, dPart);
+                    }
 
-            const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
-            const isPastDay = col.isoDate < todayStr;
-            const isOtherDay = !isToday;
-            const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
-            const isExpanded = expandedDays[col.isoDate] || false;
+                    const isSignup = op.typ_operacji === 'zajecia_zapis';
+                    const isAwans = op.typ_operacji === 'awans_z_krzesełka';
+                    const isWypis = op.typ_operacji === 'zajecia_wypis';
 
-            const renderEventsAndClasses = () => (
-              <>
-                {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
-                  <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-xl p-3 text-center space-y-1.5 shadow-sm relative group">
-                    <div className="py-1 px-2 bg-rose-200 text-rose-950 font-black rounded-lg text-[11px] uppercase tracking-wider border border-rose-300">
-                      {wydarzenie.title}
-                    </div>
-                    <div className="text-[10px] text-rose-900 font-bold">
-                      Odwołano zajęcia z powodu wydarzenia
-                    </div>
-                    <div className="flex items-center justify-between text-[9px] text-rose-800 font-bold px-1 pt-1 border-t border-rose-200">
-                      <span>{wydarzenie.dateFrom} - {wydarzenie.dateTo}</span>
-                      {appRole === 'admin' && (
-                        <button 
-                          onClick={() => handleDeleteMultiDayEvent(wydarzenie.id)}
-                          className="text-rose-700 hover:text-rose-950 cursor-pointer underline"
-                          title="Usuń wydarzenie"
-                        >
-                          Usuń
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                <div className="space-y-2">
-                  {zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
-                    <div className="py-6 text-center text-[11px] text-slate-400 font-medium">
-                      Brak zajęć w tym dniu.
-                    </div>
-                  ) : (
-                    zajeciaDnia.map((item: any, classIdx: number) => {
-                      const durationText = calculateDuration(item.start, item.end);
-                      const classKey = `${item.id}_${col.date}`;
-                      const classKeyUnique = `${item.id}_${col.date}_${classIdx}`;
-                      const zapisani = zapisyNaZajecia[classKey] || [];
-                      const limitZajec = item.limit || 12;
-                      const zapisaniGlowna = zapisani.filter((s: any) => s.status === 'zapisany');
-                      const zapisaniKrzeselko = zapisani.filter((s: any) => s.status === 'krzesełko');
-                      const liczbaGlowna = zapisaniGlowna.length;
-                      const liczbaKrzesełko = zapisaniKrzeselko.length;
-                      const isFull = liczbaGlowna >= limitZajec;
-                      const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
-                      const isPastEvent = isPastDay || isPastTime;
-                      const isLockedForClient = ['klubowicz', 'trener'].includes(appRole) && isPastEvent;
+                    return (
+                      <tr key={op.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-4 px-5 whitespace-nowrap">
+                          <div className="font-bold text-slate-900">{opDateFormatted}</div>
+                          <div className="text-[11px] text-slate-400 font-mono">{opTimeFormatted}</div>
+                        </td>
 
-                      const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
-                      const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
-                      const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
-                      
-                      const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
+                        <td className="py-4 px-5 whitespace-nowrap">
+                          <div className="font-black text-slate-900">{clientName}</div>
+                          {clientEmail && <div className="text-[11px] text-slate-400">{clientEmail}</div>}
+                        </td>
 
-                      const mySignupEntry = currentUser ? zapisani.find((s: any) => String(s.id) === String(currentUser.id)) : null;
-                      const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
-                      const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
+                        <td className="py-4 px-5 whitespace-nowrap">
+                          <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                            isSignup
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : isAwans
+                              ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                              : isWypis
+                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                              : 'bg-slate-100 text-slate-800 border border-slate-200'
+                          }`}>
+                            {isSignup ? 'ZAPIS' : isAwans ? 'AWANS' : isWypis ? 'WYPIS' : op.typ_operacji}
+                          </span>
+                        </td>
 
-                      const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
-
-                      const cancelDeadlineInfo = getCancelDeadlineInfo(item, col.date);
-                      const isMenuOpen = activeMenuClassId === classKeyUnique;
-
-                      return (
-                        <div
-                          key={classIdx}
-                          onClick={() => {
-                            if (isClassCancelled || item.isUsunięte) return;
-                            if (isLockedForClient) {
-                              showToast("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.", 'info');
-                              return;
-                            }
-                            if (isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist) {
-                              showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${item.title}".`, 'warning');
-                            }
-                            setSelectedClass({
-                              ...item,
-                              displayDate: col.date,
-                              isoDate: col.isoDate, 
-                              durationText,
-                              programmedWorkout: progInfo
-                            });
-                            setIsSearchingClient(false);
-                            setSearchClientQuery('');
-                          }}
-                          style={{ borderTopWidth: '3.5px', borderTopStyle: 'solid', borderTopColor: topColor }}
-                          className={`bg-white border rounded-xl p-2.5 space-y-1.5 shadow-sm transition-all relative ${
-                            isMenuOpen ? 'z-[60]' : 'z-10'
-                          } ${
-                            isClassCancelled || item.isUsunięte
-                              ? 'border-rose-200 opacity-80 cursor-default bg-rose-50/20'
-                              : isLockedForClient
-                              ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
-                              : isUserInMainGroup
-                              ? 'border-emerald-300 ring-2 ring-emerald-400/40 bg-emerald-50/20 hover:shadow-md cursor-pointer'
-                              : isUserInWaitlist
-                              ? 'border-blue-300 ring-2 ring-blue-400/40 bg-blue-50/20 hover:shadow-md cursor-pointer'
-                              : isPassRestrictedForClass
-                              ? 'border-amber-200/80 bg-amber-50/15 hover:shadow-md cursor-pointer'
-                              : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
-                          }`}
-                        >
-                          <div className="flex justify-between items-center gap-1.5">
-                            <div className="flex items-baseline gap-1.5 truncate">
-                              <span className="text-xs sm:text-sm font-black text-slate-900 shrink-0">{item.start}</span>
-                              <h3 className="text-[11px] sm:text-xs font-bold text-slate-800 truncate" title={item.title}>{item.title}</h3>
-                            </div>
-                            
-                            <div className="flex items-center gap-1 shrink-0">
-                              {isUserInMainGroup && !isClassCancelled && !item.isUsunięte && (
-                                <span className="bg-emerald-500 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
-                                  ✅ ZAPISANY
-                                </span>
-                              )}
-                              {isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
-                                <span className="bg-blue-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
-                                  🪑 REZERWA
-                                </span>
-                              )}
-                              {isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
-                                <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[9px] sm:text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider inline-flex items-center gap-1 shadow-xs">
-                                  <span>⚠️</span> Inny karnet
-                                </span>
-                              )}
-
-                              {isLockedForClient && !isClassCancelled && !item.isUsunięte && (
-                                <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
-                                  🔒
-                                </span>
-                              )}
-
-                              {/* MENU ADMINISTRACYJNE ⚙️ */}
-                              {appRole === 'admin' && (
-                                <div className="relative" onClick={(e) => e.stopPropagation()}>
-                                  <button 
-                                    onClick={() => setActiveMenuClassId(isMenuOpen ? null : classKeyUnique)}
-                                    className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer text-xs"
-                                    title="Ustawienia zajęć"
-                                  >
-                                    ⚙️
-                                  </button>
-
-                                  {isMenuOpen && (
-                                    <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[100] text-xs">
-                                      <button onClick={() => { openHistoryModal(item, col.date); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
-                                        🕒 Historia zajęć
-                                      </button>
-                                      <button onClick={() => { showToast("Wiadomości wysyłane są bezpośrednio z poziomu aplikacji.", 'info'); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
-                                        ✉️ Wyślij wiadomość
-                                      </button>
-                                      <button onClick={() => { 
-                                        setEditClassModalData({ ...item, displayDate: col.date });
-                                        const [sh = '08', sm = '00'] = (item.start || '08:00').split(':');
-                                        const [eh = '09', em = '00'] = (item.end || '09:00').split(':');
-                                        setEditStartHour(sh);
-                                        setEditStartMin(sm);
-                                        setEditEndHour(eh);
-                                        setEditEndMin(em);
-                                        setEditTrainer(item.trainer || (zespolTrenerzy.length > 0 ? (zespolTrenerzy[0].imie_nazwisko || zespolTrenerzy[0].nazwa) : ''));
-                                        setEditLimit(String(item.limit || 12));
-                                        setActiveMenuClassId(null); 
-                                      }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
-                                        ✏️ Edytuj zajęcia
-                                      </button>
-
-                                      {!item.isOdwołane && !item.isUsunięte ? (
-                                        <>
-                                          <button onClick={() => { 
-                                            const [sh = '14', sm = '15'] = (item.start || '14:15').split(':');
-                                            const [eh = '15', em = '15'] = (item.end || '15:15').split(':');
-                                            setDupDate('2026-' + col.date.split('/').reverse().join('-'));
-                                            setDupStartHour(sh);
-                                            setDupStartMin(sm);
-                                            setDupEndHour(eh);
-                                            setDupEndMin(em);
-                                            setDupPlan(item.title || '');
-                                            setDupTrainer(item.trainer || (zespolTrenerzy.length > 0 ? (zespolTrenerzy[0].imie_nazwisko || zespolTrenerzy[0].nazwa) : ''));
-                                            setDupLimit(String(item.limit || 12));
-                                            setDuplicateModalData(true);
-                                            setActiveMenuClassId(null); 
-                                          }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
-                                            📋 Duplikuj
-                                          </button>
-                                          <button onClick={() => handleToggleOdwolajZajecia(item, col.date)} className="w-full text-left px-4 py-2 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 cursor-pointer">
-                                            ❌ Odwołaj zajęcia
-                                          </button>
-                                          <button onClick={() => handleToggleUsunZajecia(item, col.date)} className="w-full text-left px-4 py-2 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 cursor-pointer">
-                                            🗑️ Usuń zajęcia
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <button onClick={() => {
-                                          if (item.isOdwołane) handleToggleOdwolajZajecia(item, col.date);
-                                          if (item.isUsunięte) handleToggleUsunZajecia(item, col.date);
-                                        }} className="w-full text-left px-4 py-2 text-emerald-700 hover:bg-emerald-50 font-bold flex items-center gap-2 cursor-pointer">
-                                          🔄 Przywróć zajęcia
-                                        </button>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {(isUserInMainGroup || isUserInWaitlist) && !isClassCancelled && !item.isUsunięte && cancelDeadlineInfo && (
-                            <div className="pt-0.5">
-                              {cancelDeadlineInfo.status === 'countdown' ? (
-                                <div className="bg-amber-100/90 border border-amber-300 text-amber-950 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 animate-pulse">
-                                  {cancelDeadlineInfo.label}
-                                </div>
-                              ) : cancelDeadlineInfo.status === 'locked' ? (
-                                <div className="bg-rose-100 text-rose-800 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 border border-rose-200">
-                                  🔒 Brak możliwości wypisu
-                                </div>
-                              ) : null}
-                            </div>
-                          )}
-
-                          {progInfo && !isClassCancelled && !item.isUsunięte && (
-                            <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-1.5 text-[10px] space-y-0.5 shadow-2xs">
-                              <div className="flex items-center justify-between text-amber-950 font-black">
-                                <span className="truncate">🏋️ {progInfo.workout.tytul}</span>
-                                <span className="bg-amber-200 text-amber-900 px-1 py-0.2 rounded text-[9px] font-mono shrink-0 ml-1">#{progInfo.index}/{progInfo.total}</span>
-                              </div>
-                              {progInfo.workout.opis && (
-                                <div className="text-slate-600 text-[9px] line-clamp-2 leading-tight">
-                                  {progInfo.workout.opis}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          
-                          {item.isUsunięte ? (
-                            <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200">
-                              USUNIĘTE
-                            </div>
-                          ) : isClassCancelled ? (
-                            <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200 leading-tight">
-                              {autoCancelStatus.reason || 'ODWOŁANE PRZEZ KLUB'}
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-between gap-1 text-[10px]">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className={`font-bold px-1.5 py-0.5 rounded border leading-none ${
-                                  isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                }`}>
-                                  👥 {liczbaGlowna}/{limitZajec}
-                                </span>
-                                {liczbaKrzesełko > 0 && (
-                                  <span className="bg-blue-100 text-blue-900 font-bold px-1.5 py-0.5 rounded border border-blue-200 leading-none">
-                                    🪑 {liczbaKrzesełko}
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-slate-400 font-medium whitespace-nowrap text-[9px] sm:text-[10px]">
-                                ⏱ {durationText}
+                        <td className="py-4 px-5">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                              <span>📌</span>
+                              <span>
+                                {classDetailsResolved
+                                  ? `${classDetailsResolved.title} (${classDetailsResolved.displayDateStr} ${classDetailsResolved.start}-${classDetailsResolved.end})`
+                                  : (op.opis?.split(' - ')[1] || op.opis || 'Trening grupowy')}
                               </span>
                             </div>
-                          )}
-
-                          <div className="text-[10px] text-slate-600 font-medium border-t border-slate-100 pt-1 flex items-center gap-1 truncate">
-                            <span className="text-[9px]">👤</span>
-                            <span className="truncate">{item.trainer || 'Brak trenera'}</span>
+                            <div className="text-[11px] text-slate-500 pl-5 leading-tight">
+                              {op.opis}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    }))}
-                </div>
-              </>
-            );
+                        </td>
 
-            return (
-              <div
-                key={idx}
-                className={`space-y-2.5 p-3 rounded-2xl border-2 transition-all ${
-                  isToday
-                    ? 'bg-white border-rose-500 shadow-lg ring-2 ring-rose-300/60'
-                    : 'bg-sky-50/50 border-sky-200/80 shadow-sm'
-                }`}
-              >
-                {/* NOWY, WYSOKOKONTRASTOWY I DUŻY NAGŁÓWEK DNIA Z DATĄ (DOSTĘPNY DLA SŁABIEJ WIDZĄCYCH) */}
-                <div className={`p-3 rounded-xl text-center flex flex-col items-center justify-center gap-1.5 shadow-sm transition-all ${
-                  isToday 
-                    ? 'bg-gradient-to-br from-rose-600 to-rose-700 text-white shadow-rose-200' 
-                    : 'bg-gradient-to-br from-sky-900 to-slate-900 text-white'
-                }`}>
-                  <div className="text-sm sm:text-base font-black uppercase tracking-wider drop-shadow-xs">
-                    {col.day}
+                        <td className="py-4 px-5 text-right whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-600 bg-slate-100/80 px-2.5 py-1 rounded-lg border border-slate-200">
+                            <span>📱</span> Klubowicz (Aplikacja)
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredOperationsList.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-12 text-center text-slate-400 text-xs">
+                        Brak zarejestrowanych operacji w wybranym filtrze.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ZAKŁADKA 2: GRAFIK ZAJĘĆ */}
+      {(!((appRole === 'admin' || appRole === 'trener') && adminViewTab === 'operacje')) && (
+        <section className="space-y-4">
+          <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
+            <div className="flex items-center gap-3">
+              <h2 className={`font-medium uppercase tracking-wider ${['klubowicz', 'trener'].includes(appRole) ? 'text-[13px] text-slate-500 pl-1' : 'text-base sm:text-lg font-black text-sky-950'}`}>
+                {['klubowicz', 'trener'].includes(appRole) ? 'Grafik' : 'GRAFIK ZAJĘĆ'}
+              </h2>
+            </div>
+            
+            <div className="flex items-center justify-center gap-4 bg-white border border-slate-200 rounded-3xl p-2.5 shadow-sm self-start md:self-auto w-full md:w-auto">
+              <button onClick={() => shiftWeek(-1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+              </button>
+              
+              <div className="flex flex-col items-center min-w-[150px]">
+                <label className="cursor-pointer flex flex-col items-center group relative">
+                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider text-center group-hover:text-sky-600 transition-colors">
+                    {(() => {
+                      const d1 = getMonday(selectedWeekDate);
+                      const d2 = new Date(d1); d2.setDate(d2.getDate() + 4);
+                      return `${d1.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })} - ${d2.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' })}`;
+                    })()}
+                  </span>
+                  <div className="mt-1.5 p-1.5 bg-slate-100 rounded-full border border-slate-200 shadow-sm group-hover:bg-sky-50 transition-colors">
+                    ✏️
                   </div>
-                  <div className={`inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-lg text-xs sm:text-sm font-black font-mono tracking-wide shadow-xs ${
-                    isToday ? 'bg-white text-rose-800' : 'bg-white/15 text-sky-100 border border-white/20'
-                  }`}>
-                    <span>📅</span>
-                    <span>{col.date}</span>
-                  </div>
-                </div>
-                
-                {isOtherDay && hasAnyItems ? (
-                  <div className="space-y-2">
-                    <button
-                      onClick={() => toggleDay(col.isoDate)}
-                      className="w-full bg-slate-100 hover:bg-slate-200/80 text-slate-700 font-black text-[11px] uppercase tracking-wider py-2 px-3 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-300 shadow-xs"
-                    >
-                      {isPastDay
-                        ? (isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)
-                        : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
-                    </button>
-                    {isExpanded && (
-                      <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {renderEventsAndClasses()}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  renderEventsAndClasses()
-                )}
+                  <input 
+                    type="date" 
+                    className="absolute opacity-0 inset-0 w-full h-full cursor-pointer" 
+                    value={selectedWeekDate.toISOString().split('T')[0]} 
+                    onChange={handleDateChange} 
+                  />
+                </label>
               </div>
-            );
-          })}
-        </div>
-      </section>
+
+              <button onClick={() => shiftWeek(1)} className="w-10 h-10 bg-rose-500 hover:bg-rose-600 text-white rounded-full flex items-center justify-center shadow-md transition-transform hover:scale-105 cursor-pointer shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 items-start">
+            {dashboardDays.map((col, idx) => {
+              const isToday =
+                col.fullDate.getDate() === today.getDate() &&
+                col.fullDate.getMonth() === today.getMonth() &&
+                col.fullDate.getFullYear() === today.getFullYear();
+              const aktywneWydarzeniaDnia = wydarzeniaKilkudniowe.filter((w: any) => col.isoDate >= w.dateFrom && col.isoDate <= w.dateTo);
+              const czyObózAktywny = aktywneWydarzeniaDnia.length > 0;
+              
+              const standardoweDnia = czyObózAktywny ? [] : zapisaneZajecia
+                .filter((item: any) => item.days && item.days[col.key])
+                .map((item: any) => {
+                  const classKey = `${item.id}_${col.date}`;
+                  const override = nadpisaneZajeciaDni[classKey];
+                  return override ? { ...item, ...override } : item;
+                })
+                .filter((item: any) => {
+                  if (appRole === 'klubowicz' && item.isUsunięte) return false;
+                  return true;
+                });
+
+              const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
+                .filter((item: any) => item.displayDate === col.date)
+                .map((item: any) => {
+                  const classKey = `${item.id}_${col.date}`;
+                  const override = nadpisaneZajeciaDni[classKey];
+                  return override ? { ...item, ...override } : item;
+                })
+                .filter((item: any) => {
+                  if (appRole === 'klubowicz' && item.isUsunięte) return false;
+                  return true;
+                });
+
+              const zajeciaDnia = [...standardoweDnia, ...jednorazoweDnia].sort((a: any, b: any) => (a.start || "").localeCompare(b.start || ""));
+              const isPastDay = col.isoDate < todayStr;
+              const isOtherDay = !isToday;
+              const hasAnyItems = zajeciaDnia.length > 0 || aktywneWydarzeniaDnia.length > 0;
+              const isExpanded = expandedDays[col.isoDate] || false;
+
+              const renderEventsAndClasses = () => (
+                <>
+                  {aktywneWydarzeniaDnia.map((wydarzenie: any) => (
+                    <div key={wydarzenie.id} className="bg-rose-100 border border-rose-300 rounded-xl p-3 text-center space-y-1.5 shadow-sm relative group">
+                      <div className="py-1 px-2 bg-rose-200 text-rose-950 font-black rounded-lg text-[11px] uppercase tracking-wider border border-rose-300">
+                        {wydarzenie.title}
+                      </div>
+                      <div className="text-[10px] text-rose-900 font-bold">
+                        Odwołano zajęcia z powodu wydarzenia
+                      </div>
+                      <div className="flex items-center justify-between text-[9px] text-rose-800 font-bold px-1 pt-1 border-t border-rose-200">
+                        <span>{wydarzenie.dateFrom} - {wydarzenie.dateTo}</span>
+                        {appRole === 'admin' && (
+                          <button 
+                            onClick={() => handleDeleteMultiDayEvent(wydarzenie.id)}
+                            className="text-rose-700 hover:text-rose-950 cursor-pointer underline"
+                            title="Usuń wydarzenie"
+                          >
+                            Usuń
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="space-y-2">
+                    {zajeciaDnia.length === 0 && aktywneWydarzeniaDnia.length === 0 ? (
+                      <div className="py-6 text-center text-[11px] text-slate-400 font-medium">
+                        Brak zajęć w tym dniu.
+                      </div>
+                    ) : (
+                      zajeciaDnia.map((item: any, classIdx: number) => {
+                        const durationText = calculateDuration(item.start, item.end);
+                        const classKey = `${item.id}_${col.date}`;
+                        const classKeyUnique = `${item.id}_${col.date}_${classIdx}`;
+                        const zapisani = zapisyNaZajecia[classKey] || [];
+                        const limitZajec = item.limit || 12;
+                        const zapisaniGlowna = zapisani.filter((s: any) => s.status === 'zapisany');
+                        const zapisaniKrzeselko = zapisani.filter((s: any) => s.status === 'krzesełko');
+                        const liczbaGlowna = zapisaniGlowna.length;
+                        const liczbaKrzesełko = zapisaniKrzeselko.length;
+                        const isFull = liczbaGlowna >= limitZajec;
+                        const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
+                        const isPastEvent = isPastDay || isPastTime;
+                        const isLockedForClient = ['klubowicz', 'trener'].includes(appRole) && isPastEvent;
+
+                        const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
+                        const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
+                        const topColor = getTopBorderColor(item.title, isClassCancelled, item.isUsunięte);
+                        
+                        const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
+
+                        const mySignupEntry = currentUser ? zapisani.find((s: any) => String(s.id) === String(currentUser.id)) : null;
+                        const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
+                        const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
+
+                        const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
+
+                        const cancelDeadlineInfo = getCancelDeadlineInfo(item, col.date);
+                        const isMenuOpen = activeMenuClassId === classKeyUnique;
+
+                        return (
+                          <div
+                            key={classIdx}
+                            onClick={() => {
+                              if (isClassCancelled || item.isUsunięte) return;
+                              if (isLockedForClient) {
+                                showToast("Te zajęcia już się odbyły. Zapisy oraz wypisy nie są już możliwe.", 'info');
+                                return;
+                              }
+                              if (isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist) {
+                                showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${item.title}".`, 'warning');
+                              }
+                              setSelectedClass({
+                                ...item,
+                                displayDate: col.date,
+                                isoDate: col.isoDate, 
+                                durationText,
+                                programmedWorkout: progInfo
+                              });
+                              setIsSearchingClient(false);
+                              setSearchClientQuery('');
+                            }}
+                            style={{ borderTopWidth: '3.5px', borderTopStyle: 'solid', borderTopColor: topColor }}
+                            className={`bg-white border rounded-xl p-2.5 space-y-1.5 shadow-sm transition-all relative ${
+                              isMenuOpen ? 'z-[60]' : 'z-10'
+                            } ${
+                              isClassCancelled || item.isUsunięte
+                                ? 'border-rose-200 opacity-80 cursor-default bg-rose-50/20'
+                                : isLockedForClient
+                                ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[30%]'
+                                : isUserInMainGroup
+                                ? 'border-emerald-300 ring-2 ring-emerald-400/40 bg-emerald-50/20 hover:shadow-md cursor-pointer'
+                                : isUserInWaitlist
+                                ? 'border-blue-300 ring-2 ring-blue-400/40 bg-blue-50/20 hover:shadow-md cursor-pointer'
+                                : isPassRestrictedForClass
+                                ? 'border-amber-200/80 bg-amber-50/15 hover:shadow-md cursor-pointer'
+                                : 'border-sky-100 cursor-pointer hover:border-sky-300 hover:shadow-md'
+                            }`}
+                          >
+                            <div className="flex justify-between items-center gap-1.5">
+                              <div className="flex items-baseline gap-1.5 truncate">
+                                <span className="text-xs sm:text-sm font-black text-slate-900 shrink-0">{item.start}</span>
+                                <h3 className="text-[11px] sm:text-xs font-bold text-slate-800 truncate" title={item.title}>{item.title}</h3>
+                              </div>
+                              
+                              <div className="flex items-center gap-1 shrink-0">
+                                {isUserInMainGroup && !isClassCancelled && !item.isUsunięte && (
+                                  <span className="bg-emerald-500 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
+                                    ✅ ZAPISANY
+                                  </span>
+                                )}
+                                {isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
+                                  <span className="bg-blue-600 text-white font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs animate-in fade-in zoom-in-95">
+                                    🪑 REZERWA
+                                  </span>
+                                )}
+                                {isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist && !isClassCancelled && !item.isUsunięte && (
+                                  <span className="bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[9px] sm:text-[10px] px-2.5 py-1 rounded-md uppercase tracking-wider inline-flex items-center gap-1 shadow-xs">
+                                    <span>⚠️</span> Inny karnet
+                                  </span>
+                                )}
+
+                                {isLockedForClient && !isClassCancelled && !item.isUsunięte && (
+                                  <span className="text-slate-400 text-xs shrink-0" title="Zajęcia zablokowane (minęły)">
+                                    🔒
+                                  </span>
+                                )}
+
+                                {/* MENU ADMINISTRACYJNE ⚙️ */}
+                                {appRole === 'admin' && (
+                                  <div className="relative" onClick={(e) => e.stopPropagation()}>
+                                    <button 
+                                      onClick={() => setActiveMenuClassId(isMenuOpen ? null : classKeyUnique)}
+                                      className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer text-xs"
+                                      title="Ustawienia zajęć"
+                                    >
+                                      ⚙️
+                                    </button>
+
+                                    {isMenuOpen && (
+                                      <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[100] text-xs">
+                                        <button onClick={() => { openHistoryModal(item, col.date); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                          🕒 Historia zajęć
+                                        </button>
+                                        <button onClick={() => { showToast("Wiadomości wysyłane są bezpośrednio z poziomu aplikacji.", 'info'); setActiveMenuClassId(null); }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                          ✉️ Wyślij wiadomość
+                                        </button>
+                                        <button onClick={() => { 
+                                          setEditClassModalData({ ...item, displayDate: col.date });
+                                          const [sh = '08', sm = '00'] = (item.start || '08:00').split(':');
+                                          const [eh = '09', em = '00'] = (item.end || '09:00').split(':');
+                                          setEditStartHour(sh);
+                                          setEditStartMin(sm);
+                                          setEditEndHour(eh);
+                                          setEditEndMin(em);
+                                          setEditTrainer(item.trainer || (zespolTrenerzy.length > 0 ? (zespolTrenerzy[0].imie_nazwisko || zespolTrenerzy[0].nazwa) : ''));
+                                          setEditLimit(String(item.limit || 12));
+                                          setActiveMenuClassId(null); 
+                                        }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                          ✏️ Edytuj zajęcia
+                                        </button>
+
+                                        {!item.isOdwołane && !item.isUsunięte ? (
+                                          <>
+                                            <button onClick={() => { 
+                                              const [sh = '14', sm = '15'] = (item.start || '14:15').split(':');
+                                              const [eh = '15', em = '15'] = (item.end || '15:15').split(':');
+                                              setDupDate('2026-' + col.date.split('/').reverse().join('-'));
+                                              setDupStartHour(sh);
+                                              setDupStartMin(sm);
+                                              setDupEndHour(eh);
+                                              setDupEndMin(em);
+                                              setDupPlan(item.title || '');
+                                              setDupTrainer(item.trainer || (zespolTrenerzy.length > 0 ? (zespolTrenerzy[0].imie_nazwisko || zespolTrenerzy[0].nazwa) : ''));
+                                              setDupLimit(String(item.limit || 12));
+                                              setDuplicateModalData(true);
+                                              setActiveMenuClassId(null); 
+                                            }} className="w-full text-left px-4 py-2 text-slate-700 hover:bg-slate-50 font-bold flex items-center gap-2 cursor-pointer">
+                                              📋 Duplikuj
+                                            </button>
+                                            <button onClick={() => handleToggleOdwolajZajecia(item, col.date)} className="w-full text-left px-4 py-2 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 cursor-pointer">
+                                              ❌ Odwołaj zajęcia
+                                            </button>
+                                            <button onClick={() => handleToggleUsunZajecia(item, col.date)} className="w-full text-left px-4 py-2 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 cursor-pointer">
+                                              🗑️ Usuń zajęcia
+                                            </button>
+                                          </>
+                                        ) : (
+                                          <button onClick={() => {
+                                            if (item.isOdwołane) handleToggleOdwolajZajecia(item, col.date);
+                                            if (item.isUsunięte) handleToggleUsunZajecia(item, col.date);
+                                          }} className="w-full text-left px-4 py-2 text-emerald-700 hover:bg-emerald-50 font-bold flex items-center gap-2 cursor-pointer">
+                                            🔄 Przywróć zajęcia
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {(isUserInMainGroup || isUserInWaitlist) && !isClassCancelled && !item.isUsunięte && cancelDeadlineInfo && (
+                              <div className="pt-0.5">
+                                {cancelDeadlineInfo.status === 'countdown' ? (
+                                  <div className="bg-amber-100/90 border border-amber-300 text-amber-950 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 animate-pulse">
+                                    {cancelDeadlineInfo.label}
+                                  </div>
+                                ) : cancelDeadlineInfo.status === 'locked' ? (
+                                  <div className="bg-rose-100 text-rose-800 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 border border-rose-200">
+                                    🔒 Brak możliwości wypisu
+                                  </div>
+                                ) : null}
+                              </div>
+                            )}
+
+                            {progInfo && !isClassCancelled && !item.isUsunięte && (
+                              <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-1.5 text-[10px] space-y-0.5 shadow-2xs">
+                                <div className="flex items-center justify-between text-amber-950 font-black">
+                                  <span className="truncate">🏋️ {progInfo.workout.tytul}</span>
+                                  <span className="bg-amber-200 text-amber-900 px-1 py-0.2 rounded text-[9px] font-mono shrink-0 ml-1">#{progInfo.index}/{progInfo.total}</span>
+                                </div>
+                                {progInfo.workout.opis && (
+                                  <div className="text-slate-600 text-[9px] line-clamp-2 leading-tight">
+                                    {progInfo.workout.opis}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            
+                            {item.isUsunięte ? (
+                              <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200">
+                                USUNIĘTE
+                              </div>
+                            ) : isClassCancelled ? (
+                              <div className="py-0.5 px-2 bg-rose-100 text-rose-800 font-black text-center rounded text-[10px] uppercase tracking-wider border border-rose-200 leading-tight">
+                                {autoCancelStatus.reason || 'ODWOŁANE PRZEZ KLUB'}
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between gap-1 text-[10px]">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`font-bold px-1.5 py-0.5 rounded border leading-none ${
+                                    isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  }`}>
+                                    👥 {liczbaGlowna}/{limitZajec}
+                                  </span>
+                                  {liczbaKrzesełko > 0 && (
+                                    <span className="bg-blue-100 text-blue-900 font-bold px-1.5 py-0.5 rounded border border-blue-200 leading-none">
+                                      🪑 {liczbaKrzesełko}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-slate-400 font-medium whitespace-nowrap text-[9px] sm:text-[10px]">
+                                  ⏱ {durationText}
+                                </span>
+                              </div>
+                            )}
+
+                            <div className="text-[10px] text-slate-600 font-medium border-t border-slate-100 pt-1 flex items-center gap-1 truncate">
+                              <span className="text-[9px]">👤</span>
+                              <span className="truncate">{item.trainer || 'Brak trenera'}</span>
+                            </div>
+                          </div>
+                        );
+                      }))}
+                  </div>
+                </>
+              );
+
+              return (
+                <div
+                  key={idx}
+                  className={`space-y-2.5 p-3 rounded-2xl border-2 transition-all ${
+                    isToday
+                      ? 'bg-white border-rose-500 shadow-lg ring-2 ring-rose-300/60'
+                      : 'bg-sky-50/50 border-sky-200/80 shadow-sm'
+                  }`}
+                >
+                  <div className={`p-3 rounded-xl text-center flex flex-col items-center justify-center gap-1.5 shadow-sm transition-all ${
+                    isToday 
+                      ? 'bg-gradient-to-br from-rose-600 to-rose-700 text-white shadow-rose-200' 
+                      : 'bg-gradient-to-br from-sky-900 to-slate-900 text-white'
+                  }`}>
+                    <div className="text-sm sm:text-base font-black uppercase tracking-wider drop-shadow-xs">
+                      {col.day}
+                    </div>
+                    <div className={`inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-lg text-xs sm:text-sm font-black font-mono tracking-wide shadow-xs ${
+                      isToday ? 'bg-white text-rose-800' : 'bg-white/15 text-sky-100 border border-white/20'
+                    }`}>
+                      <span>📅</span>
+                      <span>{col.date}</span>
+                    </div>
+                  </div>
+                  
+                  {isOtherDay && hasAnyItems ? (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => toggleDay(col.isoDate)}
+                        className="w-full bg-slate-100 hover:bg-slate-200/80 text-slate-700 font-black text-[11px] uppercase tracking-wider py-2 px-3 rounded-xl flex items-center justify-center transition-colors cursor-pointer border border-slate-300 shadow-xs"
+                      >
+                        {isPastDay
+                          ? (isExpanded ? 'Zwiń minione zajęcia ⌃' : `Pokaż minione zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)
+                          : (isExpanded ? 'Zwiń zajęcia ⌃' : `Pokaż zajęcia (${zajeciaDnia.length + aktywneWydarzeniaDnia.length}) ⌄`)}
+                      </button>
+                      {isExpanded && (
+                        <div className="space-y-2 mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                          {renderEventsAndClasses()}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    renderEventsAndClasses()
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
       {appRole === 'admin' && (
@@ -5131,7 +5447,6 @@ export default function DashboardPage() {
           </div>
         );
       })()}
-
       {/* MODAL: ZARZĄDZANIE UCZESTNIKAMI ZAJĘĆ */}
       {selectedClass && (() => {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -5159,21 +5474,45 @@ export default function DashboardPage() {
         
         const canManageClass = appRole === 'admin' || appRole === 'trener';
 
+        // Precyzyjne sformatowanie daty treningu
+        let d = '01', m = '01';
+        if (selectedClass.displayDate && selectedClass.displayDate.includes('/')) {
+          [d, m] = selectedClass.displayDate.split('/');
+        }
+        const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+        const cDate = new Date(yr, parseInt(m) - 1, parseInt(d));
+        const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+        const dayName = dayNames[cDate.getDay()];
+        const fullDateDisplay = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${yr}`;
+        const durationDisplay = calculateDuration(selectedClass.start, selectedClass.end);
+
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
             <div className="bg-slate-100 border border-sky-200 rounded-3xl max-w-5xl w-full p-6 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto relative">
-              <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-sky-200 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <h3 className="font-black text-sm text-sky-950 uppercase tracking-wide">
-                    {selectedClass.title} {selectedClass.start}
-                  </h3>
-                  <span className="text-xs font-mono text-slate-400">{new Date().getFullYear()}-{selectedClass.displayDate.split('/').reverse().join('-')}</span>
+              
+              {/* Nagłówek ze szczegółami zajęć */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white px-6 py-4 rounded-2xl border border-sky-200 shadow-sm gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="text-base font-black text-sky-950 uppercase tracking-wide">
+                      🏋️ {selectedClass.title}
+                    </span>
+                    <span className="bg-sky-100 text-sky-900 font-mono font-bold text-xs px-2.5 py-0.5 rounded-lg border border-sky-200">
+                      ⏱ {selectedClass.start} - {selectedClass.end} ({durationDisplay})
+                    </span>
+                  </div>
+                  <div className="text-xs font-bold text-slate-500 flex items-center gap-2">
+                    <span>📅 {fullDateDisplay}</span>
+                    <span>•</span>
+                    <span>Prowadzący: <strong>{selectedClass.trainer || 'Brak trenera'}</strong></span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+
+                <div className="flex items-center gap-3 self-end sm:self-auto">
+                  <span className={`px-3 py-1.5 rounded-xl text-xs font-black border ${
                     isFull ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-sky-100 text-sky-900 border-sky-200'
                   }`}>
-                    {glownaNieposortowana.length}/{limitZajec}
+                    👥 {glownaNieposortowana.length}/{limitZajec}
                   </span>
                   <button
                     onClick={() => setSelectedClass(null)}
@@ -5184,6 +5523,7 @@ export default function DashboardPage() {
                 </div>
               </div>
 
+              {/* Opis zaprogramowanej jednostki */}
               {selectedClass.programmedWorkout && (
                 <div className="bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-white border-2 border-amber-300 rounded-2xl p-4 shadow-sm space-y-1.5 animate-in fade-in">
                   <div className="flex items-center justify-between">
@@ -5207,6 +5547,7 @@ export default function DashboardPage() {
                 </div>
               )}
 
+              {/* Główna lista zapisanych */}
               <div className="space-y-3">
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -5346,6 +5687,7 @@ export default function DashboardPage() {
                 )}
               </div>
 
+              {/* Lista rezerwowa (Krzesełko) */}
               {listaKrzesełko.length > 0 && (
                 <div className="space-y-3 pt-4 border-t border-sky-200">
                   <h4 className="font-black text-xs text-blue-900 uppercase tracking-wider flex items-center gap-2">
@@ -5482,7 +5824,7 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {/* DOLNY PANEL AKCJI W MODALU ZAJĘĆ */}
+              {/* Dolny pasek zapisu */}
               {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
                   {!isUserSignedUp ? (
@@ -5591,6 +5933,7 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
+
               <div className="flex justify-end pt-2 border-t border-sky-200 mt-2">
                 <button
                   onClick={() => setSelectedClass(null)}
@@ -5893,7 +6236,7 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* SEKCJA: KARNETY KLUBOWICZA W PROFILU */}
+              {/* Karnety klubowicza */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Karnety klubowicza</h3>
@@ -6069,7 +6412,7 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* SEKCJA: PORTFEL W PROFILU */}
+              {/* Portfel */}
               <div className="space-y-4 border-t border-slate-200 pt-4 mt-4">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex justify-between items-center">
@@ -6178,7 +6521,7 @@ export default function DashboardPage() {
                 <div>
                   <h4 className="font-black text-amber-900 text-xs uppercase flex items-center gap-2"><span>⏸️</span> Zawieś karnet</h4>
                   <p className="text-[10px] text-amber-800 leading-tight mt-1">
-                    Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopiero w momencie odwieszenia</strong> i dopiero wtedy doliczona do ważności karnetu.
+                    Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopiero w momencie odwieszenia</strong> i wtedy doliczona do ważności.
                   </p>
                 </div>
                 {suspendPassTarget.zawieszonyOd ? (
@@ -6234,7 +6577,7 @@ export default function DashboardPage() {
                 <div>
                   <h4 className="font-black text-rose-900 text-xs uppercase flex items-center gap-2"><span>🔒</span> Zablokuj karnet</h4>
                   <p className="text-[10px] text-rose-800 leading-tight mt-1">
-                    Blokuje możliwość wejścia do klubu oraz zapisu na zajęcia. Wypisuje ze wszystkich nadchodzących zajęć. <strong>NIE przedłuża</strong> ważności karnetu.
+                    Blokuje wejście do klubu oraz zapisy. Wypisuje z nadchodzących zajęć. <strong>NIE przedłuża</strong> ważności karnetu.
                   </p>
                 </div>
                 <form onSubmit={handleConfirmBlockPass} className="space-y-3 text-xs mt-4">
@@ -6550,58 +6893,107 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL Z GRAFIKU: WYDARZENIE KILKUDNIOWE */}
+      {/* MODAL Z GRAFIKU: WYDARZENIE JEDNODNIOWE LUB KILKUDNIOWE */}
       {isMultiDayModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⛺ Dodaj wydarzenie kilkudniowe</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                ⛺ Dodaj wydarzenie specjalne
+              </h3>
               <button onClick={() => setIsMultiDayModalOpen(false)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             
             <form onSubmit={handleSaveMultiDayEvent} className="space-y-4 text-xs">
+              {/* Przełącznik: Wydarzenie jednodniowe vs kilkudniowe */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Typ wydarzenia:</label>
+                <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setEventModeType('jednodniowe')}
+                    className={`py-2 text-center rounded-lg font-black uppercase text-[11px] transition-all cursor-pointer ${
+                      eventModeType === 'jednodniowe'
+                        ? 'bg-white text-sky-950 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    1 Dzień (Jednodniowe)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEventModeType('kilkudniowe')}
+                    className={`py-2 text-center rounded-lg font-black uppercase text-[11px] transition-all cursor-pointer ${
+                      eventModeType === 'kilkudniowe'
+                        ? 'bg-white text-sky-950 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Kilkudniowe (Obóz)
+                  </button>
+                </div>
+              </div>
+
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Nazwa wydarzenia *</label>
                 <input 
                   type="text"
                   required
-                  placeholder="np. OBÓZ W WAŁCZU"
+                  placeholder={eventModeType === 'jednodniowe' ? 'np. DZIEN OTWARTY / SWIETO KLUBU' : 'np. OBÓZ W WAŁCZU'}
                   value={multiDayTitle}
                   onChange={(e) => setMultiDayTitle(e.target.value)}
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {eventModeType === 'jednodniowe' ? (
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Data od *</label>
+                  <label className="font-bold text-slate-700 block">Data wydarzenia *</label>
                   <input 
                     type="date"
                     required
                     value={multiDayFrom}
-                    onChange={(e) => setMultiDayFrom(e.target.value)}
+                    onChange={(e) => {
+                      setMultiDayFrom(e.target.value);
+                      setMultiDayTo(e.target.value);
+                    }}
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Data do *</label>
-                  <input 
-                    type="date"
-                    required
-                    value={multiDayTo}
-                    onChange={(e) => setMultiDayTo(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
-                  />
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Data od *</label>
+                    <input 
+                      type="date"
+                      required
+                      value={multiDayFrom}
+                      onChange={(e) => setMultiDayFrom(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 block">Data do *</label>
+                    <input 
+                      type="date"
+                      required
+                      value={multiDayTo}
+                      onChange={(e) => setMultiDayTo(e.target.value)}
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900 text-[11px]">
-                ⚠️ W wybranym zakresie dat wszystkie zajęcia zostaną automatycznie oznaczone jako odwołane z powodu obozu/wydarzenia, a uczestnikom zostaną zwrócone wejścia.
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900 text-[11px] leading-relaxed">
+                ⚠️ W wybranym terminie wszystkie zajęcia z grafiku zostaną automatycznie oznaczone jako odwołane z powodu tego wydarzenia, a uczestnikom zostaną natychmiast zwrócone wejścia na karnety.
               </div>
 
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsMultiDayModalOpen(false)} className="bg-slate-100 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
-                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zapisz wydarzenie</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">
+                  {eventModeType === 'jednodniowe' ? 'Zapisz wydarzenie 1-dniowe' : 'Zapisz wydarzenie kilkudniowe'}
+                </button>
               </div>
             </form>
           </div>
