@@ -22,7 +22,7 @@ const DEFAULT_GROUP_CATEGORIES = [
 const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 24 24"
+    viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
     strokeWidth="2"
@@ -555,28 +555,52 @@ export default function ClubChat() {
 
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
-
-  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH 1-NA-1 (Z OCHRONĄ PRZED WYSYŁKĄ GLOBALNĄ)
-  const sendChatPushNotification = async (recipientId: number | string | undefined | null, senderName: string, messageText: string) => {
+  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH 1-NA-1
+  const sendChatPushNotification = async (
+    recipientId: number | string | undefined | null,
+    senderName: string,
+    messageText: string
+  ) => {
     try {
       if (!recipientId || recipientId === "undefined" || recipientId === "null") return;
-      const parsedNum = Number(recipientId);
-      if (parsedNum === SYSTEM_ID || isNaN(parsedNum) && !recipientId) return;
+      const senderId = secondaryUserId || currentUserId;
 
-      let query = supabase.from("klienci").select("id, push_subscription");
-      if (parsedNum === 999999999) {
+      // ZABEZPIECZENIE PRZED POWIADOMIENIEM DO SAMEGO SIEBIE
+      if (
+        String(recipientId) === String(senderId) ||
+        String(recipientId) === String(currentUserId)
+      ) {
+        return;
+      }
+
+      const parsedNum = Number(recipientId);
+
+      // Jeżeli nadawca jest adminem i pisze do użytkownika, nie kierujemy nic do systemu
+      if (parsedNum === SYSTEM_ID && isAdmin) {
+        return;
+      }
+
+      let query = supabase.from("klienci").select("id, push_subscription, E-mail");
+
+      // Wiadomość od klubowicza do Administracji / Systemu
+      if (parsedNum === 999999999 || (parsedNum === SYSTEM_ID && !isAdmin)) {
         query = query.in("E-mail", ADMIN_EMAILS);
       } else {
+        // Wiadomość skierowana bezpośrednio do danego klubowicza
         query = query.eq("id", recipientId);
       }
 
       const { data: clients, error: clientErr } = await query;
       if (clientErr || !clients || clients.length === 0) return;
 
-      // DODATKOWA WALIDACJA: Upewniamy się, że nie wysyłamy do innych osób
-      const strictlyTargetedClients = parsedNum === 999999999
-        ? clients
-        : clients.filter((c: any) => String(c.id) === String(recipientId));
+      // Ścisła weryfikacja odbiorców – odrzucenie profilu samego nadawcy
+      const strictlyTargetedClients = clients.filter((c: any) => {
+        if (parsedNum === 999999999 || parsedNum === SYSTEM_ID) {
+          const clientEmail = (c["E-mail"] || c.email || "").toLowerCase();
+          return ADMIN_EMAILS.includes(clientEmail) && String(c.id) !== String(senderId);
+        }
+        return String(c.id) === String(recipientId);
+      });
 
       const subscriptions = strictlyTargetedClients
         .map((c: any) => {
@@ -613,7 +637,14 @@ export default function ClubChat() {
   };
 
   // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH GRUPOWEGO
-  const sendGroupPushNotification = async (groupId: string, senderId: string, senderName: string, groupName: string, messageText: string, trainingObj?: any) => {
+  const sendGroupPushNotification = async (
+    groupId: string,
+    senderId: string,
+    senderName: string,
+    groupName: string,
+    messageText: string,
+    trainingObj?: any
+  ) => {
     try {
       let recipientIds: string[] = [];
 
@@ -639,7 +670,10 @@ export default function ClubChat() {
         }
       }
 
-      recipientIds = recipientIds.filter((id) => id && id !== String(senderId));
+      // Całkowite wykluczenie nadawcy z powiadomień push
+      recipientIds = recipientIds.filter(
+        (id) => id && id !== String(senderId) && id !== String(currentUserId)
+      );
       if (recipientIds.length === 0) return;
 
       const { data: clients } = await supabase
@@ -787,7 +821,6 @@ export default function ClubChat() {
 
       if (grafikData) setGrafikZajec(grafikData);
 
-      // POBIERANIE ZAPISÓW DO 10 000 DLA PEŁNEGO DOPASOWANIA
       const { data: zapisyData } = await supabase
         .from("zapisy_zajec")
         .select("*")
@@ -819,15 +852,23 @@ export default function ClubChat() {
     }
   };
 
-  // BEZPIECZNE POBIERANIE WIADOMOŚCI - BRAK WYCIEKÓW MIĘDZY KLUBOWICZAMI
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
     try {
-      const myIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
-      let query = supabase.from("czat_wiadomosci").select("*").order("created_at", { ascending: false }).limit(5000);
+      const myIds = [
+        String(currentUserId),
+        secondaryUserId ? String(secondaryUserId) : null,
+        isAdmin ? String(SYSTEM_ID) : null,
+        isAdmin ? "999999999" : null,
+      ].filter(Boolean);
 
-      // Jeżeli nie jest to administrator, klubowicz otrzymuje WYŁĄCZNIE wiadomości ze swoim udziałem lub grupy
+      let query = supabase
+        .from("czat_wiadomosci")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(5000);
+
       if (!isAdmin) {
         query = query.or(
           `nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")}),grupa_id.not.is.null`
@@ -839,20 +880,20 @@ export default function ClubChat() {
         setMessages([...data].reverse());
       }
     } catch (err) {
-      console.error("Błąd bezpiecznego pobierania wiadomości:", err);
+      console.error("Błąd pobierania wiadomości:", err);
     }
   };
 
-  // SUBSKRYPCJA REALTIME: BŁYSKAWICZNA AKTUALIZACJA NA ŻYWO Z OCHRONĄ PRYWATNOŚCI
+  // REALTIME SYNCHRONIZACJA Z BROADCASTEM PISANIA I ZAPASOWYM POLLINGIEM
   useEffect(() => {
     if (!currentUserId) return;
 
     fetchMessages();
     fetchGroupsAndTrainings();
 
-   const channel = supabase.channel("realtime-czat-live", {
-  config: { broadcast: { self: false } },
-});
+    const channel = supabase.channel("realtime-czat-live", {
+      config: { broadcast: { self: false } },
+    });
 
     realtimeChannelRef.current = channel;
 
@@ -861,14 +902,18 @@ export default function ClubChat() {
         "postgres_changes",
         { event: "*", schema: "public", table: "czat_wiadomosci" },
         (payload) => {
-          const myActualIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+          const myActualIds = [
+            String(currentUserId),
+            secondaryUserId ? String(secondaryUserId) : null,
+            isAdmin ? String(SYSTEM_ID) : null,
+            isAdmin ? "999999999" : null,
+          ].filter(Boolean);
 
           if (payload.eventType === "INSERT") {
             const newRow = payload.new;
             const senderKey = String(newRow.nadawca_id);
             const isDirectMsg = !newRow.grupa_id;
 
-            // FILTR BEZPIECZEŃSTWA: Jeżeli to czat prywatny, a użytkownik nie jest nadawcą, odbiorcą ani adminem - wiadomość zostaje odrzucona
             if (isDirectMsg && !isAdmin) {
               const amISender = myActualIds.includes(String(newRow.nadawca_id));
               const amIReceiver = myActualIds.includes(String(newRow.odbiorca_id));
@@ -877,7 +922,6 @@ export default function ClubChat() {
               }
             }
 
-            // Czyszczenie wskaźnika pisania
             setTypingUsers((prev) => {
               if (!prev[senderKey]) return prev;
               const updated = { ...prev };
@@ -885,7 +929,6 @@ export default function ClubChat() {
               return updated;
             });
 
-            // Odblokowanie czatu z listy usuniętych, jeśli przyszedł do mnie
             if (myActualIds.includes(String(newRow.odbiorca_id))) {
               setDeletedDirectChatTimestamps((prev) => {
                 if (prev[senderKey]) {
@@ -899,13 +942,11 @@ export default function ClubChat() {
               });
             }
 
-            // Natychmiastowe dopisanie wiadomości do stanu
             setMessages((prev) => {
               if (prev.some((m) => m.id === newRow.id)) return prev;
               return [...prev, newRow];
             });
 
-            // Aktualizacja aktywnej grupy na żywo
             if (selectedGroupRef.current && String(newRow.grupa_id) === String(selectedGroupRef.current.id)) {
               setGroupMessages((prev) => {
                 if (prev.some((m) => m.id === newRow.id)) return prev;
@@ -928,12 +969,17 @@ export default function ClubChat() {
       .on("broadcast", { event: "typing" }, ({ payload }) => {
         if (!payload) return;
         const { senderId, senderName, targetUserId, groupId } = payload;
-        const myActualIds = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+        const myActualIds = [
+          String(currentUserId),
+          secondaryUserId ? String(secondaryUserId) : null,
+          isAdmin ? String(SYSTEM_ID) : null,
+          isAdmin ? "999999999" : null,
+        ].filter(Boolean);
 
         const isCurrentDirectOpen =
           selectedUserRef.current &&
           String(selectedUserRef.current.id) === String(senderId) &&
-          myActualIds.includes(String(targetUserId));
+          (myActualIds.includes(String(targetUserId)) || (isAdmin && Number(targetUserId) === SYSTEM_ID));
 
         const isCurrentGroupOpen =
           selectedGroupRef.current &&
@@ -972,7 +1018,6 @@ export default function ClubChat() {
       })
       .subscribe();
 
-    // Inteligentny polling w tle co 3.5 sekundy przy otwartym oknie czatu
     const pollInterval = setInterval(() => {
       if (isOpen) {
         fetchMessages();
@@ -1071,7 +1116,13 @@ export default function ClubChat() {
   useEffect(() => {
     if (isOpen && selectedGroup && currentUserId) {
       const markGroupAsRead = async () => {
-        const myEffective = [String(currentUserId), secondaryUserId ? String(secondaryUserId) : null].filter(Boolean);
+        const myEffective = [
+          String(currentUserId),
+          secondaryUserId ? String(secondaryUserId) : null,
+          isAdmin ? String(SYSTEM_ID) : null,
+          isAdmin ? "999999999" : null,
+        ].filter(Boolean);
+
         await supabase
           .from("czat_wiadomosci")
           .update({
@@ -1087,7 +1138,7 @@ export default function ClubChat() {
       };
       markGroupAsRead();
     }
-  }, [isOpen, selectedGroup?.id, currentUserId, secondaryUserId]);
+  }, [isOpen, selectedGroup?.id, currentUserId, secondaryUserId, isAdmin]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1149,14 +1200,24 @@ export default function ClubChat() {
     }
   };
 
+  // OBSŁUGA GRAFIKU – WERYFIKACJA CZY ZAJĘCIA ODBYWAJĄ SIĘ DZISIAJ
   const isTrainingToday = (training: any) => {
     if (training.is_odwolane || training.is_usuniete) return false;
-    if (!training.days) return false;
-    const jsDay = new Date().getDay();
+    const now = new Date();
+    const jsDay = now.getDay();
     const isoDay = jsDay === 0 ? 7 : jsDay;
     const dayNames = ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"];
     const dayShortNames = ["nie", "pon", "wt", "śr", "czw", "pt", "sob"];
     const currentDayName = dayNames[jsDay];
+    const todayIso = now.toISOString().split("T")[0];
+
+    // Sprawdzenie konkretnej daty jednorazowej
+    const specificDate = String(training.data || training.date || "").trim();
+    if (specificDate && (specificDate.includes(todayIso) || specificDate.includes(todayIso.split("-").reverse().join(".")))) {
+      return true;
+    }
+
+    if (!training.days) return false;
 
     let daysArr: any[] = [];
     if (Array.isArray(training.days)) {
@@ -1180,14 +1241,14 @@ export default function ClubChat() {
     });
   };
 
-  // ROZBUDOWANE I DOKŁADNE DOPASOWANIE ZAPISANYCH UCZESTNIKÓW NA TRENING
+  // PRECYZYJNE DOPASOWANIE WSZYSTKICH ZAPISANYCH UCZESTNIKÓW NA DANY TRENING
   const getSignupsForTraining = (training: any) => {
     if (!training) return [];
     const tId = String(training.id || "").trim();
-    const tTitle = String(training.title || "").toLowerCase().trim();
-    const tStart = String(training.start || "").trim();
-    const todayIso = new Date().toISOString().split("T")[0];
+    const tTitle = String(training.title || training.nazwa || "").toLowerCase().trim();
+    const tStart = String(training.start || training.godzina || "").trim();
     const now = new Date();
+    const todayIso = now.toISOString().split("T")[0];
     const day = String(now.getDate()).padStart(2, "0");
     const month = String(now.getMonth() + 1).padStart(2, "0");
     const year = String(now.getFullYear());
@@ -1196,12 +1257,19 @@ export default function ClubChat() {
 
     return zapisyZajec.filter((z: any) => {
       if (!z || !z.klient_id) return false;
-      const st = String(z.status || "").toLowerCase();
-      if (st === "odwolany" || st === "odwołany" || st === "anulowany" || st === "cancelled") {
+      const st = String(z.status || "").toLowerCase().trim();
+      if (
+        st === "odwolany" ||
+        st === "odwołany" ||
+        st === "anulowany" ||
+        st === "cancelled" ||
+        st === "rezygnacja" ||
+        st === "wypisany"
+      ) {
         return false;
       }
 
-      // Bezpośrednie dopasowanie po ID zajęć z grafiku
+      // Bezpośrednie powiązanie po ID treningu
       const zClassId = String(z.zajecia_id || z.grafik_id || z.training_id || z.trening_id || "").trim();
       if (zClassId && zClassId === tId) {
         const zDate = String(z.data || z.data_zajec || z.date || z.created_at || "").trim();
@@ -1239,10 +1307,10 @@ export default function ClubChat() {
     });
   };
 
-  // TWORZENIE LUB AKTUALIZACJA CZATU TRENINGOWEGO Z SYNCHRONIZACJĄ UCZESTNIKÓW
+  // TWORZENIE ORAZ SYNCHRONIZACJA GRUPY CZATU TRENINGU
   const getOrCreateTrainingGroup = async (training: any) => {
     const todayStr = new Date().toLocaleDateString("pl-PL");
-    const groupName = `Trening: ${training.title} (${todayStr} ${training.start})`;
+    const groupName = `Trening: ${training.title || training.nazwa} (${todayStr} ${training.start || training.godzina})`;
 
     const signups = getSignupsForTraining(training);
     const signedClientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
@@ -1257,7 +1325,14 @@ export default function ClubChat() {
 
     const allMembers = Array.from(new Set([...signedClientIds, myClientId, ...adminIds, "999999999", String(SYSTEM_ID)]));
 
-    const existing = groups.find((g: any) => g.nazwa === groupName || (g.typ === "trening" && g.nazwa?.includes(training.title) && g.nazwa?.includes(training.start)));
+    const existing = groups.find(
+      (g: any) =>
+        g.nazwa === groupName ||
+        (g.typ === "trening" &&
+          g.nazwa?.includes(training.title || training.nazwa) &&
+          g.nazwa?.includes(training.start || training.godzina))
+    );
+
     if (existing) {
       let currentStoredRaw = existing.czlonkowie_ids;
       if (typeof currentStoredRaw === "string") {
@@ -1296,7 +1371,6 @@ export default function ClubChat() {
     }
     return null;
   };
-
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -1373,14 +1447,25 @@ export default function ClubChat() {
         let matchedTraining = null;
         if (isTrainingChat) {
           matchedTraining =
-            grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title) && selectedGroup.nazwa.includes(t.start)) ||
-            grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
+            grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title || t.nazwa) && selectedGroup.nazwa.includes(t.start || t.godzina)) ||
+            grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title || t.nazwa));
         }
 
-        sendGroupPushNotification(String(selectedGroup.id), String(senderId), currentUserName, selectedGroup.nazwa, messageText || "📎 Załącznik", matchedTraining);
+        sendGroupPushNotification(
+          String(selectedGroup.id),
+          String(senderId),
+          currentUserName,
+          selectedGroup.nazwa,
+          messageText || "📎 Załącznik",
+          matchedTraining
+        );
 
         if (targetReplyAuthorId && String(targetReplyAuthorId) !== String(senderId)) {
-          sendChatPushNotification(targetReplyAuthorId, currentUserName, `↩ Odpowiedział(a) na Twoją wiadomość w grupie "${selectedGroup.nazwa}": "${messageText || "📎 Załącznik"}"`);
+          sendChatPushNotification(
+            targetReplyAuthorId,
+            currentUserName,
+            `↩ Odpowiedział(a) na Twoją wiadomość w grupie "${selectedGroup.nazwa}": "${messageText || "📎 Załącznik"}"`
+          );
         }
       }
     } else if (selectedUser) {
@@ -1428,6 +1513,7 @@ export default function ClubChat() {
           ? `↩ Odpowiedział(a) na Twoją wiadomość: "${messageText || "📎 Załącznik"}"`
           : messageText || "📎 Załącznik";
 
+        // BEZWZGLĘDNIE WYSYŁAMY PUSH DO KLUBOWICZA (selectedUser.id), NIGDY DO SIEBIE
         sendChatPushNotification(selectedUser.id, currentUserName, pushBody);
       }
     }
@@ -1435,7 +1521,6 @@ export default function ClubChat() {
     setIsUploading(false);
   };
 
-  // Przypinanie wiadomości wewnątrz czatu
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
     const newStatus = !msg.przypinana;
@@ -1468,7 +1553,6 @@ export default function ClubChat() {
     setActiveMessageMenuId(null);
   };
 
-  // Reakcje emoji
   const handleToggleReaction = async (msg: any, emoji: string) => {
     const myIdStr = String(secondaryUserId || currentUserId);
     let currentReactions = msg.reakcje || {};
@@ -1505,7 +1589,6 @@ export default function ClubChat() {
     setActiveMessageMenuId(null);
   };
 
-  // Dołączanie / Opuszczanie grupy publicznej
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
     const myId = secondaryUserId || currentUserId;
     if (!myId) return;
@@ -1547,7 +1630,6 @@ export default function ClubChat() {
     fetchGroupsAndTrainings();
   };
 
-  // Wyciszenie powiadomień grupy
   const handleToggleMuteGroup = async () => {
     if (!selectedGroup) return;
     const myId = secondaryUserId || currentUserId;
@@ -1570,7 +1652,6 @@ export default function ClubChat() {
     }
   };
 
-  // Zaproszenie / Prośba o dołączenie do grupy zamkniętej
   const handleRequestJoinGroup = async (group: any) => {
     const myId = String(secondaryUserId || currentUserId);
     let pendingRequests: string[] = Array.isArray(group.prosby_ids) ? group.prosby_ids.map(String) : [];
@@ -1895,7 +1976,7 @@ export default function ClubChat() {
 
       setShowEditGroupModal(false);
       fetchGroupsAndTrainings();
-    } catch (err: any) {
+    } catch (err) {
       console.error("Błąd aktualizacji grupy:", err);
     }
   };
@@ -1905,9 +1986,10 @@ export default function ClubChat() {
   const effectiveIds = [
     String(currentUserId),
     secondaryUserId ? String(secondaryUserId) : null,
+    isAdmin ? String(SYSTEM_ID) : null,
+    isAdmin ? "999999999" : null,
   ].filter(Boolean);
 
-  // ŚCIŚLE IZOLOWANE WIADOMOŚCI DLA AKTYWNEGO CZATU 1:1
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     if (m.grupa_id) return false;
@@ -1946,9 +2028,9 @@ export default function ClubChat() {
     if (isTraining) {
       const matchedTraining =
         grafikZajec.find((t: any) =>
-          selectedGroup.nazwa.includes(t.title) &&
-          (selectedGroup.nazwa.includes(t.start) || !selectedGroup.nazwa.includes(":"))
-        ) || grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title));
+          selectedGroup.nazwa.includes(t.title || t.nazwa) &&
+          (selectedGroup.nazwa.includes(t.start || t.godzina) || !selectedGroup.nazwa.includes(":"))
+        ) || grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title || t.nazwa));
 
       if (matchedTraining) {
         const signups = getSignupsForTraining(matchedTraining);
@@ -1990,7 +2072,6 @@ export default function ClubChat() {
   const latestMessageTextMap = new Map<string, string>();
   const latestGroupMessageTimeMap = new Map<string, number>();
 
-  // NAPRAWIONE MAPOWANIE PODGLĄDU: CAŁKOWITA BLOKADA WIDOCZNOŚCI CUDZYCH WIADOMOŚCI PRYWATNYCH
   messages.forEach((m: any) => {
     const msgTime = new Date(m.created_at).getTime();
 
@@ -2005,7 +2086,6 @@ export default function ClubChat() {
       const isSenderMe = effectiveIds.includes(sId);
       const isReceiverMe = effectiveIds.includes(rId);
 
-      // Warunek krytyczny: Jeśli bieżący użytkownik nie jest stroną rozmowy 1:1, wiadomość jest pomijana
       if (!isSenderMe && !isReceiverMe && !isAdmin) {
         return;
       }
@@ -2267,7 +2347,6 @@ export default function ClubChat() {
           </div>
         )}
 
-        {/* DYMEK WIADOMOŚCI */}
         <div
           onClick={() => setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id)}
           className={`max-w-[85%] min-w-[130px] p-3 rounded-2xl text-xs leading-relaxed shadow-sm cursor-pointer select-none ${
@@ -2307,7 +2386,6 @@ export default function ClubChat() {
           {renderAttachment(msg)}
         </div>
 
-        {/* POPUP MENU REAKCJI, ODPOWIEDZI I PRZYPIĘCIA */}
         {activeMessageMenuId === msg.id && (
           <div className={`absolute z-30 bottom-full mb-1 bg-white border border-slate-200 shadow-xl rounded-2xl p-2 flex flex-col gap-1.5 ${isMe ? "right-0" : "left-0"}`}>
             <div className="flex items-center gap-1.5 text-base px-1">
@@ -2348,7 +2426,6 @@ export default function ClubChat() {
           </div>
         )}
 
-        {/* WYŚWIETLANIE REAKCJI */}
         {Object.keys(reactionsObj).length > 0 && (
           <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? "justify-end" : "justify-start"}`}>
             {Object.entries(reactionsObj).map(([emoji, userList]: [string, any]) => {
@@ -2669,7 +2746,6 @@ export default function ClubChat() {
       </div>
     );
   };
-
   return (
     <div
       ref={containerRef}
@@ -3088,7 +3164,6 @@ export default function ClubChat() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
-                    {/* SEKCJA: CZATY GRUPOWE W ZAKŁADCE PRYWATNE */}
                     {directTabGroupChats.length > 0 && (
                       <div className="space-y-1 mb-2 bg-slate-100/60 p-2 rounded-2xl border border-slate-200">
                         <div className="flex items-center justify-between px-1 pb-1">
@@ -3112,7 +3187,6 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {/* PRZYPIĘTE ROZMOWY 1-NA-1 */}
                     {pinnedDirectUsers.length > 0 && (
                       <div className="space-y-1 mb-2">
                         <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
@@ -3122,7 +3196,6 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {/* POZOSTAŁE ROZMOWY 1-NA-1 */}
                     {regularDirectUsers.length > 0 && (
                       <div className="space-y-1">
                         {(pinnedDirectUsers.length > 0 || directTabGroupChats.length > 0) && (
@@ -3141,7 +3214,6 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {/* SEKCJA ARCHIWUM TYLKO DLA ADMINA */}
                     {isAdmin && archivedDirectUsers.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
@@ -3197,7 +3269,6 @@ export default function ClubChat() {
                 </>
               )}
 
-              {/* LISTA GRUP */}
               {activeTab === "groups" && (
                 <div className="flex-1 flex flex-col overflow-hidden space-y-2 min-h-0">
                   <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-1.5 text-xs font-bold shrink-0">
@@ -3429,6 +3500,7 @@ export default function ClubChat() {
                             </div>
                           );
                         })}
+
                         {closedDiscoverGroups.length === 0 && (
                           <div className="py-12 text-center text-slate-400 text-xs space-y-1">
                             <div>Brak innych grup zamkniętych.</div>
@@ -3447,8 +3519,8 @@ export default function ClubChat() {
                     const matchedGroup = groups.find(
                       (g: any) =>
                         (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) &&
-                        g.nazwa?.includes(training.title) &&
-                        (g.nazwa?.includes(training.start) || !training.start)
+                        g.nazwa?.includes(training.title || training.nazwa) &&
+                        (g.nazwa?.includes(training.start || training.godzina) || !training.start)
                     );
                     const trainingUnread = matchedGroup
                       ? messages.filter(
@@ -3478,9 +3550,9 @@ export default function ClubChat() {
                             🏋️‍♂️
                           </div>
                           <div className="overflow-hidden">
-                            <div className="font-bold text-xs text-slate-900 truncate">{training.title}</div>
+                            <div className="font-bold text-xs text-slate-900 truncate">{training.title || training.nazwa}</div>
                             <div className="text-[10px] text-slate-500">
-                              Godz: {training.start} {training.trainer ? `• Trener: ${training.trainer}` : ""}
+                              Godz: {training.start || training.godzina} {training.trainer ? `• Trener: ${training.trainer}` : ""}
                             </div>
                           </div>
                         </div>
