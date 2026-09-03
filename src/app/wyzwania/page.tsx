@@ -1,9 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -11,7 +10,39 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 const ADMIN_EMAILS = ["maciejklaput@gmail.com", "maciejklaput@icloud.com"];
 const SYSTEM_ID = 5000;
 
-// ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE Z OBSŁUGĄ WYBRANYCH KOLUMN
+// DEFINICJA 21 DOSTĘPNYCH REGUŁ AUTOMATYZACJI
+export const REGUŁY_KATALOG = [
+  // 1. Treningi i frekwencja
+  { id: "TRENINGI_OGOLNE", nazwa: "Dowolny trening (obecność)", kategoria: "Treningi", ikona: "🏋️", opis: "Łączna liczba treningów z potwierdzoną obecnością", domyslnyProg: 10 },
+  { id: "TRENINGI_HYROX", nazwa: "Trening HYROX", kategoria: "Treningi", ikona: "⚡", opis: "Obecność na sesjach HYROX", domyslnyProg: 5, parametr: "hyrox" },
+  { id: "TRENINGI_OGOLNOROZWOJOWE", nazwa: "Ogólnorozwojowe", kategoria: "Treningi", ikona: "🤸", opis: "Obecność na zajęciach ogólnorozwojowych", domyslnyProg: 5, parametr: "ogólnorozwojowe" },
+  { id: "TRENINGI_NOGI_POSLADKI", nazwa: "Nogi i pośladki", kategoria: "Treningi", ikona: "🦵", opis: "Obecność na treningu Nogi i pośladki", domyslnyProg: 5, parametr: "nogi i pośladki" },
+  { id: "TRENINGI_BRZUCH", nazwa: "Brzuch", kategoria: "Treningi", ikona: "🍫", opis: "Obecność na treningu brzucha", domyslnyProg: 5, parametr: "brzuch" },
+  { id: "TRENINGI_HIIT_TABATA", nazwa: "HIIT / TABATA", kategoria: "Treningi", ikona: "🔥", opis: "Obecność na sesjach HIIT i TABATA", domyslnyProg: 5, parametr: "hiit" },
+  { id: "TRENINGI_SILOWE", nazwa: "Trening siłowy", kategoria: "Treningi", ikona: "💪", opis: "Obecność na treningach siłowych", domyslnyProg: 5, parametr: "siłow" },
+  { id: "TRENINGI_ROZCIAGANIE", nazwa: "Rozciąganie i mobilizacja", kategoria: "Treningi", ikona: "🧘", opis: "Obecność na mobilizacji i rozciąganiu", domyslnyProg: 5, parametr: "rozciąganie" },
+  
+  // 2. Częstotliwość i Czas
+  { id: "TRENINGI_DZIEN", nazwa: "Treningi w 1 dniu", kategoria: "Częstotliwość", ikona: "⏱️", opis: "Potwierdzona obecność na min. X sesjach jednego dnia", domyslnyProg: 2 },
+  { id: "TRENINGI_TYDZIEN", nazwa: "Treningi w 1 tygodniu", kategoria: "Częstotliwość", ikona: "📅", opis: "Liczba potwierdzonych treningów od poniedziałku do niedzieli", domyslnyProg: 4 },
+  { id: "TRENINGI_MIESIAC", nazwa: "Treningi w 1 miesiącu", kategoria: "Częstotliwość", ikona: "🗓️", opis: "Liczba potwierdzonych treningów w miesiącu kalendarzowym", domyslnyProg: 16 },
+  { id: "TRENINGI_ROK", nazwa: "Treningi w 1 roku", kategoria: "Częstotliwość", ikona: "🌍", opis: "Liczba potwierdzonych treningów w roku", domyslnyProg: 100 },
+  { id: "STAZ_DNI", nazwa: "Staż w klubie (Dni)", kategoria: "Częstotliwość", ikona: "⏳", opis: "Dni od momentu założenia konta klubowicza", domyslnyProg: 90 },
+
+  // 3. Pojedynki i Dieta
+  { id: "POJEDYNKI_UDZIAL", nazwa: "Udział w pojedynkach", kategoria: "Rywalizacja", ikona: "⚔️", opis: "Liczba stoczonych pojedynków Head-to-Head", domyslnyProg: 5 },
+  { id: "POJEDYNKI_WYGRANE", nazwa: "Wygrane pojedynki", kategoria: "Rywalizacja", ikona: "🥇", opis: "Liczba wygranych pojedynków sportowych", domyslnyProg: 3 },
+  { id: "POJEDYNKI_SERIA", nazwa: "Wygrane pojedynki z rzędu", kategoria: "Rywalizacja", ikona: "🔥", opis: "Seria kolejnych zwycięstw w pojedynkach sportowych", domyslnyProg: 3 },
+  { id: "ZYWIENIE_UDZIAL", nazwa: "Udział w wyzwaniach żywieniowych", kategoria: "Rywalizacja", ikona: "🥗", opis: "Ukończone wyzwania w kategorii żywieniowej", domyslnyProg: 3 },
+  { id: "ZYWIENIE_WYGRANE", nazwa: "Wygrane wyzwania żywieniowe", kategoria: "Rywalizacja", ikona: "🥑", opis: "Zwycięstwa w wyzwaniach żywieniowych", domyslnyProg: 2 },
+  { id: "ZYWIENIE_SERIA", nazwa: "Wygrane wyzwania żywieniowe z rzędu", kategoria: "Rywalizacja", ikona: "🎯", opis: "Seria kolejnych wygranych wyzwań żywieniowych", domyslnyProg: 3 },
+
+  // 4. Klub i Społeczność
+  { id: "REJESTRACJA", nazwa: "Rejestracja w aplikacji", kategoria: "Klub", ikona: "🚀", opis: "Odznaka powitalna za dołączenie do klubu", domyslnyProg: 1 },
+  { id: "REDUKCJA_WYGRANA", nazwa: "Wygrana w wyzwaniu redukcji", kategoria: "Klub", ikona: "🏆", opis: "1. miejsce w oficjalnym klubowym wyzwaniu redukcyjnym", domyslnyProg: 1 },
+  { id: "RECZNA", nazwa: "Tylko ręczne przyznanie", kategoria: "Klub", ikona: "✋", opis: "Odznaka specjalna nadawana wyłącznie przez Trenera/Admina", domyslnyProg: 1 },
+];
+
 const fetchAllFromSupabase = async (
   table: string, 
   selectQuery: string = '*', 
@@ -42,13 +73,12 @@ const fetchAllFromSupabase = async (
 };
 
 export default function WyzwaniaPage() {
-  // Stan użytkownika
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
   const [currentUserName, setCurrentUserName] = useState<string>("");
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
+  const [currentUserData, setCurrentUserData] = useState<any>(null);
   const [userRole, setUserRole] = useState<'admin' | 'klubowicz'>('klubowicz');
 
-  // Dane z bazy
   const [klienci, setKlienci] = useState<any[]>([]);
   const [wyzwania, setWyzwania] = useState<any[]>([]);
   const [odznaki, setOdznaki] = useState<any[]>([]);
@@ -59,15 +89,12 @@ export default function WyzwaniaPage() {
   const [rankingList, setRankingList] = useState<any[]>([]);
   const [badgeRankingList, setBadgeRankingList] = useState<any[]>([]);
   
-  // Stan interfejsu
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
   const [challengeToResolve, setChallengeToResolve] = useState<any | null>(null);
   const [selectedWinnerId, setSelectedWinnerId] = useState<any | null>(null);
   const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
-  
-  // Stan do powiększania odznaki w okienku modalnym
   const [selectedBadgeForZoom, setSelectedBadgeForZoom] = useState<any | null>(null);
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -77,32 +104,32 @@ export default function WyzwaniaPage() {
   const [modalKategoria, setModalKategoria] = useState<'sport' | 'zywienie'>('sport');
   const [newDyscyplina, setNewDyscyplina] = useState("");
 
-  // Stany tworzenia nowej odznaki w panelu Admina
+  // Stany formularza tworzenia nowej odznaki
   const [newBadgeNazwa, setNewBadgeNazwa] = useState("");
   const [newBadgeOpis, setNewBadgeOpis] = useState("");
   const [newBadgeWarunek, setNewBadgeWarunek] = useState("");
   const [newBadgeIkona, setNewBadgeIkona] = useState("");
   const [newBadgePunkty, setNewBadgePunkty] = useState("1");
-  const [newBadgeKategoria, setNewBadgeKategoria] = useState("Wyzwania");
-  const [newBadgeTypReguly, setNewBadgeTypReguly] = useState("RECZNA");
-  const [newBadgeWartoscProgowa, setNewBadgeWartoscProgowa] = useState("1");
+  const [newBadgeKategoria, setNewBadgeKategoria] = useState("Treningi");
+  const [newBadgeTypReguly, setNewBadgeTypReguly] = useState("TRENINGI_OGOLNE");
+  const [newBadgeWartoscProgowa, setNewBadgeWartoscProgowa] = useState("10");
   const [newBadgeParametrDodatkowy, setNewBadgeParametrDodatkowy] = useState("");
   const [isUploadingNewBadge, setIsUploadingNewBadge] = useState(false);
+  const [selectedRuleCategoryFilter, setSelectedRuleCategoryFilter] = useState("Wszystkie");
 
-  // Stany edycji odznak w panelu Admina
+  // Stany edycji odznak
   const [editingBadgeId, setEditingBadgeId] = useState<number | null>(null);
   const [editBadgeNazwa, setEditBadgeNazwa] = useState("");
   const [editBadgeOpis, setEditBadgeOpis] = useState("");
   const [editBadgeWarunek, setEditBadgeWarunek] = useState("");
   const [editBadgeIkona, setEditBadgeIkona] = useState("");
   const [editBadgePunkty, setEditBadgePunkty] = useState("1");
-  const [editBadgeKategoria, setEditBadgeKategoria] = useState("Wyzwania");
-  const [editBadgeTypReguly, setEditBadgeTypReguly] = useState("RECZNA");
-  const [editBadgeWartoscProgowa, setEditBadgeWartoscProgowa] = useState("1");
+  const [editBadgeKategoria, setEditBadgeKategoria] = useState("Treningi");
+  const [editBadgeTypReguly, setEditBadgeTypReguly] = useState("TRENINGI_OGOLNE");
+  const [editBadgeWartoscProgowa, setEditBadgeWartoscProgowa] = useState("10");
   const [editBadgeParametrDodatkowy, setEditBadgeParametrDodatkowy] = useState("");
   const [isUploadingEditBadge, setIsUploadingEditBadge] = useState(false);
 
-  // Stany edycji dyscyplin
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
 
@@ -110,21 +137,20 @@ export default function WyzwaniaPage() {
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Funkcja wysyłania powiadomień Push do klubowicza
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
       const rawIds = Array.isArray(clientIds) ? clientIds : [clientIds];
       const validIds = rawIds.filter(id => Number(id) !== SYSTEM_ID && Number(id) !== 999999999);
       if (validIds.length === 0) return;
 
-      const { data: clients } = await supabase
+      const { data: clientsList } = await supabase
         .from("klienci")
         .select("id, push_subscription")
         .in("id", validIds);
 
-      if (!clients || clients.length === 0) return;
+      if (!clientsList || clientsList.length === 0) return;
 
-      const subscriptions = clients
+      const subscriptions = clientsList
         .map((c: any) => {
           if (!c.push_subscription) return null;
           try {
@@ -150,18 +176,249 @@ export default function WyzwaniaPage() {
         })
       });
     } catch (err) {
-      console.error("Błąd podczas wysyłania powiadomienia Push z modułu wyzwań:", err);
+      console.error("Błąd podczas wysyłania powiadomienia Push:", err);
     }
   };
 
-  // 1. Zoptymalizowana równoległa inicjalizacja danych
+  // SILNIK AUTOMATYCZNEJ WERYFIKACJI I NADAWANIA 21 REGUŁ ODZNAK
+  const checkAndAwardAutomatedBadges = async (userId: number | string, allBadgeDefs: any[]) => {
+    if (!userId || !allBadgeDefs || allBadgeDefs.length === 0) return;
+
+    try {
+      // 1. Sprawdź odznaki, które klubowicz już zdobył
+      const { data: userExistingBadges } = await supabase
+        .from("klub_odznaki_klubowicze")
+        .select("odznaka_id")
+        .eq("klient_id", userId);
+
+      const ownedBadgeIds = new Set((userExistingBadges || []).map((b: any) => Number(b.odznaka_id)));
+
+      const badgesToEvaluate = allBadgeDefs.filter((def: any) => 
+        def.typ_reguly && def.typ_reguly !== 'RECZNA' && !ownedBadgeIds.has(Number(def.id))
+      );
+
+      if (badgesToEvaluate.length === 0) return;
+
+      // 2. Pobierz historię obecności: TYLKO POTWIERDZONE OBECNOŚCI (obecny === true)
+      const { data: attendancesRaw } = await supabase
+        .from("zapisy_zajec")
+        .select("id, class_key, obecny, created_at")
+        .eq("klient_id", userId)
+        .eq("obecny", true);
+
+      const attendances = attendancesRaw || [];
+
+      // Pobierz grafik zajęć do identyfikacji dyscyplin treningowych
+      const [grafikList, jednorazoweList, nadpisaniaList] = await Promise.all([
+        fetchAllFromSupabase('grafik_zajec', 'id, title, nazwa', 'id', true, 5),
+        fetchAllFromSupabase('zajecia_jednorazowe', 'id, title, nazwa, display_date', 'id', false, 5),
+        fetchAllFromSupabase('nadpisania_zajec', 'class_key, title, nazwa', 'id', false, 5),
+      ]);
+
+      const classNamesById = new Map<string, string>();
+      grafikList.forEach((g: any) => classNamesById.set(String(g.id), (g.title || g.nazwa || '').toLowerCase()));
+      jednorazoweList.forEach((j: any) => classNamesById.set(String(j.id), (j.title || j.nazwa || '').toLowerCase()));
+      const nadpisaniaMap = new Map<string, string>();
+      nadpisaniaList.forEach((n: any) => nadpisaniaMap.set(n.class_key, (n.title || n.nazwa || '').toLowerCase()));
+
+      const userConfirmedClassTitles: { title: string; date: Date; dateStr: string }[] = attendances.map((att: any) => {
+        const cKey = String(att.class_key || '');
+        const parts = cKey.split('_');
+        const cId = parts[0];
+        const dPart = parts[1] || '';
+        
+        let title = nadpisaniaMap.get(cKey) || classNamesById.get(cId) || '';
+        
+        let dateObj = new Date();
+        if (dPart.includes('-')) {
+          dateObj = new Date(dPart);
+        } else if (dPart.includes('/')) {
+          const [d, m] = dPart.split('/').map(Number);
+          dateObj = new Date(new Date().getFullYear(), m - 1, d);
+        } else if (att.created_at) {
+          dateObj = new Date(att.created_at);
+        }
+
+        const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+        return { title, date: dateObj, dateStr };
+      });
+
+      // 3. Pobierz historię pojedynków i wyzwań żywieniowych
+      const { data: userChallengesRaw } = await supabase
+        .from("klub_wyzwania")
+        .select("id, tworca_id, przeciwnik_id, zwyciezca_id, status, kategoria_wyzwania, created_at")
+        .or(`tworca_id.eq.${userId},przeciwnik_id.eq.${userId}`);
+
+      const userChallenges = userChallengesRaw || [];
+      const verifiedChallenges = userChallenges.filter((c: any) => c.status === 'zweryfikowane');
+
+      // 4. Pobierz staż klubowicza
+      const { data: clientInfo } = await supabase
+        .from("klienci")
+        .select("id, Zarejestrowany, registered, created_at")
+        .eq("id", userId)
+        .single();
+
+      const regDateRaw = clientInfo?.Zarejestrowany || clientInfo?.registered || clientInfo?.created_at || new Date().toISOString();
+      const regDate = new Date(regDateRaw);
+      const today = new Date();
+      const tenureDays = Math.max(0, Math.floor((today.getTime() - regDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+      // 5. Pobierz wygrane redukcje
+      const { data: reductionWinsRaw } = await supabase
+        .from("klub_redukcja_uczestnicy")
+        .select("id, status_koncowy, miejsce")
+        .eq("klient_id", userId)
+        .or("miejsce.eq.1,status_koncowy.ilike.%zwycięzca%,status_koncowy.ilike.%wygrana%");
+      
+      const reductionWinsCount = (reductionWinsRaw || []).length;
+
+      // OBLICZANIE WARTOŚCI DLA POSZCZEGÓLNYCH 21 REGUŁ
+      const metricValues: Record<string, number> = {};
+
+      // 1. Łączne treningi z potwierdzoną obecnością
+      metricValues["TRENINGI_OGOLNE"] = userConfirmedClassTitles.length;
+
+      // 2–8. Dyscypliny konkretne
+      metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => c.title.includes("hyrox")).length;
+      metricValues["TRENINGI_OGOLNOROZWOJOWE"] = userConfirmedClassTitles.filter(c => c.title.includes("ogólnorozwoj")).length;
+      metricValues["TRENINGI_NOGI_POSLADKI"] = userConfirmedClassTitles.filter(c => c.title.includes("nogi") || c.title.includes("pośladk")).length;
+      metricValues["TRENINGI_BRZUCH"] = userConfirmedClassTitles.filter(c => c.title.includes("brzuch")).length;
+      metricValues["TRENINGI_HIIT_TABATA"] = userConfirmedClassTitles.filter(c => c.title.includes("hiit") || c.title.includes("tabata")).length;
+      metricValues["TRENINGI_SILOWE"] = userConfirmedClassTitles.filter(c => c.title.includes("siłow")).length;
+      metricValues["TRENINGI_ROZCIAGANIE"] = userConfirmedClassTitles.filter(c => c.title.includes("rozciąg") || c.title.includes("mobilizacj")).length;
+
+      // 9–10. Pojedynki sportowe
+      const sportChallenges = verifiedChallenges.filter((c: any) => (c.kategoria_wyzwania || 'sport') === 'sport');
+      metricValues["POJEDYNKI_UDZIAL"] = sportChallenges.length;
+      metricValues["POJEDYNKI_WYGRANE"] = sportChallenges.filter((c: any) => String(c.zwyciezca_id) === String(userId)).length;
+
+      // 11. Rejestracja
+      metricValues["REJESTRACJA"] = 1;
+
+      // 12–13. Żywienie
+      const nutritionChallenges = verifiedChallenges.filter((c: any) => c.kategoria_wyzwania === 'zywienie');
+      metricValues["ZYWIENIE_UDZIAL"] = nutritionChallenges.length;
+      metricValues["ZYWIENIE_WYGRANE"] = nutritionChallenges.filter((c: any) => String(c.zwyciezca_id) === String(userId)).length;
+
+      // 14. Treningi w 1 tygodniu (Pn–Nd)
+      const weekCounts: Record<string, number> = {};
+      userConfirmedClassTitles.forEach(c => {
+        const d = new Date(c.date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(d.setDate(diff));
+        const key = `${monday.getFullYear()}-W${Math.ceil(monday.getDate() / 7)}`;
+        weekCounts[key] = (weekCounts[key] || 0) + 1;
+      });
+      metricValues["TRENINGI_TYDZIEN"] = Object.values(weekCounts).length > 0 ? Math.max(...Object.values(weekCounts)) : 0;
+
+      // 15. Treningi w 1 miesiącu kalendarzowym
+      const monthCounts: Record<string, number> = {};
+      userConfirmedClassTitles.forEach(c => {
+        const key = c.dateStr.substring(0, 7);
+        monthCounts[key] = (monthCounts[key] || 0) + 1;
+      });
+      metricValues["TRENINGI_MIESIAC"] = Object.values(monthCounts).length > 0 ? Math.max(...Object.values(monthCounts)) : 0;
+
+      // 16. Treningi w 1 roku
+      const yearCounts: Record<string, number> = {};
+      userConfirmedClassTitles.forEach(c => {
+        const key = c.dateStr.substring(0, 4);
+        yearCounts[key] = (yearCounts[key] || 0) + 1;
+      });
+      metricValues["TRENINGI_ROK"] = Object.values(yearCounts).length > 0 ? Math.max(...Object.values(yearCounts)) : 0;
+
+      // 17. Treningi w 1 dniu
+      const dayCounts: Record<string, number> = {};
+      userConfirmedClassTitles.forEach(c => {
+        dayCounts[c.dateStr] = (dayCounts[c.dateStr] || 0) + 1;
+      });
+      metricValues["TRENINGI_DZIEN"] = Object.values(dayCounts).length > 0 ? Math.max(...Object.values(dayCounts)) : 0;
+
+      // 18. Wygrane pojedynki z rzędu (seria)
+      let maxSportStreak = 0;
+      let currentSportStreak = 0;
+      sportChallenges.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      sportChallenges.forEach((c: any) => {
+        if (String(c.zwyciezca_id) === String(userId)) {
+          currentSportStreak++;
+          if (currentSportStreak > maxSportStreak) maxSportStreak = currentSportStreak;
+        } else {
+          currentSportStreak = 0;
+        }
+      });
+      metricValues["POJEDYNKI_SERIA"] = maxSportStreak;
+
+      // 19. Wygrane wyzwania żywieniowe z rzędu (seria)
+      let maxNutrStreak = 0;
+      let currentNutrStreak = 0;
+      nutritionChallenges.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      nutritionChallenges.forEach((c: any) => {
+        if (String(c.zwyciezca_id) === String(userId)) {
+          currentNutrStreak++;
+          if (currentNutrStreak > maxNutrStreak) maxNutrStreak = currentNutrStreak;
+        } else {
+          currentNutrStreak = 0;
+        }
+      });
+      metricValues["ZYWIENIE_SERIA"] = maxNutrStreak;
+
+      // 20. Staż w dniach
+      metricValues["STAZ_DNI"] = tenureDays;
+
+      // 21. Zwycięstwo w wyzwaniu redukcji
+      metricValues["REDUKCJA_WYGRANA"] = reductionWinsCount;
+
+      // NADAWANIE ODZNAK SPEŁNIAJĄCYCH WARUNKI
+      for (const badgeDef of badgesToEvaluate) {
+        const ruleType = badgeDef.typ_reguly;
+        const threshold = Number(badgeDef.wartosc_progowa) || 1;
+        const currentMetric = metricValues[ruleType] ?? 0;
+
+        if (currentMetric >= threshold) {
+          const { error: assignErr } = await supabase.from("klub_odznaki_klubowicze").insert([{
+            klient_id: userId,
+            odznaka_id: badgeDef.id
+          }]);
+
+          if (!assignErr) {
+            ownedBadgeIds.add(Number(badgeDef.id));
+            const badgePoints = badgeDef.punkty ? ` (${badgeDef.punkty} pkt)` : "";
+            
+            await supabase.from("czat_wiadomosci").insert([{
+              nadawca_id: SYSTEM_ID,
+              nadawca_nazwa: "Forma Marzeń",
+              nadawca_avatar: null,
+              odbiorca_id: userId,
+              tresc: `🏆 Gratulacje! Twoja aktywność została nagrodzona nową odznaką: "${badgeDef.nazwa}"${badgePoints}! Sprawdź Gablotę Odznak.`,
+              przeczytana: false
+            }]);
+
+            await sendPushNotification(userId, {
+              title: "🏆 Zdobyto nową odznakę klubową!",
+              body: `Brawo! Spełniłeś warunek i odblokowałeś odznakę "${badgeDef.nazwa}"!`,
+              url: "/wyzwania"
+            });
+          }
+        }
+      }
+
+      await fetchOdznaki(userId);
+      const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
+      await fetchRankings(klienci, updated);
+    } catch (error) {
+      console.error("Błąd podczas ewaluacji odznak automatycznych:", error);
+    }
+  };
+
   useEffect(() => {
     const initData = async () => {
       setIsLoading(true);
       try {
         const [sessionRes, klienciData] = await Promise.all([
           supabase.auth.getSession(),
-          fetchAllFromSupabase('klienci', 'id, Imię, Nazwisko, E-mail, avatarUrl, push_subscription', 'id', true, 10)
+          fetchAllFromSupabase('klienci', 'id, Imię, Nazwisko, E-mail, avatarUrl, push_subscription, Zarejestrowany, registered, created_at', 'id', true, 10)
         ]);
 
         const userEmail = (sessionRes.data.session?.user?.email || "").toLowerCase().trim();
@@ -177,6 +434,7 @@ export default function WyzwaniaPage() {
           name: `${c.Imię || c.firstName || ""} ${c.Nazwisko || c.lastName || ""}`.trim() || c["E-mail"] || "Klubowicz",
           email: (c["E-mail"] || c.email || "").toLowerCase().trim(),
           avatar: c.avatarUrl || c.avatar || null,
+          registered: c.Zarejestrowany || c.registered || c.created_at
         }));
 
         setKlienci(enriched);
@@ -190,6 +448,7 @@ export default function WyzwaniaPage() {
             myId = myProfile.id;
             setCurrentUserName(`${myProfile.name} (Admin)`);
             setCurrentUserAvatar(myProfile.avatar);
+            setCurrentUserData(myProfile);
           } else {
             myId = enriched.length > 0 ? enriched[0].id : 1;
             setCurrentUserName("Maciej Kłaput (Admin)");
@@ -198,21 +457,27 @@ export default function WyzwaniaPage() {
           myId = myProfile.id;
           setCurrentUserName(myProfile.name);
           setCurrentUserAvatar(myProfile.avatar);
+          setCurrentUserData(myProfile);
         }
 
         if (myId) {
           setCurrentUserId(myId);
 
-          const [assignedBadgesData] = await Promise.all([
+          const [assignedBadgesData, allDefs] = await Promise.all([
             fetchWszystkiePrzydzieloneOdznakiDirect(),
+            fetchAllOdznakiDef(),
             fetchWyzwania(),
             fetchOdznaki(myId),
-            fetchAllOdznakiDef(),
             fetchHistoriaOdznak(),
             fetchDyscypliny(),
           ]);
 
           await fetchRankings(enriched, assignedBadgesData);
+
+          // Uruchomienie automatycznego sprawdzania 21 reguł dla obecnego użytkownika
+          if (allDefs && allDefs.length > 0) {
+            await checkAndAwardAutomatedBadges(myId, allDefs);
+          }
         }
       } catch (error) {
         console.error("Błąd podczas ładowania modułu wyzwań:", error);
@@ -224,7 +489,6 @@ export default function WyzwaniaPage() {
     initData();
   }, []);
 
-  // 2. Pobieranie danych z bazy
   const fetchWyzwania = async () => {
     const data = await fetchAllFromSupabase("klub_wyzwania", "*", "created_at", false, 5);
     if (data) setWyzwania(data);
@@ -248,7 +512,11 @@ export default function WyzwaniaPage() {
 
   const fetchAllOdznakiDef = async () => {
     const data = await fetchAllFromSupabase("klub_odznaki_definicje", "*", "punkty", true, 2);
-    if (data) setWszystkieOdznaki(data);
+    if (data) {
+      setWszystkieOdznaki(data);
+      return data;
+    }
+    return [];
   };
 
   const fetchWszystkiePrzydzieloneOdznakiDirect = async () => {
@@ -277,15 +545,11 @@ export default function WyzwaniaPage() {
     if (data) setOdznakiHistoria(data);
   };
 
-  // Obliczanie obu rankingów z mapami O(1) i deduplikacją
   const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
     const challengesData = await fetchAllFromSupabase("klub_wyzwania_historia", "zwyciezca_id", "id", false, 5);
-    
-    // Mapa klientów O(1)
     const clientsMap = new Map<string, any>();
     clientsData.forEach((c: any) => clientsMap.set(String(c.id), c));
 
-    // 1. Ranking pojedynków
     if (challengesData && clientsData.length > 0) {
       const winsCount: { [key: string]: number } = {};
       challengesData.forEach((item: any) => {
@@ -306,7 +570,6 @@ export default function WyzwaniaPage() {
       setRankingList(winsRanking);
     }
 
-    // 2. Ranking odznak według punktów z deduplikacją
     const sourceBadges = badgesData || wszystkiePrzydzieloneOdznaki;
     if (clientsData.length > 0 && sourceBadges) {
       const badgeScores: { [key: string]: { points: number; count: number } } = {};
@@ -342,7 +605,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // Helper do uploadu grafiki odznaki
   const uploadBadgeImageFile = async (file: File): Promise<string | null> => {
     try {
       const fileExt = file.name.split('.').pop();
@@ -367,7 +629,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 3. Logika ręcznego przypisywania odznaki
   const assignBadge = async (userId: any, badgeId: any) => {
     const { error } = await supabase.from("klub_odznaki_klubowicze").insert([{
       klient_id: userId,
@@ -412,7 +673,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 4. Zarządzanie definicjami odznak w Katalogu (Admin)
   const handleCreateBadgeDef = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBadgeNazwa.trim() || !newBadgeOpis.trim()) {
@@ -420,30 +680,35 @@ export default function WyzwaniaPage() {
       return;
     }
 
+    const matchedRule = REGUŁY_KATALOG.find(r => r.id === newBadgeTypReguly);
+
     const { error } = await supabase.from("klub_odznaki_definicje").insert([{
       nazwa: newBadgeNazwa.trim(),
       opis: newBadgeOpis.trim(),
       warunek: newBadgeWarunek.trim() || newBadgeOpis.trim(),
-      ikona: newBadgeIkona.trim() || "🏆",
+      ikona: newBadgeIkona.trim() || matchedRule?.ikona || "🏆",
       punkty: parseInt(newBadgePunkty) || 1,
-      kategoria: newBadgeKategoria.trim() || "Wyzwania",
+      kategoria: newBadgeKategoria.trim() || matchedRule?.kategoria || "Treningi",
       typ_reguly: newBadgeTypReguly,
       wartosc_progowa: parseInt(newBadgeWartoscProgowa) || 1,
-      parametr_dodatkowy: newBadgeParametrDodatkowy.trim() || null
+      parametr_dodatkowy: newBadgeParametrDodatkowy.trim() || matchedRule?.parametr || null
     }]);
 
     if (!error) {
-      alert("Nowa odznaka została dodana do katalogu!");
+      alert("Nowa odznaka została dodana do katalogu reguł!");
       setNewBadgeNazwa("");
       setNewBadgeOpis("");
       setNewBadgeWarunek("");
       setNewBadgeIkona("");
       setNewBadgePunkty("1");
-      setNewBadgeKategoria("Wyzwania");
-      setNewBadgeTypReguly("RECZNA");
-      setNewBadgeWartoscProgowa("1");
+      setNewBadgeKategoria("Treningi");
+      setNewBadgeTypReguly("TRENINGI_OGOLNE");
+      setNewBadgeWartoscProgowa("10");
       setNewBadgeParametrDodatkowy("");
-      fetchAllOdznakiDef();
+      const updatedDefs = await fetchAllOdznakiDef();
+      if (currentUserId && updatedDefs) {
+        checkAndAwardAutomatedBadges(currentUserId, updatedDefs);
+      }
     } else {
       alert("Błąd tworzenia odznaki: " + error.message);
     }
@@ -456,30 +721,35 @@ export default function WyzwaniaPage() {
     setEditBadgeWarunek(badge.warunek || badge.opis || "");
     setEditBadgeIkona(badge.ikona || "");
     setEditBadgePunkty(String(badge.punkty || 1));
-    setEditBadgeKategoria(badge.kategoria || "Wyzwania");
-    setEditBadgeTypReguly(badge.typ_reguly || "RECZNA");
-    setEditBadgeWartoscProgowa(String(badge.wartosc_progowa || 1));
+    setEditBadgeKategoria(badge.kategoria || "Treningi");
+    setEditBadgeTypReguly(badge.typ_reguly || "TRENINGI_OGOLNE");
+    setEditBadgeWartoscProgowa(String(badge.wartosc_progowa || 10));
     setEditBadgeParametrDodatkowy(badge.parametr_dodatkowy || "");
   };
 
   const handleSaveEditBadge = async (id: number) => {
+    const matchedRule = REGUŁY_KATALOG.find(r => r.id === editBadgeTypReguly);
+
     const { error } = await supabase.from("klub_odznaki_definicje").update({
       nazwa: editBadgeNazwa.trim(),
       opis: editBadgeOpis.trim(),
       warunek: editBadgeWarunek.trim(),
       ikona: editBadgeIkona.trim() || "🏆",
       punkty: parseInt(editBadgePunkty) || 1,
-      kategoria: editBadgeKategoria.trim(),
+      kategoria: editBadgeKategoria.trim() || matchedRule?.kategoria || "Treningi",
       typ_reguly: editBadgeTypReguly,
       wartosc_progowa: parseInt(editBadgeWartoscProgowa) || 1,
-      parametr_dodatkowy: editBadgeParametrDodatkowy.trim() || null
+      parametr_dodatkowy: editBadgeParametrDodatkowy.trim() || matchedRule?.parametr || null
     }).eq("id", id);
 
     if (!error) {
       alert("Odznaka została zaktualizowana!");
       setEditingBadgeId(null);
-      fetchAllOdznakiDef();
-      if (currentUserId) fetchOdznaki(currentUserId);
+      const updatedDefs = await fetchAllOdznakiDef();
+      if (currentUserId) {
+        fetchOdznaki(currentUserId);
+        if (updatedDefs) checkAndAwardAutomatedBadges(currentUserId, updatedDefs);
+      }
       const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
       fetchRankings(klienci, updated);
     } else {
@@ -500,7 +770,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 5. Zarządzanie dyscyplinami
   const handleAddDyscyplina = async () => {
     if (!newDyscyplina.trim()) return;
     const { error } = await supabase.from("klub_dyscypliny").insert([{ nazwa: newDyscyplina.trim() }]);
@@ -536,7 +805,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 6. Usuwanie wyzwania przez Admina
   const handleDeleteWyzwanie = async (challengeId: number) => {
     if (!confirm("Czy na pewno chcesz usunąć to wyzwanie?")) return;
     const { error } = await supabase.from("klub_wyzwania").delete().eq("id", challengeId);
@@ -548,14 +816,12 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 7. Otwieranie modalu wyboru zwycięzcy
   const openWinnerModal = (challenge: any) => {
     setChallengeToResolve(challenge);
     setSelectedWinnerId(challenge.tworca_id); 
     setIsWinnerModalOpen(true);
   };
 
-  // 8. Zatwierdzenie zwycięzcy i wyzwania
   const handleConfirmWinner = async () => {
     if (!challengeToResolve || !selectedWinnerId) return;
 
@@ -583,12 +849,16 @@ export default function WyzwaniaPage() {
       setChallengeToResolve(null);
       fetchWyzwania();
       fetchRankings(klienci);
+
+      if (currentUserId) {
+        const defs = await fetchAllOdznakiDef();
+        if (defs) checkAndAwardAutomatedBadges(currentUserId, defs);
+      }
     } else {
       alert("Błąd: " + error.message);
     }
   };
 
-  // 9. Rzucenie nowego wyzwania + Push
   const handleCreateChallenge = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
@@ -639,7 +909,6 @@ export default function WyzwaniaPage() {
     fetchWyzwania();
   };
 
-  // 10. Zmiana statusu wyzwania + Push
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
     const { error } = await supabase
       .from("klub_wyzwania")
@@ -663,20 +932,14 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // 11. Wyszukiwanie przeciwnika
   const filteredOpponents = klienci
     .filter((k: any) => String(k.id) !== String(currentUserId))
     .filter((k: any) => {
       const q = searchQuery.trim().toLowerCase();
       if (!q) return false;
-
       const fName = (k.firstName || "").toLowerCase();
       const lName = (k.lastName || "").toLowerCase();
-
-      const matchSurname = lName.startsWith(q);
-      const matchNameInitial = fName.startsWith(q.split(' ')[0]) && (q.includes(' ') ? lName.startsWith(q.split(' ')[1]) : true);
-      
-      return matchSurname || matchNameInitial;
+      return lName.startsWith(q) || fName.startsWith(q);
     });
 
   const getClientName = (id: any) => {
@@ -718,35 +981,25 @@ export default function WyzwaniaPage() {
     return [...wszystkieOdznaki].sort((a, b) => {
       const aUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
       const aMember = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
-      
       const bUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
       const bMember = selectedMemberForComparison.badges.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
 
       const aScore = (aUser ? 1 : 0) + (aMember ? 1 : 0);
       const bScore = (bUser ? 1 : 0) + (bMember ? 1 : 0);
 
-      if (bScore !== aScore) {
-        return bScore - aScore;
-      }
-
+      if (bScore !== aScore) return bScore - aScore;
       return (b.punkty || 0) - (a.punkty || 0);
     });
   };
 
   const formatRegulaLabel = (typ: string, prog?: number) => {
-    switch (typ) {
-      case "REJESTRACJA": return `🚀 Auto: Za rejestrację`;
-      case "TRENINGI_ILOSC": return `⚡ Auto: ${prog || 1} treningów`;
-      case "WYZWANIA_WYGRANE": return `⚔️ Auto: ${prog || 1} wygranych pojedynków`;
-      case "WYZWANIA_UDZIAL": return `⚔️ Auto: ${prog || 1} stoczonych pojedynków`;
-      case "ZYWIENIE_UDZIAL": return `🥗 Auto: ${prog || 1} wyzwań żywieniowych`;
-      case "ZYWIENIE_WYGRANE": return `🥗 Auto: ${prog || 1} wygranych wyzwań żywieniowych`;
-      case "AUTO_ZAPISY": return `📅 Auto: Aktywny stały zapis`;
-      default: return `✋ Ręczna (Admin)`;
-    }
+    const matched = REGUŁY_KATALOG.find(r => r.id === typ);
+    if (!matched) return `✋ Ręczna (Admin)`;
+    if (typ === 'REJESTRACJA') return `🚀 Auto: Za rejestrację`;
+    if (typ === 'RECZNA') return `✋ Ręczna (Admin)`;
+    return `${matched.ikona} Auto: ${matched.nazwa} (Próg: ${prog || 1})`;
   };
 
-  // Helper do renderowania listy wyzwań dla wybranej kategorii
   const renderChallengesList = (kategoria: 'sport' | 'zywienie') => {
     const filteredActive = wyzwania.filter(w => {
       const kat = w.kategoria_wyzwania || 'sport';
@@ -806,7 +1059,6 @@ export default function WyzwaniaPage() {
           )}
         </div>
 
-        {/* Zakończone wyzwania */}
         <div className="pt-6 border-t border-sky-100">
           <h3 className="font-black text-xs uppercase text-slate-400 mb-4 px-2">Zakończone wyzwania</h3>
           <div className="bg-white rounded-3xl border border-sky-100 overflow-hidden shadow-sm">
@@ -847,7 +1099,6 @@ export default function WyzwaniaPage() {
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12 font-sans antialiased">
-      {/* NAGŁÓWEK STRONY */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-6 rounded-[2rem] border border-sky-100 shadow-sm">
         <div>
           <h1 className="text-xl font-black text-slate-950 uppercase tracking-wider flex items-center gap-2">
@@ -883,7 +1134,13 @@ export default function WyzwaniaPage() {
           Żywienie 🥗
         </button>
         <button
-          onClick={() => { setActiveTab('odznaki'); setSelectedMemberForComparison(null); }}
+          onClick={() => { 
+            setActiveTab('odznaki'); 
+            setSelectedMemberForComparison(null); 
+            if (currentUserId && wszystkieOdznaki.length > 0) {
+              checkAndAwardAutomatedBadges(currentUserId, wszystkieOdznaki);
+            }
+          }}
           className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'odznaki' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Gablota odznak 🏆
@@ -904,13 +1161,10 @@ export default function WyzwaniaPage() {
         )}
       </div>
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: POJEDYNKI SPORTOWE */}
       {activeTab === 'aktywne' && renderChallengesList('sport')}
-
-      {/* ZAWARTOŚĆ ZAKŁADKI: WYZWANIA ŻYWIENIOWE */}
       {activeTab === 'zywienie' && renderChallengesList('zywienie')}
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: GABLOTA ODZNAK */}
+      {/* GABLOTA ODZNAK */}
       {activeTab === 'odznaki' && (
         <div className="space-y-8">
           {selectedMemberForComparison ? (
@@ -926,7 +1180,6 @@ export default function WyzwaniaPage() {
                 <div className="w-20"></div>
               </div>
 
-              {/* Nagłówek z awatarami */}
               <div className="grid grid-cols-2 gap-6 text-center items-center py-4 bg-slate-950/40 rounded-3xl p-6 border border-slate-800/80">
                 <div className="flex flex-col items-center space-y-3">
                   {currentUserAvatar ? (
@@ -961,7 +1214,6 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* Definicje odznak do porównania */}
               <div className="space-y-4">
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">Wszystkie odznaki w klubie (Otrzymane na górze)</h3>
                 <div className="space-y-3">
@@ -1023,7 +1275,6 @@ export default function WyzwaniaPage() {
             </div>
           ) : (
             <div className="space-y-8">
-              {/* Sekcja 1: Twoje trofea */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoja gablota odznak</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1057,13 +1308,12 @@ export default function WyzwaniaPage() {
                     <div className="col-span-full bg-white rounded-3xl p-12 text-center border-2 border-dashed border-sky-100 text-slate-400 text-xs space-y-2">
                       <div className="text-3xl">🏆</div>
                       <div className="font-bold text-slate-700">Brak zdobytych odznak</div>
-                      <p>Bierz udział w wyzwaniach i treningach, aby zapełnić swoją gablotę!</p>
+                      <p>Bierz udział w potwierdzonych treningach oraz wyzwaniach, aby zapełnić swoją gablotę!</p>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Sekcja 2: Lista osób z odznakami */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <h3 className="font-black text-xs uppercase text-slate-400 px-2">Klubowicze z odznakami (Kliknij, aby porównać)</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1102,7 +1352,7 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: RANKINGI */}
+      {/* RANKINGI */}
       {activeTab === 'ranking' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
@@ -1201,17 +1451,16 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* ZAWARTOŚĆ ZAKŁADKI: ADMIN PANEL */}
+      {/* ADMIN PANEL */}
       {activeTab === 'admin' && userRole === 'admin' && (
         <div className="bg-white rounded-3xl p-6 border border-rose-100 shadow-sm space-y-6">
           <div className="flex flex-wrap gap-2 text-xs font-bold border-b border-rose-100 pb-4">
             <button onClick={() => setAdminSubTab('wyzwania')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'wyzwania' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Wyzwania</button>
             <button onClick={() => setAdminSubTab('odznaki')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'odznaki' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Przyznaj Odznakę</button>
-            <button onClick={() => setAdminSubTab('katalog_odznak')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'katalog_odznak' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Katalog Odznak & Reguły</button>
+            <button onClick={() => setAdminSubTab('katalog_odznak')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'katalog_odznak' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Katalog Odznak & 21 Reguł</button>
             <button onClick={() => setAdminSubTab('dyscypliny')} className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${adminSubTab === 'dyscypliny' ? 'bg-rose-100 text-rose-900' : 'text-slate-600 hover:text-slate-900'}`}>Dyscypliny</button>
           </div>
           
-          {/* 1. Podzakładka Admina: Wyzwania */}
           {adminSubTab === 'wyzwania' && (
             <table className="w-full text-xs text-left">
               <thead>
@@ -1244,7 +1493,6 @@ export default function WyzwaniaPage() {
             </table>
           )}
 
-          {/* 2. Podzakładka Admina: Przyznawanie Odznak */}
           {adminSubTab === 'odznaki' && (
             <div className="space-y-6">
               <h3 className="font-black text-xs text-rose-950 uppercase">Ręczne przyznawanie odznaki klubowiczowi:</h3>
@@ -1264,110 +1512,177 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* 3. Podzakładka Admina: Katalog Odznak */}
+          {/* PRZYJAZNY, KAFELKOWY KATALOG I KREATOR REGUŁ */}
           {adminSubTab === 'katalog_odznak' && (
             <div className="space-y-8">
-              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-4">
-                <h3 className="font-black text-xs uppercase text-slate-900">Stwórz nową odznakę klubową (Automatyczna lub Ręczna)</h3>
-                <form onSubmit={handleCreateBadgeDef} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Nazwa odznaki</label>
-                    <input type="text" value={newBadgeNazwa} onChange={(e) => setNewBadgeNazwa(e.target.value)} placeholder="np. Mistrz Czystej Miski" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
-                  </div>
-                  
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Grafika / Zdjęcie odznaki</label>
-                    <div className="flex items-center gap-2">
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        id="new-badge-file-upload"
-                        className="hidden" 
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            setIsUploadingNewBadge(true);
-                            const url = await uploadBadgeImageFile(file);
-                            if (url) setNewBadgeIkona(url);
-                            setIsUploadingNewBadge(false);
-                          }
-                        }} 
-                      />
-                      <label 
-                        htmlFor="new-badge-file-upload" 
-                        className="bg-slate-900 text-white font-bold text-xs px-4 py-3 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors shrink-0"
-                      >
-                        {isUploadingNewBadge ? "Wgrywanie..." : "📷 Wybierz"}
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 space-y-6">
+                <div>
+                  <h3 className="font-black text-sm uppercase text-slate-900 flex items-center gap-2">
+                    <span>✨</span> KREATOR ODZNAK - WYBIERZ REGUŁĘ I USTAL PRÓG
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">Wybierz jeden z kafelków z gotową automatyczną regułą i wpisz próg, od którego odznaka przyzna się sama.</p>
+                </div>
+
+                <form onSubmit={handleCreateBadgeDef} className="space-y-6">
+                  {/* KAFELKOWY SELEKTOR 21 REGUŁ */}
+                  <div className="space-y-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+                    <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-100 pb-2">
+                      <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                        1. Wybierz regułę automatycznego przyznawania:
                       </label>
-                      <input 
-                        type="text" 
-                        value={newBadgeIkona} 
-                        onChange={(e) => setNewBadgeIkona(e.target.value)} 
-                        placeholder="URL lub Emoji" 
-                        className="flex-1 p-3 border rounded-xl text-xs font-bold bg-white" 
-                      />
+                      <div className="flex gap-1 overflow-x-auto">
+                        {["Wszystkie", "Treningi", "Częstotliwość", "Rywalizacja", "Klub"].map(kat => (
+                          <button
+                            type="button"
+                            key={kat}
+                            onClick={() => setSelectedRuleCategoryFilter(kat)}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-all ${
+                              selectedRuleCategoryFilter === kat
+                                ? "bg-amber-500 text-slate-950 shadow-xs"
+                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                          >
+                            {kat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-72 overflow-y-auto pr-1">
+                      {REGUŁY_KATALOG
+                        .filter(r => selectedRuleCategoryFilter === "Wszystkie" || r.kategoria === selectedRuleCategoryFilter)
+                        .map(rule => {
+                          const isSelected = newBadgeTypReguly === rule.id;
+                          return (
+                            <div
+                              key={rule.id}
+                              onClick={() => {
+                                setNewBadgeTypReguly(rule.id);
+                                setNewBadgeWartoscProgowa(String(rule.domyslnyProg));
+                                if (!newBadgeNazwa) setNewBadgeNazwa(rule.nazwa);
+                                if (!newBadgeOpis) setNewBadgeOpis(rule.opis);
+                                if (!newBadgeIkona) setNewBadgeIkona(rule.ikona);
+                                setNewBadgeKategoria(rule.kategoria);
+                                setNewBadgeParametrDodatkowy(rule.parametr || "");
+                              }}
+                              className={`p-3 rounded-2xl border-2 transition-all cursor-pointer flex items-start gap-3 text-left ${
+                                isSelected
+                                  ? "bg-amber-500/15 border-amber-500 ring-2 ring-amber-300 shadow-sm"
+                                  : "bg-slate-50/70 border-slate-200 hover:border-amber-300 hover:bg-white"
+                              }`}
+                            >
+                              <span className="text-2xl shrink-0 p-1.5 bg-white rounded-xl border border-slate-100 shadow-2xs">
+                                {rule.ikona}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-black text-xs text-slate-900 truncate">{rule.nazwa}</div>
+                                <div className="text-[10px] text-slate-500 leading-tight mt-0.5">{rule.opis}</div>
+                                <div className="mt-1.5 flex items-center gap-1.5">
+                                  <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded bg-slate-200/80 text-slate-700">
+                                    {rule.kategoria}
+                                  </span>
+                                  <span className="text-[9px] font-bold text-amber-800">
+                                    Domyślny próg: {rule.domyslnyProg}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   </div>
 
-                  <div className="sm:col-span-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Krótki Opis Odznaki</label>
-                    <input type="text" value={newBadgeOpis} onChange={(e) => setNewBadgeOpis(e.target.value)} placeholder="np. Weź udział w 5 klubowych wyzwaniach żywieniowych." className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
-                  </div>
-                  
-                  <div className="sm:col-span-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Warunek Otrzymania (Dla klubowiczów)</label>
-                    <textarea value={newBadgeWarunek} onChange={(e) => setNewBadgeWarunek(e.target.value)} placeholder="np. Ukończ minimum 5 wyzwań dietetycznych / żywieniowych." className="w-full p-3 border rounded-xl text-xs font-bold bg-white h-16 resize-none" />
-                  </div>
+                  {/* FORMULARZ SZCZEGÓŁÓW ODZNAKI */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+                    <div className="sm:col-span-2 border-b border-slate-100 pb-2">
+                      <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                        2. Ustal próg i dane graficzne odznaki:
+                      </label>
+                    </div>
 
-                  {/* POLA AUTOMATYZACJI */}
-                  <div>
-                    <label className="text-[10px] font-bold text-amber-700 uppercase block mb-1">⚙️ Typ automatyzacji</label>
-                    <select 
-                      value={newBadgeTypReguly} 
-                      onChange={(e) => setNewBadgeTypReguly(e.target.value)} 
-                      className="w-full p-3 border border-amber-300 rounded-xl text-xs font-bold bg-white"
-                    >
-                      <option value="RECZNA">Brak (Tylko ręczne przyznanie)</option>
-                      <option value="REJESTRACJA">Rejestracja w aplikacji (Auto)</option>
-                      <option value="ZYWIENIE_UDZIAL">Wyzwania żywieniowe - Udział</option>
-                      <option value="ZYWIENIE_WYGRANE">Wyzwania żywieniowe - Wygrane</option>
-                      <option value="WYZWANIA_UDZIAL">Pojedynki sportowe - Udział</option>
-                      <option value="WYZWANIA_WYGRANE">Pojedynki sportowe - Wygrane</option>
-                      <option value="TRENINGI_ILOSC">Liczba ukończonych treningów</option>
-                      <option value="AUTO_ZAPISY">Włączenie stałego zapisu w grafiku</option>
-                    </select>
-                  </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Nazwa odznaki *</label>
+                      <input type="text" value={newBadgeNazwa} onChange={(e) => setNewBadgeNazwa(e.target.value)} placeholder="np. Mistrz Hyrox" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
+                    </div>
 
-                  <div>
-                    <label className="text-[10px] font-bold text-amber-700 uppercase block mb-1">🎯 Wartość progowa (Próg)</label>
-                    <input 
-                      type="number" 
-                      min="1" 
-                      value={newBadgeWartoscProgowa} 
-                      onChange={(e) => setNewBadgeWartoscProgowa(e.target.value)} 
-                      disabled={newBadgeTypReguly === 'RECZNA' || newBadgeTypReguly === 'REJESTRACJA'}
-                      className="w-full p-3 border border-amber-300 rounded-xl text-xs font-bold bg-white disabled:bg-slate-100 disabled:text-slate-400" 
-                    />
-                  </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-amber-800 uppercase block mb-1">🎯 Wartość progowa (Próg osiągnięcia) *</label>
+                      <input 
+                        type="number" 
+                        min="1" 
+                        value={newBadgeWartoscProgowa} 
+                        onChange={(e) => setNewBadgeWartoscProgowa(e.target.value)} 
+                        disabled={newBadgeTypReguly === 'REJESTRACJA' || newBadgeTypReguly === 'RECZNA'}
+                        className="w-full p-3 border-2 border-amber-400 rounded-xl text-xs font-black bg-white disabled:bg-slate-100 disabled:text-slate-400" 
+                        required
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Punkty (Waga odznaki 1-10)</label>
-                    <input type="number" min="1" max="10" value={newBadgePunkty} onChange={(e) => setNewBadgePunkty(e.target.value)} className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
-                  </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Grafika / Ikona (Emoji lub URL)</label>
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          id="new-badge-file-upload"
+                          className="hidden" 
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setIsUploadingNewBadge(true);
+                              const url = await uploadBadgeImageFile(file);
+                              if (url) setNewBadgeIkona(url);
+                              setIsUploadingNewBadge(false);
+                            }
+                          }} 
+                        />
+                        <label 
+                          htmlFor="new-badge-file-upload" 
+                          className="bg-slate-900 text-white font-bold text-xs px-4 py-3 rounded-xl cursor-pointer hover:bg-slate-800 transition-colors shrink-0"
+                        >
+                          {isUploadingNewBadge ? "Wgrywanie..." : "📷 Plik"}
+                        </label>
+                        <input 
+                          type="text" 
+                          value={newBadgeIkona} 
+                          onChange={(e) => setNewBadgeIkona(e.target.value)} 
+                          placeholder="Wpisz Emoji (np. ⚡) lub URL" 
+                          className="flex-1 p-3 border rounded-xl text-xs font-bold bg-white" 
+                        />
+                      </div>
+                    </div>
 
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Kategoria</label>
-                    <input type="text" value={newBadgeKategoria} onChange={(e) => setNewBadgeKategoria(e.target.value)} placeholder="np. Żywienie / Wytrzymałość / Siła" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
-                  </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Punkty (Waga odznaki)</label>
+                        <input type="number" min="1" max="10" value={newBadgePunkty} onChange={(e) => setNewBadgePunkty(e.target.value)} className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Kategoria</label>
+                        <input type="text" value={newBadgeKategoria} onChange={(e) => setNewBadgeKategoria(e.target.value)} className="w-full p-3 border rounded-xl text-xs font-bold bg-white" />
+                      </div>
+                    </div>
 
-                  <div className="sm:col-span-2">
-                    <button type="submit" disabled={isUploadingNewBadge} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer">
-                      + Dodaj odznakę do katalogu
-                    </button>
+                    <div className="sm:col-span-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Krótki opis motywacyjny</label>
+                      <input type="text" value={newBadgeOpis} onChange={(e) => setNewBadgeOpis(e.target.value)} placeholder="np. Zaliczyłeś minimum 10 potwierdzonych treningów HYROX!" className="w-full p-3 border rounded-xl text-xs font-bold bg-white" required />
+                    </div>
+                    
+                    <div className="sm:col-span-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Warunek otrzymania (Dla klubowiczów w gablotce)</label>
+                      <textarea value={newBadgeWarunek} onChange={(e) => setNewBadgeWarunek(e.target.value)} placeholder="np. Uczestnictwo w min. 10 treningach HYROX potwierdzone obecnością przez trenera." className="w-full p-3 border rounded-xl text-xs font-bold bg-white h-16 resize-none" />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <button type="submit" disabled={isUploadingNewBadge} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-4 rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md">
+                        + Utwórz i aktywuj odznakę w klubie
+                      </button>
+                    </div>
                   </div>
                 </form>
               </div>
 
+              {/* LISTA AKTYWNYCH ODZNAK W KATALOGU */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-900">Aktualne odznaki w katalogu ({wszystkieOdznaki.length}):</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1377,11 +1692,11 @@ export default function WyzwaniaPage() {
                         <div className="space-y-3">
                           <div>
                             <label className="text-[9px] font-bold text-slate-400 uppercase">Nazwa odznaki</label>
-                            <input value={editBadgeNazwa} onChange={(e) => setEditBadgeNazwa(e.target.value)} placeholder="Nazwa" className="w-full p-2 border rounded-xl text-xs font-bold" />
+                            <input value={editBadgeNazwa} onChange={(e) => setEditBadgeNazwa(e.target.value)} className="w-full p-2 border rounded-xl text-xs font-bold" />
                           </div>
 
                           <div>
-                            <label className="text-[9px] font-bold text-slate-400 uppercase">Zdjęcie / Grafika odznaki</label>
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Zdjęcie / Ikona</label>
                             <div className="flex items-center gap-2 mt-1">
                               <input 
                                 type="file" 
@@ -1398,42 +1713,34 @@ export default function WyzwaniaPage() {
                                   }
                                 }} 
                               />
-                              <label 
-                                htmlFor={`edit-badge-file-${def.id}`} 
-                                className="bg-slate-800 text-white font-bold text-[10px] px-3 py-2 rounded-xl cursor-pointer shrink-0"
-                              >
-                                {isUploadingEditBadge ? "Wgrywanie..." : "📷 Zmień"}
+                              <label htmlFor={`edit-badge-file-${def.id}`} className="bg-slate-800 text-white font-bold text-[10px] px-3 py-2 rounded-xl cursor-pointer shrink-0">
+                                {isUploadingEditBadge ? "Wgrywanie..." : "📷 Plik"}
                               </label>
-                              <input value={editBadgeIkona} onChange={(e) => setEditBadgeIkona(e.target.value)} placeholder="URL lub emoji" className="flex-1 p-2 border rounded-xl text-xs" />
+                              <input value={editBadgeIkona} onChange={(e) => setEditBadgeIkona(e.target.value)} className="flex-1 p-2 border rounded-xl text-xs" />
                             </div>
                           </div>
 
                           <div>
                             <label className="text-[9px] font-bold text-slate-400 uppercase">Opis</label>
-                            <input value={editBadgeOpis} onChange={(e) => setEditBadgeOpis(e.target.value)} placeholder="Opis" className="w-full p-2 border rounded-xl text-xs" />
+                            <input value={editBadgeOpis} onChange={(e) => setEditBadgeOpis(e.target.value)} className="w-full p-2 border rounded-xl text-xs" />
                           </div>
 
                           <div>
                             <label className="text-[9px] font-bold text-slate-400 uppercase">Warunek</label>
-                            <textarea value={editBadgeWarunek} onChange={(e) => setEditBadgeWarunek(e.target.value)} placeholder="Warunek" className="w-full p-2 border rounded-xl text-xs h-14 resize-none" />
+                            <textarea value={editBadgeWarunek} onChange={(e) => setEditBadgeWarunek(e.target.value)} className="w-full p-2 border rounded-xl text-xs h-14 resize-none" />
                           </div>
 
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="text-[9px] font-bold text-amber-700 uppercase">Reguła</label>
+                              <label className="text-[9px] font-bold text-amber-700 uppercase">Typ reguły</label>
                               <select 
                                 value={editBadgeTypReguly} 
                                 onChange={(e) => setEditBadgeTypReguly(e.target.value)} 
                                 className="w-full p-2 border border-amber-300 rounded-xl text-xs font-bold"
                               >
-                                <option value="RECZNA">Ręczna</option>
-                                <option value="REJESTRACJA">Rejestracja w aplikacji (Auto)</option>
-                                <option value="ZYWIENIE_UDZIAL">Wyzwania żywieniowe - Udział</option>
-                                <option value="ZYWIENIE_WYGRANE">Wyzwania żywieniowe - Wygrane</option>
-                                <option value="WYZWANIA_UDZIAL">Pojedynki - Udział</option>
-                                <option value="WYZWANIA_WYGRANE">Pojedynki - Wygrane</option>
-                                <option value="TRENINGI_ILOSC">Treningi</option>
-                                <option value="AUTO_ZAPISY">Auto zapis</option>
+                                {REGUŁY_KATALOG.map(r => (
+                                  <option key={r.id} value={r.id}>{r.nazwa}</option>
+                                ))}
                               </select>
                             </div>
                             <div>
@@ -1448,14 +1755,14 @@ export default function WyzwaniaPage() {
                             </div>
                           </div>
 
-                          <div className="flex gap-2">
-                            <div className="w-24">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
                               <label className="text-[9px] font-bold text-slate-400 uppercase">Punkty</label>
                               <input type="number" min="1" max="10" value={editBadgePunkty} onChange={(e) => setEditBadgePunkty(e.target.value)} className="w-full p-2 border rounded-xl text-xs font-bold" />
                             </div>
-                            <div className="flex-1">
+                            <div>
                               <label className="text-[9px] font-bold text-slate-400 uppercase">Kategoria</label>
-                              <input value={editBadgeKategoria} onChange={(e) => setEditBadgeKategoria(e.target.value)} placeholder="Kategoria" className="w-full p-2 border rounded-xl text-xs" />
+                              <input value={editBadgeKategoria} onChange={(e) => setEditBadgeKategoria(e.target.value)} className="w-full p-2 border rounded-xl text-xs" />
                             </div>
                           </div>
 
@@ -1480,7 +1787,7 @@ export default function WyzwaniaPage() {
                                 <p className="text-[9px] text-amber-900/80 mt-1 font-mono">🎯 Warunek: {def.warunek}</p>
                               )}
                               <div className="flex flex-wrap gap-2 items-center mt-1.5">
-                                <span className="text-[9px] text-sky-600 font-bold uppercase tracking-wider">Kat: {def.kategoria || 'Wyzwania'}</span>
+                                <span className="text-[9px] text-sky-600 font-bold uppercase tracking-wider">Kat: {def.kategoria || 'Treningi'}</span>
                                 <span className="text-[9px] bg-amber-50 text-amber-800 font-bold px-2 py-0.5 rounded-lg border border-amber-200">
                                   {formatRegulaLabel(def.typ_reguly, def.wartosc_progowa)}
                                 </span>
@@ -1501,7 +1808,6 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* 4. Podzakładka Admina: Dyscypliny */}
           {adminSubTab === 'dyscypliny' && (
             <div className="space-y-4">
               <h3 className="font-black text-xs uppercase text-slate-900">Zarządzaj dyscyplinami:</h3>
@@ -1536,7 +1842,7 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* MODAL: POWIĘKSZENIE ODZNAKI (ZOOM) */}
+      {/* MODAL ZOOM */}
       {selectedBadgeForZoom && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-[2.5rem] max-w-sm w-full p-8 shadow-2xl space-y-6 text-center border border-sky-100 relative">
@@ -1582,7 +1888,7 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* MODAL WYBORU ZWYCIĘZCY */}
+      {/* MODAL ZWYCIĘZCY */}
       {isWinnerModalOpen && challengeToResolve && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-[2rem] max-w-sm w-full p-6 shadow-2xl space-y-4 border border-sky-100">
@@ -1637,7 +1943,6 @@ export default function WyzwaniaPage() {
               {modalKategoria === 'zywienie' ? '🥗 Rzuć wyzwanie żywieniowe' : '⚔️ Rzuć wyzwanie sportowe'}
             </h3>
 
-            {/* Wybór kategorii wewnątrz modalu */}
             <div className="flex gap-2">
               <button
                 type="button"
