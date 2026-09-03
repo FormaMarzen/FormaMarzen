@@ -555,7 +555,7 @@ export default function ClubChat() {
 
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
-  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH 1-NA-1
+  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH 1-NA-1 (ADMINISTRATOR + KLUBOWICZE)
   const sendChatPushNotification = async (
     recipientId: number | string | undefined | null,
     senderName: string,
@@ -565,7 +565,7 @@ export default function ClubChat() {
       if (!recipientId || recipientId === "undefined" || recipientId === "null") return;
       const senderId = secondaryUserId || currentUserId;
 
-      // ZABEZPIECZENIE PRZED POWIADOMIENIEM DO SAMEGO SIEBIE
+      // Całkowite odcięcie wysyłki do samego siebie
       if (
         String(recipientId) === String(senderId) ||
         String(recipientId) === String(currentUserId)
@@ -574,48 +574,76 @@ export default function ClubChat() {
       }
 
       const parsedNum = Number(recipientId);
+      const isTargetAdminOrSystem =
+        parsedNum === 999999999 ||
+        parsedNum === SYSTEM_ID ||
+        (secondaryUserId && String(recipientId) === String(secondaryUserId));
 
-      // Jeżeli nadawca jest adminem i pisze do użytkownika, nie kierujemy nic do systemu
-      if (parsedNum === SYSTEM_ID && isAdmin) {
-        return;
-      }
+      // Jeśli administrator pisze do konta systemowego, pomijamy
+      if (parsedNum === SYSTEM_ID && isAdmin) return;
 
-      let query = supabase.from("klienci").select("id, push_subscription, E-mail");
+      let subscriptions: any[] = [];
 
-      // Wiadomość od klubowicza do Administracji / Systemu
-      if (parsedNum === 999999999 || (parsedNum === SYSTEM_ID && !isAdmin)) {
-        query = query.in("E-mail", ADMIN_EMAILS);
-      } else {
-        // Wiadomość skierowana bezpośrednio do danego klubowicza
-        query = query.eq("id", recipientId);
-      }
+      if (isTargetAdminOrSystem) {
+        // 1. Pobranie tokenów administratora z tabeli push_subscriptions
+        const { data: adminSubs } = await supabase
+          .from("push_subscriptions")
+          .select("subscription")
+          .or("role.eq.admin,role.eq.administrator");
 
-      const { data: clients, error: clientErr } = await query;
-      if (clientErr || !clients || clients.length === 0) return;
-
-      // Ścisła weryfikacja odbiorców – odrzucenie profilu samego nadawcy
-      const strictlyTargetedClients = clients.filter((c: any) => {
-        if (parsedNum === 999999999 || parsedNum === SYSTEM_ID) {
-          const clientEmail = (c["E-mail"] || c.email || "").toLowerCase();
-          return ADMIN_EMAILS.includes(clientEmail) && String(c.id) !== String(senderId);
+        if (adminSubs && adminSubs.length > 0) {
+          adminSubs.forEach((s: any) => {
+            if (!s.subscription) return;
+            try {
+              const parsed = typeof s.subscription === "string" ? JSON.parse(s.subscription) : s.subscription;
+              subscriptions.push(parsed);
+            } catch {}
+          });
         }
-        return String(c.id) === String(recipientId);
+
+        // 2. Pobranie tokenów administratora z tabeli klienci
+        const { data: adminClients } = await supabase
+          .from("klienci")
+          .select("id, push_subscription, E-mail")
+          .in("E-mail", ADMIN_EMAILS);
+
+        if (adminClients && adminClients.length > 0) {
+          adminClients.forEach((c: any) => {
+            if (!c.push_subscription) return;
+            try {
+              const parsed = typeof c.push_subscription === "string" ? JSON.parse(c.push_subscription) : c.push_subscription;
+              subscriptions.push(parsed);
+            } catch {}
+          });
+        }
+      } else {
+        // Standardowy klubowicz - pobieramy z profilu w tabeli klienci
+        const { data: clients } = await supabase
+          .from("klienci")
+          .select("id, push_subscription")
+          .eq("id", recipientId);
+
+        if (clients && clients.length > 0) {
+          clients.forEach((c: any) => {
+            if (!c.push_subscription) return;
+            try {
+              const parsed = typeof c.push_subscription === "string" ? JSON.parse(c.push_subscription) : c.push_subscription;
+              subscriptions.push(parsed);
+            } catch {}
+          });
+        }
+      }
+
+      // Usunięcie ewentualnych duplikatów urządzeń
+      const uniqueSubsMap = new Map();
+      subscriptions.forEach((sub) => {
+        if (sub && sub.endpoint) {
+          uniqueSubsMap.set(sub.endpoint, sub);
+        }
       });
+      const finalSubscriptions = Array.from(uniqueSubsMap.values());
 
-      const subscriptions = strictlyTargetedClients
-        .map((c: any) => {
-          if (!c.push_subscription) return null;
-          try {
-            return typeof c.push_subscription === "string"
-              ? JSON.parse(c.push_subscription)
-              : c.push_subscription;
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean);
-
-      if (subscriptions.length === 0) return;
+      if (finalSubscriptions.length === 0) return;
 
       const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
 
@@ -623,7 +651,7 @@ export default function ClubChat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          subscriptions,
+          subscriptions: finalSubscriptions,
           payload: {
             title: `Wiadomość od: ${senderName}`,
             body: previewText,
@@ -670,7 +698,7 @@ export default function ClubChat() {
         }
       }
 
-      // Całkowite wykluczenie nadawcy z powiadomień push
+      // Wykluczenie nadawcy
       recipientIds = recipientIds.filter(
         (id) => id && id !== String(senderId) && id !== String(currentUserId)
       );
@@ -1200,7 +1228,7 @@ export default function ClubChat() {
     }
   };
 
-  // OBSŁUGA GRAFIKU – WERYFIKACJA CZY ZAJĘCIA ODBYWAJĄ SIĘ DZISIAJ
+  // OBSŁUGA GRAFIKU – PRECYZYJNA WERYFIKACJA CZY TRENING ODBYWA SIĘ DZISIAJ
   const isTrainingToday = (training: any) => {
     if (training.is_odwolane || training.is_usuniete) return false;
     const now = new Date();
@@ -1211,7 +1239,6 @@ export default function ClubChat() {
     const currentDayName = dayNames[jsDay];
     const todayIso = now.toISOString().split("T")[0];
 
-    // Sprawdzenie konkretnej daty jednorazowej
     const specificDate = String(training.data || training.date || "").trim();
     if (specificDate && (specificDate.includes(todayIso) || specificDate.includes(todayIso.split("-").reverse().join(".")))) {
       return true;
@@ -1513,7 +1540,7 @@ export default function ClubChat() {
           ? `↩ Odpowiedział(a) na Twoją wiadomość: "${messageText || "📎 Załącznik"}"`
           : messageText || "📎 Załącznik";
 
-        // BEZWZGLĘDNIE WYSYŁAMY PUSH DO KLUBOWICZA (selectedUser.id), NIGDY DO SIEBIE
+        // WYSYŁKA PUSH BEZPOŚREDNIO DO ROZMÓWCY
         sendChatPushNotification(selectedUser.id, currentUserName, pushBody);
       }
     }
@@ -1990,24 +2017,27 @@ export default function ClubChat() {
     isAdmin ? "999999999" : null,
   ].filter(Boolean);
 
+  // ŚCIŚLE IZOLOWANE WIADOMOŚCI 1:1 DLA AKTYWNEGO ROZMÓWCY
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     if (m.grupa_id) return false;
 
-    const isSenderMe = effectiveIds.includes(String(m.nadawca_id));
-    const isReceiverMe = effectiveIds.includes(String(m.odbiorca_id));
-    const isSelectedUserSystem = Number(selectedUser.id) === SYSTEM_ID;
+    const sId = String(m.nadawca_id ?? SYSTEM_ID);
+    const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+    const targetId = String(selectedUser.id);
 
-    if (isSelectedUserSystem) {
-      const isSystemMessage = m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID;
-      return (isSystemMessage && isReceiverMe) || (isSenderMe && Number(m.odbiorca_id) === SYSTEM_ID);
+    const isSenderMe = effectiveIds.includes(sId);
+    const isReceiverMe = effectiveIds.includes(rId);
+
+    const isSenderThem = sId === targetId;
+    const isReceiverThem = rId === targetId;
+
+    if (Number(selectedUser.id) === SYSTEM_ID) {
+      const isSysMsg = m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID;
+      return (isSysMsg && isReceiverMe) || (isSenderMe && Number(m.odbiorca_id) === SYSTEM_ID);
     }
 
-    const isTargetThem =
-      String(m.nadawca_id) === String(selectedUser.id) ||
-      String(m.odbiorca_id) === String(selectedUser.id);
-
-    return (isSenderMe && String(m.odbiorca_id) === String(selectedUser.id)) || (isTargetThem && isReceiverMe);
+    return (isSenderMe && isReceiverThem) || (isSenderThem && isReceiverMe);
   });
 
   const currentConversationMessages = selectedGroup ? groupMessages : activeChatMessages;
@@ -2072,6 +2102,7 @@ export default function ClubChat() {
   const latestMessageTextMap = new Map<string, string>();
   const latestGroupMessageTimeMap = new Map<string, number>();
 
+  // MAPOWANIE OSTATNICH WIADOMOŚCI
   messages.forEach((m: any) => {
     const msgTime = new Date(m.created_at).getTime();
 
@@ -2155,6 +2186,80 @@ export default function ClubChat() {
   const pinnedDirectUsers = activeDirectUsers.filter((u) => pinnedChatIds.includes(`direct_${u.id}`));
   const regularDirectUsers = activeDirectUsers.filter((u) => !pinnedChatIds.includes(`direct_${u.id}`));
   const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
+
+  // OCZYSZCZONE ZLICZANIE NIEPRZECZYTANYCH WIADOMOŚCI – ELIMINACJA FAŁSZYWYCH 44 POWIADOMIEŃ SYSTEMOWYCH
+  const unreadDirect1on1Count = messages.filter((m: any) => {
+    if (m.grupa_id || m.przeczytana) return false;
+    const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+    const sId = String(m.nadawca_id ?? SYSTEM_ID);
+
+    if (!effectiveIds.includes(rId) || effectiveIds.includes(sId)) return false;
+
+    // Automatyczne powiadomienia systemowe nie zawyżają licznika prywatnych wiadomości
+    const t = m.tresc || "";
+    const isAutoNotice =
+      sId === String(SYSTEM_ID) &&
+      (t.includes("🎖️") ||
+        t.includes("⚔️") ||
+        t.includes("🎂") ||
+        t.includes("Bazy Wiedzy") ||
+        t.includes("Zapisy na TRENINGI"));
+
+    if (isAutoNotice) return false;
+
+    return true;
+  }).length;
+const allMyGroups = groups.filter((g: any) => {
+    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
+    if (isTraining) return false;
+
+    if (isAdmin) return true;
+    let rawMembers = g.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try {
+        rawMembers = JSON.parse(rawMembers);
+      } catch {
+        rawMembers = [];
+      }
+    }
+    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
+    return members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
+  });
+  const activeMyGroups = allMyGroups.filter((g) => !archivedChatIds.includes(`group_${g.id}`));
+
+  const directTabGroupChats = activeMyGroups
+    .filter((g) => g.kategoria === "Czaty grupowe")
+    .sort((a, b) => {
+      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
+      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+  const directTabGroupIds = new Set(
+    activeMyGroups.filter((g) => g.kategoria === "Czaty grupowe").map((g: any) => String(g.id))
+  );
+
+  const unreadDirectGroupsCount = messages.filter(
+    (m: any) => m.grupa_id && directTabGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
+  ).length;
+
+  const unreadDirectCount = unreadDirect1on1Count + unreadDirectGroupsCount;
+
+  const myGroupIds = new Set(allMyGroups.map((g: any) => String(g.id)));
+  const trainingGroupIds = new Set(
+    groups
+      .filter((g: any) => g.typ === "trening" || g.nazwa?.startsWith("Trening:"))
+      .map((g: any) => String(g.id))
+  );
+
+  const unreadGroupsCount = messages.filter(
+    (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
+  ).length;
+
+  const unreadTrainingsCount = messages.filter(
+    (m: any) => m.grupa_id && trainingGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
+  ).length;
+
+  const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount + unreadTrainingsCount;
 
   const formatLastSeen = (lastSeenString: string | null) => {
     if (!lastSeenString) return "Brak danych o aktywności";
@@ -2455,142 +2560,6 @@ export default function ClubChat() {
     );
   };
 
-  const isPositioned = position !== null;
-  const modalWidth = 410;
-  const modalHeight = 560;
-
-  const openToLeft = isPositioned
-    ? position.x + modalWidth > (typeof window !== "undefined" ? window.innerWidth - 20 : 800)
-    : false;
-
-  const openDownwards = isPositioned
-    ? position.y - modalHeight < 20
-    : false;
-
-  const allMyGroups = groups.filter((g: any) => {
-    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
-    if (isTraining) return false;
-
-    if (isAdmin) return true;
-    let rawMembers = g.czlonkowie_ids;
-    if (typeof rawMembers === "string") {
-      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
-    }
-    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
-    return members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
-  });
-
-  const activeMyGroups = allMyGroups.filter((g) => !archivedChatIds.includes(`group_${g.id}`));
-
-  const directTabGroupChats = activeMyGroups
-    .filter((g) => g.kategoria === "Czaty grupowe")
-    .sort((a, b) => {
-      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
-      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
-      return timeB - timeA;
-    });
-
-  const pinnedMyGroups = activeMyGroups
-    .filter((g) => pinnedChatIds.includes(`group_${g.id}`))
-    .sort((a, b) => {
-      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
-      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
-      return timeB - timeA;
-    });
-
-  const unpinnedMyGroups = activeMyGroups.filter((g) => !pinnedChatIds.includes(`group_${g.id}`));
-  const archivedMyGroups = isAdmin ? allMyGroups.filter((g) => archivedChatIds.includes(`group_${g.id}`)) : [];
-
-  const myGroupsByCategory = unpinnedMyGroups.reduce((acc: Record<string, any[]>, group: any) => {
-    const cat = group.kategoria?.trim() || group.category?.trim() || "Ogólne";
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(group);
-    return acc;
-  }, {});
-
-  Object.keys(myGroupsByCategory).forEach((cat) => {
-    myGroupsByCategory[cat].sort((a, b) => {
-      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
-      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
-      return timeB - timeA;
-    });
-  });
-
-  const sortedCategoryNames = Array.from(
-    new Set([
-      ...categoriesOrder.filter((cat) => myGroupsByCategory[cat]),
-      ...Object.keys(myGroupsByCategory),
-    ])
-  );
-
-  const publicDiscoverGroups = groups.filter((g: any) => {
-    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
-    if (isTraining) return false;
-
-    const isPublic = g.typ === "publiczna";
-    let rawMembers = g.czlonkowie_ids;
-    if (typeof rawMembers === "string") {
-      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
-    }
-    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
-    const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
-    return isPublic && !isAlreadyMember;
-  });
-
-  const closedDiscoverGroups = groups.filter((g: any) => {
-    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
-    if (isTraining) return false;
-
-    const isClosed = g.typ === "zamknieta" || !g.typ;
-    let rawMembers = g.czlonkowie_ids;
-    if (typeof rawMembers === "string") {
-      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
-    }
-    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
-    const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
-    return isClosed && !isAlreadyMember;
-  });
-
-  const todayTrainingsList = grafikZajec.filter((training: any) => {
-    const isToday = isTrainingToday(training);
-    if (!isToday) return false;
-
-    if (isAdmin) return true;
-
-    const myClientId = String(secondaryUserId || currentUserId);
-    const signups = getSignupsForTraining(training);
-    return signups.some((z: any) => String(z.klient_id) === myClientId);
-  });
-
-  const myGroupIds = new Set(allMyGroups.map((g: any) => String(g.id)));
-  const trainingGroupIds = new Set(
-    groups
-      .filter((g: any) => g.typ === "trening" || g.nazwa?.startsWith("Trening:"))
-      .map((g: any) => String(g.id))
-  );
-
-  const directTabGroupIds = new Set(directTabGroupChats.map((g: any) => String(g.id)));
-
-  const unreadDirect1on1Count = messages.filter(
-    (m: any) => effectiveIds.includes(String(m.odbiorca_id)) && !m.grupa_id && !m.przeczytana
-  ).length;
-
-  const unreadDirectGroupsCount = messages.filter(
-    (m: any) => m.grupa_id && directTabGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
-  ).length;
-
-  const unreadDirectCount = unreadDirect1on1Count + unreadDirectGroupsCount;
-
-  const unreadGroupsCount = messages.filter(
-    (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
-  ).length;
-
-  const unreadTrainingsCount = messages.filter(
-    (m: any) => m.grupa_id && trainingGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
-  ).length;
-
-  const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount + unreadTrainingsCount;
-
   const renderGroupIcon = (iconValue: string, type: string) => {
     if (!iconValue) return type === "publiczna" ? "🌐" : "👥";
     if (iconValue.startsWith("http")) {
@@ -2598,20 +2567,6 @@ export default function ClubChat() {
     }
     return <span>{iconValue}</span>;
   };
-
-  const isCurrentGroupMuted = selectedGroup && Array.isArray(selectedGroup.wyciszeni_ids) && selectedGroup.wyciszeni_ids.map(String).includes(String(secondaryUserId || currentUserId));
-
-  const isCurrentChatArchived = selectedGroup
-    ? archivedChatIds.includes(`group_${selectedGroup.id}`)
-    : selectedUser
-    ? archivedChatIds.includes(`direct_${selectedUser.id}`)
-    : false;
-
-  const isCurrentChatPinned = selectedGroup
-    ? pinnedChatIds.includes(`group_${selectedGroup.id}`)
-    : selectedUser
-    ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
-    : false;
 
   const renderDirectUserItem = (user: any, isPinnedItem: boolean = false) => {
     const isSys = Number(user.id) === SYSTEM_ID;
@@ -2746,6 +2701,116 @@ export default function ClubChat() {
       </div>
     );
   };
+  
+
+  
+
+  const pinnedMyGroups = activeMyGroups
+    .filter((g) => pinnedChatIds.includes(`group_${g.id}`))
+    .sort((a, b) => {
+      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
+      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+
+  const unpinnedMyGroups = activeMyGroups.filter((g) => !pinnedChatIds.includes(`group_${g.id}`));
+  const archivedMyGroups = isAdmin ? allMyGroups.filter((g) => archivedChatIds.includes(`group_${g.id}`)) : [];
+
+  const myGroupsByCategory = unpinnedMyGroups.reduce((acc: Record<string, any[]>, group: any) => {
+    const cat = group.kategoria?.trim() || group.category?.trim() || "Ogólne";
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(group);
+    return acc;
+  }, {});
+
+  Object.keys(myGroupsByCategory).forEach((cat) => {
+    myGroupsByCategory[cat].sort((a, b) => {
+      const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
+      const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+  });
+
+  const sortedCategoryNames = Array.from(
+    new Set([
+      ...categoriesOrder.filter((cat) => myGroupsByCategory[cat]),
+      ...Object.keys(myGroupsByCategory),
+    ])
+  );
+
+  const publicDiscoverGroups = groups.filter((g: any) => {
+    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
+    if (isTraining) return false;
+
+    const isPublic = g.typ === "publiczna";
+    let rawMembers = g.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try {
+        rawMembers = JSON.parse(rawMembers);
+      } catch {
+        rawMembers = [];
+      }
+    }
+    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
+    const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
+    return isPublic && !isAlreadyMember;
+  });
+
+  const closedDiscoverGroups = groups.filter((g: any) => {
+    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
+    if (isTraining) return false;
+
+    const isClosed = g.typ === "zamknieta" || !g.typ;
+    let rawMembers = g.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try {
+        rawMembers = JSON.parse(rawMembers);
+      } catch {
+        rawMembers = [];
+      }
+    }
+    const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
+    const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
+    return isClosed && !isAlreadyMember;
+  });
+
+  const todayTrainingsList = grafikZajec.filter((training: any) => {
+    const isToday = isTrainingToday(training);
+    if (!isToday) return false;
+
+    if (isAdmin) return true;
+
+    const myClientId = String(secondaryUserId || currentUserId);
+    const signups = getSignupsForTraining(training);
+    return signups.some((z: any) => String(z.klient_id) === myClientId);
+  });
+
+  const isPositioned = position !== null;
+  const modalWidth = 410;
+  const modalHeight = 560;
+
+  const openToLeft = isPositioned
+    ? position.x + modalWidth > (typeof window !== "undefined" ? window.innerWidth - 20 : 800)
+    : false;
+
+  const openDownwards = isPositioned
+    ? position.y - modalHeight < 20
+    : false;
+
+  const isCurrentGroupMuted = selectedGroup && Array.isArray(selectedGroup.wyciszeni_ids) && selectedGroup.wyciszeni_ids.map(String).includes(String(secondaryUserId || currentUserId));
+
+  const isCurrentChatArchived = selectedGroup
+    ? archivedChatIds.includes(`group_${selectedGroup.id}`)
+    : selectedUser
+    ? archivedChatIds.includes(`direct_${selectedUser.id}`)
+    : false;
+
+  const isCurrentChatPinned = selectedGroup
+    ? pinnedChatIds.includes(`group_${selectedGroup.id}`)
+    : selectedUser
+    ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
+    : false;
+
   return (
     <div
       ref={containerRef}
@@ -3164,6 +3229,7 @@ export default function ClubChat() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
+                    {/* SEKCJA: CZATY GRUPOWE W ZAKŁADCE PRYWATNE */}
                     {directTabGroupChats.length > 0 && (
                       <div className="space-y-1 mb-2 bg-slate-100/60 p-2 rounded-2xl border border-slate-200">
                         <div className="flex items-center justify-between px-1 pb-1">
@@ -3187,6 +3253,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
+                    {/* PRZYPIĘTE ROZMOWY 1-NA-1 */}
                     {pinnedDirectUsers.length > 0 && (
                       <div className="space-y-1 mb-2">
                         <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
@@ -3196,6 +3263,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
+                    {/* POZOSTAŁE ROZMOWY 1-NA-1 */}
                     {regularDirectUsers.length > 0 && (
                       <div className="space-y-1">
                         {(pinnedDirectUsers.length > 0 || directTabGroupChats.length > 0) && (
@@ -3214,6 +3282,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
+                    {/* SEKCJA ARCHIWUM DLA ADMINA */}
                     {isAdmin && archivedDirectUsers.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
