@@ -94,7 +94,7 @@ export async function POST(req: Request) {
       return new NextResponse(xmlNotFound, { status: 200, headers: { 'Content-Type': 'application/xml' } });
     }
 
-    // Zabezpieczenie przed podwójnym przetworzeniem
+    // Zabezpieczenie przed zdublowanym przetworzeniem webhooka
     if (transakcja.status === 'success') {
       const xmlAlreadySuccess = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
       return new NextResponse(xmlAlreadySuccess, { status: 200, headers: { 'Content-Type': 'application/xml' } });
@@ -104,7 +104,8 @@ export async function POST(req: Request) {
     const isFailure = paymentStatus.toUpperCase() === 'FAILURE' || paymentStatus.toUpperCase() === 'FAILED';
 
     if (isSuccess) {
-      const transactionAmount = Number(transakcja.amount) || Number(amount) || 0;
+      const rawNum = Number(transakcja.amount) || Number(amount) || 0;
+      const transactionAmount = Math.abs(rawNum);
       const metadata = transakcja.gateway_response?.metadata || {};
       const gatewayResponse = transakcja.gateway_response || {};
 
@@ -119,7 +120,7 @@ export async function POST(req: Request) {
         ? `${klient['Imię'] || klient.imie || ''} ${klient['Nazwisko'] || klient.nazwisko || ''}`.trim()
         : 'Klubowicz';
 
-      // A. OBSŁUGA ZAKUPU ODZIEŻY KLUBOWEJ (NOWY MODUŁ ODZIEŻ)
+      // A. OBSŁUGA ZAKUPU ODZIEŻY KLUBOWEJ
       if (transakcja.type === 'tshirt_purchase' || transakcja.type === 'odziez_zakup') {
         const kampaniaId = gatewayResponse.kampania_id || metadata.kampania_id;
         const zamowienieId = gatewayResponse.zamowienie_id || metadata.zamowienie_id;
@@ -128,7 +129,6 @@ export async function POST(req: Request) {
 
         let targetOrder: any = null;
 
-        // Aktualizacja statusu zamówienia w tabeli odziez_zamowienia
         if (zamowienieId) {
           const { data: ord } = await supabase
             .from('odziez_zamowienia')
@@ -157,7 +157,6 @@ export async function POST(req: Request) {
 
         const effectiveCampId = kampaniaId || targetOrder?.kampania_id;
 
-        // Sprawdzenie progu minimalnego i uruchomienie zegara 7 dni
         if (effectiveCampId) {
           const { data: camp } = await supabase
             .from('odziez_kampanie')
@@ -191,22 +190,21 @@ export async function POST(req: Request) {
           }
         }
 
-        // Rejestracja w historii transakcji klienta (kwota 0 PLN - informacyjnie, bez modyfikacji salda portfela)
+        // Zapis rzeczywistego wpływu finansowego do rejestru transakcji
         await supabase.from('transakcje').insert([{
           klient_id: transakcja.user_id,
           typ_operacji: 'odziez_autopay',
-          kwota: 0,
-          opis: `Zamówienie odzieży klubowej: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (Autopay online: ${transactionAmount.toFixed(2)} PLN)`
+          kwota: transactionAmount,
+          opis: `Zamówienie odzieży klubowej: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (Autopay online)`
         }]);
 
-        // Powiadomienie PUSH do administratorów
         await sendPushToAdmins(
           'Opłacono koszulkę klubową! 👕',
-          `${clientName} opłacił(a) koszulkę: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (${transactionAmount} PLN)`,
+          `${clientName} opłacił(a) koszulkę: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (${transactionAmount.toFixed(2)} PLN)`,
           '/odziez'
         );
 
-      // B. OBSŁUGA OPŁACENIA KOSZULKI NA WYDARZENIE (KOSZULKA_FEE)
+      // B. OBSŁUGA OPŁACENIA KOSZULKI NA WYDARZENIE
       } else if (transakcja.type === 'koszulka_fee') {
         const wydarzenieId = gatewayResponse.wydarzenie_id || metadata.wydarzenie_id;
 
@@ -243,19 +241,19 @@ export async function POST(req: Request) {
             await supabase.from('transakcje').insert([{
               klient_id: transakcja.user_id,
               typ_operacji: 'koszulka_autopay',
-              kwota: 0,
-              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online: ${transactionAmount} PLN)`
+              kwota: transactionAmount,
+              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online)`
             }]);
 
             await sendPushToAdmins(
               'Opłacono koszulkę treningową! 👕',
-              `${clientName} opłacił(a) koszulkę na wydarzenie "${eventData.tytul}" (${transactionAmount} PLN)`,
+              `${clientName} opłacił(a) koszulkę na wydarzenie "${eventData.tytul}" (${transactionAmount.toFixed(2)} PLN)`,
               '/wydarzenia'
             );
           }
         }
 
-      // C. OBSŁUGA WPISOWEGO NA WYZWANIE REDUKCJI (REDUKCJA_FEE)
+      // C. OBSŁUGA WPISOWEGO NA WYZWANIE REDUKCJI
       } else if (transakcja.type === 'redukcja_fee') {
         const edycjaId = gatewayResponse.edycja_id || metadata.edycja_id;
 
@@ -269,13 +267,13 @@ export async function POST(req: Request) {
           await supabase.from('transakcje').insert([{
             klient_id: transakcja.user_id,
             typ_operacji: 'redukcja_fee_autopay',
-            kwota: 0,
-            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay: ${transactionAmount} PLN)`
+            kwota: transactionAmount,
+            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay)`
           }]);
 
           await sendPushToAdmins(
             'Wpisowe na redukcję opłacone! 🔥',
-            `${clientName} opłacił(a) wpisowe na wyzwanie redukcji (${transactionAmount} PLN)`,
+            `${clientName} opłacił(a) wpisowe na wyzwanie redukcji (${transactionAmount.toFixed(2)} PLN)`,
             '/analiza-formy'
           );
         }
@@ -318,7 +316,7 @@ export async function POST(req: Request) {
             .insert([{
               klient_id: klient.id,
               typ_operacji: transakcja.type === 'pass_extend' ? 'przedluzenie_karnetu_autopay' : 'zakup_karnetu_autopay',
-              kwota: -transactionAmount,
+              kwota: transactionAmount,
               opis: `${opDescription} (Opłacono online Autopay)`,
               kod_rabatowy: metadata.kod_rabatowy || null
             }])
@@ -351,12 +349,12 @@ export async function POST(req: Request) {
 
           await sendPushToAdmins(
             transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
-            `${clientName} opłacił(a) karnet: ${opDescription} (${transactionAmount} PLN)`,
+            `${clientName} opłacił(a) karnet: ${opDescription} (${transactionAmount.toFixed(2)} PLN)`,
             '/klienci'
           );
         }
 
-      // E. OBSŁUGA STANDARDOWEGO DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
+      // E. OBSŁUGA DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
       } else {
         if (klient) {
           const rawWalletStr = klient.Portfel || klient.portfel || '0.00 PLN';
@@ -367,20 +365,29 @@ export async function POST(req: Request) {
           const newWalletNum = currentWalletNum + transactionAmount;
           const formattedNewWallet = `${newWalletNum.toFixed(2)} PLN`;
 
+          // 1. Aktualizacja salda portfela klubowicza
           await supabase
             .from('klienci')
             .update({ Portfel: formattedNewWallet })
             .eq('id', klient.id);
 
+          // 2. Rejestracja transakcji finansowej (przychód klubu)
+          await supabase.from('transakcje').insert([{
+            klient_id: klient.id,
+            typ_operacji: 'doladowanie_portfela_autopay',
+            kwota: transactionAmount,
+            opis: `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN)`
+          }]);
+
           await sendPushToAdmins(
             'Doładowanie portfela / Spłata 💰',
-            `${clientName} doładował(a) portfel kwotą ${transactionAmount} PLN`,
+            `${clientName} doładował(a) portfel kwotą ${transactionAmount.toFixed(2)} PLN`,
             '/klienci'
           );
         }
       }
 
-      // 3. Aktualizacja statusu w tabeli autopay_transakcje na success
+      // 3. Aktualizacja statusu w tabeli autopay_transakcje
       await supabase
         .from('autopay_transakcje')
         .update({
