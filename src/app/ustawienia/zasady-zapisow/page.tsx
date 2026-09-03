@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Bezpośrednia, bezpieczna inicjalizacja klienta Supabase
@@ -24,9 +24,13 @@ interface Klubowicz {
   id: string | number;
   imie?: string;
   nazwisko?: string;
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
   name?: string;
   email?: string;
   telefon?: string;
+  phone?: string;
 }
 
 interface IndywidualnyLimitZapisow {
@@ -99,7 +103,7 @@ export default function ZasadyZapisowPage() {
   const [saving, setSaving] = useState<boolean>(false);
   const [savingLimit, setSavingLimit] = useState<boolean>(false);
   
-  // Wyszukiwarka na liście wyjątków
+  // Wyszukiwarka na liście głównej tabeli limitów
   const [limitSearchQuery, setLimitSearchQuery] = useState<string>('');
 
   // Modale
@@ -108,8 +112,12 @@ export default function ZasadyZapisowPage() {
   const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
   const [isLimitModalOpen, setIsLimitModalOpen] = useState<boolean>(false);
 
-  // Formularz limitu klubowicza
+  // Formularz limitu klubowicza + wyszukiwarka w modalu
   const [editingLimitId, setEditingLimitId] = useState<string | null>(null);
+  const [searchMemberText, setSearchMemberText] = useState<string>('');
+  const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState<boolean>(false);
+  const memberDropdownRef = useRef<HTMLDivElement>(null);
+
   const [memberForm, setMemberForm] = useState<{
     klubowicz_id: string;
     klubowicz_nazwa: string;
@@ -129,7 +137,28 @@ export default function ZasadyZapisowPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Pobieranie danych z bazy Supabase
+  // Obsługa zamykania listy wyszukiwarki klubowiczów przy kliknięciu poza komponent
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (memberDropdownRef.current && !memberDropdownRef.current.contains(event.target as Node)) {
+        setIsMemberDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Pomocnicze pobieranie pełnego imienia i nazwiska klubowicza
+  const getKlubowiczFullName = (k: Klubowicz): string => {
+    if (k.full_name && k.full_name.trim()) return k.full_name.trim();
+    const parts = [k.imie || k.first_name, k.nazwisko || k.last_name].filter(Boolean);
+    if (parts.length > 0) return parts.join(' ').trim();
+    if (k.name && k.name.trim()) return k.name.trim();
+    if (k.email && k.email.trim()) return k.email.trim();
+    return `Klubowicz #${k.id}`;
+  };
+
+  // Pobieranie danych z Supabase
   const loadData = async () => {
     try {
       setLoading(true);
@@ -146,21 +175,31 @@ export default function ZasadyZapisowPage() {
         setKarnety(karnetyData);
       }
 
-      // 3. Pobierz listę klubowiczów do wyboru w formularzu
+      // 3. Pobierz listę klubowiczów / klientów (sprawdzenie tabel klubowicze -> klienci -> profiles)
+      let fetchedMembers: Klubowicz[] = [];
       const { data: klubowiczeData } = await supabase
         .from('klubowicze')
         .select('*')
         .order('nazwisko', { ascending: true });
 
       if (klubowiczeData && klubowiczeData.length > 0) {
-        setKlubowicze(klubowiczeData);
+        fetchedMembers = klubowiczeData;
       } else {
-        // Fallback do tabeli profiles jeśli klubowicze są inaczej nazwani
-        const { data: profilesData } = await supabase.from('profiles').select('*');
-        if (profilesData) {
-          setKlubowicze(profilesData);
+        const { data: klienciData } = await supabase
+          .from('klienci')
+          .select('*')
+          .order('nazwisko', { ascending: true });
+
+        if (klienciData && klienciData.length > 0) {
+          fetchedMembers = klienciData;
+        } else {
+          const { data: profilesData } = await supabase.from('profiles').select('*');
+          if (profilesData && profilesData.length > 0) {
+            fetchedMembers = profilesData;
+          }
         }
       }
+      setKlubowicze(fetchedMembers);
 
       // 4. Pobierz indywidualne reguły zapisu klubowiczów
       const { data: limitsData, error: limitsError } = await supabase
@@ -234,20 +273,24 @@ export default function ZasadyZapisowPage() {
     setIsLogsModalOpen(true);
   };
 
-  // Otwarcie modala dodawania/edycji limitu klubowicza
+  // Otwarcie modala dodawania limitu dla klubowicza
   const handleOpenAddLimit = () => {
     setEditingLimitId(null);
+    setSearchMemberText('');
     setMemberForm({
-      klubowicz_id: klubowicze.length > 0 ? String(klubowicze[0].id) : '',
-      klubowicz_nazwa: klubowicze.length > 0 ? getKlubowiczFullName(klubowicze[0]) : '',
+      klubowicz_id: '',
+      klubowicz_nazwa: '',
       dni_w_przod: 14,
       notatka: '',
     });
     setIsLimitModalOpen(true);
+    setIsMemberDropdownOpen(false);
   };
 
+  // Otwarcie modala edycji limitu klubowicza
   const handleOpenEditLimit = (item: IndywidualnyLimitZapisow) => {
     setEditingLimitId(item.id);
+    setSearchMemberText('');
     setMemberForm({
       klubowicz_id: item.klubowicz_id,
       klubowicz_nazwa: item.klubowicz_nazwa,
@@ -255,31 +298,24 @@ export default function ZasadyZapisowPage() {
       notatka: item.notatka || '',
     });
     setIsLimitModalOpen(true);
-  };
-
-  // Pomocnicze pobieranie pełnego imienia i nazwiska
-  const getKlubowiczFullName = (k: Klubowicz) => {
-    if (k.imie || k.nazwisko) {
-      return `${k.imie || ''} ${k.nazwisko || ''}`.trim();
-    }
-    return k.name || k.email || `Klubowicz #${k.id}`;
+    setIsMemberDropdownOpen(false);
   };
 
   // Zapis indywidualnego limitu klubowicza
   const handleSaveMemberLimit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!memberForm.klubowicz_nazwa) {
-      showToast('Wybierz lub podaj klubowicza', 'error');
+    if (!memberForm.klubowicz_nazwa.trim()) {
+      showToast('Wybierz klubowicza z bazy', 'error');
       return;
     }
 
     try {
       setSavingLimit(true);
       const payload = {
-        klubowicz_id: memberForm.klubowicz_id,
-        klubowicz_nazwa: memberForm.klubowicz_nazwa,
+        klubowicz_id: memberForm.klubowicz_id || null,
+        klubowicz_nazwa: memberForm.klubowicz_nazwa.trim(),
         dni_w_przod: Number(memberForm.dni_w_przod) || 1,
-        notatka: memberForm.notatka || null,
+        notatka: memberForm.notatka.trim() || null,
         updated_at: new Date().toISOString(),
       };
 
@@ -314,14 +350,14 @@ export default function ZasadyZapisowPage() {
         {
           action_type: editingLimitId ? 'USER_RULE_UPDATED' : 'USER_RULE_CREATED',
           status: 'SUCCESS',
-          reason: `Ustawiono indywidualny czas zapisu ${memberForm.dni_w_przod} dni dla: ${memberForm.klubowicz_nazwa}`,
+          reason: `Ustawiono indywidualne okno zapisu: ${memberForm.dni_w_przod} dni dla: ${memberForm.klubowicz_nazwa}`,
           rule_applied: 'INDYWIDUALNY_LIMIT_ZAPISOW',
         },
       ]);
 
       setIsLimitModalOpen(false);
     } catch (err: any) {
-      console.error('Błąd zapisu indywidualnego limitu:', err);
+      console.error('Błąd zapisu limitu:', err);
       showToast('Błąd zapisu: ' + (err.message || ''), 'error');
     } finally {
       setSavingLimit(false);
@@ -330,7 +366,7 @@ export default function ZasadyZapisowPage() {
 
   // Usunięcie indywidualnego limitu
   const handleDeleteMemberLimit = async (id: string, name: string) => {
-    if (!window.confirm(`Czy na pewno chcesz usunąć indywidualny limit dla: ${name}? Osoba ta powróci do standardowych zasad.`)) {
+    if (!window.confirm(`Czy na pewno chcesz usunąć indywidualny limit dla: ${name}? Osoba powróci do standardowych zasad.`)) {
       return;
     }
 
@@ -359,7 +395,7 @@ export default function ZasadyZapisowPage() {
     }
   };
 
-  // Zapis ogólnego formularza zasad do Supabase
+  // Zapis formularza zasad ogólnych do Supabase
   const handleSaveRules = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -431,16 +467,25 @@ export default function ZasadyZapisowPage() {
     return `${mins}min`;
   };
 
-  // Filtrowana lista klubowiczów z indywidualnymi limitami
+  // Filtrowana lista klubowiczów w tabeli podsumowującej
   const filteredLimits = indywidualneLimity.filter((item) =>
     item.klubowicz_nazwa.toLowerCase().includes(limitSearchQuery.toLowerCase()) ||
     (item.notatka && item.notatka.toLowerCase().includes(limitSearchQuery.toLowerCase()))
   );
 
+  // Filtrowana lista klubowiczów w modalu wyszukiwania
+  const searchCandidates = klubowicze.filter((k) => {
+    const fullName = getKlubowiczFullName(k).toLowerCase();
+    const email = (k.email || '').toLowerCase();
+    const phone = (k.telefon || k.phone || '').toLowerCase();
+    const query = searchMemberText.toLowerCase().trim();
+    return fullName.includes(query) || email.includes(query) || phone.includes(query);
+  });
+
   if (loading) {
     return (
       <div className="max-w-[1250px] mx-auto p-12 text-center text-slate-500 font-bold text-xs animate-pulse">
-        Ładowanie reguł i parametrów klubu...
+        Ładowanie reguł i bazy klubowiczów...
       </div>
     );
   }
@@ -723,7 +768,7 @@ export default function ZasadyZapisowPage() {
           </div>
         </div>
 
-        {/* SEKCJA 5: INDYWIDUALNY CZAS ZAPISU DLA KLUBOWICZÓW (NOWA TABELA / WYJĄTKI) */}
+        {/* SEKCJA 5: INDYWIDUALNE OKNO ZAPISU DLA KLUBOWICZÓW (NOWA TABELA) */}
         <div className="space-y-4 pt-6 border-t border-slate-100">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2.5">
@@ -740,7 +785,7 @@ export default function ZasadyZapisowPage() {
                   </span>
                 </h2>
                 <p className="text-[11px] text-slate-400 font-medium">
-                  Ustalaj krótszy lub dłuższy czas zapisu w przód dla wybranych klubowiczów (np. 14 dni), by uniknąć blokowania miejsc.
+                  Ustalaj krótszy lub dłuższy czas zapisu w przód dla wybranych klubowiczów (np. 14 dni), by zapobiec blokowaniu miejsc na tygodnie naprzód.
                 </p>
               </div>
             </div>
@@ -757,13 +802,13 @@ export default function ZasadyZapisowPage() {
             </button>
           </div>
 
-          {/* Wyszukiwarka na liście reguł */}
+          {/* Wyszukiwarka w tabeli limitów */}
           {indywidualneLimity.length > 0 && (
             <div className="flex items-center justify-between gap-4">
               <div className="relative w-full max-w-xs">
                 <input
                   type="text"
-                  placeholder="Szukaj klubowicza..."
+                  placeholder="Filtruj przypisane limity..."
                   value={limitSearchQuery}
                   onChange={(e) => setLimitSearchQuery(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
@@ -773,17 +818,17 @@ export default function ZasadyZapisowPage() {
                 </svg>
               </div>
               <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
-                Domyślna zasada dla pozostałych: <b>{rules.booking_window_days} dni</b>
+                Domyślna zasada klubu: <b>{rules.booking_window_days} dni</b>
               </span>
             </div>
           )}
 
-          {/* Tabela limitów */}
+          {/* Lista tabelaryczna przypisanych limitów */}
           {indywidualneLimity.length === 0 ? (
             <div className="text-center py-8 bg-slate-50/50 border border-dashed border-slate-200 rounded-2xl">
               <p className="text-xs text-slate-500 font-bold mb-1">Brak przypisanych reguł indywidualnych</p>
               <p className="text-[11px] text-slate-400 max-w-md mx-auto mb-4">
-                Wszyscy klubowicze korzystają obecnie z globalnego okna zapisu lub przypisanego do posiadanego karnetu.
+                Wszyscy klubowicze korzystają z ogólnego okna zapisu lub przypisanego do ich karnetu.
               </p>
               <button
                 type="button"
@@ -945,18 +990,19 @@ export default function ZasadyZapisowPage() {
 
       </div>
 
-      {/* MODAL: DODAJ / EDYTUJ INDYWIDUALNY LIMIT DLA KLUBOWICZA */}
+      {/* MODAL: DODAJ / EDYTUJ INDYWIDUALNY LIMIT Z WYSZUKIWARKĄ KLUBOWICZÓW */}
       {isLimitModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-visible">
             
-            <div className="p-6 bg-gradient-to-r from-blue-950 to-slate-900 text-white flex items-center justify-between">
+            {/* Nagłówek modala */}
+            <div className="p-6 bg-gradient-to-r from-blue-950 to-slate-900 text-white flex items-center justify-between rounded-t-3xl">
               <div>
                 <h3 className="text-base font-black uppercase tracking-wider flex items-center gap-2">
                   👤 {editingLimitId ? 'Edytuj Limit Klubowicza' : 'Nowy Indywidualny Czas Zapisu'}
                 </h3>
                 <p className="text-xs text-blue-200">
-                  Ustal wyprzedzenie czasowe z jakim ta osoba może dokonywać rezerwacji.
+                  Ustal wyprzedzenie czasowe, z jakim ta osoba może dokonywać rezerwacji.
                 </p>
               </div>
               <button
@@ -968,44 +1014,150 @@ export default function ZasadyZapisowPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveMemberLimit} className="p-6 space-y-4 text-xs text-slate-700">
+            {/* Formularz */}
+            <form onSubmit={handleSaveMemberLimit} className="p-6 space-y-5 text-xs text-slate-700">
               
-              {/* Wybór klubowicza */}
-              <div>
-                <label className="block font-bold text-slate-900 mb-1">
+              {/* WYBÓR KLUBOWICZA Z WYSZUKIWARKĄ NA ŻYWO */}
+              <div className="relative" ref={memberDropdownRef}>
+                <label className="block font-bold text-slate-900 mb-1.5">
                   Wybierz Klubowicza <span className="text-rose-500">*</span>
                 </label>
-                {klubowicze.length > 0 ? (
-                  <select
-                    value={memberForm.klubowicz_id}
-                    onChange={(e) => {
-                      const selectedId = e.target.value;
-                      const found = klubowicze.find((k) => String(k.id) === selectedId);
-                      setMemberForm({
-                        ...memberForm,
-                        klubowicz_id: selectedId,
-                        klubowicz_nazwa: found ? getKlubowiczFullName(found) : '',
-                      });
-                    }}
-                    disabled={!!editingLimitId}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer disabled:bg-slate-100 disabled:text-slate-500"
-                  >
-                    <option value="">-- Wybierz klubowicza --</option>
-                    {klubowicze.map((k) => (
-                      <option key={k.id} value={String(k.id)}>
-                        {getKlubowiczFullName(k)} {k.email ? `(${k.email})` : ''}
-                      </option>
-                    ))}
-                  </select>
+
+                {memberForm.klubowicz_nazwa ? (
+                  /* Wybrany klubowicz - kafelek potwierdzenia z opcją zmiany */
+                  <div className="flex items-center justify-between p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center font-black text-xs">
+                        {memberForm.klubowicz_nazwa.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <span className="font-black text-slate-900 text-xs block">{memberForm.klubowicz_nazwa}</span>
+                        <span className="text-[10px] text-blue-700 font-bold">Wybrano z bazy klientów</span>
+                      </div>
+                    </div>
+                    {!editingLimitId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMemberForm({ ...memberForm, klubowicz_id: '', klubowicz_nazwa: '' });
+                          setSearchMemberText('');
+                          setIsMemberDropdownOpen(true);
+                        }}
+                        className="text-xs font-bold text-blue-800 hover:text-blue-950 bg-white border border-blue-200 px-3 py-1.5 rounded-xl hover:bg-blue-100 transition-all cursor-pointer"
+                      >
+                        Zmień
+                      </button>
+                    )}
+                  </div>
                 ) : (
-                  <input
-                    type="text"
-                    placeholder="Wpisz imię i nazwisko klubowicza"
-                    value={memberForm.klubowicz_nazwa}
-                    onChange={(e) => setMemberForm({ ...memberForm, klubowicz_nazwa: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                    required
-                  />
+                  /* Pole wyszukiwania z rozwijaną listą wyników */
+                  <div className="relative">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Zacznij pisać imię, nazwisko lub email..."
+                        value={searchMemberText}
+                        onChange={(e) => {
+                          setSearchMemberText(e.target.value);
+                          setIsMemberDropdownOpen(true);
+                        }}
+                        onFocus={() => setIsMemberDropdownOpen(true)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-2xl pl-10 pr-4 py-3 font-medium text-xs text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all shadow-inner"
+                        autoComplete="off"
+                        autoFocus
+                      />
+                      <svg className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+
+                    {/* Menu rozwijane wyszukiwarki */}
+                    {isMemberDropdownOpen && (
+                      <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl max-h-56 overflow-y-auto z-50 divide-y divide-slate-100 animate-fadeIn">
+                        {searchCandidates.map((k) => {
+                          const fullName = getKlubowiczFullName(k);
+                          return (
+                            <div
+                              key={k.id}
+                              onClick={() => {
+                                setMemberForm({
+                                  ...memberForm,
+                                  klubowicz_id: String(k.id),
+                                  klubowicz_nazwa: fullName,
+                                });
+                                setSearchMemberText('');
+                                setIsMemberDropdownOpen(false);
+                              }}
+                              className="p-3 hover:bg-blue-50/80 cursor-pointer transition-colors flex items-center justify-between gap-3"
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-black text-[11px]">
+                                  {fullName.charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                  <span className="font-bold text-slate-800 text-xs block">{fullName}</span>
+                                  {(k.email || k.telefon || k.phone) && (
+                                    <span className="text-[10px] text-slate-400">
+                                      {[k.email, k.telefon || k.phone].filter(Boolean).join(' • ')}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
+                                Wybierz
+                              </span>
+                            </div>
+                          );
+                        })}
+
+                        {searchCandidates.length === 0 && (
+                          <div className="p-4 text-center text-xs text-slate-400">
+                            {klubowicze.length === 0 ? (
+                              <div className="space-y-2">
+                                <p>Brak rekordów w tabeli klientów w Supabase.</p>
+                                {searchMemberText.trim() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMemberForm({
+                                        ...memberForm,
+                                        klubowicz_id: '',
+                                        klubowicz_nazwa: searchMemberText.trim(),
+                                      });
+                                      setIsMemberDropdownOpen(false);
+                                    }}
+                                    className="text-blue-700 font-bold underline cursor-pointer"
+                                  >
+                                    Użyj wpisanej nazwy: &quot;{searchMemberText}&quot;
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <p>Nie znaleziono osoby pasującej do &quot;{searchMemberText}&quot;</p>
+                                {searchMemberText.trim() && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMemberForm({
+                                        ...memberForm,
+                                        klubowicz_id: '',
+                                        klubowicz_nazwa: searchMemberText.trim(),
+                                      });
+                                      setIsMemberDropdownOpen(false);
+                                    }}
+                                    className="text-blue-700 font-bold underline cursor-pointer"
+                                  >
+                                    Użyj wpisanej nazwy ręcznie: &quot;{searchMemberText}&quot;
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -1025,7 +1177,7 @@ export default function ZasadyZapisowPage() {
                     required
                   />
                   <span className="text-xs text-slate-500 font-medium">
-                    (np. <b>14 dni</b> zapobiegnie rezerwacjom na miesiąc do przodu)
+                    (np. <b>14 dni</b> zablokuje rezerwowanie terminów na miesiąc wprzód)
                   </span>
                 </div>
               </div>
@@ -1495,7 +1647,7 @@ export default function ZasadyZapisowPage() {
               <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 space-y-2">
                 <h4 className="font-black text-blue-950 uppercase">Indywidualne Limity Klubowiczów (Priorytet)</h4>
                 <p>
-                  Jeżeli klubowicz posiada zdefiniowaną indywidualną regułę, system traktuje ją jako nadrzędną wobec ogólnego okna karnetu. Pozwala to na skrócenie okna do np. 14 dni osobom nagminnie blokującym miejsca w przód.
+                  Jeżeli klubowicz posiada zdefiniowaną indywidualną regułę, system traktuje ją jako nadrzędną wobec okna karnetu. Pozwala to na skrócenie okna do np. 14 dni osobom nagminnie blokującym miejsca w przód.
                 </p>
               </div>
 
@@ -1512,7 +1664,7 @@ export default function ZasadyZapisowPage() {
               <div className="p-4 bg-purple-50 rounded-2xl border border-purple-100 space-y-1">
                 <h4 className="font-black text-purple-950 uppercase">Automatyczne Odwoływanie</h4>
                 <p>
-                  Jeśli do ustalonego czasu przed zajęciami nie zgłosi się minimalna liczba osób, system może automatycznie anulować sesję i zwolnić blokady.
+                  Jeśli do ustalonego czasu przed zajęciami nie zgłosi się minimalna liczba osób, system może automatycznie anulować sesję i powiadomić zapisanych.
                 </p>
               </div>
 
