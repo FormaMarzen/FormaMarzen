@@ -27,9 +27,12 @@ export default function TransactionsPage() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'karnet' | 'portfel'>('all');
   
   // Domyślny zakres dat - bieżący miesiąc
-  const today = new Date();
-  const defaultStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-  const defaultEnd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+  const today = useMemo(() => new Date(), []);
+  const defaultStart = useMemo(() => `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`, [today]);
+  const defaultEnd = useMemo(() => {
+    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  }, [today]);
   
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
@@ -39,45 +42,48 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
   
   const datePickerRef = useRef<HTMLDivElement>(null);
+  const isFetchingRef = useRef(false);
 
-  const detectCategory = (typ: string, opis: string): TransactionItem['typKategoria'] => {
+  const detectCategory = useCallback((typ: string, opis: string): TransactionItem['typKategoria'] => {
     const raw = `${typ} ${opis}`.toLowerCase();
     if (raw.includes('karnet') || raw.includes('zakup')) return 'karnet';
     if (raw.includes('portfel') || raw.includes('doładowanie') || raw.includes('uzupelnienie') || raw.includes('splata') || raw.includes('korekta')) return 'portfel';
     return 'inne';
-  };
+  }, []);
 
   const fetchTransactions = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     setIsLoading(true);
+
     try {
-      // 1. Pobieramy transakcje z podwyższonym limitem do 10 000 i sortowaniem od najnowszych
-      const { data: transakcjeRaw, error: tErr } = await supabase
-        .from('transakcje')
-        .select('*')
-        .gte('created_at', `${startDate}T00:00:00`)
-        .lte('created_at', `${endDate}T23:59:59`)
-        .order('created_at', { ascending: false })
-        .limit(10000);
+      // 1. Równoległe pobieranie transakcji oraz bazy klientów (zlikwidowany waterfall)
+      const [transakcjeRes, klienciRes] = await Promise.all([
+        supabase
+          .from('transakcje')
+          .select('*')
+          .gte('created_at', `${startDate}T00:00:00`)
+          .lte('created_at', `${endDate}T23:59:59`)
+          .order('created_at', { ascending: false })
+          .limit(10000),
+        supabase
+          .from('klienci')
+          .select('*')
+          .order('id', { ascending: false })
+          .limit(5000)
+      ]);
 
-      if (tErr) throw tErr;
+      if (transakcjeRes.error) throw transakcjeRes.error;
+      if (klienciRes.error) throw klienciRes.error;
 
-      // 2. Pobieramy bazę klientów z limitem do 5 000, aby uniknąć ucinania danych przy 1000 osobach
-      const { data: klienciRaw, error: kErr } = await supabase
-        .from('klienci')
-        .select('*')
-        .order('id', { ascending: false })
-        .limit(5000);
-
-      if (kErr) throw kErr;
-
-      // Szybka mapa klientów O(1)
+      // 2. Szybka mapa klientów O(1)
       const clientsMap = new Map<string, any>();
-      ((klienciRaw as any[]) || []).forEach(k => {
+      ((klienciRes.data as any[]) || []).forEach(k => {
         clientsMap.set(String(k.id), k);
       });
 
-      // 3. Filtrujemy na poziomie JS, wykluczając logi czysto techniczne/zapisowe
-      const tList = ((transakcjeRaw as any[]) || []).filter(t => {
+      // 3. Filtrowanie na poziomie JS - wykluczenie logów technicznych / zapisowych
+      const tList = ((transakcjeRes.data as any[]) || []).filter(t => {
         const typ = (t.typ_operacji || '').toLowerCase();
         return (
           typ !== 'zajecia_zapis' &&
@@ -86,7 +92,7 @@ export default function TransactionsPage() {
         );
       });
 
-      // Zabezpieczenie przed dublowaniem rekordów po identyfikatorze
+      // 4. Zabezpieczenie przed dublowaniem rekordów po identyfikatorze
       const enriched: TransactionItem[] = [];
       const seenTransactionIds = new Set<string | number>();
 
@@ -101,8 +107,12 @@ export default function TransactionsPage() {
         const email = klient ? klient['E-mail'] || klient.email || '' : '';
 
         const dt = new Date(t.created_at);
-        const dataOperacji = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-        const godzinaOperacji = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+        const dataOperacji = isNaN(dt.getTime())
+          ? (t.data || '')
+          : `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+        const godzinaOperacji = isNaN(dt.getTime())
+          ? ''
+          : `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
         const parsedKwota = t.kwota !== null && t.kwota !== undefined ? parseFloat(String(t.kwota)) : null;
 
         enriched.push({
@@ -125,8 +135,9 @@ export default function TransactionsPage() {
       console.error("Błąd podczas pobierania transakcji:", err);
     } finally {
       setIsLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [startDate, endDate]);
+  }, [startDate, endDate, detectCategory]);
 
   useEffect(() => {
     fetchTransactions();
@@ -142,11 +153,12 @@ export default function TransactionsPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Filtrowanie listy
+  // Filtrowanie listy z wykorzystaniem useMemo
   const filteredTransactions = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
     return transactions.filter(t => {
       const matchesSearch = 
+        !query ||
         t.klientImieNazwisko.toLowerCase().includes(query) ||
         t.klientEmail.toLowerCase().includes(query) ||
         t.opis.toLowerCase().includes(query) ||
@@ -170,7 +182,7 @@ export default function TransactionsPage() {
 
   const totalTransactionsCount = filteredTransactions.length;
 
-  // Funkcja eksportu do CSV
+  // Zoptymalizowana funkcja eksportu do CSV oparta na Blob API
   const handleExportCSV = () => {
     if (filteredTransactions.length === 0) {
       alert("Brak danych do wyeksportowania.");
@@ -181,22 +193,24 @@ export default function TransactionsPage() {
     const rows = filteredTransactions.map(t => [
       t.dataOperacji,
       t.godzinaOperacji,
-      `"${t.klientImieNazwisko}"`,
-      `"${t.klientEmail}"`,
+      `"${t.klientImieNazwisko.replace(/"/g, '""')}"`,
+      `"${t.klientEmail.replace(/"/g, '""')}"`,
       t.typKategoria.toUpperCase(),
-      `"${t.typOperacji}"`,
+      `"${t.typOperacji.replace(/"/g, '""')}"`,
       t.kwota !== null ? t.kwota.toFixed(2) : "0.00",
       `"${t.opis.replace(/"/g, '""')}"`
     ]);
 
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(";"), ...rows.map(e => e.join(";"))].join("\n");
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = "\uFEFF" + [headers.join(";"), ...rows.map(e => e.join(";"))].join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", `Operacje_Finansowe_${startDate}_${endDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const getBadgeStyle = (category: TransactionItem['typKategoria']) => {

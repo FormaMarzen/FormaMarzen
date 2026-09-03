@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -65,34 +65,159 @@ export default function OdziezPage() {
   // Zegar odliczający
   const [timeLeftStr, setTimeLeftStr] = useState<string>('');
 
-  useEffect(() => {
-    initData();
+  const executeRefunds = useCallback(async (campaignId: string, paidOrders: any[]) => {
+    const refundOperations = paidOrders
+      .filter(order => order.status_platnosci === 'oplacone')
+      .map(async (order) => {
+        const refundAmount = Number(order.kwota);
+        const { data: clientData } = await supabase
+          .from('klienci')
+          .select('*')
+          .eq('id', order.klient_id)
+          .single();
+
+        if (clientData) {
+          const rawWallet = clientData.Portfel || clientData.portfel || '0.00 PLN';
+          const isNeg = String(rawWallet).includes('-');
+          let currentNum = parseFloat(String(rawWallet).replace(/[^0-9.]/g, "")) || 0;
+          if (isNeg) currentNum = -Math.abs(currentNum);
+
+          const newWalletTotal = currentNum + refundAmount;
+          const newWalletStr = `${newWalletTotal.toFixed(2)} PLN`;
+
+          await Promise.all([
+            Promise.resolve(
+              supabase.from('klienci').update({ Portfel: newWalletStr }).eq('id', order.klient_id)
+            ),
+            Promise.resolve(
+              supabase.from('transakcje').insert([{
+                klient_id: order.klient_id,
+                kwota: refundAmount,
+                typ_operacji: 'Zwrot portfel',
+                opis: `Zwrot za koszulkę (nieosiągnięte minimum) - ${order.wariant} ${order.rozmiar}`,
+                data: new Date().toISOString()
+              }])
+            ),
+            Promise.resolve(
+              supabase.from('odziez_zamowienia').update({ status_platnosci: 'zwrocone' }).eq('id', order.id)
+            )
+          ]);
+        }
+      });
+
+    await Promise.all(refundOperations);
   }, []);
 
-  useEffect(() => {
-    if (selectedCampaignId && campaignsList.length > 0) {
-      const found = campaignsList.find(c => c.id === selectedCampaignId);
-      if (found) {
-        setupCampaignData(found);
+  const processCampaignAutomations = useCallback(async (camp: any, orderList: any[]) => {
+    const now = new Date().getTime();
+    const paidOrders = orderList.filter(o => o.status_platnosci === 'oplacone');
+    const minOrders = camp.min_osob || 5;
+    const createdAtTime = new Date(camp.created_at).getTime();
+    const expiresAtTime = new Date(camp.expires_at || (createdAtTime + 30 * 24 * 60 * 60 * 1000)).getTime();
+
+    let updatedCamp = { ...camp };
+
+    if (paidOrders.length >= minOrders && !camp.min_osiagniete_at && camp.status === 'aktywny') {
+      const minOsiagniete = new Date().toISOString();
+      const deadline = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      await supabase
+        .from('odziez_kampanie')
+        .update({
+          min_osiagniete_at: minOsiagniete,
+          koniec_zamowien_at: deadline
+        })
+        .eq('id', camp.id);
+
+      updatedCamp.min_osiagniete_at = minOsiagniete;
+      updatedCamp.koniec_zamowien_at = deadline;
+    }
+
+    if (updatedCamp.koniec_zamowien_at && now > new Date(updatedCamp.koniec_zamowien_at).getTime() && updatedCamp.status === 'aktywny') {
+      await supabase
+        .from('odziez_kampanie')
+        .update({ status: 'w_realizacji' })
+        .eq('id', camp.id);
+
+      updatedCamp.status = 'w_realizacji';
+    }
+
+    if (now > expiresAtTime && paidOrders.length < minOrders && updatedCamp.status === 'aktywny') {
+      await executeRefunds(camp.id, paidOrders);
+      await supabase
+        .from('odziez_kampanie')
+        .update({ status: 'anulowany' })
+        .eq('id', camp.id);
+
+      updatedCamp.status = 'anulowany';
+    }
+
+    setCampaign(updatedCamp);
+  }, [executeRefunds]);
+
+  const setupCampaignData = useCallback(async (currentCamp: any) => {
+    setCampaign(currentCamp);
+    setEditTitle(currentCamp.tytul || 'OFICJALNA KOSZULKA TRENINGOWA');
+    setEditDescription(currentCamp.opis || 'Pamiątkowa koszulka klubowa dedykowana na to wydarzenie');
+    setEditPrice(String(currentCamp.cena || '110.00'));
+    setEditMinOsob(String(currentCamp.min_osob || '5'));
+    setEditStatus(currentCamp.status || 'aktywny');
+    setEditImgFront(currentCamp.zdjecie_przod || '/koszulka-przod.png');
+    setEditImgBack(currentCamp.zdjecie_tyl || '/koszulka-tyl.png');
+    setEditImgSizeMale(currentCamp.tabela_rozmiarow_meska_img || '');
+    setEditImgSizeFemale(currentCamp.tabela_rozmiarow_damska_img || '');
+
+    const { data: ordersData } = await supabase
+      .from('odziez_zamowienia')
+      .select('*')
+      .eq('kampania_id', currentCamp.id)
+      .order('created_at', { ascending: true });
+
+    const campOrders = ordersData || [];
+    setOrders(campOrders);
+    await processCampaignAutomations(currentCamp, campOrders);
+  }, [processCampaignAutomations]);
+
+  const loadCampaignAndOrders = useCallback(async (currentCamp: any, user: any, adminStatus: boolean) => {
+    await setupCampaignData(currentCamp);
+
+    if (!adminStatus && user && user.id) {
+      const { data: viewData } = await supabase
+        .from('odziez_wyswietlenia')
+        .select('*')
+        .eq('klient_id', user.id)
+        .eq('kampania_id', currentCamp.id)
+        .maybeSingle();
+
+      if (!viewData) {
+        setHasNewDropBadge(true);
+        await supabase.from('odziez_wyswietlenia').insert([{
+          klient_id: user.id,
+          kampania_id: currentCamp.id
+        }]);
       }
     }
-  }, [selectedCampaignId]);
+  }, [setupCampaignData]);
 
-  const initData = async () => {
+  const initData = useCallback(async () => {
     try {
       setIsLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      const userEmail = session?.user?.email;
 
+      // Równoległe pobranie sesji, bazy klientów oraz listy kampanii
+      const [sessionRes, klienciRes, campaignsRes] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.from('klienci').select('*'),
+        supabase.from('odziez_kampanie').select('*').order('created_at', { ascending: false })
+      ]);
+
+      const userEmail = sessionRes.data.session?.user?.email;
       if (!userEmail) {
         setIsLoading(false);
         return;
       }
 
       const cleanEmail = userEmail.toLowerCase().trim();
-
-      const { data: klienciList } = await supabase.from('klienci').select('*');
-      const allClients = klienciList || [];
+      const allClients = klienciRes.data || [];
       setClientsDatabase(allClients);
 
       let klientData = allClients.find((c: any) => 
@@ -138,12 +263,8 @@ export default function OdziezPage() {
         setCurrentUser(userObj);
       }
 
-      const { data: campaigns } = await supabase
-        .from('odziez_kampanie')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (campaigns && campaigns.length > 0) {
+      const campaigns = campaignsRes.data || [];
+      if (campaigns.length > 0) {
         setCampaignsList(campaigns);
         const activeCamp = campaigns.find(c => c.status === 'aktywny') || campaigns[0];
         setSelectedCampaignId(activeCamp.id);
@@ -154,140 +275,22 @@ export default function OdziezPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [loadCampaignAndOrders]);
 
-  const setupCampaignData = async (currentCamp: any) => {
-    setCampaign(currentCamp);
-    setEditTitle(currentCamp.tytul || 'OFICJALNA KOSZULKA TRENINGOWA');
-    setEditDescription(currentCamp.opis || 'Pamiątkowa koszulka klubowa dedykowana na to wydarzenie');
-    setEditPrice(String(currentCamp.cena || '110.00'));
-    setEditMinOsob(String(currentCamp.min_osob || '5'));
-    setEditStatus(currentCamp.status || 'aktywny');
-    setEditImgFront(currentCamp.zdjecie_przod || '/koszulka-przod.png');
-    setEditImgBack(currentCamp.zdjecie_tyl || '/koszulka-tyl.png');
-    setEditImgSizeMale(currentCamp.tabela_rozmiarow_meska_img || '');
-    setEditImgSizeFemale(currentCamp.tabela_rozmiarow_damska_img || '');
+  useEffect(() => {
+    initData();
+  }, [initData]);
 
-    const { data: ordersData } = await supabase
-      .from('odziez_zamowienia')
-      .select('*')
-      .eq('kampania_id', currentCamp.id)
-      .order('created_at', { ascending: true });
-
-    const campOrders = ordersData || [];
-    setOrders(campOrders);
-    await processCampaignAutomations(currentCamp, campOrders);
-  };
-
-  const loadCampaignAndOrders = async (currentCamp: any, user: any, adminStatus: boolean) => {
-    await setupCampaignData(currentCamp);
-
-    if (!adminStatus && user && user.id) {
-      const { data: viewData } = await supabase
-        .from('odziez_wyswietlenia')
-        .select('*')
-        .eq('klient_id', user.id)
-        .eq('kampania_id', currentCamp.id)
-        .maybeSingle();
-
-      if (!viewData) {
-        setHasNewDropBadge(true);
-        await supabase.from('odziez_wyswietlenia').insert([{
-          klient_id: user.id,
-          kampania_id: currentCamp.id
-        }]);
+  useEffect(() => {
+    if (selectedCampaignId && campaignsList.length > 0) {
+      const found = campaignsList.find(c => c.id === selectedCampaignId);
+      if (found) {
+        setupCampaignData(found);
       }
     }
-  };
+  }, [selectedCampaignId, campaignsList, setupCampaignData]);
 
-  const processCampaignAutomations = async (camp: any, orderList: any[]) => {
-    const now = new Date().getTime();
-    const paidOrders = orderList.filter(o => o.status_platnosci === 'oplacone');
-    const minOrders = camp.min_osob || 5;
-    const createdAtTime = new Date(camp.created_at).getTime();
-    const expiresAtTime = new Date(camp.expires_at || (createdAtTime + 30 * 24 * 60 * 60 * 1000)).getTime();
-
-    let updatedCamp = { ...camp };
-
-    if (paidOrders.length >= minOrders && !camp.min_osiagniete_at && camp.status === 'aktywny') {
-      const minOsiagniete = new Date().toISOString();
-      const deadline = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
-
-      await supabase
-        .from('odziez_kampanie')
-        .update({
-          min_osiagniete_at: minOsiagniete,
-          koniec_zamowien_at: deadline
-        })
-        .eq('id', camp.id);
-
-      updatedCamp.min_osiagniete_at = minOsiagniete;
-      updatedCamp.koniec_zamowien_at = deadline;
-    }
-
-    if (updatedCamp.koniec_zamowien_at && now > new Date(updatedCamp.koniec_zamowien_at).getTime() && updatedCamp.status === 'aktywny') {
-      await supabase
-        .from('odziez_kampanie')
-        .update({ status: 'w_realizacji' })
-        .eq('id', camp.id);
-
-      updatedCamp.status = 'w_realizacji';
-    }
-
-    if (now > expiresAtTime && paidOrders.length < minOrders && updatedCamp.status === 'aktywny') {
-      await executeRefunds(camp.id, paidOrders);
-      await supabase
-        .from('odziez_kampanie')
-        .update({ status: 'anulowany' })
-        .eq('id', camp.id);
-
-      updatedCamp.status = 'anulowany';
-    }
-
-    setCampaign(updatedCamp);
-  };
-
-  const executeRefunds = async (campaignId: string, paidOrders: any[]) => {
-    for (const order of paidOrders) {
-      if (order.status_platnosci !== 'oplacone') continue;
-      const refundAmount = Number(order.kwota);
-
-      const { data: clientData } = await supabase
-        .from('klienci')
-        .select('*')
-        .eq('id', order.klient_id)
-        .single();
-
-      if (clientData) {
-        const rawWallet = clientData.Portfel || clientData.portfel || '0.00 PLN';
-        const isNeg = String(rawWallet).includes('-');
-        let currentNum = parseFloat(String(rawWallet).replace(/[^0-9.]/g, "")) || 0;
-        if (isNeg) currentNum = -Math.abs(currentNum);
-
-        const newWalletTotal = currentNum + refundAmount;
-        const newWalletStr = `${newWalletTotal.toFixed(2)} PLN`;
-
-        await supabase
-          .from('klienci')
-          .update({ Portfel: newWalletStr })
-          .eq('id', order.klient_id);
-
-        await supabase.from('transakcje').insert([{
-          klient_id: order.klient_id,
-          kwota: refundAmount,
-          typ_operacji: 'Zwrot portfel',
-          opis: `Zwrot za koszulkę (nieosiągnięte minimum) - ${order.wariant} ${order.rozmiar}`,
-          data: new Date().toISOString()
-        }]);
-
-        await supabase
-          .from('odziez_zamowienia')
-          .update({ status_platnosci: 'zwrocone' })
-          .eq('id', order.id);
-      }
-    }
-  };
-
+  // Zegar odliczający
   useEffect(() => {
     if (!campaign) return;
 
@@ -309,8 +312,8 @@ export default function OdziezPage() {
       } else {
         const days = Math.floor(diff / (1000 * 60 * 60 * 24));
         const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+        const minutes = Math.floor((diff % (1000 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % 1000) / 1000);
         setTimeLeftStr(`${days}d ${hours}h ${minutes}m ${seconds}s`);
       }
     }, 1000);
@@ -372,6 +375,7 @@ export default function OdziezPage() {
   }, [clientsDatabase, clientSearchQuery]);
 
   const paidOrdersList = useMemo(() => orders.filter(o => o.status_platnosci === 'oplacone'), [orders]);
+  
   const sizeBreakdown = useMemo(() => {
     const counts: Record<string, number> = {};
     paidOrdersList.forEach(o => {
@@ -387,9 +391,26 @@ export default function OdziezPage() {
   const activeCampaigns = useMemo(() => campaignsList.filter(c => c.status === 'aktywny'), [campaignsList]);
   const historyCampaigns = useMemo(() => campaignsList.filter(c => c.status !== 'aktywny'), [campaignsList]);
 
+  const sendAdminPushNotification = async (userName: string, variant: string, size: string) => {
+    try {
+      fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sendToAdmins: true,
+          title: '👕 Nowe opłacone zamówienie na koszulkę!',
+          body: `${userName} opłacił(a) koszulkę: ${variant} (${size}).`,
+          url: '/odziez'
+        })
+      }).catch(e => console.warn("Błąd wysyłki push w tle:", e));
+    } catch (e) {
+      console.warn("Nie udało się zainicjować powiadomienia Push:", e);
+    }
+  };
+
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || !campaign) return;
+    if (isProcessing || !currentUser || !campaign) return;
 
     if (campaign.status !== 'aktywny') {
       alert("Zamówienia na tę koszulkę zostały już zamknięte.");
@@ -397,8 +418,8 @@ export default function OdziezPage() {
     }
 
     const price = Number(campaign.cena) || 110;
-
     setIsProcessing(true);
+
     try {
       if (paymentMethod === 'wallet') {
         if (currentUser.rawWalletNum < price) {
@@ -410,36 +431,32 @@ export default function OdziezPage() {
         const newWalletNum = currentUser.rawWalletNum - price;
         const newWalletStr = `${newWalletNum.toFixed(2)} PLN`;
 
-        await supabase
-          .from('klienci')
-          .update({ Portfel: newWalletStr })
-          .eq('id', currentUser.id);
+        // Równoległe operacje zapisu w portfelu i zamówieniu
+        await Promise.all([
+          Promise.resolve(supabase.from('klienci').update({ Portfel: newWalletStr }).eq('id', currentUser.id)),
+          Promise.resolve(supabase.from('transakcje').insert([{
+            klient_id: currentUser.id,
+            kwota: -price,
+            typ_operacji: 'Zakup odzież',
+            opis: `Zamówienie koszulki klubowej - ${selectedVariant} (${selectedSize})`,
+            data: new Date().toISOString()
+          }])),
+          Promise.resolve(supabase.from('odziez_zamowienia').insert([{
+            kampania_id: campaign.id,
+            klient_id: currentUser.id,
+            klient_imie_nazwisko: currentUser.fullName,
+            klient_email: currentUser["E-mail"] || currentUser.email,
+            wariant: selectedVariant,
+            rozmiar: selectedSize,
+            kwota: price,
+            metoda_platnosci: 'wallet',
+            status_platnosci: 'oplacone',
+            oplacone_at: new Date().toISOString(),
+            admin_odczytane: false
+          }]))
+        ]);
 
-        await supabase.from('transakcje').insert([{
-          klient_id: currentUser.id,
-          kwota: -price,
-          typ_operacji: 'Zakup odzież',
-          opis: `Zamówienie koszulki klubowej - ${selectedVariant} (${selectedSize})`,
-          data: new Date().toISOString()
-        }]);
-
-        const { error: orderErr } = await supabase.from('odziez_zamowienia').insert([{
-          kampania_id: campaign.id,
-          klient_id: currentUser.id,
-          klient_imie_nazwisko: currentUser.fullName,
-          klient_email: currentUser["E-mail"] || currentUser.email,
-          wariant: selectedVariant,
-          rozmiar: selectedSize,
-          kwota: price,
-          metoda_platnosci: 'wallet',
-          status_platnosci: 'oplacone',
-          oplacone_at: new Date().toISOString(),
-          admin_odczytane: false
-        }]);
-
-        if (orderErr) throw orderErr;
-
-        await sendAdminPushNotification(currentUser.fullName, selectedVariant, selectedSize);
+        sendAdminPushNotification(currentUser.fullName, selectedVariant, selectedSize);
 
         alert("Zamówienie zostało pomyślnie opłacone z portfela!");
         setIsOrderModalOpen(false);
@@ -508,7 +525,7 @@ export default function OdziezPage() {
 
   const handleManualAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!campaign || !selectedManualClient) {
+    if (isProcessing || !campaign || !selectedManualClient) {
       alert("Wybierz klubowicza z listy.");
       return;
     }
@@ -548,18 +565,16 @@ export default function OdziezPage() {
         const updatedWallet = curNum - price;
         const updatedWalletStr = `${updatedWallet.toFixed(2)} PLN`;
 
-        await supabase
-          .from('klienci')
-          .update({ Portfel: updatedWalletStr })
-          .eq('id', selectedManualClient.id);
-
-        await supabase.from('transakcje').insert([{
-          klient_id: selectedManualClient.id,
-          kwota: -price,
-          typ_operacji: 'Zakup odzież',
-          opis: `Ręczne zamówienie koszulki klubowej - ${manualVariant} (${manualSize})`,
-          data: new Date().toISOString()
-        }]);
+        await Promise.all([
+          Promise.resolve(supabase.from('klienci').update({ Portfel: updatedWalletStr }).eq('id', selectedManualClient.id)),
+          Promise.resolve(supabase.from('transakcje').insert([{
+            klient_id: selectedManualClient.id,
+            kwota: -price,
+            typ_operacji: 'Zakup odzież',
+            opis: `Ręczne zamówienie koszulki klubowej - ${manualVariant} (${manualSize})`,
+            data: new Date().toISOString()
+          }]))
+        ]);
       }
 
       alert(`Pomyślnie dodano ${clientFullName} do listy zamówień!`);
@@ -577,6 +592,7 @@ export default function OdziezPage() {
 
   const handleSaveCampaignAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isProcessing) return;
     setIsProcessing(true);
 
     try {
@@ -626,7 +642,7 @@ export default function OdziezPage() {
 
         if (error) throw error;
 
-        await fetch('/api/push/send', {
+        fetch('/api/push/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -635,7 +651,7 @@ export default function OdziezPage() {
             body: `${editTitle} jest już dostępna do zamówienia w aplikacji!`,
             url: '/odziez'
           })
-        });
+        }).catch(e => console.warn('Błąd wysyłki push w tle:', e));
 
         alert("Nowy drop odzieży został pomyślnie utworzony i opublikowany dla klubowiczów!");
       }
@@ -661,44 +677,40 @@ export default function OdziezPage() {
     }
   };
 
-  const sendAdminPushNotification = async (userName: string, variant: string, size: string) => {
-    try {
-      await fetch('/api/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sendToAdmins: true,
-          title: '👕 Nowe opłacone zamówienie na koszulkę!',
-          body: `${userName} opłacił(a) koszulkę: ${variant} (${size}).`,
-          url: '/odziez'
-        })
-      });
-    } catch (e) {
-      console.warn("Nie udało się wysłać powiadomienia Push:", e);
-    }
-  };
-
+  // Optymistyczne oznaczanie jako odczytane przez admina
   const handleMarkAsRead = async (orderId: string) => {
     if (!isAdmin) return;
-    await supabase.from('odziez_zamowienia').update({ admin_odczytane: true }).eq('id', orderId);
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, admin_odczytane: true } : o));
+    await supabase.from('odziez_zamowienia').update({ admin_odczytane: true }).eq('id', orderId);
   };
 
+  // Optymistyczne przełączanie statusu płatności przez admina
   const handleTogglePaymentStatus = async (order: any) => {
     if (!isAdmin) return;
     const nextStatus = order.status_platnosci === 'oplacone' ? 'oczekuje' : 'oplacone';
-    await supabase.from('odziez_zamowienia').update({ 
-      status_platnosci: nextStatus,
-      oplacone_at: nextStatus === 'oplacone' ? new Date().toISOString() : null,
-      admin_odczytane: true
-    }).eq('id', order.id);
+    const oplaconeAt = nextStatus === 'oplacone' ? new Date().toISOString() : null;
 
+    // Natychmiastowa zmiana w UI
     setOrders(prev => prev.map(o => o.id === order.id ? { 
       ...o, 
       status_platnosci: nextStatus, 
-      oplacone_at: nextStatus === 'oplacone' ? new Date().toISOString() : null,
+      oplacone_at: oplaconeAt, 
       admin_odczytane: true 
     } : o));
+
+    try {
+      const { error } = await supabase.from('odziez_zamowienia').update({ 
+        status_platnosci: nextStatus,
+        oplacone_at: oplaconeAt,
+        admin_odczytane: true
+      }).eq('id', order.id);
+
+      if (error) throw error;
+    } catch (err: any) {
+      // Rollback w przypadku błędu
+      setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status_platnosci: order.status_platnosci } : o));
+      alert("Nie udało się zmienić statusu płatności: " + err.message);
+    }
   };
 
   const openHistoryModal = async (histCamp: any) => {

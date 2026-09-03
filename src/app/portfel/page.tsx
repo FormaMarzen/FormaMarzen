@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -20,18 +20,7 @@ export default function PortfelPage() {
   const [topUpAmount, setTopUpAmount] = useState('');
   const [topUpReason, setTopUpReason] = useState('');
 
-  useEffect(() => {
-    loadData();
-
-    if (typeof window !== 'undefined') {
-      const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.get('status') === 'success') {
-        window.history.replaceState({}, '', window.location.pathname);
-      }
-    }
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
@@ -88,21 +77,21 @@ export default function PortfelPage() {
         if (klientData) {
           const rawClient = klientData as any;
 
-          // 1. Pobranie najnowszych transakcji z bramki Autopay (zwiększony limit)
-          const { data: autopayData } = await supabase
-            .from('autopay_transakcje')
-            .select('*')
-            .eq('user_id', rawClient.id)
-            .order('created_at', { ascending: false })
-            .limit(2000);
-
-          // 2. Pobranie najnowszych transakcji ogólnych z bazy (zwiększony limit)
-          const { data: localTransData } = await supabase
-            .from('transakcje')
-            .select('*')
-            .eq('klient_id', rawClient.id)
-            .order('created_at', { ascending: false })
-            .limit(2000);
+          // 1 & 2. Równoległe pobranie transakcji online Autopay oraz operacji ogólnych
+          const [{ data: autopayData }, { data: localTransData }] = await Promise.all([
+            supabase
+              .from('autopay_transakcje')
+              .select('*')
+              .eq('user_id', rawClient.id)
+              .order('created_at', { ascending: false })
+              .limit(2000),
+            supabase
+              .from('transakcje')
+              .select('*')
+              .eq('klient_id', rawClient.id)
+              .order('created_at', { ascending: false })
+              .limit(2000)
+          ]);
 
           // 3. Połączenie i selekcja wyłącznie transakcji finansowych z ochroną przed duplikatami
           const combinedHistory: any[] = [];
@@ -192,9 +181,9 @@ export default function PortfelPage() {
 
           // 4. Formatowanie stanu salda portfela
           const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
-          const isNegative = String(rawWalletStr).includes('-');
+          const isNegativeWallet = String(rawWalletStr).includes('-');
           let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
-          if (isNegative) parsedWalletNum = -Math.abs(parsedWalletNum);
+          if (isNegativeWallet) parsedWalletNum = -Math.abs(parsedWalletNum);
 
           setCurrentUser({
             ...rawClient,
@@ -211,7 +200,18 @@ export default function PortfelPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadData();
+
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('status') === 'success') {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+  }, [loadData]);
 
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string) => {
     setIsProcessingPayment(true);
@@ -260,7 +260,7 @@ export default function PortfelPage() {
 
   const handleTopUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || !topUpAmount) return;
+    if (!currentUser || !topUpAmount || isProcessingPayment) return;
 
     const kwotaZmiany = parseFloat(topUpAmount);
     if (isNaN(kwotaZmiany) || kwotaZmiany <= 0) {
@@ -276,7 +276,7 @@ export default function PortfelPage() {
   };
 
   const handleSplatPortfela = async () => {
-    if (!currentUser) return;
+    if (!currentUser || isProcessingPayment) return;
     const currentWalletNum = currentUser.rawWalletNum || 0;
     if (currentWalletNum >= 0) return;
 
@@ -287,18 +287,23 @@ export default function PortfelPage() {
     await redirectToAutopay(kwotaSplaty, orderId, opisOperacji, 'wallet_settlement');
   };
 
+  const walletVal = useMemo(() => {
+    return currentUser ? currentUser.rawWalletNum : 0;
+  }, [currentUser]);
+
+  const isNegative = useMemo(() => walletVal < 0, [walletVal]);
+
+  const filteredHistory = useMemo(() => {
+    return historiaWszystkichOperacji.filter((item) => {
+      if (activeFilter === 'autopay') return item.kategoria === 'autopay';
+      if (activeFilter === 'wallet') return item.kategoria === 'wallet';
+      return true;
+    });
+  }, [historiaWszystkichOperacji, activeFilter]);
+
   if (isLoading) {
     return <div className="p-10 flex justify-center text-slate-400 font-bold uppercase text-xs">Ładowanie portfela...</div>;
   }
-
-  const walletVal = currentUser ? currentUser.rawWalletNum : 0;
-  const isNegative = walletVal < 0;
-
-  const filteredHistory = historiaWszystkichOperacji.filter((item) => {
-    if (activeFilter === 'autopay') return item.kategoria === 'autopay';
-    if (activeFilter === 'wallet') return item.kategoria === 'wallet';
-    return true;
-  });
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
@@ -504,8 +509,14 @@ export default function PortfelPage() {
                 <button type="button" onClick={() => setIsTopUpOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
                   Anuluj
                 </button>
-                <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                  Przejdź do płatności
+                <button 
+                  type="submit" 
+                  disabled={isProcessingPayment}
+                  className={`bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer ${
+                    isProcessingPayment ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                >
+                  {isProcessingPayment ? 'Łączenie...' : 'Przejdź do płatności'}
                 </button>
               </div>
             </form>
