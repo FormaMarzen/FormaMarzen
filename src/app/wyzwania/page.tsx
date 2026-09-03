@@ -43,6 +43,7 @@ export const REGUŁY_KATALOG = [
   { id: "RECZNA", nazwa: "Tylko ręczne przyznanie", kategoria: "Klub", ikona: "✋", opis: "Odznaka specjalna nadawana wyłącznie przez Trenera/Admina", domyslnyProg: 1 },
 ];
 
+// OMIJANIE LIMITU 1000 REKORDÓW W SUPABASE BEZ RYZYKA BŁĘDU SKŁADNIOWEGO
 const fetchAllFromSupabase = async (
   table: string, 
   selectQuery: string = '*', 
@@ -52,14 +53,31 @@ const fetchAllFromSupabase = async (
 ) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
-    const { data, error } = await supabase
+    let query = supabase
       .from(table)
       .select(selectQuery)
-      .order(orderBy, { ascending })
       .range(i * 1000, (i + 1) * 1000 - 1);
+    
+    if (orderBy) {
+      query = query.order(orderBy, { ascending });
+    }
+
+    const { data, error } = await query;
     
     if (error) {
       console.error(`Błąd pobierania tabeli ${table}:`, error);
+      // Fallback bez sortowania gdy dana kolumna nie istnieje
+      if (orderBy && error.message?.includes('does not exist')) {
+        const fallbackRes = await supabase
+          .from(table)
+          .select(selectQuery)
+          .range(i * 1000, (i + 1) * 1000 - 1);
+        if (fallbackRes.data && fallbackRes.data.length > 0) {
+          result.push(...fallbackRes.data);
+          if (fallbackRes.data.length < 1000) break;
+          continue;
+        }
+      }
       break;
     }
     if (data && data.length > 0) {
@@ -254,7 +272,7 @@ export default function WyzwaniaPage() {
 
       const { data: clientInfo } = await supabase
         .from("klienci")
-        .select("id, Zarejestrowany, registered, created_at")
+        .select("*")
         .eq("id", userId)
         .single();
 
@@ -397,31 +415,43 @@ export default function WyzwaniaPage() {
     const initData = async () => {
       setIsLoading(true);
       try {
+        // POBRANIE WSZYSTKICH KOLUMN Z TABELI KLIENCI BEZ BŁĘDÓW SKŁADNIOWYCH
         const [sessionRes, klienciData] = await Promise.all([
           supabase.auth.getSession(),
-          fetchAllFromSupabase('klienci', 'id, Imię, Nazwisko, E-mail, avatarUrl, push_subscription, Zarejestrowany, registered, created_at', 'id', true, 10)
+          fetchAllFromSupabase('klienci', '*', 'id', true, 20)
         ]);
 
-        const userEmail = (sessionRes.data.session?.user?.email || "").toLowerCase().trim();
-        if (!userEmail) {
-          setIsLoading(false);
-          return;
+        let userEmail = (sessionRes.data.session?.user?.email || "").toLowerCase().trim();
+        if (!userEmail && typeof window !== "undefined") {
+          const localUser = localStorage.getItem("currentUser") || localStorage.getItem("user");
+          if (localUser) {
+            try {
+              const parsed = JSON.parse(localUser);
+              userEmail = (parsed.email || parsed["E-mail"] || "").toLowerCase().trim();
+            } catch(e) {}
+          }
         }
 
-        const enriched = (klienciData || []).map((c: any) => {
-          const fName = c.Imię || c.firstName || "";
-          const lName = c.Nazwisko || c.lastName || "";
-          const fullName = `${fName} ${lName}`.trim() || c["E-mail"] || "Klubowicz";
-          return {
-            id: c.id,
-            firstName: fName,
-            lastName: lName,
-            name: fullName,
-            email: (c["E-mail"] || c.email || "").toLowerCase().trim(),
-            avatar: c.avatarUrl || c.avatar || null,
-            registered: c.Zarejestrowany || c.registered || c.created_at
-          };
-        });
+        // KULOODPORNE MAPOWANIE ZAREJESTROWANYCH KLUBOWICZÓW
+        const enriched = (klienciData || [])
+          .filter((c: any) => c && c.id && Number(c.id) !== SYSTEM_ID)
+          .map((c: any) => {
+            const fName = c.Imię || c.imie || c.firstName || "";
+            const lName = c.Nazwisko || c.nazwisko || c.lastName || "";
+            const fullName = [fName, lName].filter(Boolean).join(" ").trim() || c["E-mail"] || c.email || `Klubowicz #${c.id}`;
+            const emailVal = (c["E-mail"] || c.email || "").toLowerCase().trim();
+            const avatarVal = c.avatarUrl || c.avatar || null;
+            return {
+              id: c.id,
+              firstName: fName,
+              lastName: lName,
+              name: fullName,
+              email: emailVal,
+              phone: c["Numer tel."] || c.phone || c.telefon || "",
+              avatar: avatarVal,
+              registered: c.Zarejestrowany || c.registered || c.created_at
+            };
+          });
 
         setKlienci(enriched);
 
@@ -442,6 +472,10 @@ export default function WyzwaniaPage() {
           myId = myProfile.id;
           setCurrentUserName(myProfile.name);
           setCurrentUserAvatar(myProfile.avatar);
+        } else if (enriched.length > 0) {
+          myId = enriched[0].id;
+          setCurrentUserName(enriched[0].name);
+          setCurrentUserAvatar(enriched[0].avatar);
         }
 
         if (myId) {
@@ -922,7 +956,7 @@ export default function WyzwaniaPage() {
       if (!q) return false;
       const fName = (k.firstName || "").toLowerCase();
       const lName = (k.lastName || "").toLowerCase();
-      return lName.startsWith(q) || fName.startsWith(q);
+      return lName.startsWith(q) || fName.startsWith(q) || k.name.toLowerCase().includes(q);
     });
 
   const getClientName = (id: any) => {
@@ -930,25 +964,23 @@ export default function WyzwaniaPage() {
     return found ? found.name : "Klubowicz";
   };
 
-  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI
+  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI (DO WYSZUKIWARKI I GABLOTY)
   const allMembersWithBadgeData = useMemo(() => {
-    return klienci
-      .filter((k: any) => String(k.id) !== String(currentUserId))
-      .map((k: any) => {
-        const userBadges = wszystkiePrzydzieloneOdznaki.filter(
-          (item: any) => String(item.klient_id) === String(k.id)
-        );
-        return {
-          ...k,
-          badgesCount: userBadges.length,
-          badges: userBadges
-        };
-      });
-  }, [klienci, wszystkiePrzydzieloneOdznaki, currentUserId]);
+    return (klienci || []).map((k: any) => {
+      const userBadges = (wszystkiePrzydzieloneOdznaki || []).filter(
+        (item: any) => String(item.klient_id) === String(k.id)
+      );
+      return {
+        ...k,
+        badgesCount: userBadges.length,
+        badges: userBadges
+      };
+    });
+  }, [klienci, wszystkiePrzydzieloneOdznaki]);
 
   const membersWithBadges = useMemo(() => {
-    return allMembersWithBadgeData.filter((k: any) => k.badgesCount > 0);
-  }, [allMembersWithBadgeData]);
+    return allMembersWithBadgeData.filter((k: any) => k.badgesCount > 0 && String(k.id) !== String(currentUserId));
+  }, [allMembersWithBadgeData, currentUserId]);
 
   // WYSZUKIWANIE DOWOLNEGO REJESTROWANEGO KLUBOWICZA W GABLOCIE
   const searchedClubMembers = useMemo(() => {
@@ -956,15 +988,15 @@ export default function WyzwaniaPage() {
     const q = badgeMemberSearchQuery.toLowerCase().trim();
 
     return allMembersWithBadgeData.filter(k => 
-      k.name.toLowerCase().includes(q) ||
-      k.firstName.toLowerCase().includes(q) ||
-      k.lastName.toLowerCase().includes(q) ||
-      k.email.toLowerCase().includes(q)
+      (k.name && k.name.toLowerCase().includes(q)) ||
+      (k.firstName && k.firstName.toLowerCase().includes(q)) ||
+      (k.lastName && k.lastName.toLowerCase().includes(q)) ||
+      (k.email && k.email.toLowerCase().includes(q))
     );
   }, [badgeMemberSearchQuery, allMembersWithBadgeData]);
 
   const handleSelectMemberToInspect = (member: any) => {
-    const userBadges = wszystkiePrzydzieloneOdznaki.filter(
+    const userBadges = (wszystkiePrzydzieloneOdznaki || []).filter(
       (item: any) => String(item.klient_id) === String(member.id)
     );
     setSelectedMemberForComparison({
@@ -996,10 +1028,10 @@ export default function WyzwaniaPage() {
 
     return [...wszystkieOdznaki].sort((a, b) => {
       const aUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === a.id || o.odznaka_id === a.id);
-      const aMember = (selectedMemberForComparison.badges || []).some((o: any) => o.klub_odznaki_definicje?.id === defId(o, a.id));
+      const aMember = (selectedMemberForComparison.badges || []).some((o: any) => (o.klub_odznaki_definicje?.id === a.id) || (o.odznaka_id === a.id));
 
       const bUser = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === b.id || o.odznaka_id === b.id);
-      const bMember = (selectedMemberForComparison.badges || []).some((o: any) => o.klub_odznaki_definicje?.id === defId(o, b.id));
+      const bMember = (selectedMemberForComparison.badges || []).some((o: any) => (o.klub_odznaki_definicje?.id === b.id) || (o.odznaka_id === b.id));
 
       const aScore = (aUser ? 1 : 0) + (aMember ? 1 : 0);
       const bScore = (bUser ? 1 : 0) + (bMember ? 1 : 0);
@@ -1007,10 +1039,6 @@ export default function WyzwaniaPage() {
       if (bScore !== aScore) return bScore - aScore;
       return (b.punkty || 0) - (a.punkty || 0);
     });
-  };
-
-  const defId = (assignedBadge: any, targetId: any) => {
-    return assignedBadge.klub_odznaki_definicje?.id === targetId || assignedBadge.odznaka_id === targetId ? targetId : null;
   };
 
   const formatRegulaLabel = (typ: string, prog?: number) => {
@@ -1402,7 +1430,7 @@ export default function WyzwaniaPage() {
                   <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
                   <input
                     type="text"
-                    placeholder="Wpisz imię, nazwisko lub email klubowicza (np. Izabela Knap)..."
+                    placeholder="Wpisz imię, nazwisko lub email klubowicza (np. Joanna Kolańska)..."
                     value={badgeMemberSearchQuery}
                     onChange={(e) => setBadgeMemberSearchQuery(e.target.value)}
                     className="w-full bg-white border border-sky-200 rounded-2xl pl-11 pr-10 py-3 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-sm"
@@ -1410,7 +1438,7 @@ export default function WyzwaniaPage() {
                   {badgeMemberSearchQuery && (
                     <button
                       onClick={() => setBadgeMemberSearchQuery("")}
-                      className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                      className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer"
                     >
                       ✕
                     </button>
@@ -1465,7 +1493,7 @@ export default function WyzwaniaPage() {
                   </div>
                 )}
 
-                {/* Klubowicze, którzy już posiadają odznaki */}
+                {/* Klubowicze ze zdobytymi odznakami */}
                 <div className="space-y-3 pt-2">
                   <div className="text-[10px] font-black uppercase text-slate-400 px-2">
                     Klubowicze ze zdobytymi odznakami ({membersWithBadges.length}):
@@ -1498,7 +1526,7 @@ export default function WyzwaniaPage() {
 
                     {membersWithBadges.length === 0 && (
                       <div className="col-span-full bg-white rounded-3xl p-8 text-center border border-sky-100 text-slate-400 text-xs italic">
-                        Brak innych klubowiczów z odznakami. Skorzystaj z powyższej wyszukiwarki, aby sprawdzić profil dowolnej osoby z klubu.
+                        Brak innych klubowiczów ze zdobytymi odznakami. Wpisz nazwisko klubowicza w wyszukiwarce powyżej, aby zobaczyć jego profil.
                       </div>
                     )}
                   </div>
