@@ -218,14 +218,14 @@ const parsujOkresZDlugosci = (dlugoscStr: string) => {
 // POMOCNIK OKREŚLANIA KWARTAŁU / MIESIĄCA WAKACYJNEGO
 const getPeriodKey = (date: Date) => {
   const y = date.getFullYear();
-  const m = date.getMonth(); // 0 = Jan, 6 = Jul, 7 = Aug
+  const m = date.getMonth();
   if (m === 6) return { key: `${y}_M6`, label: `Lipiec ${y}`, isVacation: true, maxCount: 1 };
   if (m === 7) return { key: `${y}_M7`, label: `Sierpień ${y}`, isVacation: true, maxCount: 1 };
   const q = Math.floor(m / 3) + 1;
   return { key: `${y}_Q${q}`, label: `Kwartał ${q} (${y})`, isVacation: false, maxCount: 2 };
 };
 
-// NOWY PRECYZYJNY ROZBIJNIK DNI ROBOCZYCH I WEEKENDOWYCH DLA ZAWIESZEŃ
+// PRECYZYJNY ROZBIJNIK DNI ROBOCZYCH I WEEKENDOWYCH DLA ZAWIESZEŃ
 const calculateSuspensionBreakdown = (startDateStr: string, endDateStr: string) => {
   if (!startDateStr || !endDateStr) {
     return { weekdaysCount: 0, weekendDaysCount: 0, totalCalendarDays: 0 };
@@ -240,7 +240,7 @@ const calculateSuspensionBreakdown = (startDateStr: string, endDateStr: string) 
   const loopD = new Date(start);
 
   while (loopD <= end) {
-    const day = loopD.getDay(); // 0 = niedziela, 6 = sobota
+    const day = loopD.getDay();
     if (day === 0 || day === 6) {
       weekendDaysCount++;
     } else {
@@ -574,8 +574,9 @@ export default function KarnetyPage() {
     };
   };
 
+  // INTEGRACJA: RABAT ŁĄCZY SIĘ Z RABATAMI KLUBOWICZA (Ciągłość + Urodziny + Ambasador)
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number) => {
-    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false };
+    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false, ambassadorPercent: 0, ambassadorTierName: '' };
     
     const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia'], client.urodziny_rabat_rok);
     
@@ -584,6 +585,10 @@ export default function KarnetyPage() {
     
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client, basePriceToCheck) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
+
+    // RABAT Z PROGRAMU AMBASADOR DLA POLECAJĄCEGO KLUBOWICZA
+    const ambassadorDiscountVal = Number(client.ambassadorDiscountPercent) || 0;
+    const ambassadorTierName = client.ambassadorTierName || '';
 
     let totalPercent = 0;
     let labelParts: string[] = [];
@@ -601,16 +606,24 @@ export default function KarnetyPage() {
       labelParts.push(`${continuityDiscountVal}% ciągłość`);
     }
 
+    // Ambasador: rabat łączy się z rabatami klubowicza
+    if (ambassadorDiscountVal > 0) {
+      totalPercent += ambassadorDiscountVal;
+      labelParts.push(`${ambassadorDiscountVal}% Ambasador${ambassadorTierName ? ` (${ambassadorTierName})` : ''}`);
+    }
+
     if (totalPercent > 0) {
       return {
         percent: Math.min(100, totalPercent),
-        label: `(-${totalPercent}% ${labelParts.join(' + ')})`,
-        type: birthdayDiscountVal > 0 ? 'birthday' : (manualDiscountVal > 0 ? 'manual' : 'system'),
+        label: `(-${Math.min(100, totalPercent)}% ${labelParts.join(' + ')})`,
+        type: ambassadorDiscountVal > 0 ? 'ambassador' : (birthdayDiscountVal > 0 ? 'birthday' : (manualDiscountVal > 0 ? 'manual' : 'system')),
         isBirthday: birthdayDiscountVal > 0,
         continuityPercent: continuityDiscountVal,
         birthdayPercent: birthdayDiscountVal,
         daysLeftBirthday: bStatus.daysLeft,
-        isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear
+        isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
+        ambassadorPercent: ambassadorDiscountVal,
+        ambassadorTierName: ambassadorTierName
       };
     }
 
@@ -622,7 +635,9 @@ export default function KarnetyPage() {
       continuityPercent: 0, 
       birthdayPercent: 0, 
       daysLeftBirthday: bStatus.daysLeft, 
-      isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear
+      isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
+      ambassadorPercent: 0,
+      ambassadorTierName: ''
     };
   };
 
@@ -717,6 +732,17 @@ export default function KarnetyPage() {
         if (klienciData && klienciData.length > 0) {
           const todayDateOnly = new Date().toISOString().split('T')[0];
 
+          // POBIERZ DANE PROGRAMU AMBASADOR DLA NALICZENIA RABATÓW
+          let ambassadorTiersList: any[] = [];
+          try {
+            const { data: aTiers } = await supabase
+              .from('ambassador_tiers')
+              .select('*')
+              .eq('is_active', true)
+              .order('required_referrals', { ascending: true });
+            ambassadorTiersList = aTiers || [];
+          } catch(e) {}
+
           const enriched = await Promise.all(klienciData.map(async (c: any) => {
             let parsedKarnety: any[] = [];
             if (Array.isArray(c.karnetyKlubowicza)) {
@@ -759,7 +785,30 @@ export default function KarnetyPage() {
 
             const rawContinuity = extractClientContinuityDiscount(c);
 
-            // Bezpieczne parsowanie salda portfela
+            // Pobierz kwalifikowane polecenia dla klienta
+            let ambDiscountPercent = 0;
+            let ambTierName = '';
+            let qualifiedCount = 0;
+
+            try {
+              const { data: qRefs } = await supabase
+                .from('referrals')
+                .select('id')
+                .eq('referrer_id', c.id)
+                .eq('is_qualified', true);
+
+              qualifiedCount = qRefs ? qRefs.length : 0;
+
+              if (ambassadorTiersList.length > 0 && qualifiedCount > 0) {
+                for (const t of ambassadorTiersList) {
+                  if (qualifiedCount >= t.required_referrals) {
+                    ambDiscountPercent = Number(t.ambassador_discount_percent) || 0;
+                    ambTierName = t.name;
+                  }
+                }
+              }
+            } catch(e) {}
+
             let displayWallet = '0.00 PLN';
             const rawWallet = c.Portfel ?? c.portfel ?? c.wallet;
             if (typeof rawWallet === 'number') {
@@ -785,7 +834,10 @@ export default function KarnetyPage() {
               system_discount_offset: c.system_discount_offset || 0,
               karnetyKlubowicza: verifiedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
-              wallet: displayWallet
+              wallet: displayWallet,
+              ambassadorDiscountPercent: ambDiscountPercent,
+              ambassadorTierName: ambTierName,
+              qualifiedReferralsCount: qualifiedCount
             };
           }));
           
@@ -832,7 +884,10 @@ export default function KarnetyPage() {
                  'Rabat za ciągłość': '0%',
                  system_discount_offset: 0,
                  historiaZawieszenGlobalna: [],
-                 wallet: '0.00 PLN'
+                 wallet: '0.00 PLN',
+                 ambassadorDiscountPercent: 0,
+                 ambassadorTierName: '',
+                 qualifiedReferralsCount: 0
                };
              }
              globalCreatingLock = false;
@@ -1081,7 +1136,6 @@ export default function KarnetyPage() {
 
     return true;
   });
-
   // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M Z KALENDARZEM
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1270,7 +1324,6 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // Bezpieczna aktualizacja portfela
     if ('portfel' in currentUser) {
       dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
         ? nowyStanPortfela
@@ -1281,7 +1334,6 @@ export default function KarnetyPage() {
         : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
     }
 
-    // Bezpieczna aktualizacja ceny
     if (!isBonus13thPeriod) {
       if ('Cena' in currentUser) {
         dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
@@ -1532,7 +1584,6 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // Bezpieczna aktualizacja portfela
     if ('portfel' in currentUser) {
       dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
         ? nowyStanPortfela
@@ -1543,7 +1594,6 @@ export default function KarnetyPage() {
         : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
     }
 
-    // Bezpieczna aktualizacja ceny
     if ('Cena' in currentUser) {
       dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
         ? cenaPoRabacie
@@ -1734,11 +1784,9 @@ export default function KarnetyPage() {
     const targetKarnet = karnetyList[karnetIndex];
     const isContract = targetKarnet.isContract12M;
 
-    // PRECYZYJNA ANALIZA DNI ROBOCZYCH I WEEKENDOWYCH
     const { weekdaysCount, weekendDaysCount, totalCalendarDays } = calculateSuspensionBreakdown(suspendStartDate, suspendEndDate);
     const requestedDays = totalCalendarDays;
 
-    // REGULA 1: BLOKADA ZAWIESZENIA WYŁĄCZNIE NA DNI WEEKENDOWE (SOBOTA / NIEDZIELA)
     if (isContract && weekdaysCount === 0) {
       setSuspendError('Zawieszenie karnetu na umowę nie może obejmować wyłącznie dni weekendowych (sobota / niedziela). Wybierz również dzień roboczy.');
       return;
@@ -1770,17 +1818,14 @@ export default function KarnetyPage() {
     let newDaysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
     let newTotalUsed = targetKarnet.totalSuspendedDaysUsed || (30 - newDaysLeft);
 
-    // REGULA 2 I 3: OBLICZANIE EFEKTYWNYCH DNI ZAWIESZENIA DLA UMOWY 12M
     let effectiveDaysToDeduct = requestedDays;
     let effectiveDaysToExtend = requestedDays;
 
     if (isContract) {
       if (weekendDaysCount >= 1 && weekdaysCount === 1) {
-        // Weekend + 1 dzień tygodnia -> odlicza TYLKO 1 DZIEŃ i przedłuża TYLKO O 1 DZIEŃ
         effectiveDaysToDeduct = 1;
         effectiveDaysToExtend = 1;
       } else {
-        // Weekend + 2 dni tygodnia LUB brak weekendu -> pełne dni kalendarzowe
         effectiveDaysToDeduct = requestedDays;
         effectiveDaysToExtend = requestedDays;
       }
@@ -1792,7 +1837,6 @@ export default function KarnetyPage() {
       newDaysLeft = Math.max(0, newDaysLeft - effectiveDaysToDeduct);
       newTotalUsed += effectiveDaysToDeduct;
     } else {
-      // Karnety standardowe (zasady bez zmian)
       if (requestedDays > 14) {
         setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
         return;
@@ -1987,7 +2031,6 @@ export default function KarnetyPage() {
 
     const actualEndStr = actualEnd.toISOString().split('T')[0];
 
-    // OBLICZENIE ILE PLANOWANO ODLICZYĆ A ILE FAKTYCZNIE ODLICZONO
     let plannedDeducted = getDaysBetween(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
     let actualDeducted = 0;
 
@@ -2303,15 +2346,26 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* BANER INFORMACYJNY O AKTYWNYM RABACIE */}
+        {/* BANER INFORMACYJNY O AKTYWNYM RABACIE (W TYM PROGRAM AMBASADOR) */}
         {!birthdayStatus.isBirthdayWindow && effectiveDiscount.percent > 0 && (
           <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 flex items-center justify-between shadow-sm">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">🏷️</span>
+              <span className="text-2xl">{effectiveDiscount.ambassadorPercent > 0 ? '🏆' : '🏷️'}</span>
               <div>
-                <div className="font-black text-xs uppercase tracking-wider">Twój aktywny rabat: {effectiveDiscount.percent}%</div>
+                <div className="font-black text-xs uppercase tracking-wider flex items-center gap-2 flex-wrap">
+                  <span>Twój aktywny rabat: {effectiveDiscount.percent}%</span>
+                  {effectiveDiscount.ambassadorPercent > 0 && (
+                    <span className="bg-amber-200 text-amber-950 px-2 py-0.5 rounded text-[10px] font-black uppercase">
+                      Ambasador: {effectiveDiscount.ambassadorTierName || 'Aktywny'} (-{effectiveDiscount.ambassadorPercent}%)
+                    </span>
+                  )}
+                </div>
                 <div className="text-[11px] text-emerald-700 mt-0.5">
-                  {effectiveDiscount.type === 'manual' ? 'Przypisano indywidualny rabat stały do Twojego konta.' : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów (od 150 zł).`} Ceny zakupu i przedłużeń karnetów uwzględniają tę zniżkę.
+                  {effectiveDiscount.ambassadorPercent > 0 
+                    ? `Zniżka z Programu Ambasador została naliczona i łączy się z Twoimi rabatami klubowicza.` 
+                    : effectiveDiscount.type === 'manual' 
+                    ? 'Przypisano indywidualny rabat stały do Twojego konta.' 
+                    : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów (od 150 zł).`} Ceny zakupu i przedłużeń karnetów uwzględniają tę zniżkę.
                 </div>
               </div>
             </div>
@@ -2630,7 +2684,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         )}
-
         {/* MODAL ZAWIESZENIA */}
         {isSuspendModalOpen && (() => {
           const selectedPass = karnetyList.find((k: any) => k.id.toString() === passToSuspendId.toString());
@@ -3306,6 +3359,7 @@ export default function KarnetyPage() {
                   </td>
                   <td className="py-4 px-4 text-slate-600 text-[11px] space-y-0.5">
                     <div>• Dzienny limit: {item.dziennyLimit === 'Niestandardowy' ? `${item.niestandardowyDziennyIlosc} dziennie` : item.dziennyLimit}</div>
+                    <div>• Tygodniowy limit: {item.tygodniowyLimit || 'Bez limitu'}</div>
                     {item.blokujPortfel && (
                       <div className="text-rose-700 font-bold">• Blokada portfela: &lt; {item.portfelPrógKwota} PLN</div>
                     )}
@@ -3750,7 +3804,7 @@ export default function KarnetyPage() {
                 <div className="space-y-1">
                   <label className="font-bold text-slate-800 block">Opis</label>
                   <textarea 
-                    rows={3}
+                    rows={3} 
                     placeholder="Opis karnetu..."
                     value={opis}
                     onChange={(e) => setOpis(e.target.value)}
