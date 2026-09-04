@@ -105,6 +105,11 @@ export interface SuplementKlubowicza {
   jednostka: string;
 }
 
+export interface BadaniaKrwiPlik {
+  url: string;
+  nazwa: string;
+}
+
 export interface BadaniaKrwiWpis {
   id: number;
   klient_id: number | string;
@@ -112,6 +117,7 @@ export interface BadaniaKrwiWpis {
   data_badania: string;
   plik_pdf_url?: string | null;
   plik_pdf_nazwa?: string | null;
+  pliki_pdf?: BadaniaKrwiPlik[] | string[];
   zdjecia?: string[];
   interpretacja?: string | null;
   zalecenia?: string | null;
@@ -121,6 +127,26 @@ export interface BadaniaKrwiWpis {
   created_at?: string;
   updated_at?: string;
 }
+
+export const extractPdfFiles = (b?: BadaniaKrwiWpis | null): BadaniaKrwiPlik[] => {
+  if (!b) return [];
+  if (b.pliki_pdf && Array.isArray(b.pliki_pdf) && b.pliki_pdf.length > 0) {
+    return b.pliki_pdf.map((f: any) => 
+      typeof f === 'string' ? { url: f, nazwa: f.split('/').pop() || 'Dokument.pdf' } : f
+    );
+  }
+  if (b.plik_pdf_url) {
+    try {
+      const trimmed = b.plik_pdf_url.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [{ url: b.plik_pdf_url, nazwa: b.plik_pdf_nazwa || 'Wyniki.pdf' }];
+  }
+  return [];
+};
 
 const calculateAge = (birthDateString?: string | null): number | null => {
   if (!birthDateString) return null;
@@ -225,11 +251,12 @@ export default function AnalizaFormyPage() {
   const [isSavingBadanie, setIsSavingBadanie] = useState<boolean>(false);
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
 
-  // Formularz Badania Krwi
+  // Formularz Badania Krwi z obsługą wielu plików PDF
   const [badanieFormData, setBadanieFormData] = useState({
     data_badania: new Date().toISOString().split('T')[0],
     plik_pdf_url: '' as string,
     plik_pdf_nazwa: '' as string,
+    pliki_pdf: [] as BadaniaKrwiPlik[],
     zdjecia: [] as string[],
     interpretacja: '',
     zalecenia: '',
@@ -530,7 +557,6 @@ export default function AnalizaFormyPage() {
       loadEdycjaDetails(selectedEdycjaId);
     }
   }, [selectedEdycjaId]);
-
   const fetchMeasurements = async (klientId: number | string, email: string) => {
     try {
       let query = supabase
@@ -681,6 +707,7 @@ export default function AnalizaFormyPage() {
       data_badania: new Date().toISOString().split('T')[0],
       plik_pdf_url: '',
       plik_pdf_nazwa: '',
+      pliki_pdf: [],
       zdjecia: [],
       interpretacja: '',
       zalecenia: '',
@@ -692,10 +719,12 @@ export default function AnalizaFormyPage() {
 
   const handleEditBadanie = (badanie: BadaniaKrwiWpis) => {
     setEditingBadanieId(badanie.id);
+    const existingPdfs = extractPdfFiles(badanie);
     setBadanieFormData({
       data_badania: badanie.data_badania || new Date().toISOString().split('T')[0],
-      plik_pdf_url: badanie.plik_pdf_url || '',
-      plik_pdf_nazwa: badanie.plik_pdf_nazwa || '',
+      plik_pdf_url: badanie.plik_pdf_url || (existingPdfs[0]?.url || ''),
+      plik_pdf_nazwa: badanie.plik_pdf_nazwa || (existingPdfs[0]?.nazwa || ''),
+      pliki_pdf: existingPdfs,
       zdjecia: badanie.zdjecia || [],
       interpretacja: badanie.interpretacja || '',
       zalecenia: badanie.zalecenia || '',
@@ -728,40 +757,72 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF JEDNOCZEŚNIE LUB PARTIAMI
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.type !== 'application/pdf') {
-      alert("Proszę wybrać plik PDF.");
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const pdfFiles = Array.from(files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+    if (pdfFiles.length === 0) {
+      alert("Proszę wybrać pliki w formacie PDF.");
       return;
     }
 
     setIsUploadingPdf(true);
     try {
       const tKlientId = selectedKlient?.id || currentUserId || 'klient';
-      const fileName = `badania_${tKlientId}_${Date.now()}.pdf`;
-      const { data: uploadData, error: uploadErr } = await supabase.storage
-        .from('badania')
-        .upload(fileName, file, { upsert: true });
+      const uploadedPdfs: BadaniaKrwiPlik[] = [];
 
-      let publicUrl = '';
-      if (!uploadErr && uploadData) {
-        const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
-        publicUrl = urlData.publicUrl;
-      } else {
-        publicUrl = URL.createObjectURL(file);
+      for (let i = 0; i < pdfFiles.length; i++) {
+        const file = pdfFiles[i];
+        const cleanBaseName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const fileName = `badania_${tKlientId}_${Date.now()}_${i}_${cleanBaseName}.pdf`;
+
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('badania')
+          .upload(fileName, file, { upsert: true });
+
+        let publicUrl = '';
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
+          publicUrl = urlData.publicUrl;
+        } else {
+          publicUrl = URL.createObjectURL(file);
+        }
+
+        uploadedPdfs.push({
+          url: publicUrl,
+          nazwa: file.name
+        });
       }
 
-      setBadanieFormData(prev => ({
-        ...prev,
-        plik_pdf_url: publicUrl,
-        plik_pdf_nazwa: file.name
-      }));
+      setBadanieFormData(prev => {
+        const combined = [...(prev.pliki_pdf || []), ...uploadedPdfs];
+        return {
+          ...prev,
+          pliki_pdf: combined,
+          plik_pdf_url: combined[0]?.url || '',
+          plik_pdf_nazwa: combined[0]?.nazwa || ''
+        };
+      });
     } catch (err: any) {
       alert("Błąd wgrywania PDF: " + err.message);
     } finally {
       setIsUploadingPdf(false);
+      e.target.value = '';
     }
+  };
+
+  const handleRemovePdfFile = (index: number) => {
+    setBadanieFormData(prev => {
+      const updated = prev.pliki_pdf.filter((_, i) => i !== index);
+      return {
+        ...prev,
+        pliki_pdf: updated,
+        plik_pdf_url: updated[0]?.url || '',
+        plik_pdf_nazwa: updated[0]?.nazwa || ''
+      };
+    });
   };
 
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -864,12 +925,16 @@ export default function AnalizaFormyPage() {
 
     const existingBadanie = editingBadanieId ? badaniaList.find(b => b.id === editingBadanieId) : null;
 
-    const payload = {
+    const mainPdfUrl = badanieFormData.pliki_pdf?.[0]?.url || badanieFormData.plik_pdf_url || null;
+    const mainPdfName = badanieFormData.pliki_pdf?.[0]?.nazwa || badanieFormData.plik_pdf_nazwa || null;
+
+    const payload: any = {
       klient_id: tKlientId,
       email_klienta: tEmail,
       data_badania: badanieFormData.data_badania,
-      plik_pdf_url: badanieFormData.plik_pdf_url || null,
-      plik_pdf_nazwa: badanieFormData.plik_pdf_nazwa || null,
+      plik_pdf_url: mainPdfUrl,
+      plik_pdf_nazwa: mainPdfName,
+      pliki_pdf: badanieFormData.pliki_pdf && badanieFormData.pliki_pdf.length > 0 ? badanieFormData.pliki_pdf : null,
       zdjecia: isTrainerOrAdmin ? (badanieFormData.zdjecia || []) : (existingBadanie?.zdjecia || []),
       interpretacja: isTrainerOrAdmin ? (badanieFormData.interpretacja || null) : (existingBadanie?.interpretacja || null),
       zalecenia: isTrainerOrAdmin ? (badanieFormData.zalecenia || null) : (existingBadanie?.zalecenia || null),
@@ -880,22 +945,28 @@ export default function AnalizaFormyPage() {
     };
 
     try {
-      let error = null;
-      if (editingBadanieId) {
-        const res = await supabase.from('klub_badania_krwi').update(payload).eq('id', editingBadanieId);
-        error = res.error;
-      } else {
-        const res = await supabase.from('klub_badania_krwi').insert([payload]);
-        error = res.error;
+      let res = editingBadanieId
+        ? await supabase.from('klub_badania_krwi').update(payload).eq('id', editingBadanieId)
+        : await supabase.from('klub_badania_krwi').insert([payload]);
+
+      // Obsługa kompatybilności wstecznej bazy w przypadku braku dedykowanej kolumny jsonb 'pliki_pdf'
+      if (res.error && res.error.message && res.error.message.includes('pliki_pdf')) {
+        delete payload.pliki_pdf;
+        if (badanieFormData.pliki_pdf && badanieFormData.pliki_pdf.length > 0) {
+          payload.plik_pdf_url = JSON.stringify(badanieFormData.pliki_pdf);
+        }
+        res = editingBadanieId
+          ? await supabase.from('klub_badania_krwi').update(payload).eq('id', editingBadanieId)
+          : await supabase.from('klub_badania_krwi').insert([payload]);
       }
 
-      if (!error) {
+      if (!res.error) {
         alert(editingBadanieId ? "Wpis badań został zaktualizowany!" : "Nowy wpis badań został zapisany!");
         setIsBadaniaModalOpen(false);
         setEditingBadanieId(null);
         await fetchBadaniaKrwi(tKlientId, tEmail);
       } else {
-        alert("Błąd zapisu badania: " + error.message);
+        alert("Błąd zapisu badania: " + res.error.message);
       }
     } catch (err: any) {
       alert("Błąd zapisu: " + err.message);
@@ -1052,7 +1123,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Obsługa otwierania edycji nagrody
   const handleOpenEditNagroda = (nagroda: RedukcjaNagroda) => {
     setEditingNagrodaId(nagroda.id);
     setNagrodaFormData({
@@ -1063,7 +1133,6 @@ export default function AnalizaFormyPage() {
     setIsAddNagrodaModalOpen(true);
   };
 
-  // Zapis nagrody (Dodanie lub Aktualizacja)
   const handleSaveNagroda = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEdycjaId || !nagrodaFormData.tytul.trim()) return;
@@ -1112,7 +1181,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Przełącznik ukrywania / pokazywania pomiarów (dla klubowicza oraz admina)
   const handleTogglePokazPomiary = async (uczestnikId: number, currentVal?: boolean) => {
     const newVal = currentVal === false ? true : false;
     setUczestnicyRedukcji(prev =>
@@ -1906,7 +1974,6 @@ export default function AnalizaFormyPage() {
           </div>
         )
       )}
-
       {/* ZAKŁADKA 1: POMIARY */}
       {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
@@ -2397,6 +2464,7 @@ export default function AnalizaFormyPage() {
           </div>
         </div>
       )}
+
       {/* ZAKŁADKA 3: REDUKCJA */}
       {activeTab === 'redukcja' && (
         <div className="space-y-8">
@@ -3114,7 +3182,6 @@ export default function AnalizaFormyPage() {
 
         </div>
       )}
-
       {/* ZAKŁADKA 4: BADANIA KRWI */}
       {activeTab === 'badania' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
@@ -3137,7 +3204,7 @@ export default function AnalizaFormyPage() {
                 <span>💬</span> Instrukcja dla Klubowicza
               </div>
               <p className="text-xs text-sky-200 font-medium">
-                Po dodaniu pliku PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
+                Po dodaniu plików PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
               </p>
             </div>
             <button
@@ -3164,7 +3231,7 @@ export default function AnalizaFormyPage() {
                 <thead>
                   <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
                     <th className="p-3 w-28">Data Badania</th>
-                    <th className="p-3 w-40">Dokument PDF</th>
+                    <th className="p-3 w-48">Dokumenty PDF</th>
                     <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
                     <th className="p-3">Główne Wnioski / Interpretacja</th>
                     <th className="p-3 w-36 text-center">Suplementacja</th>
@@ -3173,88 +3240,99 @@ export default function AnalizaFormyPage() {
                 </thead>
                 <tbody className="divide-y divide-sky-100">
                   {badaniaList.length > 0 ? (
-                    badaniaList.map((b) => (
-                      <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
-                        <td className="p-3 font-black text-sky-950 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            {b.nowa_interpretacja && (
-                              <span className="relative flex h-2.5 w-2.5">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
-                              </span>
+                    badaniaList.map((b) => {
+                      const pdfList = extractPdfFiles(b);
+
+                      return (
+                        <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
+                          <td className="p-3 font-black text-sky-950 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              {b.nowa_interpretacja && (
+                                <span className="relative flex h-2.5 w-2.5">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                                </span>
+                              )}
+                              <span>{b.data_badania}</span>
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            {pdfList.length > 0 ? (
+                              <div className="space-y-1.5 max-w-[220px]">
+                                {pdfList.map((pdf, pIdx) => (
+                                  <a
+                                    key={pIdx}
+                                    href={pdf.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors"
+                                    title={pdf.nazwa}
+                                  >
+                                    <span className="shrink-0">📄</span>
+                                    <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">Brak pliku PDF</span>
                             )}
-                            <span>{b.data_badania}</span>
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          {b.plik_pdf_url ? (
-                            <a
-                              href={b.plik_pdf_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5"
-                            >
-                              <span>📄</span> {b.plik_pdf_nazwa || "Wyniki.pdf"}
-                            </a>
-                          ) : (
-                            <span className="text-slate-400 italic">Brak pliku PDF</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-center font-bold text-slate-700">
-                          {(b.zdjecia || []).length > 0 ? (
-                            <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
-                              📷 {b.zdjecia?.length} szt.
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
-                          {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
-                        </td>
-                        <td className="p-3 text-center">
-                          <div className="space-y-0.5 text-[10px]">
-                            <span className="block font-bold text-emerald-700">
-                              Trener: {(b.suplementacja_trener || []).length} poz.
-                            </span>
-                            <span className="block font-bold text-sky-700">
-                              Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
-                            </span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => {
-                                setSelectedBadanieDetail(b);
-                                setIsDetailViewOpen(true);
-                                markInterpretationAsRead(b.id);
-                              }}
-                              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
-                              title="Otwórz szczegóły"
-                            >
-                              🔍 Podgląd
-                            </button>
+                          </td>
+                          <td className="p-3 text-center font-bold text-slate-700">
+                            {(b.zdjecia || []).length > 0 ? (
+                              <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
+                                📷 {b.zdjecia?.length} szt.
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
+                            {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className="space-y-0.5 text-[10px]">
+                              <span className="block font-bold text-emerald-700">
+                                Trener: {(b.suplementacja_trener || []).length} poz.
+                              </span>
+                              <span className="block font-bold text-sky-700">
+                                Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
+                              </span>
+                            </div>
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setSelectedBadanieDetail(b);
+                                  setIsDetailViewOpen(true);
+                                  markInterpretationAsRead(b.id);
+                                }}
+                                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
+                                title="Otwórz szczegóły"
+                              >
+                                🔍 Podgląd
+                              </button>
 
-                            <button
-                              onClick={() => handleEditBadanie(b)}
-                              className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
-                              title="Edytuj wpis"
-                            >
-                              ✏️
-                            </button>
+                              <button
+                                onClick={() => handleEditBadanie(b)}
+                                className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
+                                title="Edytuj wpis"
+                              >
+                                ✏️
+                              </button>
 
-                            <button
-                              onClick={() => handleDeleteBadanie(b.id)}
-                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
-                              title="Usuń wpis"
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                              <button
+                                onClick={() => handleDeleteBadanie(b.id)}
+                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
+                                title="Usuń wpis"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
@@ -3309,33 +3387,67 @@ export default function AnalizaFormyPage() {
                 />
               </div>
 
-              {/* PLIK PDF */}
+              {/* PLIKI PDF (WIELE PLIKÓW PDF JEDNOCZEŚNIE) */}
               <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
-                <label className="font-black text-sky-950 uppercase tracking-wider block">
-                  📄 Wyniki Badań w Pliku PDF (Wgrywane przez Klubowicza)
-                </label>
-                
-                {badanieFormData.plik_pdf_url ? (
-                  <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 truncate">
-                      <span className="text-xl">📑</span>
-                      <span className="font-bold text-slate-900 truncate">{badanieFormData.plik_pdf_nazwa || 'Plik_badan.pdf'}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setBadanieFormData(prev => ({ ...prev, plik_pdf_url: '', plik_pdf_nazwa: '' }))}
-                      className="text-rose-600 hover:text-rose-800 text-xs font-bold bg-white px-3 py-1 rounded-lg border border-rose-200 cursor-pointer"
-                    >
-                      Usuń plik ✕
-                    </button>
-                  </div>
-                ) : (
-                  <label className="border-2 border-dashed border-sky-200 hover:border-amber-400 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-colors bg-sky-50/20">
-                    <span className="text-2xl mb-1">📤</span>
-                    <span className="font-bold text-slate-700">{isUploadingPdf ? 'Wgrywanie pliku PDF...' : 'Kliknij, aby wgrać plik PDF z wynikami'}</span>
-                    <input type="file" accept="application/pdf" disabled={isUploadingPdf} onChange={handleUploadPdf} className="hidden" />
+                <div className="flex items-center justify-between">
+                  <label className="font-black text-sky-950 uppercase tracking-wider block">
+                    📄 Wyniki Badań w Plikach PDF (Możliwość dodania wielu plików)
                   </label>
+                  <span className="text-[10px] font-bold text-slate-500">
+                    Wgrano: {badanieFormData.pliki_pdf.length} {badanieFormData.pliki_pdf.length === 1 ? 'plik' : 'plików'}
+                  </span>
+                </div>
+                
+                {badanieFormData.pliki_pdf.length > 0 && (
+                  <div className="space-y-2">
+                    {badanieFormData.pliki_pdf.map((fileItem, fIdx) => (
+                      <div key={fIdx} className="p-2.5 bg-sky-50 border border-sky-200 rounded-xl flex items-center justify-between gap-2 shadow-2xs">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="text-lg text-amber-600">📑</span>
+                          <span className="font-bold text-slate-900 truncate text-xs">{fileItem.nazwa || `Dokument_${fIdx + 1}.pdf`}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <a
+                            href={fileItem.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] font-bold text-sky-700 hover:underline px-2 py-1 bg-white rounded border border-sky-200"
+                          >
+                            Podgląd ↗
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePdfFile(fIdx)}
+                            className="text-rose-600 hover:text-rose-800 text-xs font-bold bg-white px-2.5 py-1 rounded-lg border border-rose-200 cursor-pointer"
+                            title="Usuń ten plik"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
+
+                <label className="border-2 border-dashed border-sky-200 hover:border-amber-400 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-colors bg-sky-50/20">
+                  <span className="text-2xl mb-1">📤</span>
+                  <span className="font-bold text-slate-700 text-center">
+                    {isUploadingPdf 
+                      ? 'Wgrywanie plików PDF...' 
+                      : badanieFormData.pliki_pdf.length > 0 
+                        ? '+ Dodaj kolejny plik PDF (możesz wybrać kilka naraz)' 
+                        : 'Kliknij, aby wgrać pliki PDF z wynikami (możesz wybrać kilka plików jednocześnie)'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 mt-0.5">Obsługiwany format: .pdf</span>
+                  <input 
+                    type="file" 
+                    accept="application/pdf" 
+                    multiple 
+                    disabled={isUploadingPdf} 
+                    onChange={handleUploadPdf} 
+                    className="hidden" 
+                  />
+                </label>
               </div>
 
               {/* SEKCJE DLA TRENERA / ADMINA (UKRYTE DLA KLUBOWICZA) */}
@@ -3536,7 +3648,7 @@ export default function AnalizaFormyPage() {
 
               {appRole === 'klubowicz' && (
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900 font-medium">
-                  ℹ️ Trener po zapoznaniu się z wynikami z dokumentu PDF przygotuje dla Ciebie szczegółową interpretację, zalecenia oraz dedykowany protokół suplementacyjny.
+                  ℹ️ Trener po zapoznaniu się z wynikami z dokumentów PDF przygotuje dla Ciebie szczegółową interpretację, zalecenia oraz dedykowany protokół suplementacyjny.
                 </div>
               )}
 
@@ -3603,25 +3715,40 @@ export default function AnalizaFormyPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-sky-50/70 p-4 rounded-2xl border border-sky-200 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-sky-900 uppercase block">Oryginalny Dokument PDF</span>
-                  <div className="text-xs font-black text-sky-950 mt-0.5">
-                    {selectedBadanieDetail.plik_pdf_nazwa || "Wyniki_Badań.pdf"}
-                  </div>
+              {/* LISTA ZAŁĄCZONYCH PLIKÓW PDF */}
+              <div className="bg-sky-50/70 p-4 rounded-2xl border border-sky-200 flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-sky-900 uppercase block">Oryginalne Dokumenty PDF</span>
+                  <span className="text-[10px] font-bold text-slate-500">
+                    {extractPdfFiles(selectedBadanieDetail).length} {extractPdfFiles(selectedBadanieDetail).length === 1 ? 'dokument' : 'dokumenty/ów'}
+                  </span>
                 </div>
-                {selectedBadanieDetail.plik_pdf_url ? (
-                  <a
-                    href={selectedBadanieDetail.plik_pdf_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl transition-all shadow-xs cursor-pointer"
-                  >
-                    Otwórz PDF ↗
-                  </a>
-                ) : (
-                  <span className="text-xs text-slate-400 italic">Brak pliku</span>
-                )}
+                {(() => {
+                  const pdfs = extractPdfFiles(selectedBadanieDetail);
+                  if (pdfs.length === 0) {
+                    return <span className="text-xs text-slate-400 italic">Brak załączonych plików PDF</span>;
+                  }
+                  return (
+                    <div className="space-y-2 mt-1">
+                      {pdfs.map((p, pIdx) => (
+                        <div key={pIdx} className="bg-white p-2.5 rounded-xl border border-sky-200 flex items-center justify-between gap-2 shadow-2xs">
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="text-base text-amber-600">📄</span>
+                            <span className="text-xs font-black text-sky-950 truncate">{p.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
+                          </div>
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] px-3 py-1.5 rounded-lg transition-all shadow-xs cursor-pointer shrink-0"
+                          >
+                            Otwórz PDF ↗
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center justify-between">
