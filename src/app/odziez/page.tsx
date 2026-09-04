@@ -20,7 +20,7 @@ export default function OdziezPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [hasNewDropBadge, setHasNewDropBadge] = useState(false);
 
-  // Modal szczegółów historycznego / zarchiwizowanego dropu (podgląd wzoru)
+  // Modal szczegółów historycznego / zarchiwizowanego dropu
   const [selectedHistoryCampaign, setSelectedHistoryCampaign] = useState<any>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
@@ -29,6 +29,12 @@ export default function OdziezPage() {
   const [selectedVariant, setSelectedVariant] = useState('MĘSKA');
   const [selectedSize, setSelectedSize] = useState('M');
   const [paymentMethod, setPaymentMethod] = useState<'autopay' | 'wallet'>('autopay');
+
+  // Formularz edycji konkretnego zamówienia klubowicza przez Admina
+  const [isEditOrderModalOpen, setIsEditOrderModalOpen] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<any>(null);
+  const [editOrderVariant, setEditOrderVariant] = useState('MĘSKA');
+  const [editOrderSize, setEditOrderSize] = useState('M');
 
   // Formularz tworzenia / edycji kampanii przez Admina
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -93,7 +99,7 @@ export default function OdziezPage() {
                 klient_id: order.klient_id,
                 kwota: refundAmount,
                 typ_operacji: 'Zwrot portfel',
-                opis: `Zwrot za koszulkę (anulowanie/archiwizacja dropu) - ${order.wariant} ${order.rozmiar}`,
+                opis: `Zwrot za koszulkę - ${order.wariant} ${order.rozmiar}`,
                 data: new Date().toISOString()
               }])
             ),
@@ -392,6 +398,94 @@ export default function OdziezPage() {
   const activeCampaigns = useMemo(() => campaignsList.filter(c => c.status === 'aktywny'), [campaignsList]);
   const historyCampaigns = useMemo(() => campaignsList.filter(c => c.status !== 'aktywny'), [campaignsList]);
 
+  // Otwarcie modalu edycji zamówienia klubowicza
+  const handleOpenEditOrder = (order: any) => {
+    if (!isAdmin) return;
+    setEditingOrder(order);
+    setEditOrderVariant(order.wariant || 'MĘSKA');
+    setEditOrderSize(order.rozmiar || 'M');
+    setIsEditOrderModalOpen(true);
+  };
+
+  // Zapis zmian rozmiaru / wariantu zamówienia klubowicza
+  const handleSaveEditedOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isProcessing || !editingOrder) return;
+    setIsProcessing(true);
+
+    try {
+      const { error } = await supabase
+        .from('odziez_zamowienia')
+        .update({
+          wariant: editOrderVariant,
+          rozmiar: editOrderSize
+        })
+        .eq('id', editingOrder.id);
+
+      if (error) throw error;
+
+      setOrders(prev => prev.map(o => o.id === editingOrder.id ? {
+        ...o,
+        wariant: editOrderVariant,
+        rozmiar: editOrderSize
+      } : o));
+
+      alert("Pomyślnie zaktualizowano rozmiar i wariant koszulki!");
+      setIsEditOrderModalOpen(false);
+      setEditingOrder(null);
+    } catch (err: any) {
+      console.error("Błąd edycji zamówienia:", err);
+      alert("Błąd: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Usunięcie pojedynczego zamówienia klubowicza z opcją zwrotu wpłaconych środków
+  const handleDeleteOrder = async (order: any) => {
+    if (!isAdmin) return;
+
+    const isPaid = order.status_platnosci === 'oplacone';
+    const clientName = order.klient_imie_nazwisko || 'Klubowicza';
+
+    if (!window.confirm(`Czy na pewno chcesz usunąć zamówienie dla: ${clientName} (${order.wariant} ${order.rozmiar})?`)) {
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      if (isPaid) {
+        const askRefund = window.confirm(
+          `Zamówienie zostało OPŁACONE na kwotę ${order.kwota} PLN.\n\nCzy chcesz ZWRÓCIĆ te środki do Wirtualnego Portfela klubowicza przed usunięciem?`
+        );
+        if (askRefund) {
+          await executeRefunds(order.kampania_id, [order]);
+        }
+      }
+
+      const { error } = await supabase
+        .from('odziez_zamowienia')
+        .delete()
+        .eq('id', order.id);
+
+      if (error) throw error;
+
+      const updatedOrders = orders.filter(o => o.id !== order.id);
+      setOrders(updatedOrders);
+
+      if (campaign) {
+        await processCampaignAutomations(campaign, updatedOrders);
+      }
+
+      alert("Zamówienie zostało pomyślnie usunięte!");
+    } catch (err: any) {
+      console.error("Błąd usuwania zamówienia:", err);
+      alert("Błąd usuwania zamówienia: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // Archiwizacja dropa z opcjonalnym automatycznym zwrotem wpłat na portfel
   const handleArchiveCampaign = async (campId: string) => {
     if (!isAdmin) return;
@@ -401,7 +495,6 @@ export default function OdziezPage() {
 
     setIsProcessing(true);
     try {
-      // Pobranie opłaconych zamówień dla dropa
       const { data: paidOrdersData } = await supabase
         .from('odziez_zamowienia')
         .select('*')
@@ -456,7 +549,6 @@ export default function OdziezPage() {
 
     setIsProcessing(true);
     try {
-      // Sprawdzenie czy istnieją opłacone zamówienia przed ich usunięciem
       const { data: paidOrdersData } = await supabase
         .from('odziez_zamowienia')
         .select('*')
@@ -615,7 +707,7 @@ export default function OdziezPage() {
 
         const data = await response.json();
         if (!response.ok || !data.success) {
-          throw new Error(data.error || 'Błąd inicjalizacji Autopay');
+          throw new Error(data.error || 'Błąd inicjalizacji AutoPay');
         }
 
         const form = document.createElement('form');
@@ -1106,7 +1198,7 @@ export default function OdziezPage() {
             {isAdmin ? (
               <div className="space-y-2">
                 <div className="text-[11px] text-slate-400 italic">
-                  💡 Kliknij w status płatności, aby go szybko przełączyć. Wykrzyknik oznacza nowe, nieodczytane zamówienie.
+                  💡 Kliknij w status płatności, aby go szybko przełączyć. Opcje ✏️ (edycja rozmiaru) oraz 🗑️ (usunięcie) dostępne są na kafelku każdego zamówienia.
                 </div>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
@@ -1118,29 +1210,57 @@ export default function OdziezPage() {
                       <div 
                         key={order.id}
                         onClick={() => handleMarkAsRead(order.id)}
-                        className={`border rounded-2xl p-4 flex items-center justify-between transition-all ${
+                        className={`border rounded-2xl p-4 flex flex-col justify-between gap-3 transition-all ${
                           isUnread ? 'bg-rose-50/50 border-rose-300 shadow-sm ring-1 ring-rose-300' : 'bg-white border-slate-200'
                         }`}
                       >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-blue-500" />
-                            <span className="font-bold text-xs text-slate-900">{order.klient_imie_nazwisko}</span>
-                            {isUnread && (
-                              <span className="bg-rose-600 text-white font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center">
-                                !
-                              </span>
-                            )}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                              <span className="font-bold text-xs text-slate-900">{order.klient_imie_nazwisko}</span>
+                              {isUnread && (
+                                <span className="bg-rose-600 text-white font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center">
+                                  !
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              {order.metoda_platnosci === 'wallet' ? '👛 Portfel' : order.metoda_platnosci === 'autopay' ? '💳 AutoPay' : '💵 Gotówka'} • {order.klient_email || '-'}
+                            </div>
                           </div>
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            {order.metoda_platnosci === 'wallet' ? '👛 Portfel' : order.metoda_platnosci === 'autopay' ? '💳 AutoPay' : '💵 Gotówka'} • {order.wariant} ({order.rozmiar})
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEditOrder(order);
+                              }}
+                              className="bg-slate-100 hover:bg-slate-200 text-slate-700 p-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                              title="Edytuj rozmiar i krój"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteOrder(order);
+                              }}
+                              className="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                              title="Usuń zamówienie"
+                            >
+                              🗑️
+                            </button>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200 px-2 py-1 rounded-lg uppercase">
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                          <span className="text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200 px-2.5 py-1 rounded-lg uppercase">
                             {order.rozmiar} • {order.wariant}
                           </span>
+
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1429,7 +1549,7 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* MODAL ZAMÓWIENIA */}
+      {/* MODAL ZAMÓWIENIA KLUBOWICZA */}
       {isOrderModalOpen && campaign && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-md w-full max-h-[92vh] flex flex-col shadow-2xl border border-sky-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
@@ -1515,7 +1635,86 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* MODAL ARCHIWALNEGO WZORU (BEZ LICZBY KUPUJĄCYCH) */}
+      {/* MODAL EDYCJI POJEDYNCZEGO ZAMÓWIENIA KLUBOWICZA PRZEZ ADMINA */}
+      {isEditOrderModalOpen && editingOrder && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-sm w-full max-h-[92vh] flex flex-col shadow-2xl border border-sky-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
+              <div>
+                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <span>✏️</span> Edytuj zamówienie
+                </h3>
+                <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                  {editingOrder.klient_imie_nazwisko}
+                </p>
+              </div>
+              <button 
+                onClick={() => { setIsEditOrderModalOpen(false); setEditingOrder(null); }} 
+                className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedOrder} className="p-5 space-y-4 text-xs">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Wariant kroju *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['MĘSKA', 'DAMSKA'].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setEditOrderVariant(v)}
+                      className={`py-2 rounded-xl font-bold uppercase border transition-all cursor-pointer ${
+                        editOrderVariant === v ? 'bg-blue-600 text-white border-blue-600 shadow-xs' : 'bg-slate-50 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Rozmiar *</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setEditOrderSize(s)}
+                      className={`py-2 rounded-xl font-black uppercase border transition-all cursor-pointer ${
+                        editOrderSize === s ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
+                <button 
+                  type="button" 
+                  onClick={() => { setIsEditOrderModalOpen(false); setEditingOrder(null); }} 
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isProcessing} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-black px-5 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer"
+                >
+                  {isProcessing ? 'Zapisywanie...' : 'Zapisz zmiany'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ARCHIWALNEGO WZORU */}
       {isHistoryModalOpen && selectedHistoryCampaign && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
@@ -1542,7 +1741,6 @@ export default function OdziezPage() {
                 </div>
               )}
 
-              {/* WZÓR: WIZUALIZACJA PRZÓD I TYŁ */}
               <div className="space-y-2">
                 <div className="font-bold text-slate-900 uppercase text-[11px]">Wzór koszulki:</div>
                 <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4 items-center justify-center">
@@ -1568,7 +1766,6 @@ export default function OdziezPage() {
                 </div>
               </div>
 
-              {/* TABELE ROZMIARÓW WZORU */}
               {(selectedHistoryCampaign.tabela_rozmiarow_meska_img || selectedHistoryCampaign.tabela_rozmiarow_damska_img) && (
                 <div className="space-y-3 pt-2">
                   <div className="font-bold text-slate-900 uppercase text-[11px]">Tabele rozmiarów wzoru:</div>
