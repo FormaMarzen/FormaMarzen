@@ -525,7 +525,6 @@ export default function RootLayout({
       title: "Główne",
       items: [
         { href: '/', label: 'Panel główny', icon: '📊' },
-        { href: '/ustawienia/program-ambasador', label: 'Program Ambasador', icon: '🏆' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
         { href: '/moje-zapisy?ranking=true', label: 'Ranking Klubowiczów', icon: '👑' },
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
