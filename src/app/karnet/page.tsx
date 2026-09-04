@@ -597,10 +597,8 @@ export default function KarnetyPage() {
     if (rawAmbDiscountVal > 0) {
       const passNameLower = (targetPassNameToCheck || '').toLowerCase().trim();
 
-      // Reguła: Jeśli próg wymaga konkretnego karnetu (np. 'open'), sprawdzamy czy nazwa zawiera 'open'
       if (tierTargetPass !== 'all' && tierTargetPass !== '') {
         if (passNameLower && !passNameLower.includes(tierTargetPass)) {
-          // Klubowicz ma 100% zniżki na OPEN, ale wybiera np. karnet 10 wejść -> rabat ambasadora nie jest naliczany
           isPassQualifiedForAmbassador = false;
           ambassadorDiscountVal = 0;
         } else {
@@ -627,7 +625,6 @@ export default function KarnetyPage() {
       labelParts.push(`${continuityDiscountVal}% ciągłość`);
     }
 
-    // Dodanie rabatu Ambasadora jeśli karnet spełnia kryteria
     if (ambassadorDiscountVal > 0) {
       totalPercent += ambassadorDiscountVal;
       labelParts.push(`${ambassadorDiscountVal}% Ambasador${ambassadorTierName ? ` (${ambassadorTierName})` : ''}`);
@@ -755,7 +752,6 @@ export default function KarnetyPage() {
         if (klienciData && klienciData.length > 0) {
           const todayDateOnly = new Date().toISOString().split('T')[0];
 
-          // POBRANIE PROGÓW Z BAZY (WRAZ Z TARGET_PASS_NAME)
           let ambassadorTiersList: any[] = [];
           try {
             const { data: aTiers } = await supabase
@@ -808,7 +804,6 @@ export default function KarnetyPage() {
 
             const rawContinuity = extractClientContinuityDiscount(c);
 
-            // Odczytanie poleceń i przypisanie progu z informacją o docelowym karnecie
             let ambDiscountPercent = 0;
             let ambTierName = '';
             let ambTargetPass = 'all';
@@ -1163,6 +1158,7 @@ export default function KarnetyPage() {
 
     return true;
   });
+
   // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M Z KALENDARZEM
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1221,7 +1217,6 @@ export default function KarnetyPage() {
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
     const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
-    // Przekazujemy nazwę przedłużanego karnetu w celu weryfikacji warunku Ambasadora (np. OPEN)
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum, passToExtend.nazwa);
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
@@ -1352,25 +1347,27 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    if ('portfel' in currentUser) {
-      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
-        ? nowyStanPortfela
-        : (typeof currentUser.portfel === 'string' && currentUser.portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
-    } else if ('Portfel' in currentUser) {
-      dbPayload.Portfel = (typeof currentUser.Portfel === 'number' || currentUser.Portfel === null)
-        ? nowyStanPortfela
-        : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
+    // Pewny zapis salda do Portfela - bez względu na wielkość liter w bazie
+    const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
+      ? nowyStanPortfela
+      : nowyStanPortfelaStr;
+
+    dbPayload.Portfel = walletValToSave;
+    if ('portfel' in currentUser && currentUser.portfel !== undefined) {
+      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? nowyStanPortfela : walletValToSave;
     }
 
     if (!isBonus13thPeriod) {
-      if ('Cena' in currentUser) {
+      if ('Cena' in currentUser && currentUser.Cena !== undefined) {
         dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
           ? cenaPoRabacie
           : (typeof currentUser.Cena === 'string' && currentUser.Cena.includes('PLN') ? cenaStr : cenaPoRabacie);
-      } else if ('cena' in currentUser) {
+      } else if ('cena' in currentUser && currentUser.cena !== undefined) {
         dbPayload.cena = (typeof currentUser.cena === 'number' || currentUser.cena === null)
           ? cenaPoRabacie
           : (typeof currentUser.cena === 'string' && currentUser.cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+      } else {
+        dbPayload.Cena = cenaStr;
       }
     }
 
@@ -1381,7 +1378,7 @@ export default function KarnetyPage() {
       return;
     }
 
-    let createdTransactionId: number | null = null;
+        let createdTransactionId: number | null = null;
     if (cenaPoRabacie > 0) {
       const opisOperacji = isContract 
         ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`
@@ -1429,12 +1426,12 @@ export default function KarnetyPage() {
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
       Wygasa: latestExpiryDate,
-      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
+      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
       rabat: finalRabatInt,
       cyklCiaglosci: finalCyklInt,
       hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
-      Portfel: dbPayload.Portfel || currentUser.Portfel,
-      portfel: dbPayload.portfel || currentUser.portfel,
+      Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
+      portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
       wallet: nowyStanPortfelaStr
     });
     
@@ -1613,24 +1610,26 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    if ('portfel' in currentUser) {
-      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null)
-        ? nowyStanPortfela
-        : (typeof currentUser.portfel === 'string' && currentUser.portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
-    } else if ('Portfel' in currentUser) {
-      dbPayload.Portfel = (typeof currentUser.Portfel === 'number' || currentUser.Portfel === null)
-        ? nowyStanPortfela
-        : (typeof currentUser.Portfel === 'string' && currentUser.Portfel.includes('PLN') ? nowyStanPortfelaStr : nowyStanPortfela);
+    // Pewny zapis salda do Portfela - bez względu na wielkość liter w bazie
+    const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
+      ? nowyStanPortfela
+      : nowyStanPortfelaStr;
+
+    dbPayload.Portfel = walletValToSave;
+    if ('portfel' in currentUser && currentUser.portfel !== undefined) {
+      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? nowyStanPortfela : walletValToSave;
     }
 
-    if ('Cena' in currentUser) {
+    if ('Cena' in currentUser && currentUser.Cena !== undefined) {
       dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
         ? cenaPoRabacie
         : (typeof currentUser.Cena === 'string' && currentUser.Cena.includes('PLN') ? cenaStr : cenaPoRabacie);
-    } else if ('cena' in currentUser) {
+    } else if ('cena' in currentUser && currentUser.cena !== undefined) {
       dbPayload.cena = (typeof currentUser.cena === 'number' || currentUser.cena === null)
         ? cenaPoRabacie
         : (typeof currentUser.cena === 'string' && currentUser.cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+    } else {
+      dbPayload.Cena = cenaStr;
     }
 
     const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
@@ -1676,12 +1675,12 @@ export default function KarnetyPage() {
       ...currentUser,
       karnetyKlubowicza: updatedKarnetyList,
       Wygasa: latestExpiryDate,
-      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok || currentUser.urodziny_rabat_rok,
+      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
       rabat: finalRabatInt,
       cyklCiaglosci: finalCyklInt,
       hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
-      Portfel: dbPayload.Portfel || currentUser.Portfel,
-      portfel: dbPayload.portfel || currentUser.portfel,
+      Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
+      portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
       wallet: nowyStanPortfelaStr
     });
 
