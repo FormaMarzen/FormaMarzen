@@ -13,6 +13,12 @@ export default function OdziezPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Referencja do aktualnego użytkownika zapobiegająca pętlom renderowania
+  const currentUserRef = useRef<any>(null);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
   // Dane kampanii i zamówień
   const [campaignsList, setCampaignsList] = useState<any[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
@@ -20,7 +26,7 @@ export default function OdziezPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [hasNewDropBadge, setHasNewDropBadge] = useState(false);
 
-  // Modal szczegółów zarchiwizowanego dropu (podgląd wzoru)
+  // Modal szczegółów zarchiwizowanego dropu (podgląd samego wzoru)
   const [selectedHistoryCampaign, setSelectedHistoryCampaign] = useState<any>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
@@ -90,15 +96,15 @@ export default function OdziezPage() {
           const newWalletTotal = currentNum + refundAmount;
           const newWalletStr = `${newWalletTotal.toFixed(2)} PLN`;
 
-          const adminSenderId = currentUser?.id ? Number(currentUser.id) : null;
-          const adminSenderName = currentUser?.fullName || 'Forma Marzeń';
+          const adminSenderId = currentUserRef.current?.id ? Number(currentUserRef.current.id) : null;
+          const adminSenderName = currentUserRef.current?.fullName || 'Forma Marzeń';
 
           await Promise.all([
-            // 1. Zwiększenie salda w Portfelu
+            // 1. Zasilenie wirtualnego portfela
             Promise.resolve(
               supabase.from('klienci').update({ Portfel: newWalletStr }).eq('id', order.klient_id)
             ),
-            // 2. Dodanie rekordu w historii transakcji
+            // 2. Dodanie rekordu do historii transakcji
             Promise.resolve(
               supabase.from('transakcje').insert([{
                 klient_id: order.klient_id,
@@ -108,18 +114,18 @@ export default function OdziezPage() {
                 data: new Date().toISOString()
               }])
             ),
-            // 3. Aktualizacja statusu zamówienia na 'zwrocone'
+            // 3. Zmiana statusu zamówienia
             Promise.resolve(
               supabase.from('odziez_zamowienia').update({ status_platnosci: 'zwrocone' }).eq('id', order.id)
             ),
-            // 4. Automatyczna wiadomość na czacie prywatnym klubowicza
+            // 4. Wiadomość na prywatnym czacie klubowicza
             Promise.resolve(
               supabase.from('czat_wiadomosci').insert([{
                 nadawca_id: adminSenderId,
                 nadawca_nazwa: adminSenderName,
                 nadawca_avatar: null,
                 odbiorca_id: Number(order.klient_id),
-                tresc: `👕 Informacja o zwrocie: Kwota ${refundAmount.toFixed(2)} PLN za zamówienie koszulki klubowej (${order.wariant} ${order.rozmiar}) została pomyślnie zwrócona do Twojego Wirtualnego Portfela w aplikacji.`,
+                tresc: `👕 Informacja o zwrocie: Kwota ${refundAmount.toFixed(2)} PLN za zamówienie koszulki klubowej (${order.wariant} ${order.rozmiar}) została zwrócona do Twojego Wirtualnego Portfela w aplikacji.`,
                 przeczytana: false,
                 grupa_id: null,
                 created_at: new Date().toISOString()
@@ -130,7 +136,7 @@ export default function OdziezPage() {
       });
 
     await Promise.all(refundOperations);
-  }, [currentUser]);
+  }, []);
 
   const processCampaignAutomations = useCallback(async (camp: any, orderList: any[]) => {
     const now = new Date().getTime();
@@ -303,18 +309,20 @@ export default function OdziezPage() {
     }
   }, [loadCampaignAndOrders]);
 
+  // Inicjalizacja uruchamiana wyłącznie raz przy wejściu na stronę
   useEffect(() => {
     initData();
   }, [initData]);
 
+  // Obsługa przełączania dropa w selektorze bez zapętlania
   useEffect(() => {
     if (selectedCampaignId && campaignsList.length > 0) {
       const found = campaignsList.find(c => c.id === selectedCampaignId);
-      if (found) {
+      if (found && found.id !== campaign?.id) {
         setupCampaignData(found);
       }
     }
-  }, [selectedCampaignId, campaignsList, setupCampaignData]);
+  }, [selectedCampaignId, campaignsList, campaign?.id, setupCampaignData]);
 
   // Zegar odliczający
   useEffect(() => {
@@ -459,7 +467,7 @@ export default function OdziezPage() {
     }
   };
 
-  // Usunięcie zamówienia z opcją zwrotu i wysyłki wiadomości na czat
+  // Usunięcie zamówienia z opcją zwrotu i powiadomienia na czacie
   const handleDeleteOrder = async (order: any) => {
     if (!isAdmin) return;
 
