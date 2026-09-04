@@ -44,6 +44,17 @@ interface Przepis {
   created_at?: string;
 }
 
+interface OcenaPrzepisu {
+  id?: number;
+  przepis_id: number;
+  user_email: string;
+  ocena_czas: number;
+  ocena_latwosc: number;
+  ocena_ogolna: number;
+  srednia: number;
+  created_at?: string;
+}
+
 interface Sugestia {
   id: number;
   nazwa: string;
@@ -53,6 +64,7 @@ interface Sugestia {
 }
 
 type TabType = "suplementy" | "sport" | "odzywianie" | "przepisy";
+type SortOption = "domyslne" | "ocena_desc" | "ocena_asc";
 
 const SYSTEM_ID = 5000;
 
@@ -100,10 +112,12 @@ export default function BazaWiedzyPage() {
   const [sportWpisy, setSportWpisy] = useState<ArtykulWiedzy[]>([]);
   const [odzywianieWpisy, setOdzywianieWpisy] = useState<ArtykulWiedzy[]>([]);
   const [przepisy, setPrzepisy] = useState<Przepis[]>([]);
+  const [ocenyMap, setOcenyMap] = useState<Record<number, OcenaPrzepisu[]>>({});
 
-  // Filtry i wyszukiwarka
+  // Filtry, wyszukiwarka i sortowanie
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedKategoria, setSelectedKategoria] = useState<string>("wszystkie");
+  const [przepisSort, setPrzepisSort] = useState<SortOption>("domyslne");
 
   // Propozycje klubowiczów
   const [sugestie, setSugestie] = useState<Sugestia[]>([]);
@@ -115,6 +129,13 @@ export default function BazaWiedzyPage() {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+
+  // Stan oceniania w modalu podglądu
+  const [ratingCzas, setRatingCzas] = useState(5);
+  const [ratingLatwosc, setRatingLatwosc] = useState(5);
+  const [ratingOgolna, setRatingOgolna] = useState(5);
+  const [isSavingRating, setIsSavingRating] = useState(false);
+  const [ratingSuccess, setRatingSuccess] = useState(false);
 
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -229,6 +250,32 @@ export default function BazaWiedzyPage() {
       setPrzepisy(sortedPrzepisy);
     }
 
+    // Pobieranie ocen przepisów
+    try {
+      const { data: ocenyData } = await supabase.from("oceny_przepisow").select("*");
+      if (ocenyData && Array.isArray(ocenyData)) {
+        const grouped: Record<number, OcenaPrzepisu[]> = {};
+        ocenyData.forEach((row: any) => {
+          const pId = Number(row.przepis_id);
+          if (!grouped[pId]) grouped[pId] = [];
+          grouped[pId].push({
+            id: row.id,
+            przepis_id: pId,
+            user_email: row.user_email,
+            ocena_czas: Number(row.ocena_czas) || 5,
+            ocena_latwosc: Number(row.ocena_latwosc) || 5,
+            ocena_ogolna: Number(row.ocena_ogolna) || 5,
+            srednia: Number(row.srednia) || 5,
+          });
+        });
+        setOcenyMap(grouped);
+      } else {
+        loadOcenyFromLocalStorage();
+      }
+    } catch (e) {
+      loadOcenyFromLocalStorage();
+    }
+
     const { data: sugData } = await supabase
       .from("sugestie_suplementow")
       .select("*")
@@ -239,7 +286,33 @@ export default function BazaWiedzyPage() {
     setIsLoading(false);
   };
 
-  // Funkcje obsługi nieodczytanych wpisów (wykrzykniki)
+  const loadOcenyFromLocalStorage = () => {
+    if (typeof window === "undefined") return;
+    try {
+      const local = localStorage.getItem("fm_przepisy_oceny");
+      if (local) {
+        setOcenyMap(JSON.parse(local));
+      }
+    } catch (err) {}
+  };
+
+  const saveOcenyFallback = (updated: Record<number, OcenaPrzepisu[]>) => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem("fm_przepisy_oceny", JSON.stringify(updated));
+    } catch (e) {}
+  };
+
+  const calculateRecipeRating = (przepisId: number) => {
+    const list = ocenyMap[przepisId] || [];
+    if (list.length === 0) return { avg: 0, count: 0 };
+    const sum = list.reduce((acc, curr) => acc + (curr.srednia || 0), 0);
+    return {
+      avg: Number((sum / list.length).toFixed(1)),
+      count: list.length,
+    };
+  };
+
   const getStorageKeyPrefix = (tab: TabType) => {
     if (tab === "suplementy") return "seen_supl_";
     if (tab === "sport") return "seen_sport_";
@@ -260,7 +333,6 @@ export default function BazaWiedzyPage() {
     setReadVersion((v) => v + 1);
   };
 
-  // Dedykowana funkcja: oznacz wszystkie pozycje z danej zakładki jako przeczytane
   const handleMarkAllAsSeenForCurrentTab = (tab: TabType) => {
     if (typeof window === "undefined") return;
 
@@ -372,12 +444,21 @@ export default function BazaWiedzyPage() {
         if (activeTab === "przepisy") {
           if (a.do_weryfikacji && !b.do_weryfikacji) return -1;
           if (!a.do_weryfikacji && b.do_weryfikacji) return 1;
+
+          if (przepisSort === "ocena_desc") {
+            const rA = calculateRecipeRating(a.id).avg;
+            const rB = calculateRecipeRating(b.id).avg;
+            if (rB !== rA) return rB - rA;
+          } else if (przepisSort === "ocena_asc") {
+            const rA = calculateRecipeRating(a.id).avg;
+            const rB = calculateRecipeRating(b.id).avg;
+            if (rA !== rB) return rA - rB;
+          }
         }
         return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
       });
-  }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria]);
+  }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria, ocenyMap, przepisSort]);
 
-  // WYSYŁANIE WIADOMOŚCI NA CZAT ORAZ POWIADOMIENIA
   const notifyKlubowiczOnChatAndPush = async (targetEmail: string, supplementName: string) => {
     try {
       const cleanEmail = targetEmail.toLowerCase().trim();
@@ -386,7 +467,6 @@ export default function BazaWiedzyPage() {
 
       const trescWiadomosci = `Cześć ${recipientName}! Z przyjemnością informujemy, że Twój proponowany suplement "${supplementName}" został zweryfikowany przez Trenera i dodany do Bazy Wiedzy! 💊 Możesz go teraz sprawdzić w zakładce Baza Wiedzy.`;
 
-      // 1. Zapis bezpośrednio na czacie (tabela czat_wiadomosci)
       if (recipientId) {
         await supabase.from("czat_wiadomosci").insert([
           {
@@ -404,7 +484,6 @@ export default function BazaWiedzyPage() {
         ]);
       }
 
-      // 2. Zapis w tabeli powiadomienia
       await supabase.from("powiadomienia").insert([
         {
           odbiorca_email: cleanEmail,
@@ -417,7 +496,6 @@ export default function BazaWiedzyPage() {
         },
       ]);
 
-      // 3. Wysłanie push do endpointu
       const pushPayload = {
         targetEmail: cleanEmail,
         email: cleanEmail,
@@ -734,7 +812,6 @@ export default function BazaWiedzyPage() {
       return;
     }
 
-    // JEŚLI DODAWANIE NASTĄPIŁO Z PROPOZYCJI KLUBOWICZA -> ZMIEŃ STATUS I WYŚLIJ WIADOMOŚĆ NA CZACIE
     if (originatingSugestiaId && originatingSugestiaEmail) {
       await supabase
         .from("sugestie_suplementow")
@@ -749,6 +826,47 @@ export default function BazaWiedzyPage() {
 
     setIsAdminModalOpen(false);
     fetchData();
+  };
+
+  const handleSaveRecipeRating = async () => {
+    if (!selectedItem || activeTab !== "przepisy") return;
+    setIsSavingRating(true);
+
+    const sredniaOsobista = Number(((ratingCzas + ratingLatwosc + ratingOgolna) / 3).toFixed(1));
+    const cleanMail = userEmail.toLowerCase().trim() || "klubowicz@formamarzen.pl";
+
+    const payload: OcenaPrzepisu = {
+      przepis_id: selectedItem.id,
+      user_email: cleanMail,
+      ocena_czas: ratingCzas,
+      ocena_latwosc: ratingLatwosc,
+      ocena_ogolna: ratingOgolna,
+      srednia: sredniaOsobista,
+    };
+
+    try {
+      await supabase.from("oceny_przepisow").upsert(payload, { onConflict: "przepis_id,user_email" });
+    } catch (e) {
+      console.warn("Zapis w Supabase niedostępny, używam pamięci lokalnej.");
+    }
+
+    setOcenyMap((prev) => {
+      const pId = selectedItem.id;
+      const currentList = prev[pId] ? [...prev[pId]] : [];
+      const idx = currentList.findIndex((o) => o.user_email === cleanMail);
+      if (idx >= 0) {
+        currentList[idx] = payload;
+      } else {
+        currentList.push(payload);
+      }
+      const updated = { ...prev, [pId]: currentList };
+      saveOcenyFallback(updated);
+      return updated;
+    });
+
+    setIsSavingRating(false);
+    setRatingSuccess(true);
+    setTimeout(() => setRatingSuccess(false), 3500);
   };
 
   const getKategoriaBadge = (kategoria: string) => {
@@ -767,7 +885,42 @@ export default function BazaWiedzyPage() {
   const handleOpenItemModal = (item: any) => {
     markItemAsSeen(item, activeTab);
     setSelectedItem(item);
+
+    if (activeTab === "przepisy") {
+      const cleanMail = userEmail.toLowerCase().trim();
+      const existing = (ocenyMap[item.id] || []).find((o) => o.user_email === cleanMail);
+      if (existing) {
+        setRatingCzas(existing.ocena_czas);
+        setRatingLatwosc(existing.ocena_latwosc);
+        setRatingOgolna(existing.ocena_ogolna);
+      } else {
+        setRatingCzas(5);
+        setRatingLatwosc(5);
+        setRatingOgolna(5);
+      }
+    }
+
     setIsViewModalOpen(true);
+  };
+
+  const renderStarPicker = (val: number, onChange: (n: number) => void) => {
+    return (
+      <div className="flex items-center gap-1">
+        {[1, 2, 3, 4, 5].map((star) => (
+          <button
+            key={star}
+            type="button"
+            onClick={() => onChange(star)}
+            className="text-2xl transition-transform hover:scale-125 focus:outline-none cursor-pointer"
+          >
+            {star <= val ? "⭐" : "☆"}
+          </button>
+        ))}
+        <span className="ml-2 text-xs font-black text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
+          {val}/5
+        </span>
+      </div>
+    );
   };
 
   if (isLoading) {
@@ -1014,35 +1167,64 @@ export default function BazaWiedzyPage() {
           </>
         )}
 
-        {/* WYSZUKIWARKA I KATEGORIE */}
+        {/* WYSZUKIWARKA, LICZNIK POZYCJI I KATEGORIE */}
         <div className="bg-white p-4 sm:p-5 rounded-3xl border border-sky-100 shadow-sm space-y-4">
           <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
-            <div className="relative w-full md:w-80">
-              <input
-                type="text"
-                placeholder={
-                  activeTab === "suplementy"
-                    ? "Szukaj suplementu po nazwie..."
-                    : activeTab === "sport"
-                    ? "Szukaj ćwiczenia..."
-                    : activeTab === "odzywianie"
-                    ? "Szukaj artykułu..."
-                    : "Szukaj przepisu po nazwie..."
-                }
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500 transition-colors"
-              />
-              <span className="absolute left-3.5 top-2.5 text-slate-400">🔍</span>
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
-              )}
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <div className="relative flex-1 md:w-80">
+                <input
+                  type="text"
+                  placeholder={
+                    activeTab === "suplementy"
+                      ? "Szukaj suplementu po nazwie..."
+                      : activeTab === "sport"
+                      ? "Szukaj ćwiczenia..."
+                      : activeTab === "odzywianie"
+                      ? "Szukaj artykułu..."
+                      : "Szukaj przepisu po nazwie..."
+                  }
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-sky-500 transition-colors"
+                />
+                <span className="absolute left-3.5 top-2.5 text-slate-400">🔍</span>
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* LICZNIK DOSTĘPNYCH POZYCJI */}
+              <span className="px-3 py-2 bg-sky-50 text-sky-900 border border-sky-200/80 rounded-xl text-xs font-black shrink-0 whitespace-nowrap shadow-xs">
+                {currentFilteredList.length}{" "}
+                {currentFilteredList.length === 1
+                  ? "pozycja"
+                  : [2, 3, 4].includes(currentFilteredList.length % 10) &&
+                    ![12, 13, 14].includes(currentFilteredList.length % 100)
+                  ? "pozycje"
+                  : "pozycji"}
+              </span>
             </div>
+
+            {/* SELEKTOR SORTOWANIA DLA PRZEPISÓW */}
+            {activeTab === "przepisy" && (
+              <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+                <span className="text-[11px] font-black uppercase text-slate-400">SORTUJ:</span>
+                <select
+                  value={przepisSort}
+                  onChange={(e) => setPrzepisSort(e.target.value as SortOption)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
+                >
+                  <option value="domyslne">Domyślnie (Nazwa)</option>
+                  <option value="ocena_desc">⭐ Najwyższa ocena</option>
+                  <option value="ocena_asc">⭐ Najniższa ocena</option>
+                </select>
+              </div>
+            )}
 
             <div className="flex items-center gap-1.5 flex-wrap justify-center w-full md:w-auto">
               <span className="text-[11px] font-black uppercase text-slate-400 mr-1 hidden sm:inline">KATEGORIA:</span>
@@ -1107,6 +1289,7 @@ export default function BazaWiedzyPage() {
                     const wyzsze = item.dawkowanie_wyzsze || "";
                     const autorWyswietlany = activeTab === "przepisy" ? getAutorDisplay(item) : "";
                     const isUnread = isItemUnread(item, activeTab);
+                    const ratingData = activeTab === "przepisy" ? calculateRecipeRating(item.id) : null;
 
                     return (
                       <tr
@@ -1130,10 +1313,19 @@ export default function BazaWiedzyPage() {
                               </div>
                             )}
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <div className="font-black text-sky-950 text-base group-hover:text-sky-700 transition-colors">
                                   {item.nazwa}
                                 </div>
+
+                                {ratingData && ratingData.count > 0 && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs font-black shadow-2xs">
+                                    <span>⭐</span>
+                                    <span>{ratingData.avg}</span>
+                                    <span className="text-[10px] text-amber-700 font-semibold">({ratingData.count})</span>
+                                  </span>
+                                )}
+
                                 {isUnread && (
                                   <span className="relative flex h-3.5 w-3.5">
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
@@ -1310,8 +1502,22 @@ export default function BazaWiedzyPage() {
                 </h2>
 
                 {activeTab === "przepisy" && (
-                  <div className="text-xs text-slate-500 font-medium">
-                    Dodane przez: <span className="font-bold text-slate-800">{getAutorDisplay(selectedItem)}</span>
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-xs text-slate-500 font-medium">
+                      Dodane przez: <span className="font-bold text-slate-800">{getAutorDisplay(selectedItem)}</span>
+                    </div>
+                    {(() => {
+                      const r = calculateRecipeRating(selectedItem.id);
+                      return r.count > 0 ? (
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-950 border border-amber-200 rounded-full font-black text-xs">
+                          <span>⭐ Średnia ocena:</span>
+                          <span className="text-sm">{r.avg} / 5</span>
+                          <span className="text-slate-500 font-normal">({r.count} opinii)</span>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-400">Ten przepis nie ma jeszcze ocen – bądź pierwszy!</div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -1383,6 +1589,54 @@ export default function BazaWiedzyPage() {
                       </div>
                     </div>
                   )}
+
+                  {/* SEKCJA OCENIANIA PRZEPISU (1-5 GWIAZDEK) */}
+                  <div className="bg-gradient-to-br from-amber-50/70 to-sky-50/70 p-5 sm:p-6 rounded-3xl border border-amber-200/80 space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-amber-200/60 pb-3">
+                      <div>
+                        <h4 className="font-black text-sm uppercase text-slate-900 flex items-center gap-2">
+                          <span>⭐</span> Oceń ten przepis
+                        </h4>
+                        <p className="text-[11px] text-slate-600 font-medium">
+                          Wystaw ocenę w 3 kategoriach – wyliczymy automatycznie średnią notę potrawy.
+                        </p>
+                      </div>
+                      <div className="text-xs font-bold text-sky-900 bg-white/80 px-3 py-1 rounded-xl self-start sm:self-auto border border-sky-100">
+                        Twoja średnia: {((ratingCzas + ratingLatwosc + ratingOgolna) / 3).toFixed(1)} / 5
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                      <div className="space-y-1.5 bg-white/90 p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
+                        <span className="text-xs font-bold text-slate-700 block">⏱️ Czas przygotowania:</span>
+                        {renderStarPicker(ratingCzas, setRatingCzas)}
+                      </div>
+
+                      <div className="space-y-1.5 bg-white/90 p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
+                        <span className="text-xs font-bold text-slate-700 block">👌 Łatwość wykonania:</span>
+                        {renderStarPicker(ratingLatwosc, setRatingLatwosc)}
+                      </div>
+
+                      <div className="space-y-1.5 bg-white/90 p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs">
+                        <span className="text-xs font-bold text-slate-700 block">🍽️ Ogólna ocena:</span>
+                        {renderStarPicker(ratingOgolna, setRatingOgolna)}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {ratingSuccess ? "✅ Twoja ocena została zapisana!" : "Możesz w każdej chwili zaktualizować swoją ocenę."}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleSaveRecipeRating}
+                        disabled={isSavingRating}
+                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs uppercase px-5 py-2.5 rounded-xl shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {isSavingRating ? "ZAPISYWANIE..." : "ZAPISZ OCENĘ"}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
