@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -153,6 +153,19 @@ export default function WyzwaniaPage() {
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
+  // STANY DLA NOWYCH FUNKCJI: PRZYPOMNIENIA, RANKINGI ROZWIJANE I WYSZUKIWARKI
+  const [remindingId, setRemindingId] = useState<number | null>(null);
+  const [searchH2H, setSearchH2H] = useState("");
+  const [isH2HExpanded, setIsH2HExpanded] = useState(false);
+
+  const [searchBadges, setSearchBadges] = useState("");
+  const [isBadgesExpanded, setIsBadgesExpanded] = useState(false);
+
+  const [searchWalkover, setSearchWalkover] = useState("");
+  const [isWalkoverExpanded, setIsWalkoverExpanded] = useState(false);
+
+  const autoCheckProcessedRef = useRef(false);
+
   const parseDateFromClassKey = (classKey: string): Date => {
     const parts = classKey ? String(classKey).split('_') : [];
     const datePart = parts[1] || '';
@@ -186,6 +199,23 @@ export default function WyzwaniaPage() {
       }
     }
     return new Date();
+  };
+
+  const formatDateDisplay = (dateString?: string | null) => {
+    if (!dateString) return "-";
+    try {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return "-";
+      return d.toLocaleString('pl-PL', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return "-";
+    }
   };
 
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
@@ -231,6 +261,141 @@ export default function WyzwaniaPage() {
     }
   };
 
+  // AUTOMATYCZNY MECHANIZM 5 DNI (PRZYPOMNIENIE) ORAZ 10 DNI (WALKOWER)
+  const processPendingChallengesAuto = async (challengesList: any[], clientsList: any[]) => {
+    if (!challengesList || challengesList.length === 0 || autoCheckProcessedRef.current) return;
+    autoCheckProcessedRef.current = true;
+
+    try {
+      const nowMs = new Date().getTime();
+      const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+      const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+      let shouldRefresh = false;
+
+      for (const ch of challengesList) {
+        if (ch.status !== 'oczekujace' || !ch.created_at) continue;
+
+        const createdMs = new Date(ch.created_at).getTime();
+        const diff = nowMs - createdMs;
+
+        const tworcaClient = clientsList.find(c => String(c.id) === String(ch.tworca_id));
+        const przeciwnikClient = clientsList.find(c => String(c.id) === String(ch.przeciwnik_id));
+        const tworcaNazwa = tworcaClient ? tworcaClient.name : "Klubowicz";
+        const przeciwnikNazwa = przeciwnikClient ? przeciwnikClient.name : "Klubowicz";
+
+        // 10 DNI -> AUTOMATYCZNY WALKOWER
+        if (diff >= tenDaysMs) {
+          shouldRefresh = true;
+          await supabase
+            .from("klub_wyzwania")
+            .update({ 
+              status: 'walkower', 
+              updated_at: new Date().toISOString() 
+            })
+            .eq("id", ch.id);
+
+          const walkowerMsgOpponent = `🚫 Upłynęło 10 dni od rzucenia wyzwania w dyscyplinie "${ch.dyscyplina}" przez ${tworcaNazwa}. Z powodu braku akceptacji wyzwanie zostało poddane walkowerem.`;
+          const walkowerMsgCreator = `🏆 Informacja: Klubowicz ${przeciwnikNazwa} nie przyjął Twojego wyzwania w dyscyplinie "${ch.dyscyplina}" przez 10 dni. Wyzwanie zakończone walkowerem (wynik trafia do tabeli walkowerów).`;
+
+          await supabase.from("czat_wiadomosci").insert([
+            {
+              nadawca_id: SYSTEM_ID,
+              nadawca_nazwa: "Forma Marzeń",
+              nadawca_avatar: null,
+              odbiorca_id: ch.przeciwnik_id,
+              tresc: walkowerMsgOpponent,
+              przeczytana: false
+            },
+            {
+              nadawca_id: SYSTEM_ID,
+              nadawca_nazwa: "Forma Marzeń",
+              nadawca_avatar: null,
+              odbiorca_id: ch.tworca_id,
+              tresc: walkowerMsgCreator,
+              przeczytana: false
+            }
+          ]);
+
+          await sendPushNotification([ch.tworca_id, ch.przeciwnik_id], {
+            title: "🚫 Walkower w wyzwaniu",
+            body: `Wyzwanie "${ch.dyscyplina}" zakończone walkowerem z powodu upływu 10 dni.`,
+            url: "/wyzwania"
+          });
+        }
+        // 5 DNI -> AUTOMATYCZNE SYSTEMOWE PRZYPOMNIENIE
+        else if (diff >= fiveDaysMs && !ch.reminder_5d_sent) {
+          shouldRefresh = true;
+          await supabase
+            .from("klub_wyzwania")
+            .update({ 
+              reminder_5d_sent: true,
+              updated_at: new Date().toISOString() 
+            })
+            .eq("id", ch.id);
+
+          const reminderMsg = `⏰ SYSTEMOWE PRZYPOMNIENIE: Minęło 5 dni od wyzwania w dyscyplinie "${ch.dyscyplina}" rzuconego przez ${tworcaNazwa}! Masz jeszcze 5 dni na podjęcie decyzji. Po 10 dniach system automatycznie przyzna walkower.`;
+
+          await supabase.from("czat_wiadomosci").insert([
+            {
+              nadawca_id: SYSTEM_ID,
+              nadawca_nazwa: "Forma Marzeń",
+              nadawca_avatar: null,
+              odbiorca_id: ch.przeciwnik_id,
+              tresc: reminderMsg,
+              przeczytana: false
+            }
+          ]);
+
+          await sendPushNotification(ch.przeciwnik_id, {
+            title: "⏰ Czas ucieka! Wyzwanie czeka",
+            body: `Minęło 5 dni od wyzwania w "${ch.dyscyplina}" od ${tworcaNazwa}. Przyjmij wyzwanie zanim upłynie 10 dni!`,
+            url: "/wyzwania"
+          });
+        }
+      }
+
+      if (shouldRefresh) {
+        const refreshed = await fetchAllFromSupabase("klub_wyzwania", "*", "created_at", false, 5);
+        if (refreshed) setWyzwania(refreshed);
+      }
+    } catch (err) {
+      console.error("Błąd automatycznej weryfikacji 5/10 dni wyzwań:", err);
+    }
+  };
+
+  // MANUALNE WYSŁANIE PRZYPOMNIENIA PRZEZ RZUCAJĄCEGO
+  const handleSendManualReminder = async (challenge: any) => {
+    if (!currentUserId || !challenge) return;
+    setRemindingId(challenge.id);
+    try {
+      const oppName = getClientName(challenge.przeciwnik_id);
+      const systemReminderText = `🔔 PRZYPOMNIENIE O WYZWANIU!\n${currentUserName} przypomina o oczekującym wyzwaniu w dyscyplinie: "${challenge.dyscyplina}". Wejdź do aplikacji w zakładkę Wyzwania i podejmij rękawicę!`;
+
+      await supabase.from("czat_wiadomosci").insert([
+        {
+          nadawca_id: currentUserId,
+          nadawca_nazwa: currentUserName,
+          nadawca_avatar: currentUserAvatar,
+          odbiorca_id: challenge.przeciwnik_id,
+          tresc: systemReminderText,
+          przeczytana: false
+        }
+      ]);
+
+      await sendPushNotification(challenge.przeciwnik_id, {
+        title: "🔔 Przypomnienie o wyzwaniu!",
+        body: `${currentUserName} przypomina o rzuconym wyzwaniu w dyscyplinie: "${challenge.dyscyplina}"!`,
+        url: "/wyzwania"
+      });
+
+      alert(`Pomyślnie wysłano przypomnienie do klubowicza: ${oppName}!`);
+    } catch (err: any) {
+      alert("Błąd wysyłania przypomnienia: " + (err.message || err));
+    } finally {
+      setRemindingId(null);
+    }
+  };
+
   // SILNIK AUTOMATYCZNEJ WERYFIKACJI I NADAWANIA 21 REGUŁ ODZNAK
   const checkAndAwardAutomatedBadges = async (userId: number | string, allBadgeDefs: any[]) => {
     if (!userId || Number(userId) === SYSTEM_ID || !allBadgeDefs || allBadgeDefs.length === 0) return;
@@ -249,7 +414,6 @@ export default function WyzwaniaPage() {
 
       if (badgesToEvaluate.length === 0) return;
 
-      // POBIERZ WSZYSTKIE ZAPISY UŻYTKOWNIKA DO WERYFIKACJI POTWIERDZONEJ OBECNOŚCI
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
         .select("id, class_key, obecny, nieobecny, status, created_at")
@@ -284,7 +448,6 @@ export default function WyzwaniaPage() {
       const userConfirmedClassTitles: { title: string; date: Date; dateStr: string }[] = [];
 
       attendances.forEach((att: any) => {
-        // 1. Weryfikacja obecności: musi być potwierdzona przez trenera (nie wystarczy sam zapis)
         const isPresent = att.obecny === true || att.obecny === 1 || String(att.obecny).toLowerCase() === 'true';
         const isAbsent = att.nieobecny === true || att.nieobecny === 1 || String(att.nieobecny).toLowerCase() === 'true';
         const isWaitlist = att.status === 'krzesełko';
@@ -302,7 +465,6 @@ export default function WyzwaniaPage() {
         const [sh = '00', sm = '00'] = startTime.split(':');
         const fullStartDateTime = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
 
-        // 2. Weryfikacja daty: trening musiał się już odbyć (wyklucza przyszłe zapisy)
         if (fullStartDateTime.getTime() > now.getTime()) return;
 
         const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
@@ -548,13 +710,18 @@ export default function WyzwaniaPage() {
           setCurrentUserAvatar(enriched[0].avatar);
         }
 
+        const fetchedChallenges = await fetchAllFromSupabase("klub_wyzwania", "*", "created_at", false, 5);
+        if (fetchedChallenges) {
+          setWyzwania(fetchedChallenges);
+          await processPendingChallengesAuto(fetchedChallenges, enriched);
+        }
+
         if (myId) {
           setCurrentUserId(myId);
 
           const [assignedBadgesData, allDefs] = await Promise.all([
             fetchWszystkiePrzydzieloneOdznakiDirect(),
             fetchAllOdznakiDef(),
-            fetchWyzwania(),
             fetchOdznaki(myId),
             fetchHistoriaOdznak(),
             fetchDyscypliny(),
@@ -980,7 +1147,8 @@ export default function WyzwaniaPage() {
           dyscyplina: dyscyplina.trim(),
           opis: opisWyzwania.trim() || "Brak dodatkowego opisu",
           status: "oczekujace",
-          kategoria_wyzwania: modalKategoria
+          kategoria_wyzwania: modalKategoria,
+          created_at: new Date().toISOString()
         }
       ]);
 
@@ -1018,9 +1186,18 @@ export default function WyzwaniaPage() {
   };
 
   const handleUpdateStatus = async (challengeId: number, newStatus: string) => {
+    const updatePayload: any = { 
+      status: newStatus, 
+      updated_at: new Date().toISOString() 
+    };
+
+    if (newStatus === "aktywne") {
+      updatePayload.accepted_at = new Date().toISOString();
+    }
+
     const { error } = await supabase
       .from("klub_wyzwania")
-      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq("id", challengeId);
 
     if (!error) {
@@ -1036,7 +1213,7 @@ export default function WyzwaniaPage() {
       fetchWyzwania();
       fetchRankings(klienci);
     } else {
-      alert("Nie udało się zaktualizować statusu.");
+      alert("Nie udało się zaktualizować statusu: " + error.message);
     }
   };
 
@@ -1056,7 +1233,86 @@ export default function WyzwaniaPage() {
     return found ? found.name : "Klubowicz";
   };
 
-  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI (BEZ KONTA SYSTEMOWEGO I BEZ NAZWY "KLUBOWICZ")
+  // KALKULACJA RANKINGU WALKOWERÓW
+  const walkowerRankingList = useMemo(() => {
+    const walkowers = wyzwania.filter((w: any) => w.status === 'walkower');
+    const walkowerStats: Record<string, { surrendered: number; gained: number }> = {};
+
+    walkowers.forEach((w: any) => {
+      const pId = String(w.przeciwnik_id);
+      const tId = String(w.tworca_id);
+
+      if (!walkowerStats[pId]) walkowerStats[pId] = { surrendered: 0, gained: 0 };
+      walkowerStats[pId].surrendered += 1;
+
+      if (!walkowerStats[tId]) walkowerStats[tId] = { surrendered: 0, gained: 0 };
+      walkowerStats[tId].gained += 1;
+    });
+
+    const clientsMap = new Map<string, any>();
+    klienci.forEach(c => clientsMap.set(String(c.id), c));
+
+    return Object.keys(walkowerStats).map(id => {
+      const client = clientsMap.get(id);
+      return {
+        id,
+        name: client ? client.name : "Klubowicz",
+        avatar: client ? client.avatar : null,
+        surrendered: walkowerStats[id].surrendered,
+        gained: walkowerStats[id].gained
+      };
+    })
+    .filter(r => r.name.toLowerCase() !== "klubowicz" && Number(r.id) !== SYSTEM_ID)
+    .sort((a, b) => b.surrendered - a.surrendered || b.gained - a.gained);
+  }, [wyzwania, klienci]);
+
+  // RANKINGI Z ZACHOWANIEM ORYGINALNEJ POZYCJI ORAZ FILTROWANIEM
+  const indexedH2HRanking = useMemo(() => {
+    return rankingList.map((row, idx) => ({ ...row, originalRank: idx + 1 }));
+  }, [rankingList]);
+
+  const filteredH2HList = useMemo(() => {
+    const q = searchH2H.trim().toLowerCase();
+    if (!q) return indexedH2HRanking;
+    return indexedH2HRanking.filter(r => r.name.toLowerCase().includes(q));
+  }, [indexedH2HRanking, searchH2H]);
+
+  const displayedH2HList = useMemo(() => {
+    if (searchH2H.trim().length > 0) return filteredH2HList;
+    return isH2HExpanded ? filteredH2HList : filteredH2HList.slice(0, 10);
+  }, [filteredH2HList, searchH2H, isH2HExpanded]);
+
+  const indexedBadgeRanking = useMemo(() => {
+    return badgeRankingList.map((row, idx) => ({ ...row, originalRank: idx + 1 }));
+  }, [badgeRankingList]);
+
+  const filteredBadgeRanking = useMemo(() => {
+    const q = searchBadges.trim().toLowerCase();
+    if (!q) return indexedBadgeRanking;
+    return indexedBadgeRanking.filter(r => r.name.toLowerCase().includes(q));
+  }, [indexedBadgeRanking, searchBadges]);
+
+  const displayedBadgeRanking = useMemo(() => {
+    if (searchBadges.trim().length > 0) return filteredBadgeRanking;
+    return isBadgesExpanded ? filteredBadgeRanking : filteredBadgeRanking.slice(0, 10);
+  }, [filteredBadgeRanking, searchBadges, isBadgesExpanded]);
+
+  const indexedWalkowerRanking = useMemo(() => {
+    return walkowerRankingList.map((row, idx) => ({ ...row, originalRank: idx + 1 }));
+  }, [walkowerRankingList]);
+
+  const filteredWalkowerRanking = useMemo(() => {
+    const q = searchWalkover.trim().toLowerCase();
+    if (!q) return indexedWalkowerRanking;
+    return indexedWalkowerRanking.filter(r => r.name.toLowerCase().includes(q));
+  }, [indexedWalkowerRanking, searchWalkover]);
+
+  const displayedWalkowerRanking = useMemo(() => {
+    if (searchWalkover.trim().length > 0) return filteredWalkowerRanking;
+    return isWalkoverExpanded ? filteredWalkowerRanking : filteredWalkowerRanking.slice(0, 10);
+  }, [filteredWalkowerRanking, searchWalkover, isWalkoverExpanded]);
+
+  // WSZYSCY KLUBOWICZE WRAZ ZE SWOIMI ODZNAKAMI
   const allMembersWithBadgeData = useMemo(() => {
     return (klienci || [])
       .filter((k: any) => Number(k.id) !== SYSTEM_ID && k.name.toLowerCase() !== "klubowicz")
@@ -1076,7 +1332,6 @@ export default function WyzwaniaPage() {
     return allMembersWithBadgeData.filter((k: any) => k.badgesCount > 0 && String(k.id) !== String(currentUserId));
   }, [allMembersWithBadgeData, currentUserId]);
 
-  // WYSZUKIWANIE DOWOLNEGO KLUBOWICZA W GABLOCIE
   const searchedClubMembers = useMemo(() => {
     if (!badgeMemberSearchQuery.trim()) return [];
     const q = badgeMemberSearchQuery.toLowerCase().trim();
@@ -1146,12 +1401,12 @@ export default function WyzwaniaPage() {
   const renderChallengesList = (kategoria: 'sport' | 'zywienie') => {
     const filteredActive = wyzwania.filter(w => {
       const kat = w.kategoria_wyzwania || 'sport';
-      return kat === kategoria && w.status !== 'zweryfikowane' && w.status !== 'odrzucone';
+      return kat === kategoria && w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && w.status !== 'walkower';
     });
 
     const filteredCompleted = wyzwania.filter(w => {
       const kat = w.kategoria_wyzwania || 'sport';
-      return kat === kategoria && (w.status === 'zweryfikowane' || w.status === 'odrzucone');
+      return kat === kategoria && (w.status === 'zweryfikowane' || w.status === 'odrzucone' || w.status === 'walkower');
     });
 
     const isSport = kategoria === 'sport';
@@ -1162,16 +1417,38 @@ export default function WyzwaniaPage() {
           {filteredActive.map((w: any) => {
             const przeciwnikName = getClientName(w.przeciwnik_id);
             const tworcaName = getClientName(w.tworca_id);
+            const isChallenger = String(w.tworca_id) === String(currentUserId);
+            const isOpponent = String(w.przeciwnik_id) === String(currentUserId);
 
             return (
               <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4">
                 <div className="flex items-start justify-between">
                   <div>
-                    <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">{w.status}</span>
+                    <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full ${w.status === 'aktywne' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                      {w.status}
+                    </span>
                     <h3 className="font-black text-sm text-slate-900 mt-2">{w.dyscyplina}</h3>
                     <p className="text-xs text-slate-600 mt-1">{w.opis}</p>
                   </div>
                   <span className="text-2xl">{isSport ? '🎯' : '🥗'}</span>
+                </div>
+
+                <div className="bg-sky-50/50 rounded-2xl p-3 border border-sky-100/70 text-[11px] space-y-1">
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span className="text-slate-400 font-bold">📅 Rzucono:</span>
+                    <span className="font-mono font-bold text-slate-800">{formatDateDisplay(w.created_at)}</span>
+                  </div>
+                  {w.accepted_at ? (
+                    <div className="flex items-center justify-between text-emerald-800">
+                      <span className="font-bold">✅ Przyjęto:</span>
+                      <span className="font-mono font-black">{formatDateDisplay(w.accepted_at)}</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between text-amber-800 font-bold">
+                      <span>⏳ Oczekiwanie:</span>
+                      <span className="text-[10px] bg-amber-100 px-2 py-0.5 rounded-md">Brak akceptacji (Limit: 10 dni)</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
@@ -1186,10 +1463,26 @@ export default function WyzwaniaPage() {
                   </div>
                 </div>
 
-                {w.status === 'oczekujace' && String(w.przeciwnik_id) === String(currentUserId) && (
+                {w.status === 'oczekujace' && isOpponent && (
                   <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
-                    <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Przyjmij wyzwanie</button>
-                    <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">Odrzuć</button>
+                    <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">
+                      Przyjmij wyzwanie
+                    </button>
+                    <button onClick={() => handleUpdateStatus(w.id, 'odrzucone')} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">
+                      Odrzuć
+                    </button>
+                  </div>
+                )}
+
+                {w.status === 'oczekujace' && isChallenger && (
+                  <div className="pt-2 border-t border-sky-50">
+                    <button 
+                      onClick={() => handleSendManualReminder(w)}
+                      disabled={remindingId === w.id}
+                      className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-2.5 rounded-xl text-xs transition-colors cursor-pointer shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <span>🔔</span> {remindingId === w.id ? "Wysyłanie przypomnienia..." : "Przypomnij o wyzwaniu"}
+                    </button>
                   </div>
                 )}
               </div>
@@ -1210,18 +1503,33 @@ export default function WyzwaniaPage() {
                 <tr className="border-b border-sky-100 text-slate-400 uppercase font-bold text-[10px] bg-slate-50">
                   <th className="py-3 px-4">Dyscyplina / Zadanie</th>
                   <th className="py-3 px-4">Uczestnicy</th>
-                  <th className="py-3 px-4">Zwycięzca</th>
+                  <th className="py-3 px-4">Zwycięzca / Rozstrzygnięcie</th>
                   <th className="py-3 px-4 text-right">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredCompleted.map((w: any) => (
                   <tr key={w.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                    <td className="py-3 px-4 font-bold text-slate-900">{w.dyscyplina}</td>
+                    <td className="py-3 px-4 font-bold text-slate-900">
+                      <div>{w.dyscyplina}</div>
+                      <div className="text-[10px] text-slate-400 font-normal">Rzucono: {formatDateDisplay(w.created_at)}</div>
+                    </td>
                     <td className="py-3 px-4 text-slate-600">{getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}</td>
-                    <td className="py-3 px-4 font-bold text-amber-600">{w.zwyciezca_id ? getClientName(w.zwyciezca_id) : "-"}</td>
+                    <td className="py-3 px-4 font-bold text-amber-600">
+                      {w.status === 'walkower' ? (
+                        <span className="text-purple-700 font-black">Walkower: {getClientName(w.tworca_id)}</span>
+                      ) : (
+                        w.zwyciezca_id ? getClientName(w.zwyciezca_id) : "-"
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-right">
-                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${w.status === 'zweryfikowane' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                        w.status === 'zweryfikowane' 
+                          ? 'bg-emerald-100 text-emerald-800' 
+                          : w.status === 'walkower'
+                          ? 'bg-purple-100 text-purple-900 border border-purple-200'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}>
                         {w.status}
                       </span>
                     </td>
@@ -1325,7 +1633,6 @@ export default function WyzwaniaPage() {
                 <div className="w-20"></div>
               </div>
 
-              {/* Nagłówek profilu oglądanego klubowicza */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-center items-center py-4 bg-slate-950/50 rounded-3xl p-6 border border-slate-800/80">
                 <div className="flex flex-col items-center space-y-3">
                   {currentUserAvatar ? (
@@ -1361,7 +1668,6 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* SEKCJA 1: ODZNAKI ZDOBYTE PRZEZ TEGO KLUBOWICZA */}
               <div className="space-y-4">
                 <h3 className="text-xs font-black uppercase tracking-wider text-amber-400 px-2 flex items-center gap-2">
                   <span>🎖️</span> Zdobyte odznaki przez: {selectedMemberForComparison.name} ({(selectedMemberForComparison.badges || []).length})
@@ -1401,7 +1707,6 @@ export default function WyzwaniaPage() {
                 )}
               </div>
 
-              {/* SEKCJA 2: PEŁNE PORÓWNANIE ZE WSZYSTKIMI ODZNAKAMI W KLUBIE */}
               <div className="space-y-4 pt-6 border-t border-slate-800">
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">
                   Porównanie wszystkich odznak w klubie (Zdobyte na górze)
@@ -1465,7 +1770,6 @@ export default function WyzwaniaPage() {
             </div>
           ) : (
             <div className="space-y-8">
-              {/* Sekcja 1: Twoja gablota odznak */}
               <div className="space-y-4">
                 <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoja gablota odznak</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1505,7 +1809,6 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* SEKCJA 2: WYSZUKIWARKA KLUBOWICZA ORAZ LISTA PROFILI */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2">
                   <div>
@@ -1519,7 +1822,6 @@ export default function WyzwaniaPage() {
                   </span>
                 </div>
 
-                {/* Pole wyszukiwarki klubowiczów */}
                 <div className="relative">
                   <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
                   <input
@@ -1539,7 +1841,6 @@ export default function WyzwaniaPage() {
                   )}
                 </div>
 
-                {/* Wyniki wyszukiwania na żywo */}
                 {badgeMemberSearchQuery.trim().length > 0 && (
                   <div className="space-y-2">
                     <div className="text-[10px] font-black uppercase text-slate-400 px-2">
@@ -1587,7 +1888,6 @@ export default function WyzwaniaPage() {
                   </div>
                 )}
 
-                {/* Klubowicze ze zdobytymi odznakami */}
                 <div className="space-y-3 pt-2">
                   <div className="text-[10px] font-black uppercase text-slate-400 px-2">
                     Klubowicze ze zdobytymi odznakami ({membersWithBadges.length}):
@@ -1631,78 +1931,209 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* RANKINGI */}
+      {/* RANKINGI I NOWA TABELA WALKOWERÓW */}
       {activeTab === 'ranking' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-          <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
-            <div>
-              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                <span>⚔️</span> Ranking Pojedynków Head-to-Head
-              </h3>
-              <p className="text-[11px] text-slate-500 mt-0.5">Liczba wygranych pojedynków przeciwko innym klubowiczom.</p>
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            {/* 1. RANKING POJEDYNKÓW HEAD-TO-HEAD */}
+            <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                    <span>⚔️</span> Ranking Pojedynków Head-to-Head
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Liczba wygranych pojedynków przeciwko innym klubowiczom.</p>
+                </div>
+                <span className="text-[10px] font-bold bg-amber-100 text-amber-900 px-2.5 py-1 rounded-full w-fit">
+                  {rankingList.length} uczestników
+                </span>
+              </div>
+              
+              <div className="relative">
+                <span className="absolute left-3.5 top-2.5 text-slate-400 text-xs">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Szukaj po imieniu lub nazwisku..."
+                  value={searchH2H}
+                  onChange={(e) => setSearchH2H(e.target.value)}
+                  className="w-full bg-slate-50 border border-sky-100 rounded-xl pl-9 pr-8 py-2 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                />
+                {searchH2H && (
+                  <button onClick={() => setSearchH2H("")} className="absolute right-3 top-2 text-slate-400 hover:text-slate-600 font-bold text-xs">✕</button>
+                )}
+              </div>
+              
+              <div className="overflow-hidden rounded-2xl border border-sky-100">
+                <table className="w-full text-xs text-left">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
+                      <th className="py-3 px-3.5 w-16">Miejsce</th>
+                      <th className="py-3 px-3">Klubowicz</th>
+                      <th className="py-3 px-3.5 text-right">Wygrane</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedH2HList.map((row: any) => (
+                      <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                        <td className="py-3 px-3.5 font-black text-slate-700">
+                          {row.originalRank === 1 ? '🥇 1' : row.originalRank === 2 ? '🥈 2' : row.originalRank === 3 ? '🥉 3' : `#${row.originalRank}`}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-slate-900 flex items-center gap-2.5">
+                          {row.avatar ? (
+                            <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-[10px]">
+                              {row.name.charAt(0)}
+                            </div>
+                          )}
+                          <span className="truncate max-w-[140px]">{row.name}</span>
+                        </td>
+                        <td className="py-3 px-3.5 text-right font-black text-amber-600 text-xs">{row.wins} ⚔️</td>
+                      </tr>
+                    ))}
+                    {displayedH2HList.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="py-8 text-center text-slate-400 text-xs italic">
+                          {searchH2H ? "Nie znaleziono klubowicza o takich danych." : "Brak rozstrzygniętych pojedynków."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {!searchH2H && rankingList.length > 10 && (
+                <button
+                  onClick={() => setIsH2HExpanded(!isH2HExpanded)}
+                  className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer border border-slate-200"
+                >
+                  {isH2HExpanded ? "Zwiń listę ▲" : `Pokaż pozostałych (${rankingList.length - 10}) ▼`}
+                </button>
+              )}
             </div>
-            
-            <div className="overflow-hidden rounded-2xl border border-sky-100">
-              <table className="w-full text-xs text-left">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
-                    <th className="py-3 px-3.5 w-16">Miejsce</th>
-                    <th className="py-3 px-3">Klubowicz</th>
-                    <th className="py-3 px-3.5 text-right">Wygrane</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rankingList.map((row, index) => (
-                    <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                      <td className="py-3 px-3.5 font-black text-slate-700">
-                        {index === 0 ? '🥇 1' : index === 1 ? '🥈 2' : index === 2 ? '🥉 3' : `#${index + 1}`}
-                      </td>
-                      <td className="py-3 px-3 font-bold text-slate-900 flex items-center gap-2.5">
-                        {row.avatar ? (
-                          <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
-                        ) : (
-                          <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-[10px]">
-                            {row.name.charAt(0)}
-                          </div>
-                        )}
-                        <span className="truncate max-w-[140px]">{row.name}</span>
-                      </td>
-                      <td className="py-3 px-3.5 text-right font-black text-amber-600 text-xs">{row.wins} ⚔️</td>
+
+            {/* 2. RANKING PUNKTOWY ODZNAK */}
+            <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                    <span>🏆</span> Ranking Punktowy Odznak
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Suma punktów ze wszystkich zdobytych odznak klubowych.</p>
+                </div>
+                <span className="text-[10px] font-bold bg-amber-100 text-amber-900 px-2.5 py-1 rounded-full w-fit">
+                  {badgeRankingList.length} uczestników
+                </span>
+              </div>
+
+              <div className="relative">
+                <span className="absolute left-3.5 top-2.5 text-slate-400 text-xs">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Szukaj po imieniu lub nazwisku..."
+                  value={searchBadges}
+                  onChange={(e) => setSearchBadges(e.target.value)}
+                  className="w-full bg-slate-50 border border-sky-100 rounded-xl pl-9 pr-8 py-2 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                />
+                {searchBadges && (
+                  <button onClick={() => setSearchBadges("")} className="absolute right-3 top-2 text-slate-400 hover:text-slate-600 font-bold text-xs">✕</button>
+                )}
+              </div>
+              
+              <div className="overflow-hidden rounded-2xl border border-sky-100">
+                <table className="w-full text-xs text-left">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
+                      <th className="py-3 px-3.5 w-16">Miejsce</th>
+                      <th className="py-3 px-3">Klubowicz</th>
+                      <th className="py-3 px-3.5 text-right">Punkty (Odznaki)</th>
                     </tr>
-                  ))}
-                  {rankingList.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="py-8 text-center text-slate-400 text-xs italic">Brak rozstrzygniętych pojedynków.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {displayedBadgeRanking.map((row: any) => (
+                      <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                        <td className="py-3 px-3.5 font-black text-slate-700">
+                          {row.originalRank === 1 ? '🥇 1' : row.originalRank === 2 ? '🥈 2' : row.originalRank === 3 ? '🥉 3' : `#${row.originalRank}`}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-slate-900 flex items-center gap-2.5">
+                          {row.avatar ? (
+                            <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-sky-100 text-sky-800 flex items-center justify-center font-bold text-[10px]">
+                              {row.name.charAt(0)}
+                            </div>
+                          )}
+                          <span className="truncate max-w-[140px]">{row.name}</span>
+                        </td>
+                        <td className="py-3 px-3.5 text-right font-black text-amber-600 text-xs">
+                          {row.points} pkt <span className="text-[10px] text-slate-400 font-normal">({row.count} 🏆)</span>
+                        </td>
+                      </tr>
+                    ))}
+                    {displayedBadgeRanking.length === 0 && (
+                      <tr>
+                        <td colSpan={3} className="py-8 text-center text-slate-400 text-xs italic">
+                          {searchBadges ? "Nie znaleziono klubowicza o takich danych." : "Brak zdobytych odznak w klubie."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {!searchBadges && badgeRankingList.length > 10 && (
+                <button
+                  onClick={() => setIsBadgesExpanded(!isBadgesExpanded)}
+                  className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer border border-slate-200"
+                >
+                  {isBadgesExpanded ? "Zwiń listę ▲" : `Pokaż pozostałych (${badgeRankingList.length - 10}) ▼`}
+                </button>
+              )}
             </div>
           </div>
 
+          {/* 3. NOWA TABELA: RANKING WALKOWERÓW */}
           <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
-            <div>
-              <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                <span>🏆</span> Ranking Punktowy Odznak
-              </h3>
-              <p className="text-[11px] text-slate-500 mt-0.5">Suma punktów ze wszystkich zdobytych odznak klubowych.</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <span>🚫</span> Tabela Walkowerów (Brak akceptacji po 10 dniach)
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">Podsumowanie pojedynków nierozstrzygniętych z powodu braku reakcji wyzwanego klubowicza.</p>
+              </div>
+              <span className="text-[10px] font-bold bg-purple-100 text-purple-900 px-2.5 py-1 rounded-full w-fit">
+                Łącznie walkowerów: {wyzwania.filter(w => w.status === 'walkower').length}
+              </span>
             </div>
-            
+
+            <div className="relative">
+              <span className="absolute left-3.5 top-2.5 text-slate-400 text-xs">🔍</span>
+              <input
+                type="text"
+                placeholder="Szukaj po imieniu lub nazwisku..."
+                value={searchWalkover}
+                onChange={(e) => setSearchWalkover(e.target.value)}
+                className="w-full bg-slate-50 border border-sky-100 rounded-xl pl-9 pr-8 py-2 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              />
+              {searchWalkover && (
+                <button onClick={() => setSearchWalkover("")} className="absolute right-3 top-2 text-slate-400 hover:text-slate-600 font-bold text-xs">✕</button>
+              )}
+            </div>
+
             <div className="overflow-hidden rounded-2xl border border-sky-100">
               <table className="w-full text-xs text-left">
                 <thead>
                   <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
                     <th className="py-3 px-3.5 w-16">Miejsce</th>
                     <th className="py-3 px-3">Klubowicz</th>
-                    <th className="py-3 px-3.5 text-right">Punkty (Odznaki)</th>
+                    <th className="py-3 px-3.5 text-center">Oddane walkowery (Nieprzyjęte)</th>
+                    <th className="py-3 px-3.5 text-right">Zyskane walkowery</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {badgeRankingList.map((row, index) => (
+                  {displayedWalkowerRanking.map((row: any) => (
                     <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                      <td className="py-3 px-3.5 font-black text-slate-700">
-                        {index === 0 ? '🥇 1' : index === 1 ? '🥈 2' : index === 2 ? '🥉 3' : `#${index + 1}`}
-                      </td>
+                      <td className="py-3 px-3.5 font-black text-slate-700">#{row.originalRank}</td>
                       <td className="py-3 px-3 font-bold text-slate-900 flex items-center gap-2.5">
                         {row.avatar ? (
                           <img src={row.avatar} alt={row.name} className="w-7 h-7 rounded-full object-cover border border-sky-200" />
@@ -1713,19 +2144,33 @@ export default function WyzwaniaPage() {
                         )}
                         <span className="truncate max-w-[140px]">{row.name}</span>
                       </td>
-                      <td className="py-3 px-3.5 text-right font-black text-amber-600 text-xs">
-                        {row.points} pkt <span className="text-[10px] text-slate-400 font-normal">({row.count} 🏆)</span>
+                      <td className="py-3 px-3.5 text-center font-black text-rose-600 text-xs">
+                        {row.surrendered} 🚫
+                      </td>
+                      <td className="py-3 px-3.5 text-right font-black text-purple-700 text-xs">
+                        +{row.gained}
                       </td>
                     </tr>
                   ))}
-                  {badgeRankingList.length === 0 && (
+                  {displayedWalkowerRanking.length === 0 && (
                     <tr>
-                      <td colSpan={3} className="py-8 text-center text-slate-400 text-xs italic">Brak zdobytych odznak w klubie.</td>
+                      <td colSpan={4} className="py-8 text-center text-slate-400 text-xs italic">
+                        {searchWalkover ? "Nie znaleziono klubowicza o takich danych." : "W klubie nie odnotowano jeszcze żadnego walkowera!"}
+                      </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+
+            {!searchWalkover && walkowerRankingList.length > 10 && (
+              <button
+                onClick={() => setIsWalkoverExpanded(!isWalkoverExpanded)}
+                className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl transition-colors cursor-pointer border border-slate-200"
+              >
+                {isWalkoverExpanded ? "Zwiń listę ▲" : `Pokaż pozostałych (${walkowerRankingList.length - 10}) ▼`}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1759,10 +2204,11 @@ export default function WyzwaniaPage() {
                       <span>{w.dyscyplina}</span>
                     </div>
                     {w.zwyciezca_id && <div className="text-[10px] text-amber-600 font-normal mt-0.5">Zwycięzca: {getClientName(w.zwyciezca_id)}</div>}
+                    {w.status === 'walkower' && <div className="text-[10px] text-purple-600 font-bold mt-0.5">Rozstrzygnięcie: Walkower</div>}
                   </td>
                   <td className="py-4 px-2 text-slate-600">{w.status}</td>
                   <td className="py-4 px-2 text-right flex gap-2 justify-end">
-                    {w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && (
+                    {w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && w.status !== 'walkower' && (
                       <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors">Zatwierdź</button>
                     )}
                     <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
@@ -1791,10 +2237,9 @@ export default function WyzwaniaPage() {
             </div>
           )}
 
-          {/* KAFELKOWY KATALOG I KREATOR REGUŁ + PRZYCISK MASOWEGO PRZELICZANIA */}
+          {/* KAFELKOWY KATALOG I KREATOR REGUŁ */}
           {adminSubTab === 'katalog_odznak' && (
             <div className="space-y-8">
-              {/* PRZYCISK MASOWEGO PRZELICZANIA ODZNAK */}
               <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-6 rounded-3xl text-slate-950 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
                 <div>
                   <h3 className="font-black text-sm uppercase tracking-wider flex items-center gap-2">
@@ -1820,7 +2265,6 @@ export default function WyzwaniaPage() {
                 </div>
 
                 <form onSubmit={handleCreateBadgeDef} className="space-y-6">
-                  {/* KAFELKOWY SELEKTOR 21 REGUŁ */}
                   <div className="space-y-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
                     <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-100 pb-2">
                       <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
@@ -1888,7 +2332,6 @@ export default function WyzwaniaPage() {
                     </div>
                   </div>
 
-                  {/* FORMULARZ DANYCH ODZNAKI */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
                     <div className="sm:col-span-2 border-b border-slate-100 pb-2">
                       <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
