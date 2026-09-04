@@ -90,10 +90,15 @@ export default function OdziezPage() {
           const newWalletTotal = currentNum + refundAmount;
           const newWalletStr = `${newWalletTotal.toFixed(2)} PLN`;
 
+          const adminSenderId = currentUser?.id ? Number(currentUser.id) : null;
+          const adminSenderName = currentUser?.fullName || 'Forma Marzeń';
+
           await Promise.all([
+            // 1. Zwiększenie salda w Portfelu
             Promise.resolve(
               supabase.from('klienci').update({ Portfel: newWalletStr }).eq('id', order.klient_id)
             ),
+            // 2. Dodanie rekordu w historii transakcji
             Promise.resolve(
               supabase.from('transakcje').insert([{
                 klient_id: order.klient_id,
@@ -103,15 +108,29 @@ export default function OdziezPage() {
                 data: new Date().toISOString()
               }])
             ),
+            // 3. Aktualizacja statusu zamówienia na 'zwrocone'
             Promise.resolve(
               supabase.from('odziez_zamowienia').update({ status_platnosci: 'zwrocone' }).eq('id', order.id)
+            ),
+            // 4. Automatyczna wiadomość na czacie prywatnym klubowicza
+            Promise.resolve(
+              supabase.from('czat_wiadomosci').insert([{
+                nadawca_id: adminSenderId,
+                nadawca_nazwa: adminSenderName,
+                nadawca_avatar: null,
+                odbiorca_id: Number(order.klient_id),
+                tresc: `👕 Informacja o zwrocie: Kwota ${refundAmount.toFixed(2)} PLN za zamówienie koszulki klubowej (${order.wariant} ${order.rozmiar}) została pomyślnie zwrócona do Twojego Wirtualnego Portfela w aplikacji.`,
+                przeczytana: false,
+                grupa_id: null,
+                created_at: new Date().toISOString()
+              }])
             )
           ]);
         }
       });
 
     await Promise.all(refundOperations);
-  }, []);
+  }, [currentUser]);
 
   const processCampaignAutomations = useCallback(async (camp: any, orderList: any[]) => {
     const now = new Date().getTime();
@@ -440,7 +459,7 @@ export default function OdziezPage() {
     }
   };
 
-  // Usunięcie zamówienia z opcją zwrotu
+  // Usunięcie zamówienia z opcją zwrotu i wysyłki wiadomości na czat
   const handleDeleteOrder = async (order: any) => {
     if (!isAdmin) return;
 
@@ -455,7 +474,7 @@ export default function OdziezPage() {
     try {
       if (isPaid) {
         const askRefund = window.confirm(
-          `Zamówienie zostało OPŁACONE na kwotę ${order.kwota} PLN.\n\nCzy chcesz ZWRÓCIĆ te środki do Wirtualnego Portfela klubowicza przed usunięciem?`
+          `Zamówienie zostało OPŁACONE na kwotę ${order.kwota} PLN.\n\nCzy chcesz ZWRÓCIĆ te środki do Wirtualnego Portfela klubowicza i powiadomić go na czacie przed usunięciem?`
         );
         if (askRefund) {
           await executeRefunds(order.kampania_id, [order]);
@@ -503,7 +522,7 @@ export default function OdziezPage() {
       const paidList = paidOrdersData || [];
       if (paidList.length > 0) {
         const askRefund = window.confirm(
-          `W tym dropie znajduje się ${paidList.length} opłaconych zamówień na łączną kwotę ${paidList.reduce((acc, curr) => acc + Number(curr.kwota), 0).toFixed(2)} PLN.\n\nCzy chcesz ZWRÓCIĆ środki na Wirtualny Portfel wszystkim płacącym klubowiczom?`
+          `W tym dropie znajduje się ${paidList.length} opłaconych zamówień na łączną kwotę ${paidList.reduce((acc, curr) => acc + Number(curr.kwota), 0).toFixed(2)} PLN.\n\nCzy chcesz ZWRÓCIĆ środki na Wirtualny Portfel wszystkim płacącym klubowiczom oraz wysłać im informację na czacie?`
         );
         if (askRefund) {
           await executeRefunds(campId, paidList);
@@ -557,7 +576,7 @@ export default function OdziezPage() {
       const paidList = paidOrdersData || [];
       if (paidList.length > 0) {
         const askRefund = window.confirm(
-          `W usuwanym dropie znajduje się ${paidList.length} opłaconych zamówień.\n\nCzy chcesz NAJPIERW zwrócić środki na Wirtualny Portfel klubowiczom przed trwałym usunięciem dropa?`
+          `W usuwanym dropie znajduje się ${paidList.length} opłaconych zamówień.\n\nCzy chcesz NAJPIERW zwrócić środki na Wirtualny Portfel klubowiczom oraz powiadomić ich na czacie przed trwałym usunięciem dropa?`
         );
         if (askRefund) {
           await executeRefunds(campId, paidList);
