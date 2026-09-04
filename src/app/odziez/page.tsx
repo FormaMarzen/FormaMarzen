@@ -13,7 +13,7 @@ export default function OdziezPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Referencja do aktualnego użytkownika zapobiegająca pętlom renderowania
+  // Referencja do użytkownika zabezpieczająca przed zapętleniem hooków
   const currentUserRef = useRef<any>(null);
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -26,7 +26,7 @@ export default function OdziezPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [hasNewDropBadge, setHasNewDropBadge] = useState(false);
 
-  // Modal szczegółów zarchiwizowanego dropu (podgląd samego wzoru)
+  // Modal szczegółów zarchiwizowanego dropu (podgląd wzoru)
   const [selectedHistoryCampaign, setSelectedHistoryCampaign] = useState<any>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
@@ -295,12 +295,15 @@ export default function OdziezPage() {
       const campaigns = campaignsRes.data || [];
       setCampaignsList(campaigns);
 
-      if (campaigns.length > 0) {
-        const activeCamp = campaigns.find(c => c.status === 'aktywny') || campaigns[0];
+      // Górna karta ładuje WYŁĄCZNIE dropy ze statusem 'aktywny'
+      const activeCamp = campaigns.find(c => c.status === 'aktywny');
+      if (activeCamp) {
         setSelectedCampaignId(activeCamp.id);
         await loadCampaignAndOrders(activeCamp, userObj, !!adminCheck);
       } else {
         setCampaign(null);
+        setSelectedCampaignId('');
+        setOrders([]);
       }
     } catch (err) {
       console.error("Błąd ładowania danych odzieży:", err);
@@ -309,15 +312,14 @@ export default function OdziezPage() {
     }
   }, [loadCampaignAndOrders]);
 
-  // Inicjalizacja uruchamiana wyłącznie raz przy wejściu na stronę
   useEffect(() => {
     initData();
   }, [initData]);
 
-  // Obsługa przełączania dropa w selektorze bez zapętlania
+  // Zmiana wybranego aktywnego dropa w selektorze
   useEffect(() => {
     if (selectedCampaignId && campaignsList.length > 0) {
-      const found = campaignsList.find(c => c.id === selectedCampaignId);
+      const found = campaignsList.find(c => c.id === selectedCampaignId && c.status === 'aktywny');
       if (found && found.id !== campaign?.id) {
         setupCampaignData(found);
       }
@@ -326,7 +328,7 @@ export default function OdziezPage() {
 
   // Zegar odliczający
   useEffect(() => {
-    if (!campaign) return;
+    if (!campaign || campaign.status !== 'aktywny') return;
 
     const interval = setInterval(() => {
       const now = new Date().getTime();
@@ -422,6 +424,7 @@ export default function OdziezPage() {
     return orders.filter(o => o.status_platnosci === 'oplacone' && !o.admin_odczytane).length;
   }, [orders]);
 
+  // Ścisły podział: aktywne na górze, reszta w archiwum na dole
   const activeCampaigns = useMemo(() => campaignsList.filter(c => c.status === 'aktywny'), [campaignsList]);
   const historyCampaigns = useMemo(() => campaignsList.filter(c => c.status !== 'aktywny'), [campaignsList]);
 
@@ -467,7 +470,7 @@ export default function OdziezPage() {
     }
   };
 
-  // Usunięcie zamówienia z opcją zwrotu i powiadomienia na czacie
+  // Usunięcie pojedynczego zamówienia
   const handleDeleteOrder = async (order: any) => {
     if (!isAdmin) return;
 
@@ -512,10 +515,10 @@ export default function OdziezPage() {
     }
   };
 
-  // Archiwizacja dropa z zapytaniem o zwrot środków
+  // Archiwizacja dropa (przenosi go wyłącznie na dół do archiwum)
   const handleArchiveCampaign = async (campId: string) => {
     if (!isAdmin) return;
-    if (!window.confirm("Czy na pewno chcesz przenieść ten drop do archiwum? Trafi on na dół strony, gdzie klubowicze będą mogli jedynie oglądać wzór.")) {
+    if (!window.confirm("Czy na pewno chcesz przenieść ten drop do archiwum? Zniknie on z górnej części strony i trafi na sam dół do archiwum.")) {
       return;
     }
 
@@ -530,7 +533,7 @@ export default function OdziezPage() {
       const paidList = paidOrdersData || [];
       if (paidList.length > 0) {
         const askRefund = window.confirm(
-          `W tym dropie znajduje się ${paidList.length} opłaconych zamówień na łączną kwotę ${paidList.reduce((acc, curr) => acc + Number(curr.kwota), 0).toFixed(2)} PLN.\n\nCzy chcesz ZWRÓCIĆ środki na Wirtualny Portfel wszystkim płacącym klubowiczom oraz wysłać im informację na czacie?`
+          `W tym dropie znajduje się ${paidList.length} opłaconych zamówień na łączną kwotę ${paidList.reduce((acc, curr) => acc + Number(curr.kwota), 0).toFixed(2)} PLN.\n\nCzy chcesz ZWRÓCIĆ środki na Wirtualny Portfel wszystkim płacącym klubowiczom oraz wysłać im powiadomienie na czacie?`
         );
         if (askRefund) {
           await executeRefunds(campId, paidList);
@@ -557,7 +560,7 @@ export default function OdziezPage() {
         setOrders([]);
       }
 
-      alert("Drop został pomyślnie zarchiwizowany!");
+      alert("Drop został pomyślnie zarchiwizowany i przeniesiony do historii!");
     } catch (err: any) {
       console.error("Błąd podczas archiwizacji dropa:", err);
       alert("Błąd archiwizacji: " + err.message);
@@ -569,7 +572,7 @@ export default function OdziezPage() {
   // Trwałe usunięcie dropa
   const handleDeleteCampaign = async (campId: string) => {
     if (!isAdmin) return;
-    if (!window.confirm("UWAGA: Czy na pewno chcesz całkowicie usunąć ten drop? Spowoduje to bezpowrotne skasowanie wzoru oraz powiązanych z nim wpisów zamówień. Tej operacji nie można cofnąć!")) {
+    if (!window.confirm("UWAGA: Czy na pewno chcesz całkowicie usunąć ten drop? Spowoduje to bezpowrotne skasowanie wzoru oraz powiązanych zamówień. Tej operacji nie można cofnąć!")) {
       return;
     }
 
@@ -584,7 +587,7 @@ export default function OdziezPage() {
       const paidList = paidOrdersData || [];
       if (paidList.length > 0) {
         const askRefund = window.confirm(
-          `W usuwanym dropie znajduje się ${paidList.length} opłaconych zamówień.\n\nCzy chcesz NAJPIERW zwrócić środki na Wirtualny Portfel klubowiczom oraz powiadomić ich na czacie przed trwałym usunięciem dropa?`
+          `W usuwanym dropie znajduje się ${paidList.length} opłaconych zamówień.\n\nCzy chcesz NAJPIERW zwrócić środki na Wirtualny Portfel klubowiczom i powiadomić ich na czacie przed trwałym usunięciem?`
         );
         if (askRefund) {
           await executeRefunds(campId, paidList);
@@ -605,14 +608,11 @@ export default function OdziezPage() {
         setSelectedHistoryCampaign(null);
       }
 
-      if (selectedCampaignId === campId) {
+      if (selectedCampaignId === campId || campaign?.id === campId) {
         const remainingActive = updatedList.filter(c => c.status === 'aktywny');
         if (remainingActive.length > 0) {
           setSelectedCampaignId(remainingActive[0].id);
           await loadCampaignAndOrders(remainingActive[0], currentUser, isAdmin);
-        } else if (updatedList.length > 0) {
-          setSelectedCampaignId(updatedList[0].id);
-          await loadCampaignAndOrders(updatedList[0], currentUser, isAdmin);
         } else {
           setCampaign(null);
           setSelectedCampaignId('');
@@ -900,11 +900,18 @@ export default function OdziezPage() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (updatedCampaigns && updatedCampaigns.length > 0) {
+      if (updatedCampaigns) {
         setCampaignsList(updatedCampaigns);
-        const activeCamp = campaign?.id ? updatedCampaigns.find(c => c.id === campaign.id) || updatedCampaigns[0] : updatedCampaigns[0];
-        setSelectedCampaignId(activeCamp.id);
-        await loadCampaignAndOrders(activeCamp, currentUser, isAdmin);
+        const activeCamps = updatedCampaigns.filter(c => c.status === 'aktywny');
+        if (activeCamps.length > 0) {
+          const nextActive = activeCamps.find(c => c.id === campaign?.id) || activeCamps[0];
+          setSelectedCampaignId(nextActive.id);
+          await loadCampaignAndOrders(nextActive, currentUser, isAdmin);
+        } else {
+          setCampaign(null);
+          setSelectedCampaignId('');
+          setOrders([]);
+        }
       }
     } catch (err: any) {
       console.error("Błąd zapisu kampanii:", err);
@@ -1000,7 +1007,7 @@ export default function OdziezPage() {
             )}
             {isAdmin && (
               <div className="flex flex-wrap items-center gap-2">
-                {campaign && (
+                {campaign && campaign.status === 'aktywny' && (
                   <>
                     <button
                       onClick={() => handleArchiveCampaign(campaign.id)}
@@ -1093,8 +1100,8 @@ export default function OdziezPage() {
         </div>
       </div>
 
-      {/* 2. GŁÓWNA KARTA KOSZULKI */}
-      {campaign ? (
+      {/* 2. GŁÓWNA KARTA KOSZULKI (POKAZUJE WYŁĄCZNIE AKTYWNY DROP) */}
+      {campaign && campaign.status === 'aktywny' ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
           
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
@@ -1173,20 +1180,14 @@ export default function OdziezPage() {
             </div>
           </div>
 
-          {campaign.status === 'aktywny' ? (
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={() => setIsOrderModalOpen(true)}
-                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-black text-xs sm:text-sm px-8 py-4 rounded-2xl uppercase tracking-wider shadow-lg shadow-blue-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
-              >
-                <span>👕</span> Zamów koszulkę teraz
-              </button>
-            </div>
-          ) : (
-            <div className="p-4 bg-slate-100 rounded-2xl text-center text-xs font-bold text-slate-500 uppercase">
-              Zamówienia na ten drop zostały zakończone ({campaign.status === 'w_realizacji' ? 'W realizacji w szwalni' : campaign.status}).
-            </div>
-          )}
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => setIsOrderModalOpen(true)}
+              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-black text-xs sm:text-sm px-8 py-4 rounded-2xl uppercase tracking-wider shadow-lg shadow-blue-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <span>👕</span> Zamów koszulkę teraz
+            </button>
+          </div>
 
           {/* 3. SEKCJA ZAMÓWIEŃ */}
           <div className="space-y-4 pt-6 border-t border-slate-100">
@@ -1560,7 +1561,7 @@ export default function OdziezPage() {
                         handleDeleteCampaign(hist.id);
                       }}
                       className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition-colors"
-                      title="Usuń trwale ten drop"
+                      title="Usuń trwale ten drop z archiwum"
                     >
                       🗑️
                     </button>
