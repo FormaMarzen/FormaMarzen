@@ -555,7 +555,8 @@ export default function ClubChat() {
 
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
-  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH 1-NA-1 (ADMINISTRATOR + KLUBOWICZE)
+
+  // OBSŁUGA MULTI-DEVICE PUSH (TELEFON + TABLET + KOMPUTER)
   const sendChatPushNotification = async (
     recipientId: number | string | undefined | null,
     senderName: string,
@@ -565,7 +566,6 @@ export default function ClubChat() {
       if (!recipientId || recipientId === "undefined" || recipientId === "null") return;
       const senderId = secondaryUserId || currentUserId;
 
-      // Całkowite odcięcie wysyłki do samego siebie
       if (
         String(recipientId) === String(senderId) ||
         String(recipientId) === String(currentUserId)
@@ -574,67 +574,80 @@ export default function ClubChat() {
       }
 
       const parsedNum = Number(recipientId);
-      const isTargetAdminOrSystem =
+
+      // Sprawdzenie adresu e-mail odbiorcy w tabeli klienci
+      const { data: targetClientData } = (await (supabase.from("klienci") as any)
+        .select('id, "E-mail", push_subscription')
+        .eq("id", recipientId)
+        .maybeSingle()) as { data: any };
+
+      const recipientEmail = (targetClientData?.["E-mail"] || targetClientData?.email || "").toLowerCase().trim();
+      const isTargetAdmin =
         parsedNum === 999999999 ||
         parsedNum === SYSTEM_ID ||
+        ADMIN_EMAILS.includes(recipientEmail) ||
         (secondaryUserId && String(recipientId) === String(secondaryUserId));
 
-      // Jeśli administrator pisze do konta systemowego, pomijamy
       if (parsedNum === SYSTEM_ID && isAdmin) return;
 
-      let subscriptions: any[] = [];
+      const subscriptions: any[] = [];
 
-      if (isTargetAdminOrSystem) {
-        // 1. Pobranie tokenów administratora z tabeli push_subscriptions
+      const addSub = (sub: any) => {
+        if (!sub) return;
+        if (Array.isArray(sub)) {
+          sub.forEach(addSub);
+          return;
+        }
+        if (typeof sub === "string") {
+          try {
+            const parsed = JSON.parse(sub);
+            addSub(parsed);
+          } catch {}
+          return;
+        }
+        if (sub && sub.endpoint) {
+          subscriptions.push(sub);
+        }
+      };
+
+      if (isTargetAdmin) {
+        // 1. Wszystkie tokeny admina z push_subscriptions (telefon, tablet, inne urządzenia)
         const { data: adminSubs } = await supabase
           .from("push_subscriptions")
           .select("subscription")
           .or("role.eq.admin,role.eq.administrator");
 
-        if (adminSubs && adminSubs.length > 0) {
-          adminSubs.forEach((s: any) => {
-            if (!s.subscription) return;
-            try {
-              const parsed = typeof s.subscription === "string" ? JSON.parse(s.subscription) : s.subscription;
-              subscriptions.push(parsed);
-            } catch {}
-          });
+        if (adminSubs) {
+          adminSubs.forEach((s: any) => addSub(s.subscription));
         }
 
-        // 2. Pobranie tokenów administratora z tabeli klienci
+        // 2. Tokeny z profilu klienci dla kont admina
         const { data: adminClients } = await supabase
           .from("klienci")
-          .select("id, push_subscription, E-mail")
+          .select("push_subscription")
           .in("E-mail", ADMIN_EMAILS);
 
-        if (adminClients && adminClients.length > 0) {
-          adminClients.forEach((c: any) => {
-            if (!c.push_subscription) return;
-            try {
-              const parsed = typeof c.push_subscription === "string" ? JSON.parse(c.push_subscription) : c.push_subscription;
-              subscriptions.push(parsed);
-            } catch {}
-          });
+        if (adminClients) {
+          adminClients.forEach((c: any) => addSub(c.push_subscription));
         }
       } else {
-        // Standardowy klubowicz - pobieramy z profilu w tabeli klienci
-        const { data: clients } = await supabase
-          .from("klienci")
-          .select("id, push_subscription")
-          .eq("id", recipientId);
+        // 1. Token z profilu klienta
+        if (targetClientData?.push_subscription) {
+          addSub(targetClientData.push_subscription);
+        }
 
-        if (clients && clients.length > 0) {
-          clients.forEach((c: any) => {
-            if (!c.push_subscription) return;
-            try {
-              const parsed = typeof c.push_subscription === "string" ? JSON.parse(c.push_subscription) : c.push_subscription;
-              subscriptions.push(parsed);
-            } catch {}
-          });
+        // 2. Wszelkie dodatkowe urządzenia klubowicza z push_subscriptions
+        const { data: clientSubs } = await supabase
+          .from("push_subscriptions")
+          .select("subscription")
+          .or(`client_id.eq.${recipientId},user_id.eq.${recipientId}`);
+
+        if (clientSubs) {
+          clientSubs.forEach((s: any) => addSub(s.subscription));
         }
       }
 
-      // Usunięcie ewentualnych duplikatów urządzeń
+      // Precyzyjna deduplikacja tokenów po endpointcie urządzenia
       const uniqueSubsMap = new Map();
       subscriptions.forEach((sub) => {
         if (sub && sub.endpoint) {
@@ -664,7 +677,7 @@ export default function ClubChat() {
     }
   };
 
-  // BEZPIECZNA WYSYŁKA POWIADOMIENIA PUSH GRUPOWEGO
+  // MULTI-DEVICE PUSH DLA CZATÓW GRUPOWYCH
   const sendGroupPushNotification = async (
     groupId: string,
     senderId: string,
@@ -698,35 +711,56 @@ export default function ClubChat() {
         }
       }
 
-      // Wykluczenie nadawcy
       recipientIds = recipientIds.filter(
         (id) => id && id !== String(senderId) && id !== String(currentUserId)
       );
       if (recipientIds.length === 0) return;
 
-      const { data: clients } = await supabase
-        .from("klienci")
-        .select("id, push_subscription")
-        .in("id", recipientIds);
-
-      if (!clients || clients.length === 0) return;
-
-      const strictlyTargeted = clients.filter((c: any) => recipientIds.includes(String(c.id)));
-
-      const subscriptions = strictlyTargeted
-        .map((c: any) => {
-          if (!c.push_subscription) return null;
+      const subscriptions: any[] = [];
+      const addSub = (sub: any) => {
+        if (!sub) return;
+        if (Array.isArray(sub)) {
+          sub.forEach(addSub);
+          return;
+        }
+        if (typeof sub === "string") {
           try {
-            return typeof c.push_subscription === "string"
-              ? JSON.parse(c.push_subscription)
-              : c.push_subscription;
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean);
+            const parsed = JSON.parse(sub);
+            addSub(parsed);
+          } catch {}
+          return;
+        }
+        if (sub && sub.endpoint) {
+          subscriptions.push(sub);
+        }
+      };
 
-      if (subscriptions.length === 0) return;
+      const { data: clients } = (await (supabase.from("klienci") as any)
+      .select('id, push_subscription, "E-mail"')
+      .in("id", recipientIds)) as { data: any[] };
+
+      if (clients) {
+        clients.forEach((c: any) => addSub(c.push_subscription));
+      }
+
+      const { data: pushSubs } = await supabase
+        .from("push_subscriptions")
+        .select("subscription")
+        .or(`client_id.in.(${recipientIds.join(",")}),user_id.in.(${recipientIds.join(",")})`);
+
+      if (pushSubs) {
+        pushSubs.forEach((s: any) => addSub(s.subscription));
+      }
+
+      const uniqueSubsMap = new Map();
+      subscriptions.forEach((sub) => {
+        if (sub && sub.endpoint) {
+          uniqueSubsMap.set(sub.endpoint, sub);
+        }
+      });
+      const finalSubscriptions = Array.from(uniqueSubsMap.values());
+
+      if (finalSubscriptions.length === 0) return;
 
       const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
 
@@ -734,7 +768,7 @@ export default function ClubChat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          subscriptions,
+          subscriptions: finalSubscriptions,
           payload: {
             title: `${groupName} (${senderName})`,
             body: previewText,
@@ -1097,49 +1131,75 @@ export default function ClubChat() {
     });
   };
 
+  // NAPRAWIONE OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE (NATYCHMIASTOWE ZNIKANIE JEDYNKI)
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
-        const targetId = secondaryUserId || currentUserId;
+        const myEffective = [
+          String(currentUserId),
+          secondaryUserId ? String(secondaryUserId) : null,
+          isAdmin ? String(SYSTEM_ID) : null,
+          isAdmin ? "999999999" : null,
+        ].filter(Boolean);
+
         const isSys = Number(selectedUser.id) === SYSTEM_ID;
 
-        if (isSys) {
-          await supabase
-            .from("czat_wiadomosci")
-            .update({
-              przeczytana: true,
-              przeczytana_at: new Date().toISOString(),
-            })
-            .eq("odbiorca_id", targetId)
-            .is("nadawca_id", null)
-            .eq("przeczytana", false);
+        // 1. Natychmiastowe usunięcie czerwonej jedynki ze stanu lokalnego
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.grupa_id || m.przeczytana) return m;
+            const sId = String(m.nadawca_id ?? SYSTEM_ID);
+            const rId = String(m.odbiorca_id ?? SYSTEM_ID);
 
-          await supabase
-            .from("czat_wiadomosci")
-            .update({
-              przeczytana: true,
-              przeczytana_at: new Date().toISOString(),
-            })
-            .eq("odbiorca_id", targetId)
-            .eq("nadawca_id", SYSTEM_ID)
-            .eq("przeczytana", false);
-        } else {
-          await supabase
-            .from("czat_wiadomosci")
-            .update({
-              przeczytana: true,
-              przeczytana_at: new Date().toISOString(),
-            })
-            .eq("nadawca_id", selectedUser.id)
-            .eq("odbiorca_id", targetId)
-            .eq("przeczytana", false);
+            const isTargetSender = isSys
+              ? m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID
+              : sId === String(selectedUser.id);
+
+            const isTargetReceiver = myEffective.includes(rId);
+
+            if (isTargetSender && isTargetReceiver) {
+              return {
+                ...m,
+                przeczytana: true,
+                przeczytana_at: new Date().toISOString(),
+              };
+            }
+            return m;
+          })
+        );
+
+        // 2. Trwałe zaktualizowanie bazy Supabase dla wszystkich identyfikatorów
+        try {
+          if (isSys) {
+            await supabase
+              .from("czat_wiadomosci")
+              .update({
+                przeczytana: true,
+                przeczytana_at: new Date().toISOString(),
+              })
+              .in("odbiorca_id", myEffective)
+              .or(`nadawca_id.is.null,nadawca_id.eq.${SYSTEM_ID}`)
+              .eq("przeczytana", false);
+          } else {
+            await supabase
+              .from("czat_wiadomosci")
+              .update({
+                przeczytana: true,
+                przeczytana_at: new Date().toISOString(),
+              })
+              .eq("nadawca_id", selectedUser.id)
+              .in("odbiorca_id", myEffective)
+              .eq("przeczytana", false);
+          }
+        } catch (err) {
+          console.error("Błąd zapisu statusu przeczytania:", err);
         }
 
         fetchMessages();
       };
       markAsRead();
     }
-  }, [isOpen, selectedUser, currentUserId, secondaryUserId]);
+  }, [isOpen, selectedUser, currentUserId, secondaryUserId, isAdmin]);
 
   useEffect(() => {
     if (isOpen && selectedGroup && currentUserId) {
@@ -1150,6 +1210,15 @@ export default function ClubChat() {
           isAdmin ? String(SYSTEM_ID) : null,
           isAdmin ? "999999999" : null,
         ].filter(Boolean);
+
+        setGroupMessages((prev) =>
+          prev.map((m) => {
+            if (String(m.grupa_id) === String(selectedGroup.id) && !m.przeczytana && !myEffective.includes(String(m.nadawca_id))) {
+              return { ...m, przeczytana: true, przeczytana_at: new Date().toISOString() };
+            }
+            return m;
+          })
+        );
 
         await supabase
           .from("czat_wiadomosci")
@@ -1296,7 +1365,6 @@ export default function ClubChat() {
         return false;
       }
 
-      // Bezpośrednie powiązanie po ID treningu
       const zClassId = String(z.zajecia_id || z.grafik_id || z.training_id || z.trening_id || "").trim();
       if (zClassId && zClassId === tId) {
         const zDate = String(z.data || z.data_zajec || z.date || z.created_at || "").trim();
@@ -1540,7 +1608,6 @@ export default function ClubChat() {
           ? `↩ Odpowiedział(a) na Twoją wiadomość: "${messageText || "📎 Załącznik"}"`
           : messageText || "📎 Załącznik";
 
-        // WYSYŁKA PUSH BEZPOŚREDNIO DO ROZMÓWCY
         sendChatPushNotification(selectedUser.id, currentUserName, pushBody);
       }
     }
@@ -2017,7 +2084,6 @@ export default function ClubChat() {
     isAdmin ? "999999999" : null,
   ].filter(Boolean);
 
-  // ŚCIŚLE IZOLOWANE WIADOMOŚCI 1:1 DLA AKTYWNEGO ROZMÓWCY
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     if (m.grupa_id) return false;
@@ -2102,7 +2168,6 @@ export default function ClubChat() {
   const latestMessageTextMap = new Map<string, string>();
   const latestGroupMessageTimeMap = new Map<string, number>();
 
-  // MAPOWANIE OSTATNICH WIADOMOŚCI
   messages.forEach((m: any) => {
     const msgTime = new Date(m.created_at).getTime();
 
@@ -2187,29 +2252,8 @@ export default function ClubChat() {
   const regularDirectUsers = activeDirectUsers.filter((u) => !pinnedChatIds.includes(`direct_${u.id}`));
   const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
 
-  // OCZYSZCZONE ZLICZANIE NIEPRZECZYTANYCH WIADOMOŚCI – ELIMINACJA FAŁSZYWYCH 44 POWIADOMIEŃ SYSTEMOWYCH
-  const unreadDirect1on1Count = messages.filter((m: any) => {
-    if (m.grupa_id || m.przeczytana) return false;
-    const rId = String(m.odbiorca_id ?? SYSTEM_ID);
-    const sId = String(m.nadawca_id ?? SYSTEM_ID);
-
-    if (!effectiveIds.includes(rId) || effectiveIds.includes(sId)) return false;
-
-    // Automatyczne powiadomienia systemowe nie zawyżają licznika prywatnych wiadomości
-    const t = m.tresc || "";
-    const isAutoNotice =
-      sId === String(SYSTEM_ID) &&
-      (t.includes("🎖️") ||
-        t.includes("⚔️") ||
-        t.includes("🎂") ||
-        t.includes("Bazy Wiedzy") ||
-        t.includes("Zapisy na TRENINGI"));
-
-    if (isAutoNotice) return false;
-
-    return true;
-  }).length;
-const allMyGroups = groups.filter((g: any) => {
+  // PRAWIDŁOWY PORZĄDEK DEKLARACJI ZMIENNYCH GRUP (BEZ BŁĘDÓW SCOPE)
+  const allMyGroups = groups.filter((g: any) => {
     const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
     if (isTraining) return false;
 
@@ -2225,6 +2269,7 @@ const allMyGroups = groups.filter((g: any) => {
     const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     return members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
   });
+
   const activeMyGroups = allMyGroups.filter((g) => !archivedChatIds.includes(`group_${g.id}`));
 
   const directTabGroupChats = activeMyGroups
@@ -2234,9 +2279,32 @@ const allMyGroups = groups.filter((g: any) => {
       const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
       return timeB - timeA;
     });
+
   const directTabGroupIds = new Set(
     activeMyGroups.filter((g) => g.kategoria === "Czaty grupowe").map((g: any) => String(g.id))
   );
+
+  // OCZYSZCZONE ZLICZANIE NIEPRZECZYTANYCH WIADOMOŚCI PRYWATNYCH
+  const unreadDirect1on1Count = messages.filter((m: any) => {
+    if (m.grupa_id || m.przeczytana) return false;
+    const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+    const sId = String(m.nadawca_id ?? SYSTEM_ID);
+
+    if (!effectiveIds.includes(rId) || effectiveIds.includes(sId)) return false;
+
+    const t = m.tresc || "";
+    const isAutoNotice =
+      sId === String(SYSTEM_ID) &&
+      (t.includes("🎖️") ||
+        t.includes("⚔️") ||
+        t.includes("🎂") ||
+        t.includes("Bazy Wiedzy") ||
+        t.includes("Zapisy na TRENINGI"));
+
+    if (isAutoNotice) return false;
+
+    return true;
+  }).length;
 
   const unreadDirectGroupsCount = messages.filter(
     (m: any) => m.grupa_id && directTabGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
@@ -2594,6 +2662,21 @@ const allMyGroups = groups.filter((g: any) => {
         <button
           type="button"
           onClick={() => {
+            // Natychmiastowe optymistyczne usunięcie nieprzeczytanej wiadomości dla tego wątku
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.grupa_id || m.przeczytana) return m;
+                const sId = String(m.nadawca_id ?? SYSTEM_ID);
+                const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+                const isTargetSender = isSys
+                  ? m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID
+                  : sId === String(user.id);
+                if (isTargetSender && effectiveIds.includes(rId)) {
+                  return { ...m, przeczytana: true, przeczytana_at: new Date().toISOString() };
+                }
+                return m;
+              })
+            );
             selectedUserRef.current = user;
             setSelectedUser(user);
             setChatInsideTab("messages");
@@ -2701,9 +2784,6 @@ const allMyGroups = groups.filter((g: any) => {
       </div>
     );
   };
-  
-
-  
 
   const pinnedMyGroups = activeMyGroups
     .filter((g) => pinnedChatIds.includes(`group_${g.id}`))
@@ -2745,11 +2825,7 @@ const allMyGroups = groups.filter((g: any) => {
     const isPublic = g.typ === "publiczna";
     let rawMembers = g.czlonkowie_ids;
     if (typeof rawMembers === "string") {
-      try {
-        rawMembers = JSON.parse(rawMembers);
-      } catch {
-        rawMembers = [];
-      }
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
     }
     const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
@@ -2763,11 +2839,7 @@ const allMyGroups = groups.filter((g: any) => {
     const isClosed = g.typ === "zamknieta" || !g.typ;
     let rawMembers = g.czlonkowie_ids;
     if (typeof rawMembers === "string") {
-      try {
-        rawMembers = JSON.parse(rawMembers);
-      } catch {
-        rawMembers = [];
-      }
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
     }
     const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
@@ -2810,8 +2882,7 @@ const allMyGroups = groups.filter((g: any) => {
     : selectedUser
     ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
     : false;
-
-  return (
+    return (
     <div
       ref={containerRef}
       style={
