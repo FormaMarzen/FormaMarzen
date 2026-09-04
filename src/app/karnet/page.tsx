@@ -574,9 +574,9 @@ export default function KarnetyPage() {
     };
   };
 
-  // INTEGRACJA: RABAT ŁĄCZY SIĘ Z RABATAMI KLUBOWICZA (Ciągłość + Urodziny + Ambasador)
-  const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number) => {
-    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false, ambassadorPercent: 0, ambassadorTierName: '' };
+  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW (W TYM WERYFIKACJA KARNETU OPEN DLA AMBASADORA)
+  const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number, targetPassNameToCheck?: string) => {
+    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false, ambassadorPercent: 0, ambassadorTierName: '', isPassQualifiedForAmbassador: true };
     
     const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia'], client.urodziny_rabat_rok);
     
@@ -586,9 +586,30 @@ export default function KarnetyPage() {
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client, basePriceToCheck) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
-    // RABAT Z PROGRAMU AMBASADOR DLA POLECAJĄCEGO KLUBOWICZA
-    const ambassadorDiscountVal = Number(client.ambassadorDiscountPercent) || 0;
+    // PRECYZYJNA WERYFIKACJA: CZY TEN PROG AMBASADORA OBEJMUJE WYBRANY KARNET?
+    const rawAmbDiscountVal = Number(client.ambassadorDiscountPercent) || 0;
     const ambassadorTierName = client.ambassadorTierName || '';
+    const tierTargetPass = (client.ambassadorTargetPass || 'all').toLowerCase().trim();
+
+    let ambassadorDiscountVal = 0;
+    let isPassQualifiedForAmbassador = true;
+
+    if (rawAmbDiscountVal > 0) {
+      const passNameLower = (targetPassNameToCheck || '').toLowerCase().trim();
+
+      // Reguła: Jeśli próg wymaga konkretnego karnetu (np. 'open'), sprawdzamy czy nazwa zawiera 'open'
+      if (tierTargetPass !== 'all' && tierTargetPass !== '') {
+        if (passNameLower && !passNameLower.includes(tierTargetPass)) {
+          // Klubowicz ma 100% zniżki na OPEN, ale wybiera np. karnet 10 wejść -> rabat ambasadora nie jest naliczany
+          isPassQualifiedForAmbassador = false;
+          ambassadorDiscountVal = 0;
+        } else {
+          ambassadorDiscountVal = rawAmbDiscountVal;
+        }
+      } else {
+        ambassadorDiscountVal = rawAmbDiscountVal;
+      }
+    }
 
     let totalPercent = 0;
     let labelParts: string[] = [];
@@ -606,7 +627,7 @@ export default function KarnetyPage() {
       labelParts.push(`${continuityDiscountVal}% ciągłość`);
     }
 
-    // Ambasador: rabat łączy się z rabatami klubowicza
+    // Dodanie rabatu Ambasadora jeśli karnet spełnia kryteria
     if (ambassadorDiscountVal > 0) {
       totalPercent += ambassadorDiscountVal;
       labelParts.push(`${ambassadorDiscountVal}% Ambasador${ambassadorTierName ? ` (${ambassadorTierName})` : ''}`);
@@ -623,7 +644,8 @@ export default function KarnetyPage() {
         daysLeftBirthday: bStatus.daysLeft,
         isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
         ambassadorPercent: ambassadorDiscountVal,
-        ambassadorTierName: ambassadorTierName
+        ambassadorTierName: ambassadorTierName,
+        isPassQualifiedForAmbassador
       };
     }
 
@@ -637,7 +659,8 @@ export default function KarnetyPage() {
       daysLeftBirthday: bStatus.daysLeft, 
       isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
       ambassadorPercent: 0,
-      ambassadorTierName: ''
+      ambassadorTierName: '',
+      isPassQualifiedForAmbassador
     };
   };
 
@@ -732,7 +755,7 @@ export default function KarnetyPage() {
         if (klienciData && klienciData.length > 0) {
           const todayDateOnly = new Date().toISOString().split('T')[0];
 
-          // POBIERZ DANE PROGRAMU AMBASADOR DLA NALICZENIA RABATÓW
+          // POBRANIE PROGÓW Z BAZY (WRAZ Z TARGET_PASS_NAME)
           let ambassadorTiersList: any[] = [];
           try {
             const { data: aTiers } = await supabase
@@ -785,9 +808,10 @@ export default function KarnetyPage() {
 
             const rawContinuity = extractClientContinuityDiscount(c);
 
-            // Pobierz kwalifikowane polecenia dla klienta
+            // Odczytanie poleceń i przypisanie progu z informacją o docelowym karnecie
             let ambDiscountPercent = 0;
             let ambTierName = '';
+            let ambTargetPass = 'all';
             let qualifiedCount = 0;
 
             try {
@@ -804,6 +828,7 @@ export default function KarnetyPage() {
                   if (qualifiedCount >= t.required_referrals) {
                     ambDiscountPercent = Number(t.ambassador_discount_percent) || 0;
                     ambTierName = t.name;
+                    ambTargetPass = t.target_pass_name || 'all';
                   }
                 }
               }
@@ -837,6 +862,7 @@ export default function KarnetyPage() {
               wallet: displayWallet,
               ambassadorDiscountPercent: ambDiscountPercent,
               ambassadorTierName: ambTierName,
+              ambassadorTargetPass: ambTargetPass,
               qualifiedReferralsCount: qualifiedCount
             };
           }));
@@ -887,6 +913,7 @@ export default function KarnetyPage() {
                  wallet: '0.00 PLN',
                  ambassadorDiscountPercent: 0,
                  ambassadorTierName: '',
+                 ambassadorTargetPass: 'all',
                  qualifiedReferralsCount: 0
                };
              }
@@ -1194,7 +1221,8 @@ export default function KarnetyPage() {
     const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
     const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
-    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum);
+    // Przekazujemy nazwę przedłużanego karnetu w celu weryfikacji warunku Ambasadora (np. OPEN)
+    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum, passToExtend.nazwa);
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
@@ -1435,7 +1463,7 @@ export default function KarnetyPage() {
       : [];
     
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
-    const isContract = defKarnetu?.isContract12M || defKarnetu?.typKarnetu === 'Umowa 12 miesięcy';
+    const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
     
     let calculatedFirstPayment = basePriceNum;
     let contractInfo: any = null;
@@ -1445,7 +1473,8 @@ export default function KarnetyPage() {
       calculatedFirstPayment = contractInfo.proRataFirstMonth;
     }
     
-    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment);
+    // Weryfikacja rabatu Ambasadora dla wybranego do zakupu karnetu
+    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
@@ -2005,7 +2034,7 @@ export default function KarnetyPage() {
     setSuspendEndDate('');
   };
 
-  // ODWIESZENIE KARNETU PRZED CZASEM (PRECYZYJNA KOREKTA DNI I ZWROT DO PULI)
+  // ODWIESZENIE KARNETU PRZED CZASEM
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -2684,6 +2713,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         )}
+
         {/* MODAL ZAWIESZENIA */}
         {isSuspendModalOpen && (() => {
           const selectedPass = karnetyList.find((k: any) => k.id.toString() === passToSuspendId.toString());
@@ -2760,7 +2790,6 @@ export default function KarnetyPage() {
                     </div>
                   </div>
 
-                  {/* PODGLĄD ROZLICZENIA DLA UMOWY 12M */}
                   {isSelectedContract && suspendStartDate && suspendEndDate && suspendEndDate >= suspendStartDate && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5 text-[11px]">
                       <div className="flex justify-between text-slate-600">
@@ -2817,7 +2846,7 @@ export default function KarnetyPage() {
             basePrice = 0;
           }
 
-          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePrice);
+          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePrice, passToExtend.nazwa);
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
           const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
 
@@ -2860,6 +2889,12 @@ export default function KarnetyPage() {
                     )}
                   </div>
 
+                  {!effectiveDiscount.isPassQualifiedForAmbassador && effectiveDiscount.ambassadorPercent > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
+                      ℹ️ Twój rabat Ambasador ({effectiveDiscount.ambassadorPercent}%) przysługuje wyłącznie na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
+                    </div>
+                  )}
+
                   {!isBonus13Period && finalPrice > 0 && (
                     <div className="space-y-1 mt-2">
                       <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
@@ -2896,7 +2931,6 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
                   {currentWalletNum > 0 && !isBonus13Period && finalPrice > 0 && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
                       <label className="flex items-center justify-between cursor-pointer">
@@ -2930,7 +2964,6 @@ export default function KarnetyPage() {
                     </div>
                   )}
                   
-                  {/* PODSUMOWANIE KWOT */}
                   <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
                     <div className="flex justify-between text-slate-600">
                       <span>{isBonus13Period ? 'Wartość bonusu:' : isContract ? 'Miesięczna kwota raty:' : 'Cena katalogowa:'}</span>
@@ -2997,7 +3030,7 @@ export default function KarnetyPage() {
         {/* MODAL: KUP KARNET */}
         {isBuyPassModalOpen && (() => {
           const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
-          const isContract = selectedPassDef?.isContract12M || selectedPassDef?.typKarnetu === 'Umowa 12 miesięcy';
+          const isContract = selectedPassDef?.isContract12M || selectedPassDef?.typ_karnetu === 'Umowa 12 miesięcy';
           
           let basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
           let calculatedFirstPayment = basePrice;
@@ -3008,7 +3041,7 @@ export default function KarnetyPage() {
             calculatedFirstPayment = contractInfo.proRataFirstMonth;
           }
 
-          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment);
+          const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
           const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
 
           const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
@@ -3048,7 +3081,7 @@ export default function KarnetyPage() {
                           kDisplayPrice = kProRata.proRataFirstMonth;
                         }
 
-                        const kEffectiveDisc = getEffectiveDiscount(currentUser, kIsContract, kDisplayPrice);
+                        const kEffectiveDisc = getEffectiveDiscount(currentUser, kIsContract, kDisplayPrice, k.nazwa);
                         
                         const kFinalPrice = kEffectiveDisc.percent > 0 
                           ? (kDisplayPrice * (1 - kEffectiveDisc.percent / 100)).toFixed(2)
@@ -3064,6 +3097,12 @@ export default function KarnetyPage() {
                       })}
                     </select>
                   </div>
+
+                  {!effectiveDiscount.isPassQualifiedForAmbassador && effectiveDiscount.ambassadorPercent > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
+                      ℹ️ Twój rabat Ambasador ({effectiveDiscount.ambassadorPercent}%) przysługuje wyłącznie na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
+                    </div>
+                  )}
 
                   {selectedBuyPass && isContract && contractInfo && (
                     <div className="bg-amber-50/80 p-4 rounded-xl border border-amber-200 space-y-2 text-amber-950">
@@ -3121,7 +3160,6 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
                   {selectedBuyPass && selectedPassDef && currentWalletNum > 0 && discountedPrice > 0 && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
                       <label className="flex items-center justify-between cursor-pointer">
@@ -3155,41 +3193,38 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* PODSUMOWANIE KWOT */}
-                  {selectedBuyPass && selectedPassDef && (
-                    <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
-                      <div className="flex justify-between text-slate-600">
-                        <span>Płatność początkowa:</span>
-                        <span className="font-bold">
-                          {discountedPrice === 0 ? '0.00 PLN (Bezpłatny)' : `${calculatedFirstPayment.toFixed(2)} PLN`}
-                        </span>
-                      </div>
-                      {appliedLabel && discountedPrice > 0 && (
-                        <div className="flex justify-between text-emerald-700 font-bold">
-                          <span>Naliczony rabat:</span>
-                          <span>{appliedLabel} (-{(calculatedFirstPayment - discountedPrice).toFixed(2)} PLN)</span>
-                        </div>
-                      )}
-                      {useWalletFunds && walletDeduction > 0 && discountedPrice > 0 && (
-                        <div className="flex justify-between text-purple-700 font-bold">
-                          <span>Pokryto z portfela:</span>
-                          <span>-{walletDeduction.toFixed(2)} PLN</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
-                        <span>
-                          {discountedPrice === 0 
-                            ? 'Do zapłaty:' 
-                            : amountToPayGateway > 0 
-                            ? 'Do zapłaty przez Autopay:' 
-                            : 'Do zapłaty (Portfel):'}
-                        </span>
-                        <span className="text-emerald-700 font-bold">
-                          {discountedPrice === 0 ? '0.00 PLN (Bezpłatny)' : `${amountToPayGateway.toFixed(2)} PLN`}
-                        </span>
-                      </div>
+                  <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Płatność początkowa:</span>
+                      <span className="font-bold">
+                        {discountedPrice === 0 ? '0.00 PLN (Bezpłatny)' : `${calculatedFirstPayment.toFixed(2)} PLN`}
+                      </span>
                     </div>
-                  )}
+                    {appliedLabel && discountedPrice > 0 && (
+                      <div className="flex justify-between text-emerald-700 font-bold">
+                        <span>Naliczony rabat:</span>
+                        <span>{appliedLabel} (-{(calculatedFirstPayment - discountedPrice).toFixed(2)} PLN)</span>
+                      </div>
+                    )}
+                    {useWalletFunds && walletDeduction > 0 && discountedPrice > 0 && (
+                      <div className="flex justify-between text-purple-700 font-bold">
+                        <span>Pokryto z portfela:</span>
+                        <span>-{walletDeduction.toFixed(2)} PLN</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-slate-900 font-black text-xs pt-1 border-t border-amber-200">
+                      <span>
+                        {discountedPrice === 0 
+                          ? 'Do zapłaty:' 
+                          : amountToPayGateway > 0 
+                          ? 'Do zapłaty przez Autopay:' 
+                          : 'Do zapłaty (Portfel):'}
+                      </span>
+                      <span className="text-emerald-700 font-bold">
+                        {discountedPrice === 0 ? '0.00 PLN (Bezpłatny)' : `${amountToPayGateway.toFixed(2)} PLN`}
+                      </span>
+                    </div>
+                  </div>
 
                   {currentUser?.karnetyKlubowicza?.length > 0 && !isContract && (
                     <div className="space-y-2 pt-2 border-t border-sky-100">
@@ -3206,7 +3241,7 @@ export default function KarnetyPage() {
                           />
                           <div className="flex flex-col">
                             <span className="font-bold text-slate-800">Od dzisiaj</span>
-                            <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
+                            <span className="text-[10px] text-slate-500">Karnet zostanie aktywowaty natychmiast</span>
                           </div>
                         </label>
                         <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
