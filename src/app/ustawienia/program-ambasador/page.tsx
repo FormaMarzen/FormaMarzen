@@ -258,23 +258,24 @@ export default function ProgramAmbasadorUstawieniaPage() {
     .reduce((acc, curr) => acc + Number(curr.pass_price || 0), 0);
 
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
+    <div className="w-full max-w-[1700px] mx-auto space-y-5 sm:space-y-6 pb-24 font-sans antialiased text-slate-800 px-3 sm:px-6 overflow-x-hidden">
       {statusMessage && (
         <div 
-          className={`fixed top-6 right-6 z-50 px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border transition-all ${
+          className={`fixed top-4 right-4 left-4 sm:left-auto sm:right-6 sm:top-6 z-50 px-4 sm:px-5 py-3 sm:py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border transition-all max-w-md ${
             statusMessage.type === 'success' 
               ? 'bg-emerald-900 text-emerald-100 border-emerald-700' 
               : 'bg-rose-900 text-rose-100 border-rose-700'
           }`}
         >
-          <span className="text-base">{statusMessage.type === 'success' ? '✅' : '⚠️'}</span>
+          <span className="text-base shrink-0">{statusMessage.type === 'success' ? '✅' : '⚠️'}</span>
           <span className="text-xs font-bold tracking-wide">{statusMessage.text}</span>
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-5 rounded-2xl shadow-sm">
+      {/* NAGŁÓWEK I KONTROLKI */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white border border-sky-200 p-4 sm:p-5 rounded-2xl shadow-sm">
         <div>
-          <h1 className="text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
+          <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
             🏆 PROGRAM AMBASADOR
           </h1>
           <p className="text-xs text-slate-500 font-medium mt-0.5">
@@ -282,8 +283,8 @@ export default function ProgramAmbasadorUstawieniaPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3 bg-sky-50/70 border border-sky-200 px-4 py-2 rounded-xl">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+          <div className="flex items-center justify-between sm:justify-start gap-3 bg-sky-50/70 border border-sky-200 px-3.5 py-2 rounded-xl">
             <span className="text-xs font-bold text-sky-950">Status programu:</span>
             <button
               onClick={() => {
@@ -304,51 +305,53 @@ export default function ProgramAmbasadorUstawieniaPage() {
 
           <button
             onClick={handleOpenAddTier}
-            className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
+            className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer shrink-0"
           >
             <span>+ DODAJ NOWY POZIOM</span>
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl">🏅</div>
-          <div>
-            <div className="text-[11px] font-bold uppercase text-slate-400">Aktywne poziomy</div>
+      {/* METRYKI PODSUMOWUJĄCE */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white border border-sky-200 rounded-2xl p-4 sm:p-5 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">🏅</div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase text-slate-400 truncate">Aktywne poziomy</div>
             <div className="text-2xl font-black text-slate-900">{tiers.length}</div>
           </div>
         </div>
 
-        <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-xl">🤝</div>
-          <div>
-            <div className="text-[11px] font-bold uppercase text-slate-400">Polecenia zaliczone</div>
+        <div className="bg-white border border-sky-200 rounded-2xl p-4 sm:p-5 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-xl shrink-0">🤝</div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase text-slate-400 truncate">Polecenia zaliczone</div>
             <div className="text-2xl font-black text-emerald-800">{totalQualifiedCount}</div>
           </div>
         </div>
 
-        <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-sky-50 border border-sky-200 flex items-center justify-center text-xl">💰</div>
-          <div>
-            <div className="text-[11px] font-bold uppercase text-slate-400">Wartość sprzedaży</div>
-            <div className="text-2xl font-black text-sky-950">{totalVolume.toFixed(2)} PLN</div>
+        <div className="bg-white border border-sky-200 rounded-2xl p-4 sm:p-5 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-sky-50 border border-sky-200 flex items-center justify-center text-xl shrink-0">💰</div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase text-slate-400 truncate">Wartość sprzedaży</div>
+            <div className="text-2xl font-black text-sky-950 truncate">{totalVolume.toFixed(2)} PLN</div>
           </div>
         </div>
 
-        <div className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-center text-xl">🛡️</div>
-          <div>
-            <div className="text-[11px] font-bold uppercase text-slate-400">Min. kwota karnetu</div>
-            <div className="text-2xl font-black text-purple-950">{Number(settings.min_pass_price).toFixed(2)} PLN</div>
+        <div className="bg-white border border-sky-200 rounded-2xl p-4 sm:p-5 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-center text-xl shrink-0">🛡️</div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase text-slate-400 truncate">Min. kwota karnetu</div>
+            <div className="text-2xl font-black text-purple-950 truncate">{Number(settings.min_pass_price).toFixed(2)} PLN</div>
           </div>
         </div>
       </div>
 
-      <div className="flex gap-2 border-b border-sky-200 pb-2">
+      {/* ZAKŁADKI RESPONSYWNE */}
+      <div className="flex items-center gap-2 border-b border-sky-200 pb-2 overflow-x-auto scrollbar-none -mx-1 px-1">
         <button
           onClick={() => setActiveTab('tiers')}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer ${
+          className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === 'tiers' ? 'bg-sky-900 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-sky-50 border border-sky-200'
           }`}
         >
@@ -356,7 +359,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
         </button>
         <button
           onClick={() => setActiveTab('rules')}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer ${
+          className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === 'rules' ? 'bg-sky-900 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-sky-50 border border-sky-200'
           }`}
         >
@@ -364,7 +367,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
         </button>
         <button
           onClick={() => setActiveTab('history')}
-          className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer ${
+          className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
             activeTab === 'history' ? 'bg-sky-900 text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-sky-50 border border-sky-200'
           }`}
         >
@@ -379,19 +382,19 @@ export default function ProgramAmbasadorUstawieniaPage() {
           {activeTab === 'tiers' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {tiers.map((tier) => (
-                <div key={tier.id} className="bg-white border border-sky-200 rounded-2xl p-5 shadow-sm flex flex-col justify-between relative overflow-hidden">
+                <div key={tier.id} className="bg-white border border-sky-200 rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col justify-between relative overflow-hidden">
                   <div className="absolute top-0 left-0 right-0 h-1.5" style={{ backgroundColor: tier.badge_color || '#0284c7' }} />
                   <div>
                     <div className="flex items-start justify-between gap-2 mb-3 mt-1">
                       <span 
-                        className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border"
+                        className="px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border truncate max-w-[150px]"
                         style={{ borderColor: tier.badge_color, color: tier.badge_color, backgroundColor: `${tier.badge_color}15` }}
                       >
                         {tier.name}
                       </span>
                       <button
                         onClick={() => handleToggleTierStatus(tier)}
-                        className={`text-[10px] font-black px-2 py-0.5 rounded cursor-pointer ${tier.is_active ? 'bg-emerald-100 text-emerald-900' : 'bg-slate-100 text-slate-500'}`}
+                        className={`text-[10px] font-black px-2 py-0.5 rounded cursor-pointer shrink-0 ${tier.is_active ? 'bg-emerald-100 text-emerald-900' : 'bg-slate-100 text-slate-500'}`}
                       >
                         {tier.is_active ? 'AKTYWNY' : 'WYŁĄCZONY'}
                       </button>
@@ -402,29 +405,29 @@ export default function ProgramAmbasadorUstawieniaPage() {
                     </div>
 
                     <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 mb-2.5">
-                      <div className="text-[10px] font-black uppercase tracking-wider text-amber-900 mb-0.5 flex justify-between items-center">
-                        <span>🎁 Nagroda Klubowicza:</span>
-                        <span className="bg-amber-200 text-amber-950 px-1.5 py-0.5 rounded font-black text-[9px]">
-                          -{tier.ambassador_discount_percent || 0}% rabatu
+                      <div className="text-[10px] font-black uppercase tracking-wider text-amber-900 mb-0.5 flex justify-between items-center gap-2">
+                        <span className="truncate">🎁 Nagroda Klubowicza:</span>
+                        <span className="bg-amber-200 text-amber-950 px-1.5 py-0.5 rounded font-black text-[9px] shrink-0">
+                          -{tier.ambassador_discount_percent || 0}%
                         </span>
                       </div>
-                      <div className="text-xs font-bold text-slate-800 leading-snug">{tier.reward_description}</div>
+                      <div className="text-xs font-bold text-slate-800 leading-snug break-words">{tier.reward_description}</div>
                     </div>
 
                     <div className="bg-sky-50/70 border border-sky-200 rounded-xl p-3 mb-4">
-                      <div className="text-[10px] font-black uppercase tracking-wider text-sky-900 mb-0.5 flex justify-between items-center">
-                        <span>👋 Bonus dla Nowego:</span>
-                        <span className="bg-sky-200 text-sky-950 px-1.5 py-0.5 rounded font-black text-[9px]">
-                          -{tier.referee_discount_percent || 10}% na start
+                      <div className="text-[10px] font-black uppercase tracking-wider text-sky-900 mb-0.5 flex justify-between items-center gap-2">
+                        <span className="truncate">👋 Bonus dla Nowego:</span>
+                        <span className="bg-sky-200 text-sky-950 px-1.5 py-0.5 rounded font-black text-[9px] shrink-0">
+                          -{tier.referee_discount_percent || 10}%
                         </span>
                       </div>
-                      <div className="text-xs font-medium text-slate-700 leading-snug">{tier.referee_reward_description || 'Standardowy bonus'}</div>
+                      <div className="text-xs font-medium text-slate-700 leading-snug break-words">{tier.referee_reward_description || 'Standardowy bonus'}</div>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-end gap-1.5 pt-3 border-t border-sky-100">
-                    <button onClick={() => handleOpenEditTier(tier)} className="w-7 h-7 bg-amber-800 hover:bg-amber-900 text-white rounded-lg flex items-center justify-center transition-colors shadow-sm cursor-pointer" title="Edytuj">✏️</button>
-                    <button onClick={() => handleDeleteTier(tier.id)} className="w-7 h-7 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center border border-rose-200 transition-colors cursor-pointer" title="Usuń">🗑️</button>
+                    <button onClick={() => handleOpenEditTier(tier)} className="w-8 h-8 bg-amber-800 hover:bg-amber-900 text-white rounded-lg flex items-center justify-center transition-colors shadow-sm cursor-pointer" title="Edytuj">✏️</button>
+                    <button onClick={() => handleDeleteTier(tier.id)} className="w-8 h-8 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center border border-rose-200 transition-colors cursor-pointer" title="Usuń">🗑️</button>
                   </div>
                 </div>
               ))}
@@ -432,7 +435,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
           )}
 
           {activeTab === 'rules' && (
-            <div className="bg-white border border-sky-200 rounded-3xl p-6 sm:p-8 max-w-2xl shadow-sm space-y-6">
+            <div className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-8 max-w-2xl shadow-sm space-y-6">
               <div className="border-b border-sky-100 pb-3">
                 <h3 className="font-black text-sm text-sky-950 uppercase">Zabezpieczenie Minimalnej Wartości Karnetu</h3>
                 <p className="text-xs text-slate-500 mt-1">Ustal minimalną kwotę zakupu karnetu, która zalicza polecenie do podniesienia poziomu ambasadora.</p>
@@ -454,7 +457,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
                   </div>
                 </div>
                 <div className="pt-4 border-t border-sky-100 flex justify-end">
-                  <button type="submit" disabled={isSavingSettings} className="bg-amber-800 hover:bg-amber-900 disabled:opacity-50 text-white font-black px-6 py-2.5 rounded-xl text-xs transition-colors shadow-sm cursor-pointer uppercase tracking-wider">
+                  <button type="submit" disabled={isSavingSettings} className="w-full sm:w-auto bg-amber-800 hover:bg-amber-900 disabled:opacity-50 text-white font-black px-6 py-2.5 rounded-xl text-xs transition-colors shadow-sm cursor-pointer uppercase tracking-wider">
                     {isSavingSettings ? 'Zapisywanie...' : 'Zapisz Regułę'}
                   </button>
                 </div>
@@ -464,12 +467,12 @@ export default function ProgramAmbasadorUstawieniaPage() {
 
           {activeTab === 'history' && (
             <div className="bg-white border border-sky-200 rounded-2xl shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-sky-100 flex items-center justify-between">
-                <h3 className="font-black text-sm text-sky-950 uppercase">Historia Rejestracji i Zakupów</h3>
-                <span className="text-xs bg-sky-50 text-sky-900 border border-sky-200 font-bold px-3 py-1 rounded-full">Razem: {referrals.length}</span>
+              <div className="p-4 border-b border-sky-100 flex items-center justify-between gap-2">
+                <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase truncate">Historia Rejestracji i Zakupów</h3>
+                <span className="text-xs bg-sky-50 text-sky-900 border border-sky-200 font-bold px-3 py-1 rounded-full shrink-0">Razem: {referrals.length}</span>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full min-w-[650px] text-left border-collapse">
                   <thead>
                     <tr className="bg-sky-50/70 border-b border-sky-200 text-[11px] font-bold text-sky-900 uppercase tracking-wider">
                       <th className="py-3.5 px-4">Ambasador</th>
@@ -489,12 +492,12 @@ export default function ProgramAmbasadorUstawieniaPage() {
                         <td className="py-3.5 px-4 font-black text-slate-800">{Number(row.pass_price).toFixed(2)} PLN</td>
                         <td className="py-3.5 px-4 text-center">
                           {row.is_qualified ? (
-                            <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase">✓ Zaliczone</span>
+                            <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase whitespace-nowrap">✓ Zaliczone</span>
                           ) : (
-                            <span className="bg-rose-100 text-rose-900 border border-rose-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase">✕ Poniżej minimum</span>
+                            <span className="bg-rose-100 text-rose-900 border border-rose-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase whitespace-nowrap">✕ Poniżej minimum</span>
                           )}
                         </td>
-                        <td className="py-3.5 px-4 text-right text-slate-500 font-medium">
+                        <td className="py-3.5 px-4 text-right text-slate-500 font-medium whitespace-nowrap">
                           {new Date(row.created_at).toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                         </td>
                       </tr>
@@ -507,14 +510,15 @@ export default function ProgramAmbasadorUstawieniaPage() {
         </>
       )}
 
+      {/* MODAL EDYCJI / DODAWANIA PROGU */}
       {isTierModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-8 shadow-2xl space-y-5 my-8">
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-5 sm:p-8 shadow-2xl space-y-5 my-auto max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="font-black text-sm text-sky-950 uppercase">
                 {editingTierId !== null ? '✏️ Edytuj Poziom Ambasadora' : '🏅 Nowy Poziom Ambasadora'}
               </h3>
-              <button type="button" onClick={() => setIsTierModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer text-base">✕</button>
+              <button type="button" onClick={() => setIsTierModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer text-lg p-1">✕</button>
             </div>
 
             <form onSubmit={handleSaveTier} className="space-y-4 text-xs">
@@ -530,7 +534,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-800 block">Wymagana liczba poleconych *</label>
                   <input
@@ -550,7 +554,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
                       type="color"
                       value={tierForm.badge_color}
                       onChange={(e) => setTierForm({ ...tierForm, badge_color: e.target.value })}
-                      className="w-10 h-10 rounded-xl border border-sky-200 p-1 cursor-pointer bg-white"
+                      className="w-10 h-10 rounded-xl border border-sky-200 p-1 cursor-pointer bg-white shrink-0"
                     />
                     <input
                       type="text"
@@ -562,8 +566,7 @@ export default function ProgramAmbasadorUstawieniaPage() {
                 </div>
               </div>
 
-              {/* RZECZYWISTE WARTOŚCI PROCENTOWE DO AUTOMATYCZNYCH OBLICZEŃ */}
-              <div className="grid grid-cols-2 gap-3 bg-sky-50/60 p-3.5 rounded-2xl border border-sky-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-sky-50/60 p-3.5 rounded-2xl border border-sky-200">
                 <div className="space-y-1">
                   <label className="font-black text-amber-900 block text-[11px] uppercase">
                     Rabat dla Ambasadora (%):
