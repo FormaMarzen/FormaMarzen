@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { supabase } from "../raporty/klienci/supabase";
 
 interface Suplement {
@@ -114,6 +114,9 @@ export default function BazaWiedzyPage() {
   const [przepisy, setPrzepisy] = useState<Przepis[]>([]);
   const [ocenyMap, setOcenyMap] = useState<Record<number, OcenaPrzepisu[]>>({});
 
+  // Pamięć podręczna przeczytanych wpisów
+  const [seenKeysSet, setSeenKeysSet] = useState<Set<string>>(new Set());
+
   // Filtry, wyszukiwarka i sortowanie
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedKategoria, setSelectedKategoria] = useState<string>("wszystkie");
@@ -142,9 +145,6 @@ export default function BazaWiedzyPage() {
   const [originatingSugestiaId, setOriginatingSugestiaId] = useState<number | null>(null);
   const [originatingSugestiaEmail, setOriginatingSugestiaEmail] = useState<string | null>(null);
 
-  // Stan pomocniczy do wymuszania re-renderu po oznaczeniu jako przeczytane
-  const [readVersion, setReadVersion] = useState(0);
-
   const [form, setForm] = useState({
     nazwa: "",
     kategorie: ["witaminy"] as string[],
@@ -164,6 +164,25 @@ export default function BazaWiedzyPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const keys = new Set<string>();
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (
+          k &&
+          (k.startsWith("seen_supl_") ||
+            k.startsWith("seen_sport_") ||
+            k.startsWith("seen_odz_") ||
+            k.startsWith("seen_przepis_"))
+        ) {
+          keys.add(k);
+        }
+      }
+      setSeenKeysSet(keys);
+    }
+  }, []);
+
+  useEffect(() => {
     fetchData();
   }, []);
 
@@ -175,87 +194,118 @@ export default function BazaWiedzyPage() {
   const fetchData = async () => {
     setIsLoading(true);
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const email = session?.user?.email || "";
-    setUserEmail(email);
-
-    const cleanEmail = email.toLowerCase().trim();
-    if (cleanEmail === "maciejklaput@gmail.com" || cleanEmail === "maciejklaput@icloud.com") {
-      setIsAdmin(true);
-    }
-
-    const { data: klienciData } = await supabase.from("klienci").select("*");
-
-    const newKlienciMap: Record<string, string> = {};
-    const newKlienciIdMap: Record<string, number> = {};
-    let currentFullName = "";
-
-    if (klienciData && Array.isArray(klienciData)) {
-      klienciData.forEach((row: any) => {
-        const imie = String(row["Imię"] || row["imie"] || row["Imie"] || "").trim();
-        const nazwisko = String(row["Nazwisko"] || row["nazwisko"] || "").trim();
-        const mail = String(row["E-mail"] || row["email"] || row["mail"] || "").toLowerCase().trim();
-        const idNum = Number(row.id);
-
-        const full = `${imie} ${nazwisko}`.trim();
-        if (mail && full) {
-          newKlienciMap[mail] = full;
-          if (!isNaN(idNum)) {
-            newKlienciIdMap[mail] = idNum;
-          }
-          if (mail === cleanEmail) {
-            currentFullName = full;
-          }
-        }
-      });
-    }
-
-    if (!currentFullName && (cleanEmail.includes("maciejklaput") || cleanEmail.includes("maciej"))) {
-      currentFullName = "Maciej Kłaput";
-      newKlienciMap["maciejklaput@gmail.com"] = "Maciej Kłaput";
-      newKlienciMap["maciejklaput@icloud.com"] = "Maciej Kłaput";
-    }
-
-    setKlienciMap(newKlienciMap);
-    setKlienciIdMap(newKlienciIdMap);
-    setUserImieNazwisko(currentFullName || "Klubowicz");
-
-    const { data: suplData } = await supabase
-      .from("suplementy")
-      .select("*")
-      .order("nazwa", { ascending: true });
-    if (suplData) setSuplementy(suplData);
-
-    const { data: sportData } = await supabase
-      .from("baza_sport")
-      .select("*")
-      .order("nazwa", { ascending: true });
-    if (sportData) setSportWpisy(sportData);
-
-    const { data: odzData } = await supabase
-      .from("baza_odzywianie")
-      .select("*")
-      .order("nazwa", { ascending: true });
-    if (odzData) setOdzywianieWpisy(odzData);
-
-    const { data: przData } = await supabase.from("baza_przepisow").select("*");
-    if (przData) {
-      const sortedPrzepisy = przData.sort((a, b) => {
-        if (a.do_weryfikacji && !b.do_weryfikacji) return -1;
-        if (!a.do_weryfikacji && b.do_weryfikacji) return 1;
-        return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
-      });
-      setPrzepisy(sortedPrzepisy);
-    }
-
-    // Pobieranie ocen przepisów
     try {
-      const { data: ocenyData } = await supabase.from("oceny_przepisow").select("*");
-      if (ocenyData && Array.isArray(ocenyData)) {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const email = session?.user?.email || "";
+      setUserEmail(email);
+
+      const cleanEmail = email.toLowerCase().trim();
+      if (cleanEmail === "maciejklaput@gmail.com" || cleanEmail === "maciejklaput@icloud.com") {
+        setIsAdmin(true);
+      }
+
+      // Wszystkie zapytania pobierają rekordy OD NAJNOWSZYCH
+      const [
+        klienciRes,
+        suplRes,
+        sportRes,
+        odzRes,
+        przRes,
+        ocenyRes,
+        sugRes,
+      ] = await Promise.all([
+        supabase
+          .from("klienci")
+          .select("id, Imię, imie, Imie, Nazwisko, nazwisko, E-mail, email, mail")
+          .order("id", { ascending: false })
+          .limit(2000),
+        supabase
+          .from("suplementy")
+          .select("*")
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .limit(2000),
+        supabase
+          .from("baza_sport")
+          .select("*")
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .limit(2000),
+        supabase
+          .from("baza_odzywianie")
+          .select("*")
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .limit(2000),
+        supabase
+          .from("baza_przepisow")
+          .select("*")
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .limit(2000),
+        supabase
+          .from("oceny_przepisow")
+          .select("*")
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .limit(5000),
+        supabase
+          .from("sugestie_suplementow")
+          .select("*")
+          .eq("status", "oczekujace")
+          .order("created_at", { ascending: false })
+          .limit(1000),
+      ]);
+
+      // Przetwarzanie klientów
+      const newKlienciMap: Record<string, string> = {};
+      const newKlienciIdMap: Record<string, number> = {};
+      let currentFullName = "";
+
+      if (klienciRes.data && Array.isArray(klienciRes.data)) {
+        klienciRes.data.forEach((row: any) => {
+          const imie = String(row["Imię"] || row["imie"] || row["Imie"] || "").trim();
+          const nazwisko = String(row["Nazwisko"] || row["nazwisko"] || "").trim();
+          const mail = String(row["E-mail"] || row["email"] || row["mail"] || "").toLowerCase().trim();
+          const idNum = Number(row.id);
+
+          const full = `${imie} ${nazwisko}`.trim();
+          if (mail && full) {
+            newKlienciMap[mail] = full;
+            if (!isNaN(idNum)) {
+              newKlienciIdMap[mail] = idNum;
+            }
+            if (mail === cleanEmail) {
+              currentFullName = full;
+            }
+          }
+        });
+      }
+
+      if (!currentFullName && (cleanEmail.includes("maciejklaput") || cleanEmail.includes("maciej"))) {
+        currentFullName = "Maciej Kłaput";
+        newKlienciMap["maciejklaput@gmail.com"] = "Maciej Kłaput";
+        newKlienciMap["maciejklaput@icloud.com"] = "Maciej Kłaput";
+      }
+
+      setKlienciMap(newKlienciMap);
+      setKlienciIdMap(newKlienciIdMap);
+      setUserImieNazwisko(currentFullName || "Klubowicz");
+
+      if (suplRes.data) setSuplementy(suplRes.data);
+      if (sportRes.data) setSportWpisy(sportRes.data);
+      if (odzRes.data) setOdzywianieWpisy(odzRes.data);
+
+      if (przRes.data) {
+        const sortedPrzepisy = przRes.data.sort((a, b) => {
+          if (a.do_weryfikacji && !b.do_weryfikacji) return -1;
+          if (!a.do_weryfikacji && b.do_weryfikacji) return 1;
+          return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
+        });
+        setPrzepisy(sortedPrzepisy);
+      }
+
+      // Oceny przepisów
+      if (ocenyRes.data && Array.isArray(ocenyRes.data)) {
         const grouped: Record<number, OcenaPrzepisu[]> = {};
-        ocenyData.forEach((row: any) => {
+        ocenyRes.data.forEach((row: any) => {
           const pId = Number(row.przepis_id);
           if (!grouped[pId]) grouped[pId] = [];
           grouped[pId].push({
@@ -272,18 +322,14 @@ export default function BazaWiedzyPage() {
       } else {
         loadOcenyFromLocalStorage();
       }
-    } catch (e) {
+
+      if (sugRes.data) setSugestie(sugRes.data);
+    } catch (err) {
+      console.error("Błąd podczas pobierania bazy wiedzy:", err);
       loadOcenyFromLocalStorage();
+    } finally {
+      setIsLoading(false);
     }
-
-    const { data: sugData } = await supabase
-      .from("sugestie_suplementow")
-      .select("*")
-      .eq("status", "oczekujace")
-      .order("created_at", { ascending: false });
-    if (sugData) setSugestie(sugData);
-
-    setIsLoading(false);
   };
 
   const loadOcenyFromLocalStorage = () => {
@@ -303,7 +349,7 @@ export default function BazaWiedzyPage() {
     } catch (e) {}
   };
 
-  const calculateRecipeRating = (przepisId: number) => {
+  const calculateRecipeRating = useCallback((przepisId: number) => {
     const list = ocenyMap[przepisId] || [];
     if (list.length === 0) return { avg: 0, count: 0 };
     const sum = list.reduce((acc, curr) => acc + (curr.srednia || 0), 0);
@@ -311,7 +357,7 @@ export default function BazaWiedzyPage() {
       avg: Number((sum / list.length).toFixed(1)),
       count: list.length,
     };
-  };
+  }, [ocenyMap]);
 
   const getStorageKeyPrefix = (tab: TabType) => {
     if (tab === "suplementy") return "seen_supl_";
@@ -320,17 +366,18 @@ export default function BazaWiedzyPage() {
     return "seen_przepis_";
   };
 
-  const isItemUnread = (item: any, tab: TabType) => {
-    if (typeof window === "undefined") return false;
+  const isItemUnread = useCallback((item: any, tab: TabType) => {
     const key = `${getStorageKeyPrefix(tab)}${item.id}`;
-    return !localStorage.getItem(key);
-  };
+    return !seenKeysSet.has(key);
+  }, [seenKeysSet]);
 
   const markItemAsSeen = (item: any, tab: TabType) => {
     if (typeof window === "undefined") return;
     const key = `${getStorageKeyPrefix(tab)}${item.id}`;
-    localStorage.setItem(key, "true");
-    setReadVersion((v) => v + 1);
+    try {
+      localStorage.setItem(key, "true");
+    } catch (e) {}
+    setSeenKeysSet((prev) => new Set(prev).add(key));
   };
 
   const handleMarkAllAsSeenForCurrentTab = (tab: TabType) => {
@@ -342,31 +389,35 @@ export default function BazaWiedzyPage() {
     else if (tab === "odzywianie") itemsToMark = odzywianieWpisy;
     else if (tab === "przepisy") itemsToMark = przepisy;
 
+    const nextSet = new Set(seenKeysSet);
     itemsToMark.forEach((item) => {
       const key = `${getStorageKeyPrefix(tab)}${item.id}`;
-      localStorage.setItem(key, "true");
+      try {
+        localStorage.setItem(key, "true");
+      } catch (e) {}
+      nextSet.add(key);
     });
 
-    setReadVersion((v) => v + 1);
+    setSeenKeysSet(nextSet);
   };
 
   const hasUnreadSuplementy = useMemo(() => {
     const unreadItems = suplementy.some((item) => isItemUnread(item, "suplementy"));
     const unreadSugestie = isAdmin && sugestie.length > 0;
     return unreadItems || unreadSugestie;
-  }, [suplementy, sugestie, isAdmin, readVersion]);
+  }, [suplementy, sugestie, isAdmin, isItemUnread]);
 
   const hasUnreadSport = useMemo(() => {
     return sportWpisy.some((item) => isItemUnread(item, "sport"));
-  }, [sportWpisy, readVersion]);
+  }, [sportWpisy, isItemUnread]);
 
   const hasUnreadOdzywianie = useMemo(() => {
     return odzywianieWpisy.some((item) => isItemUnread(item, "odzywianie"));
-  }, [odzywianieWpisy, readVersion]);
+  }, [odzywianieWpisy, isItemUnread]);
 
   const hasUnreadPrzepisy = useMemo(() => {
     return przepisy.some((item) => isItemUnread(item, "przepisy"));
-  }, [przepisy, readVersion]);
+  }, [przepisy, isItemUnread]);
 
   const hasAnyUnreadOverall = useMemo(() => {
     return hasUnreadSuplementy || hasUnreadSport || hasUnreadOdzywianie || hasUnreadPrzepisy;
@@ -379,7 +430,7 @@ export default function BazaWiedzyPage() {
     return hasUnreadPrzepisy;
   }, [activeTab, hasUnreadSuplementy, hasUnreadSport, hasUnreadOdzywianie, hasUnreadPrzepisy]);
 
-  const getAutorDisplay = (item: Przepis) => {
+  const getAutorDisplay = useCallback((item: Przepis) => {
     const emailKey = (item.autor_email || "").toLowerCase().trim();
     if (emailKey && klienciMap[emailKey]) {
       return klienciMap[emailKey];
@@ -391,9 +442,9 @@ export default function BazaWiedzyPage() {
       return item.autor_nazwa;
     }
     return "Klubowicz";
-  };
+  }, [klienciMap]);
 
-  const parseCategories = (kategoria: string | string[] | undefined | null): string[] => {
+  const parseCategories = useCallback((kategoria: string | string[] | undefined | null): string[] => {
     if (!kategoria) return [];
     if (Array.isArray(kategoria)) return kategoria;
     if (typeof kategoria === "string") {
@@ -409,7 +460,7 @@ export default function BazaWiedzyPage() {
         .filter(Boolean);
     }
     return [];
-  };
+  }, []);
 
   const currentCategoryList = useMemo(() => {
     if (activeTab === "suplementy") return KATEGORIE_SUPL;
@@ -457,7 +508,7 @@ export default function BazaWiedzyPage() {
         }
         return (a.nazwa || "").localeCompare(b.nazwa || "", "pl");
       });
-  }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria, ocenyMap, przepisSort]);
+  }, [activeTab, suplementy, sportWpisy, odzywianieWpisy, przepisy, searchQuery, selectedKategoria, przepisSort, calculateRecipeRating, parseCategories]);
 
   const notifyKlubowiczOnChatAndPush = async (targetEmail: string, supplementName: string) => {
     try {
@@ -869,7 +920,7 @@ export default function BazaWiedzyPage() {
     setTimeout(() => setRatingSuccess(false), 3500);
   };
 
-  const getKategoriaBadge = (kategoria: string) => {
+  const getKategoriaBadge = useCallback((kategoria: string) => {
     const all = [...KATEGORIE_SUPL, ...KATEGORIE_SPORT, ...KATEGORIE_ODZYWIANIE, ...KATEGORIE_PRZEPISY];
     const found = all.find((k) => k.id === kategoria);
     if (found) {
@@ -880,7 +931,7 @@ export default function BazaWiedzyPage() {
       };
     }
     return { label: kategoria, icon: "📌", color: "bg-slate-50 text-slate-800 border-slate-200" };
-  };
+  }, []);
 
   const handleOpenItemModal = (item: any) => {
     markItemAsSeen(item, activeTab);
@@ -1304,7 +1355,13 @@ export default function BazaWiedzyPage() {
                             {activeTab !== "przepisy" && (
                               <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200 shrink-0 overflow-hidden flex items-center justify-center">
                                 {item.grafika_url ? (
-                                  <img src={item.grafika_url} alt={item.nazwa} className="w-full h-full object-cover" />
+                                  <img
+                                    src={item.grafika_url}
+                                    alt={item.nazwa}
+                                    loading="lazy"
+                                    decoding="async"
+                                    className="w-full h-full object-cover"
+                                  />
                                 ) : (
                                   <span className="text-xl opacity-60">
                                     {activeTab === "suplementy" ? "💊" : activeTab === "sport" ? "🏋️" : "🥗"}
@@ -1463,6 +1520,8 @@ export default function BazaWiedzyPage() {
                   <img
                     src={selectedItem.grafika_url}
                     alt={selectedItem.nazwa}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-contain max-h-[48vh] group-hover:scale-[1.02] transition-transform duration-300"
                   />
                   <div className="absolute bottom-3 right-3 bg-slate-950/70 text-white text-[11px] font-bold px-3 py-1.5 rounded-xl backdrop-blur-sm flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
@@ -1733,6 +1792,8 @@ export default function BazaWiedzyPage() {
           <img
             src={zoomedImage}
             alt="Powiększone zdjęcie"
+            loading="lazy"
+            decoding="async"
             className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
