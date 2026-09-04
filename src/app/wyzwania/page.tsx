@@ -1434,22 +1434,28 @@ export default function WyzwaniaPage() {
                 </div>
 
                 <div className="bg-sky-50/50 rounded-2xl p-3 border border-sky-100/70 text-[11px] space-y-1">
-                  <div className="flex items-center justify-between text-slate-600">
-                    <span className="text-slate-400 font-bold">📅 Rzucono:</span>
-                    <span className="font-mono font-bold text-slate-800">{formatDateDisplay(w.created_at)}</span>
-                  </div>
-                  {w.accepted_at ? (
-                    <div className="flex items-center justify-between text-emerald-800">
-                      <span className="font-bold">✅ Przyjęto:</span>
-                      <span className="font-mono font-black">{formatDateDisplay(w.accepted_at)}</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between text-amber-800 font-bold">
-                      <span>⏳ Oczekiwanie:</span>
-                      <span className="text-[10px] bg-amber-100 px-2 py-0.5 rounded-md">Brak akceptacji (Limit: 10 dni)</span>
-                    </div>
-                  )}
-                </div>
+  <div className="flex items-center justify-between text-slate-600">
+    <span className="text-slate-400 font-bold">📅 Rzucono:</span>
+    <span className="font-mono font-bold text-slate-800">{formatDateDisplay(w.created_at)}</span>
+  </div>
+  {w.status === 'aktywne' ? (
+    <div className="flex items-center justify-between text-emerald-800">
+      <span className="font-bold">✅ Przyjęto:</span>
+      <span className="font-mono font-black">
+        {w.accepted_at 
+          ? formatDateDisplay(w.accepted_at) 
+          : formatDateDisplay(w.updated_at) !== "-" 
+            ? formatDateDisplay(w.updated_at) 
+            : "W toku"}
+      </span>
+    </div>
+  ) : w.status === 'oczekujace' ? (
+    <div className="flex items-center justify-between text-amber-800 font-bold">
+      <span>⏳ Oczekiwanie:</span>
+      <span className="text-[10px] bg-amber-100 px-2 py-0.5 rounded-md">Brak akceptacji (Limit: 10 dni)</span>
+    </div>
+  ) : null}
+</div>
 
                 <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
                   <div>
