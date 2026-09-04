@@ -525,6 +525,7 @@ export default function RootLayout({
       title: "Główne",
       items: [
         { href: '/', label: 'Panel główny', icon: '📊' },
+        { href: '/ustawienia/program-ambasador', label: 'Program Ambasador', icon: '🏆' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
         { href: '/moje-zapisy?ranking=true', label: 'Ranking Klubowiczów', icon: '👑' },
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
@@ -1134,7 +1135,7 @@ export default function RootLayout({
                     Anuluj
                   </button>
                   <button 
-                    type="submit"
+                    type="submit" 
                     className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
                   >
                     Zapisz klienta
@@ -1199,7 +1200,7 @@ export default function RootLayout({
                   <label className="font-bold text-slate-700 block">Adres e-mail *</label>
                   <input 
                     type="email" 
-                    readOnly
+                    readOnly 
                     value={profileEmail}
                     className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-slate-500 focus:outline-none cursor-not-allowed"
                   />
