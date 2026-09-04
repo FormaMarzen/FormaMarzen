@@ -20,7 +20,7 @@ export default function OdziezPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [hasNewDropBadge, setHasNewDropBadge] = useState(false);
 
-  // Modal szczegółów historycznego / zarchiwizowanego dropu
+  // Modal szczegółów zarchiwizowanego dropu (podgląd wzoru)
   const [selectedHistoryCampaign, setSelectedHistoryCampaign] = useState<any>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
@@ -48,7 +48,7 @@ export default function OdziezPage() {
   const [editImgSizeMale, setEditImgSizeMale] = useState('');
   const [editImgSizeFemale, setEditImgSizeFemale] = useState('');
 
-  // Referencje do ukrytych inputów wgrywania plików
+  // Referencje do ukrytych inputów plików
   const frontFileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
   const sizeMaleFileInputRef = useRef<HTMLInputElement>(null);
@@ -398,7 +398,7 @@ export default function OdziezPage() {
   const activeCampaigns = useMemo(() => campaignsList.filter(c => c.status === 'aktywny'), [campaignsList]);
   const historyCampaigns = useMemo(() => campaignsList.filter(c => c.status !== 'aktywny'), [campaignsList]);
 
-  // Otwarcie modalu edycji zamówienia klubowicza
+  // Edycja rozmiaru i wariantu koszulki klubowicza
   const handleOpenEditOrder = (order: any) => {
     if (!isAdmin) return;
     setEditingOrder(order);
@@ -407,7 +407,6 @@ export default function OdziezPage() {
     setIsEditOrderModalOpen(true);
   };
 
-  // Zapis zmian rozmiaru / wariantu zamówienia klubowicza
   const handleSaveEditedOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isProcessing || !editingOrder) return;
@@ -441,7 +440,7 @@ export default function OdziezPage() {
     }
   };
 
-  // Usunięcie pojedynczego zamówienia klubowicza z opcją zwrotu wpłaconych środków
+  // Usunięcie zamówienia z opcją zwrotu
   const handleDeleteOrder = async (order: any) => {
     if (!isAdmin) return;
 
@@ -486,7 +485,7 @@ export default function OdziezPage() {
     }
   };
 
-  // Archiwizacja dropa z opcjonalnym automatycznym zwrotem wpłat na portfel
+  // Archiwizacja dropa z zapytaniem o zwrot środków
   const handleArchiveCampaign = async (campId: string) => {
     if (!isAdmin) return;
     if (!window.confirm("Czy na pewno chcesz przenieść ten drop do archiwum? Trafi on na dół strony, gdzie klubowicze będą mogli jedynie oglądać wzór.")) {
@@ -540,7 +539,7 @@ export default function OdziezPage() {
     }
   };
 
-  // Trwałe usunięcie dropa z opcją zwrotu środków przed wyczyszczeniem danych
+  // Trwałe usunięcie dropa
   const handleDeleteCampaign = async (campId: string) => {
     if (!isAdmin) return;
     if (!window.confirm("UWAGA: Czy na pewno chcesz całkowicie usunąć ten drop? Spowoduje to bezpowrotne skasowanie wzoru oraz powiązanych z nim wpisów zamówień. Tej operacji nie można cofnąć!")) {
