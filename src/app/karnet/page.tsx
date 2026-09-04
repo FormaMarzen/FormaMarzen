@@ -215,40 +215,6 @@ const parsujOkresZDlugosci = (dlugoscStr: string) => {
   return { ilosc: '1', jednostka: 'Miesiąc' };
 };
 
-// PRECYZYJNY KALKULATOR DATY WYGAŚNIĘCIA OPARTY O PRAWDZIWY KALENDARZ
-const calculatePassValidityDaysOrEndDate = (baseDate: Date, passDef: any): Date => {
-  let meta: Record<string, any> = {};
-  if (passDef?.inne_ustawienia) {
-    try {
-      meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : passDef.inne_ustawienia;
-    } catch(e) {}
-  }
-
-  const baseYear = baseDate.getFullYear();
-  const baseMonth = String(baseDate.getMonth() + 1).padStart(2, '0');
-  const baseDay = String(baseDate.getDate()).padStart(2, '0');
-  const baseStr = `${baseYear}-${baseMonth}-${baseDay}`;
-
-  const typ = passDef?.typKarnetu || passDef?.typ_karnetu;
-  const czasIlosc = parseInt(String(passDef?.czasIlosc || meta?.czasIlosc || ''), 10);
-  const czasJednostka = passDef?.czasJednostka || meta?.czasJednostka;
-
-  const limitIlosc = parseInt(String(passDef?.limitIlosc || meta?.limitIlosc || ''), 10);
-  const limitOkres = passDef?.limitOkres || meta?.limitOkres;
-
-  let limitDescription = passDef?.dlugosc || passDef?.limitCzasowy || '';
-
-  if (typ === 'Na czas' && !isNaN(czasIlosc) && czasIlosc > 0) {
-    limitDescription = `${czasIlosc} ${czasJednostka || 'Miesiąc'}`;
-  } else if (typ === 'Na ilość treningów' && !isNaN(limitIlosc) && limitIlosc > 0) {
-    limitDescription = `${limitIlosc} ${limitOkres || 'Miesiąc'}`;
-  }
-
-  const calcIsoStr = getCalendarExpiryDate(baseStr, limitDescription);
-  const parts = calcIsoStr.split('-').map(n => parseInt(n, 10));
-  return new Date(parts[0], parts[1] - 1, parts[2]);
-};
-
 // POMOCNIK OKREŚLANIA KWARTAŁU / MIESIĄCA WAKACYJNEGO
 const getPeriodKey = (date: Date) => {
   const y = date.getFullYear();
@@ -257,6 +223,34 @@ const getPeriodKey = (date: Date) => {
   if (m === 7) return { key: `${y}_M7`, label: `Sierpień ${y}`, isVacation: true, maxCount: 1 };
   const q = Math.floor(m / 3) + 1;
   return { key: `${y}_Q${q}`, label: `Kwartał ${q} (${y})`, isVacation: false, maxCount: 2 };
+};
+
+// NOWY PRECYZYJNY ROZBIJNIK DNI ROBOCZYCH I WEEKENDOWYCH DLA ZAWIESZEŃ
+const calculateSuspensionBreakdown = (startDateStr: string, endDateStr: string) => {
+  if (!startDateStr || !endDateStr) {
+    return { weekdaysCount: 0, weekendDaysCount: 0, totalCalendarDays: 0 };
+  }
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  let weekdaysCount = 0;
+  let weekendDaysCount = 0;
+  const loopD = new Date(start);
+
+  while (loopD <= end) {
+    const day = loopD.getDay(); // 0 = niedziela, 6 = sobota
+    if (day === 0 || day === 6) {
+      weekendDaysCount++;
+    } else {
+      weekdaysCount++;
+    }
+    loopD.setDate(loopD.getDate() + 1);
+  }
+
+  const totalCalendarDays = weekdaysCount + weekendDaysCount;
+  return { weekdaysCount, weekendDaysCount, totalCalendarDays };
 };
 
 export default function KarnetyPage() {
@@ -652,6 +646,7 @@ export default function KarnetyPage() {
       endOfContractStr
     };
   };
+
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata: any) => {
     setIsProcessingPayment(true);
     try {
@@ -1630,6 +1625,7 @@ export default function KarnetyPage() {
     date2.setHours(0, 0, 0, 0);
     return Math.round(Math.abs((date2.getTime() - date1.getTime()) / (24 * 60 * 60 * 1000))) + 1;
   };
+
   const handleAutoWypiszPoZawieszeniu = async (klientId: number, zawieszonyOd: string, zawieszonyDo: string, nazwaKarnetu: string) => {
     const now = new Date();
     const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1713,7 +1709,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA (NATYCHMIASTOWE WYDŁUŻENIE I ODJĘCIE Z PULI)
+  // ZATWIERDZENIE ZAWIESZENIA (Z NOWĄ LOGIKĄ WEEKENDÓW DLA UMOWY 12M)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -1732,12 +1728,21 @@ export default function KarnetyPage() {
       return;
     }
 
-    const requestedDays = getDaysBetween(suspendStartDate, suspendEndDate);
     const karnetIndex = karnetyList.findIndex((k: any) => k.id.toString() === passToSuspendId.toString());
     if (karnetIndex === -1) return;
     
     const targetKarnet = karnetyList[karnetIndex];
     const isContract = targetKarnet.isContract12M;
+
+    // PRECYZYJNA ANALIZA DNI ROBOCZYCH I WEEKENDOWYCH
+    const { weekdaysCount, weekendDaysCount, totalCalendarDays } = calculateSuspensionBreakdown(suspendStartDate, suspendEndDate);
+    const requestedDays = totalCalendarDays;
+
+    // REGULA 1: BLOKADA ZAWIESZENIA WYŁĄCZNIE NA DNI WEEKENDOWE (SOBOTA / NIEDZIELA)
+    if (isContract && weekdaysCount === 0) {
+      setSuspendError('Zawieszenie karnetu na umowę nie może obejmować wyłącznie dni weekendowych (sobota / niedziela). Wybierz również dzień roboczy.');
+      return;
+    }
 
     if (targetKarnet.waznyDo) {
       if (suspendStartDate > targetKarnet.waznyDo) {
@@ -1765,14 +1770,29 @@ export default function KarnetyPage() {
     let newDaysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
     let newTotalUsed = targetKarnet.totalSuspendedDaysUsed || (30 - newDaysLeft);
 
+    // REGULA 2 I 3: OBLICZANIE EFEKTYWNYCH DNI ZAWIESZENIA DLA UMOWY 12M
+    let effectiveDaysToDeduct = requestedDays;
+    let effectiveDaysToExtend = requestedDays;
+
     if (isContract) {
-      if (requestedDays > newDaysLeft) {
-        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${newDaysLeft} dni z rocznej puli 30 dni.`);
+      if (weekendDaysCount >= 1 && weekdaysCount === 1) {
+        // Weekend + 1 dzień tygodnia -> odlicza TYLKO 1 DZIEŃ i przedłuża TYLKO O 1 DZIEŃ
+        effectiveDaysToDeduct = 1;
+        effectiveDaysToExtend = 1;
+      } else {
+        // Weekend + 2 dni tygodnia LUB brak weekendu -> pełne dni kalendarzowe
+        effectiveDaysToDeduct = requestedDays;
+        effectiveDaysToExtend = requestedDays;
+      }
+
+      if (effectiveDaysToDeduct > newDaysLeft) {
+        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${newDaysLeft} dni z rocznej puli 30 dni (próbujesz wykorzystać ${effectiveDaysToDeduct} dni).`);
         return;
       }
-      newDaysLeft = Math.max(0, newDaysLeft - requestedDays);
-      newTotalUsed += requestedDays;
+      newDaysLeft = Math.max(0, newDaysLeft - effectiveDaysToDeduct);
+      newTotalUsed += effectiveDaysToDeduct;
     } else {
+      // Karnety standardowe (zasady bez zmian)
       if (requestedDays > 14) {
         setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
         return;
@@ -1860,7 +1880,7 @@ export default function KarnetyPage() {
       const parts = targetKarnet.waznyDo.split('-');
       if (parts.length === 3) {
         const expDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-        expDate.setDate(expDate.getDate() + requestedDays);
+        expDate.setDate(expDate.getDate() + effectiveDaysToExtend);
         newExtendedExpiry = `${expDate.getFullYear()}-${String(expDate.getMonth() + 1).padStart(2, '0')}-${String(expDate.getDate()).padStart(2, '0')}`;
       }
     }
@@ -1869,7 +1889,8 @@ export default function KarnetyPage() {
       id: Date.now(),
       od: suspendStartDate,
       do: suspendEndDate,
-      dni: requestedDays,
+      dni: isContract ? effectiveDaysToDeduct : requestedDays,
+      dni_kalendarzowe: requestedDays,
       kto: '📱 Klubowicz (Aplikacja)',
       status: 'aktywne'
     };
@@ -1897,8 +1918,9 @@ export default function KarnetyPage() {
       od: suspendStartDate,
       planowane_do: suspendEndDate,
       do: suspendEndDate,
-      planowane_dni: requestedDays,
-      dni: requestedDays,
+      planowane_dni: isContract ? effectiveDaysToDeduct : requestedDays,
+      dni: isContract ? effectiveDaysToDeduct : requestedDays,
+      dni_kalendarzowe: requestedDays,
       status: 'aktywne',
       utworzono: new Date().toISOString(),
       isContract: isContract || false
@@ -1929,13 +1951,17 @@ export default function KarnetyPage() {
       Wygasa: latestExpiryDate
     });
 
-    showToast(`Pomyślnie zawieszono karnet na okres ${requestedDays} dni. Data ważności została wydłużona do ${newExtendedExpiry}.`, 'success');
+    const successMsg = isContract && weekendDaysCount >= 1 && weekdaysCount === 1
+      ? `Pomyślnie zawieszono karnet! Odliczono 1 dzień roboczy z puli (weekend bez odliczenia). Data ważności została wydłużona do ${newExtendedExpiry}.`
+      : `Pomyślnie zawieszono karnet na okres ${effectiveDaysToExtend} dni. Data ważności została wydłużona do ${newExtendedExpiry}.`;
+
+    showToast(successMsg, 'success');
     setIsSuspendModalOpen(false);
     setSuspendStartDate('');
     setSuspendEndDate('');
   };
 
-  // ODWIESZENIE KARNETU PRZED CZASEM (KOREKTA DNI I ZWROT DO PULI)
+  // ODWIESZENIE KARNETU PRZED CZASEM (PRECYZYJNA KOREKTA DNI I ZWROT DO PULI)
   const handleUnsuspendSubmit = async () => {
     if (!passToUnsuspendId) return;
     
@@ -1959,13 +1985,39 @@ export default function KarnetyPage() {
       actualEnd = plannedEnd; 
     }
 
-    const plannedDays = getDaysBetween(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
-    let actualDays = 0;
-    if (today >= start) {
-      actualDays = getDaysBetween(targetKarnet.zawieszonyOd, actualEnd.toISOString().split('T')[0]);
+    const actualEndStr = actualEnd.toISOString().split('T')[0];
+
+    // OBLICZENIE ILE PLANOWANO ODLICZYĆ A ILE FAKTYCZNIE ODLICZONO
+    let plannedDeducted = getDaysBetween(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
+    let actualDeducted = 0;
+
+    if (targetKarnet.isContract12M) {
+      const plannedBreakdown = calculateSuspensionBreakdown(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
+      if (plannedBreakdown.weekendDaysCount >= 1 && plannedBreakdown.weekdaysCount === 1) {
+        plannedDeducted = 1;
+      } else {
+        plannedDeducted = plannedBreakdown.totalCalendarDays;
+      }
+
+      if (today >= start) {
+        const actualBreakdown = calculateSuspensionBreakdown(targetKarnet.zawieszonyOd, actualEndStr);
+        if (actualBreakdown.weekdaysCount === 0) {
+          actualDeducted = 0;
+        } else if (actualBreakdown.weekendDaysCount >= 1 && actualBreakdown.weekdaysCount === 1) {
+          actualDeducted = 1;
+        } else {
+          actualDeducted = actualBreakdown.totalCalendarDays;
+        }
+      } else {
+        actualDeducted = 0;
+      }
+    } else {
+      if (today >= start) {
+        actualDeducted = getDaysBetween(targetKarnet.zawieszonyOd, actualEndStr);
+      }
     }
 
-    const unusedDaysRefund = Math.max(0, plannedDays - actualDays);
+    const unusedDaysRefund = Math.max(0, plannedDeducted - actualDeducted);
 
     let correctedExpiryDate = targetKarnet.waznyDo;
     if (unusedDaysRefund > 0 && targetKarnet.waznyDo) {
@@ -1991,8 +2043,8 @@ export default function KarnetyPage() {
       if (h.status === 'aktywne') {
         return {
           ...h,
-          do: actualEnd.toISOString().split('T')[0],
-          dni: actualDays,
+          do: actualEndStr,
+          dni: actualDeducted,
           status: 'zakończone'
         };
       }
@@ -2004,8 +2056,8 @@ export default function KarnetyPage() {
       if (susp.status === 'aktywne' && susp.karnetId?.toString() === targetKarnet.id?.toString()) {
         return {
           ...susp,
-          do: actualEnd.toISOString().split('T')[0],
-          dni: actualDays,
+          do: actualEndStr,
+          dni: actualDeducted,
           status: 'zakończone'
         };
       }
@@ -2526,12 +2578,20 @@ export default function KarnetyPage() {
               </div>
               
               <div className="bg-sky-50/80 p-5 rounded-2xl border border-sky-100 space-y-3 text-xs text-sky-900">
-                <p className="font-bold">Limity zawieszeń obowiązują dla Twoich karnetów:</p>
-                <ul className="list-disc pl-4 space-y-2 font-medium">
-                  <li><strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!</li>
+                <p className="font-bold">Limity i zasady zawieszeń dla Twoich karnetów:</p>
+                <ul className="list-disc pl-4 space-y-2 font-medium leading-relaxed">
+                  <li>
+                    <strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku.
+                    <div className="mt-1 pl-2 border-l-2 border-sky-300 space-y-1 text-[11px] text-slate-700">
+                      <div>• <strong>Blokada weekendowa:</strong> Nie można zawiesić karnetu wyłącznie na sobotę i/lub niedzielę.</div>
+                      <div>• <strong>Weekend + 1 dzień roboczy:</strong> Z puli 30 dni odliczany jest <strong>tylko 1 dzień</strong> (za dzień roboczy) i o 1 dzień wydłuża się karnet.</div>
+                      <div>• <strong>Weekend + min. 2 dni robocze:</strong> Odliczane są <strong>pełne dni</strong> kalendarzowe (np. 4 dni).</div>
+                    </div>
+                    Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!
+                  </li>
                   <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy). W przypadku zawieszenia na przełomie kwartałów, dni są rozliczane proporcjonalnie w każdym kwartale.</li>
-                  <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Uwaga: jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
-                  <li><strong>Odwieszenie:</strong> Karnet możesz odwiesić w dowolnym momencie przed czasem, a niewykorzystane dni zostaną automatycznie doliczone do daty ważności.</li>
+                  <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
+                  <li><strong>Odwieszenie przed czasem:</strong> Karnet możesz odwiesić w dowolnym momencie, a niewykorzystane dni zostaną automatycznie zwrócone do puli i uwzględnione w ważności karnetu.</li>
                 </ul>
               </div>
 
@@ -2572,74 +2632,116 @@ export default function KarnetyPage() {
         )}
 
         {/* MODAL ZAWIESZENIA */}
-        {isSuspendModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">❄️ Zawieszenie karnetu</h3>
-                <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
+        {isSuspendModalOpen && (() => {
+          const selectedPass = karnetyList.find((k: any) => k.id.toString() === passToSuspendId.toString());
+          const isSelectedContract = selectedPass?.isContract12M;
+          const breakdown = calculateSuspensionBreakdown(suspendStartDate, suspendEndDate);
+
+          let deductionPreview = breakdown.totalCalendarDays;
+          let previewNote = '';
+
+          if (isSelectedContract && breakdown.totalCalendarDays > 0) {
+            if (breakdown.weekdaysCount === 0) {
+              previewNote = '⚠️ Wybrano wyłącznie weekend! Zawieszenie zostanie zablokowane.';
+            } else if (breakdown.weekendDaysCount >= 1 && breakdown.weekdaysCount === 1) {
+              deductionPreview = 1;
+              previewNote = '✨ Weekend + 1 dzień roboczy: z puli 30 dni zostanie odliczony tylko 1 dzień roboczy.';
+            } else if (breakdown.weekendDaysCount >= 1 && breakdown.weekdaysCount >= 2) {
+              previewNote = '📅 Weekend + min. 2 dni robocze: odliczone zostaną pełne dni kalendarzowe.';
+            }
+          }
+
+          return (
+            <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">❄️ Zawieszenie karnetu</h3>
+                  <button onClick={() => setIsSuspendModalOpen(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer text-lg">✕</button>
+                </div>
+                
+                <form onSubmit={handleSuspendSubmit} className="space-y-4 text-xs">
+                  {suspendError && (
+                    <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold p-3 rounded-xl text-center leading-relaxed">
+                      ⚠️ {suspendError}
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-700 block">Karnet do zawieszenia</label>
+                    <select 
+                      required
+                      value={passToSuspendId} 
+                      onChange={(e) => setPassToSuspendId(e.target.value)} 
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
+                    >
+                      {activePassesForSuspend.map((k: any) => (
+                        <option key={k.id} value={k.id.toString()}>
+                          {k.nazwa} {k.isContract12M ? `(Umowa 12M - Pula: ${k.contractSuspensionDaysLeft ?? 30} dni)` : `(Ważny do ${k.waznyDo})`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="font-bold text-slate-700 block">Od dnia *</label>
+                      <input 
+                        type="date" 
+                        required 
+                        min={todayStr} 
+                        value={suspendStartDate} 
+                        onChange={(e) => setSuspendStartDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="font-bold text-slate-700 block">Do dnia (włącznie) *</label>
+                      <input 
+                        type="date" 
+                        required 
+                        min={suspendStartDate || todayStr} 
+                        value={suspendEndDate} 
+                        onChange={(e) => setSuspendEndDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* PODGLĄD ROZLICZENIA DLA UMOWY 12M */}
+                  {isSelectedContract && suspendStartDate && suspendEndDate && suspendEndDate >= suspendStartDate && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5 text-[11px]">
+                      <div className="flex justify-between text-slate-600">
+                        <span>Liczba wybranych dni kalendarzowych:</span>
+                        <strong className="text-slate-800">{breakdown.totalCalendarDays} dni</strong>
+                      </div>
+                      <div className="flex justify-between text-slate-500 text-[10px]">
+                        <span>Dni robocze: {breakdown.weekdaysCount} • Dni weekendowe: {breakdown.weekendDaysCount}</span>
+                      </div>
+                      <div className="flex justify-between text-sky-950 font-bold border-t border-slate-200 pt-1.5 mt-1">
+                        <span>Do odliczenia z puli 30 dni:</span>
+                        <span className="font-black text-sky-700">{breakdown.weekdaysCount === 0 ? '0 dni (blokada)' : `${deductionPreview} ${deductionPreview === 1 ? 'dzień' : 'dni'}`}</span>
+                      </div>
+                      {previewNote && (
+                        <div className={`text-[10px] font-bold mt-1.5 p-2 rounded-lg ${breakdown.weekdaysCount === 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-sky-100/60 text-sky-800'}`}>
+                          {previewNote}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
+                    <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
+                      Anuluj
+                    </button>
+                    <button type="submit" className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
+                      Zamroź karnet
+                    </button>
+                  </div>
+                </form>
               </div>
-              
-              <form onSubmit={handleSuspendSubmit} className="space-y-4 text-xs">
-                {suspendError && (
-                  <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold p-3 rounded-xl text-center">
-                    ⚠️ {suspendError}
-                  </div>
-                )}
-
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-700 block">Karnet do zawieszenia</label>
-                  <select 
-                    required
-                    value={passToSuspendId} 
-                    onChange={(e) => setPassToSuspendId(e.target.value)} 
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
-                  >
-                    {activePassesForSuspend.map((k: any) => (
-                      <option key={k.id} value={k.id.toString()}>
-                        {k.nazwa} {k.isContract12M ? `(Umowa 12M - Pula: ${k.contractSuspensionDaysLeft ?? 30} dni)` : `(Ważny do ${k.waznyDo})`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-700 block">Od dnia *</label>
-                    <input 
-                      type="date" 
-                      required 
-                      min={todayStr} 
-                      value={suspendStartDate} 
-                      onChange={(e) => setSuspendStartDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-700 block">Do dnia (włącznie) *</label>
-                    <input 
-                      type="date" 
-                      required 
-                      min={suspendStartDate || todayStr} 
-                      value={suspendEndDate} 
-                      onChange={(e) => setSuspendEndDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
-                  <button type="button" onClick={() => setIsSuspendModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer">
-                    Anuluj
-                  </button>
-                  <button type="submit" className="bg-slate-800 hover:bg-slate-900 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer">
-                    Zamroź karnet
-                  </button>
-                </div>
-              </form>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* MODAL: PRZEDŁUŻ KARNET / OPŁAĆ RATĘ */}
         {isExtendModalOpen && passToExtend && (() => {
@@ -2966,7 +3068,7 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
-                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA TYLKO GDY KARNET JEST PŁATNY */}
+                  {/* WYKORZYSTANIE ŚRODKÓW Z PORTFELA */}
                   {selectedBuyPass && selectedPassDef && currentWalletNum > 0 && discountedPrice > 0 && (
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
                       <label className="flex items-center justify-between cursor-pointer">
@@ -3410,7 +3512,7 @@ export default function KarnetyPage() {
                     <p className="font-bold text-sm">Karnet na umowę cykliczną (12 miesięcy)</p>
                     <p className="text-[11px] leading-relaxed font-medium">
                       Wybór tej opcji oznacza, że karnet podlega pod zasady rozliczeń ratalnych z uwzględnieniem wyrównania za bieżący miesiąc (pro-rata). 
-                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na darmowe zawieszenie. Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong>.
+                      Klubowicz z tym karnetem otrzyma do dyspozycji dedykowaną, roczną pulę 30 dni na darmowe zawieszenie (z zabezpieczeniem przed sztucznym zawieszaniem weekendów). Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong>.
                     </p>
                   </div>
                 )}
