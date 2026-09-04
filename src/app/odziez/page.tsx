@@ -20,9 +20,8 @@ export default function OdziezPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [hasNewDropBadge, setHasNewDropBadge] = useState(false);
 
-  // Modal szczegółów historycznego dropu
+  // Modal szczegółów historycznego / zarchiwizowanego dropu (podgląd wzoru)
   const [selectedHistoryCampaign, setSelectedHistoryCampaign] = useState<any>(null);
-  const [historyOrders, setHistoryOrders] = useState<any[]>([]);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
   // Formularz zamówienia klubowicza
@@ -43,7 +42,7 @@ export default function OdziezPage() {
   const [editImgSizeMale, setEditImgSizeMale] = useState('');
   const [editImgSizeFemale, setEditImgSizeFemale] = useState('');
 
-  // Referencje do ukrytych inputów wgrywania plików z urządzenia
+  // Referencje do ukrytych inputów wgrywania plików
   const frontFileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
   const sizeMaleFileInputRef = useRef<HTMLInputElement>(null);
@@ -94,7 +93,7 @@ export default function OdziezPage() {
                 klient_id: order.klient_id,
                 kwota: refundAmount,
                 typ_operacji: 'Zwrot portfel',
-                opis: `Zwrot za koszulkę (nieosiągnięte minimum) - ${order.wariant} ${order.rozmiar}`,
+                opis: `Zwrot za koszulkę (anulowanie/archiwizacja dropu) - ${order.wariant} ${order.rozmiar}`,
                 data: new Date().toISOString()
               }])
             ),
@@ -203,7 +202,6 @@ export default function OdziezPage() {
     try {
       setIsLoading(true);
 
-      // Równoległe pobranie sesji, bazy klientów oraz listy kampanii
       const [sessionRes, klienciRes, campaignsRes] = await Promise.all([
         supabase.auth.getSession(),
         supabase.from('klienci').select('*'),
@@ -237,7 +235,7 @@ export default function OdziezPage() {
         klientData?.rola === 'admin' || 
         klientData?.isAdmin === true || 
         cleanEmail.includes('admin') || 
-        cleanEmail.includes('biuro') ||
+        cleanEmail.includes('biuro') || 
         (klientData?.Nazwisko && klientData.Nazwisko.toLowerCase().includes('kłaput')) ||
         klientData?.Imię === 'Maciej';
 
@@ -264,11 +262,14 @@ export default function OdziezPage() {
       }
 
       const campaigns = campaignsRes.data || [];
+      setCampaignsList(campaigns);
+
       if (campaigns.length > 0) {
-        setCampaignsList(campaigns);
         const activeCamp = campaigns.find(c => c.status === 'aktywny') || campaigns[0];
         setSelectedCampaignId(activeCamp.id);
         await loadCampaignAndOrders(activeCamp, userObj, !!adminCheck);
+      } else {
+        setCampaign(null);
       }
     } catch (err) {
       console.error("Błąd ładowania danych odzieży:", err);
@@ -391,6 +392,125 @@ export default function OdziezPage() {
   const activeCampaigns = useMemo(() => campaignsList.filter(c => c.status === 'aktywny'), [campaignsList]);
   const historyCampaigns = useMemo(() => campaignsList.filter(c => c.status !== 'aktywny'), [campaignsList]);
 
+  // Archiwizacja dropa z opcjonalnym automatycznym zwrotem wpłat na portfel
+  const handleArchiveCampaign = async (campId: string) => {
+    if (!isAdmin) return;
+    if (!window.confirm("Czy na pewno chcesz przenieść ten drop do archiwum? Trafi on na dół strony, gdzie klubowicze będą mogli jedynie oglądać wzór.")) {
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      // Pobranie opłaconych zamówień dla dropa
+      const { data: paidOrdersData } = await supabase
+        .from('odziez_zamowienia')
+        .select('*')
+        .eq('kampania_id', campId)
+        .eq('status_platnosci', 'oplacone');
+
+      const paidList = paidOrdersData || [];
+      if (paidList.length > 0) {
+        const askRefund = window.confirm(
+          `W tym dropie znajduje się ${paidList.length} opłaconych zamówień na łączną kwotę ${paidList.reduce((acc, curr) => acc + Number(curr.kwota), 0).toFixed(2)} PLN.\n\nCzy chcesz ZWRÓCIĆ środki na Wirtualny Portfel wszystkim płacącym klubowiczom?`
+        );
+        if (askRefund) {
+          await executeRefunds(campId, paidList);
+        }
+      }
+
+      const { error } = await supabase
+        .from('odziez_kampanie')
+        .update({ status: 'zarchiwizowany' })
+        .eq('id', campId);
+
+      if (error) throw error;
+
+      const updatedList = campaignsList.map(c => c.id === campId ? { ...c, status: 'zarchiwizowany' } : c);
+      setCampaignsList(updatedList);
+
+      const remainingActive = updatedList.filter(c => c.status === 'aktywny');
+      if (remainingActive.length > 0) {
+        setSelectedCampaignId(remainingActive[0].id);
+        await loadCampaignAndOrders(remainingActive[0], currentUser, isAdmin);
+      } else {
+        setCampaign(null);
+        setSelectedCampaignId('');
+        setOrders([]);
+      }
+
+      alert("Drop został pomyślnie zarchiwizowany!");
+    } catch (err: any) {
+      console.error("Błąd podczas archiwizacji dropa:", err);
+      alert("Błąd archiwizacji: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Trwałe usunięcie dropa z opcją zwrotu środków przed wyczyszczeniem danych
+  const handleDeleteCampaign = async (campId: string) => {
+    if (!isAdmin) return;
+    if (!window.confirm("UWAGA: Czy na pewno chcesz całkowicie usunąć ten drop? Spowoduje to bezpowrotne skasowanie wzoru oraz powiązanych z nim wpisów zamówień. Tej operacji nie można cofnąć!")) {
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      // Sprawdzenie czy istnieją opłacone zamówienia przed ich usunięciem
+      const { data: paidOrdersData } = await supabase
+        .from('odziez_zamowienia')
+        .select('*')
+        .eq('kampania_id', campId)
+        .eq('status_platnosci', 'oplacone');
+
+      const paidList = paidOrdersData || [];
+      if (paidList.length > 0) {
+        const askRefund = window.confirm(
+          `W usuwanym dropie znajduje się ${paidList.length} opłaconych zamówień.\n\nCzy chcesz NAJPIERW zwrócić środki na Wirtualny Portfel klubowiczom przed trwałym usunięciem dropa?`
+        );
+        if (askRefund) {
+          await executeRefunds(campId, paidList);
+        }
+      }
+
+      await Promise.all([
+        supabase.from('odziez_wyswietlenia').delete().eq('kampania_id', campId),
+        supabase.from('odziez_zamowienia').delete().eq('kampania_id', campId),
+        supabase.from('odziez_kampanie').delete().eq('id', campId)
+      ]);
+
+      const updatedList = campaignsList.filter(c => c.id !== campId);
+      setCampaignsList(updatedList);
+
+      if (isHistoryModalOpen && selectedHistoryCampaign?.id === campId) {
+        setIsHistoryModalOpen(false);
+        setSelectedHistoryCampaign(null);
+      }
+
+      if (selectedCampaignId === campId) {
+        const remainingActive = updatedList.filter(c => c.status === 'aktywny');
+        if (remainingActive.length > 0) {
+          setSelectedCampaignId(remainingActive[0].id);
+          await loadCampaignAndOrders(remainingActive[0], currentUser, isAdmin);
+        } else if (updatedList.length > 0) {
+          setSelectedCampaignId(updatedList[0].id);
+          await loadCampaignAndOrders(updatedList[0], currentUser, isAdmin);
+        } else {
+          setCampaign(null);
+          setSelectedCampaignId('');
+          setOrders([]);
+        }
+      }
+
+      alert("Drop został pomyślnie usunięty.");
+    } catch (err: any) {
+      console.error("Błąd usuwania dropa:", err);
+      alert("Błąd podczas usuwania: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const sendAdminPushNotification = async (userName: string, variant: string, size: string) => {
     try {
       fetch('/api/push/send', {
@@ -431,7 +551,6 @@ export default function OdziezPage() {
         const newWalletNum = currentUser.rawWalletNum - price;
         const newWalletStr = `${newWalletNum.toFixed(2)} PLN`;
 
-        // Równoległe operacje zapisu w portfelu i zamówieniu
         await Promise.all([
           Promise.resolve(supabase.from('klienci').update({ Portfel: newWalletStr }).eq('id', currentUser.id)),
           Promise.resolve(supabase.from('transakcje').insert([{
@@ -677,20 +796,17 @@ export default function OdziezPage() {
     }
   };
 
-  // Optymistyczne oznaczanie jako odczytane przez admina
   const handleMarkAsRead = async (orderId: string) => {
     if (!isAdmin) return;
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, admin_odczytane: true } : o));
     await supabase.from('odziez_zamowienia').update({ admin_odczytane: true }).eq('id', orderId);
   };
 
-  // Optymistyczne przełączanie statusu płatności przez admina
   const handleTogglePaymentStatus = async (order: any) => {
     if (!isAdmin) return;
     const nextStatus = order.status_platnosci === 'oplacone' ? 'oczekuje' : 'oplacone';
     const oplaconeAt = nextStatus === 'oplacone' ? new Date().toISOString() : null;
 
-    // Natychmiastowa zmiana w UI
     setOrders(prev => prev.map(o => o.id === order.id ? { 
       ...o, 
       status_platnosci: nextStatus, 
@@ -700,26 +816,20 @@ export default function OdziezPage() {
 
     try {
       const { error } = await supabase.from('odziez_zamowienia').update({ 
-        status_platnosci: nextStatus,
-        oplacone_at: oplaconeAt,
-        admin_odczytane: true
+        status_platnosci: nextStatus, 
+        oplacone_at: oplaconeAt, 
+        admin_odczytane: true 
       }).eq('id', order.id);
 
       if (error) throw error;
     } catch (err: any) {
-      // Rollback w przypadku błędu
       setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status_platnosci: order.status_platnosci } : o));
       alert("Nie udało się zmienić statusu płatności: " + err.message);
     }
   };
 
-  const openHistoryModal = async (histCamp: any) => {
+  const openHistoryModal = (histCamp: any) => {
     setSelectedHistoryCampaign(histCamp);
-    const { data: hOrders } = await supabase
-      .from('odziez_zamowienia')
-      .select('*')
-      .eq('kampania_id', histCamp.id);
-    setHistoryOrders(hOrders || []);
     setIsHistoryModalOpen(true);
   };
 
@@ -771,25 +881,41 @@ export default function OdziezPage() {
               </span>
             )}
             {isAdmin && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {campaign && (
-                  <button
-                    onClick={() => {
-                      setEditTitle(campaign.tytul || '');
-                      setEditDescription(campaign.opis || '');
-                      setEditPrice(String(campaign.cena || '110.00'));
-                      setEditMinOsob(String(campaign.min_osob || '5'));
-                      setEditStatus(campaign.status || 'aktywny');
-                      setEditImgFront(campaign.zdjecie_przod || '');
-                      setEditImgBack(campaign.zdjecie_tyl || '');
-                      setEditImgSizeMale(campaign.tabela_rozmiarow_meska_img || '');
-                      setEditImgSizeFemale(campaign.tabela_rozmiarow_damska_img || '');
-                      setIsEditModalOpen(true);
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black px-4 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                  >
-                    <span>⚙️</span> Edytuj Drop
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handleArchiveCampaign(campaign.id)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black px-3.5 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                      title="Przenieś ten drop do archiwum na dole"
+                    >
+                      <span>📦</span> Archiwizuj
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCampaign(campaign.id)}
+                      className="bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-black px-3.5 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                      title="Trwale usuń drop"
+                    >
+                      <span>🗑️</span> Usuń
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditTitle(campaign.tytul || '');
+                        setEditDescription(campaign.opis || '');
+                        setEditPrice(String(campaign.cena || '110.00'));
+                        setEditMinOsob(String(campaign.min_osob || '5'));
+                        setEditStatus(campaign.status || 'aktywny');
+                        setEditImgFront(campaign.zdjecie_przod || '');
+                        setEditImgBack(campaign.zdjecie_tyl || '');
+                        setEditImgSizeMale(campaign.tabela_rozmiarow_meska_img || '');
+                        setEditImgSizeFemale(campaign.tabela_rozmiarow_damska_img || '');
+                        setIsEditModalOpen(true);
+                      }}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black px-3.5 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>⚙️</span> Edytuj
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={() => {
@@ -805,9 +931,9 @@ export default function OdziezPage() {
                     setEditImgSizeFemale('');
                     setIsEditModalOpen(true);
                   }}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[11px] font-black px-4 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[11px] font-black px-3.5 py-2 rounded-xl uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
                 >
-                  <span>+</span> Dodaj Nowy Drop
+                  <span>+</span> Dodaj Drop
                 </button>
               </div>
             )}
@@ -944,7 +1070,7 @@ export default function OdziezPage() {
             </div>
           )}
 
-          {/* 3. SEKCJA ZAMÓWIEŃ (ADMIN WIDZI WSZYSTKO, KLUBOWICZ WIDZI WYŁĄCZNIE LICZNIK) */}
+          {/* 3. SEKCJA ZAMÓWIEŃ */}
           <div className="space-y-4 pt-6 border-t border-slate-100">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
               <div className="flex items-center gap-2">
@@ -1037,7 +1163,6 @@ export default function OdziezPage() {
                 </div>
               </div>
             ) : (
-              /* KLUBOWICZ WIDZI WYŁĄCZNIE ILE OSÓB JUŻ OPŁACIŁO (BEZ LISTY ZAMÓWIEŃ) */
               <div className="space-y-3 pt-2">
                 <div className="bg-sky-50/70 border border-sky-100 rounded-2xl p-4 text-xs text-sky-950 leading-relaxed text-center">
                   Zbiórka trwa! Do tej pory koszulkę opłaciło już <strong>{currentPaidCount} osób</strong>. Dołącz do zamawiających!
@@ -1242,14 +1367,19 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* SEKCJA 3: HISTORIA POPRZEDNICH DROPÓW */}
+      {/* SEKCJA 3: HISTORIA POPRZEDNICH DROPÓW / ARCHIWUM */}
       {historyCampaigns.length > 0 && (
         <div className="space-y-4 pt-8 border-t border-slate-200">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">📜</span>
-            <h3 className="text-sm font-black text-slate-700 uppercase tracking-widest">
-              HISTORIA POPRZEDNICH DROPÓW ({historyCampaigns.length})
-            </h3>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">📜</span>
+              <h3 className="text-sm font-black text-slate-700 uppercase tracking-widest">
+                HISTORIA & ARCHIWUM DROPÓW ({historyCampaigns.length})
+              </h3>
+            </div>
+            <span className="text-[10px] text-slate-400 font-medium italic">
+              Kliknij, aby podejrzeć wzór
+            </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1269,13 +1399,30 @@ export default function OdziezPage() {
                   </div>
                   <div>
                     <div className="font-black text-xs text-slate-900 group-hover:text-blue-600 transition-colors">{hist.tytul}</div>
-                    <div className="text-[10px] text-slate-400 font-mono mt-0.5">Cena: {hist.cena} zł • Status: <span className="uppercase font-bold text-slate-600">{hist.status}</span></div>
+                    <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      Cena: {hist.cena} zł • Status: <span className="uppercase font-bold text-slate-600">{hist.status}</span>
+                    </div>
                   </div>
                 </div>
 
-                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-3 py-1 rounded-xl group-hover:bg-blue-50 group-hover:text-blue-700 transition-colors">
-                  Szczegóły →
-                </span>
+                <div className="flex items-center gap-2">
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCampaign(hist.id);
+                      }}
+                      className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition-colors"
+                      title="Usuń trwale ten drop"
+                    >
+                      🗑️
+                    </button>
+                  )}
+                  <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-3 py-1 rounded-xl group-hover:bg-blue-50 group-hover:text-blue-700 transition-colors">
+                    Wzór →
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -1368,7 +1515,7 @@ export default function OdziezPage() {
         </div>
       )}
 
-      {/* MODAL HISTORII SZCZEGÓŁÓW */}
+      {/* MODAL ARCHIWALNEGO WZORU (BEZ LICZBY KUPUJĄCYCH) */}
       {isHistoryModalOpen && selectedHistoryCampaign && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
@@ -1379,26 +1526,85 @@ export default function OdziezPage() {
                 )}
                 <div>
                   <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">{selectedHistoryCampaign.tytul}</h3>
-                  <div className="text-[10px] text-slate-400 font-mono">Status: <span className="uppercase font-bold">{selectedHistoryCampaign.status}</span></div>
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    Status: <span className="uppercase font-bold text-slate-600">{selectedHistoryCampaign.status}</span> • Cena: <span className="font-bold text-slate-800">{selectedHistoryCampaign.cena} zł</span>
+                  </div>
                 </div>
               </div>
               <button onClick={() => setIsHistoryModalOpen(false)} className="text-slate-400 font-bold w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer">✕</button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 text-xs">
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2">
-                <div className="font-bold text-slate-900 uppercase text-[11px]">Podsumowanie dropu:</div>
-                <div className="grid grid-cols-2 gap-2 text-slate-600 font-medium">
-                  <div>Cena koszulki: <span className="font-bold text-slate-900">{selectedHistoryCampaign.cena} zł</span></div>
-                  <div>Wymagane minimum: <span className="font-bold text-slate-900">{selectedHistoryCampaign.min_osob} osób</span></div>
-                  <div>Łącznie zamówień: <span className="font-bold text-slate-900">{historyOrders.length}</span></div>
-                  <div>Opłaconych: <span className="font-bold text-emerald-600">{historyOrders.filter(o => o.status_platnosci === 'oplacone').length}</span></div>
+            <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5 text-xs">
+              {selectedHistoryCampaign.opis && (
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 text-slate-600">
+                  <div className="font-bold text-slate-900 uppercase text-[11px] mb-1">Opis wzoru:</div>
+                  <p className="leading-relaxed">{selectedHistoryCampaign.opis}</p>
+                </div>
+              )}
+
+              {/* WZÓR: WIZUALIZACJA PRZÓD I TYŁ */}
+              <div className="space-y-2">
+                <div className="font-bold text-slate-900 uppercase text-[11px]">Wzór koszulki:</div>
+                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4 items-center justify-center">
+                  <div className="text-center space-y-1">
+                    <img 
+                      src={selectedHistoryCampaign.zdjecie_przod || "/koszulka-przod.png"} 
+                      alt="Wzór Przód" 
+                      className="max-h-56 mx-auto object-contain drop-shadow-sm rounded-lg"
+                      onError={(e: any) => { e.currentTarget.src = "https://placehold.co/400x500/f1f5f9/0284c7?text=Przod"; }}
+                    />
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Widok z przodu</div>
+                  </div>
+
+                  <div className="text-center space-y-1">
+                    <img 
+                      src={selectedHistoryCampaign.zdjecie_tyl || "/koszulka-tyl.png"} 
+                      alt="Wzór Tył" 
+                      className="max-h-56 mx-auto object-contain drop-shadow-sm rounded-lg"
+                      onError={(e: any) => { e.currentTarget.src = "https://placehold.co/400x500/f1f5f9/0284c7?text=Tyl"; }}
+                    />
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Widok z tyłu</div>
+                  </div>
                 </div>
               </div>
+
+              {/* TABELE ROZMIARÓW WZORU */}
+              {(selectedHistoryCampaign.tabela_rozmiarow_meska_img || selectedHistoryCampaign.tabela_rozmiarow_damska_img) && (
+                <div className="space-y-3 pt-2">
+                  <div className="font-bold text-slate-900 uppercase text-[11px]">Tabele rozmiarów wzoru:</div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {selectedHistoryCampaign.tabela_rozmiarow_meska_img && (
+                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
+                        <div className="text-[10px] font-bold text-slate-500 mb-1 uppercase">Tabela Męska</div>
+                        <img src={selectedHistoryCampaign.tabela_rozmiarow_meska_img} alt="Tabela męska" className="max-h-60 mx-auto object-contain rounded" />
+                      </div>
+                    )}
+                    {selectedHistoryCampaign.tabela_rozmiarow_damska_img && (
+                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
+                        <div className="text-[10px] font-bold text-slate-500 mb-1 uppercase">Tabela Damska</div>
+                        <img src={selectedHistoryCampaign.tabela_rozmiarow_damska_img} alt="Tabela damska" className="max-h-60 mx-auto object-contain rounded" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="p-4 border-t border-slate-100 flex justify-end shrink-0 bg-white">
-              <button onClick={() => setIsHistoryModalOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-2.5 rounded-xl cursor-pointer">
+            <div className="p-4 border-t border-slate-100 flex justify-between items-center shrink-0 bg-white">
+              {isAdmin ? (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteCampaign(selectedHistoryCampaign.id)}
+                  className="bg-rose-50 text-rose-600 hover:bg-rose-100 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <span>🗑️</span> Usuń ten drop
+                </button>
+              ) : <div />}
+              
+              <button 
+                onClick={() => setIsHistoryModalOpen(false)} 
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-2.5 rounded-xl cursor-pointer"
+              >
                 Zamknij
               </button>
             </div>
@@ -1616,6 +1822,7 @@ export default function OdziezPage() {
                     <option value="aktywny">Aktywny (Można zamawiać)</option>
                     <option value="w_realizacji">W realizacji w szwalni (Zakończono zbieranie)</option>
                     <option value="zakonczony">Zakończony (Rozdane koszulki)</option>
+                    <option value="zarchiwizowany">Zarchiwizowany (Przeniesiony na dół do historii)</option>
                     <option value="anulowany">Anulowany (Wykonano zwroty)</option>
                   </select>
                 </div>
