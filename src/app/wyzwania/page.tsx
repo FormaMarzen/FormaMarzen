@@ -43,7 +43,6 @@ export const REGUŁY_KATALOG = [
   { id: "RECZNA", nazwa: "Tylko ręczne przyznanie", kategoria: "Klub", ikona: "✋", opis: "Odznaka specjalna nadawana wyłącznie przez Trenera/Admina", domyslnyProg: 1 },
 ];
 
-// OMIJANIE LIMITU 1000 REKORDÓW W SUPABASE BEZ RYZYKA BŁĘDU SKŁADNIOWEGO
 const fetchAllFromSupabase = async (
   table: string, 
   selectQuery: string = '*', 
@@ -122,7 +121,6 @@ export default function WyzwaniaPage() {
 
   const [badgeMemberSearchQuery, setBadgeMemberSearchQuery] = useState("");
 
-  // Stany formularza tworzenia nowej odznaki (Admin)
   const [newBadgeNazwa, setNewBadgeNazwa] = useState("");
   const [newBadgeOpis, setNewBadgeOpis] = useState("");
   const [newBadgeWarunek, setNewBadgeWarunek] = useState("");
@@ -136,7 +134,6 @@ export default function WyzwaniaPage() {
   const [selectedRuleCategoryFilter, setSelectedRuleCategoryFilter] = useState("Wszystkie");
   const [isGlobalRecalculating, setIsGlobalRecalculating] = useState(false);
 
-  // Stany edycji odznak (Admin)
   const [editingBadgeId, setEditingBadgeId] = useState<number | null>(null);
   const [editBadgeNazwa, setEditBadgeNazwa] = useState("");
   const [editBadgeOpis, setEditBadgeOpis] = useState("");
@@ -155,6 +152,41 @@ export default function WyzwaniaPage() {
   const [activeTab, setActiveTab] = useState<'aktywne' | 'zywienie' | 'odznaki' | 'ranking' | 'admin'>('aktywne');
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
+
+  const parseDateFromClassKey = (classKey: string): Date => {
+    const parts = classKey ? String(classKey).split('_') : [];
+    const datePart = parts[1] || '';
+    const currentYear = new Date().getFullYear();
+
+    if (!datePart) return new Date();
+
+    if (datePart.includes('/')) {
+      const segments = datePart.split('/');
+      if (segments.length === 2) {
+        const [d, m] = segments;
+        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+      } else if (segments.length === 3) {
+        const [d, m, y] = segments;
+        const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
+        return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
+      }
+    } else if (datePart.includes('-')) {
+      const segments = datePart.split('-');
+      if (segments.length === 3) {
+        if (segments[0].length === 4) {
+          const [y, m, d] = segments;
+          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+        } else {
+          const [d, m, y] = segments;
+          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+        }
+      } else if (segments.length === 2) {
+        const [d, m] = segments;
+        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+      }
+    }
+    return new Date();
+  };
 
   const sendPushNotification = async (clientIds: number | string | (number | string)[], payload: { title: string; body: string; url?: string }) => {
     try {
@@ -217,46 +249,64 @@ export default function WyzwaniaPage() {
 
       if (badgesToEvaluate.length === 0) return;
 
+      // POBIERZ WSZYSTKIE ZAPISY UŻYTKOWNIKA DO WERYFIKACJI POTWIERDZONEJ OBECNOŚCI
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
-        .select("id, class_key, obecny, created_at")
-        .eq("klient_id", userId)
-        .eq("obecny", true);
+        .select("id, class_key, obecny, nieobecny, status, created_at")
+        .eq("klient_id", userId);
 
       const attendances = attendancesRaw || [];
 
       const [grafikList, jednorazoweList, nadpisaniaList] = await Promise.all([
-        fetchAllFromSupabase('grafik_zajec', 'id, title, nazwa', 'id', true, 5),
-        fetchAllFromSupabase('zajecia_jednorazowe', 'id, title, nazwa, display_date', 'id', false, 5),
-        fetchAllFromSupabase('nadpisania_zajec', 'class_key, title, nazwa', 'id', false, 5),
+        fetchAllFromSupabase('grafik_zajec', 'id, title, nazwa, start, start_time', 'id', true, 5),
+        fetchAllFromSupabase('zajecia_jednorazowe', 'id, title, nazwa, start, start_time, display_date', 'id', false, 5),
+        fetchAllFromSupabase('nadpisania_zajec', 'class_key, title, nazwa, start', 'id', false, 5),
       ]);
 
       const classNamesById = new Map<string, string>();
-      grafikList.forEach((g: any) => classNamesById.set(String(g.id), (g.title || g.nazwa || '').toLowerCase()));
-      jednorazoweList.forEach((j: any) => classNamesById.set(String(j.id), (j.title || j.nazwa || '').toLowerCase()));
+      const classStartTimesById = new Map<string, string>();
+      grafikList.forEach((g: any) => {
+        classNamesById.set(String(g.id), (g.title || g.nazwa || '').toLowerCase());
+        classStartTimesById.set(String(g.id), g.start || g.start_time || '00:00');
+      });
+      jednorazoweList.forEach((j: any) => {
+        classNamesById.set(String(j.id), (j.title || j.nazwa || '').toLowerCase());
+        classStartTimesById.set(String(j.id), j.start_time || j.start || '00:00');
+      });
       const nadpisaniaMap = new Map<string, string>();
-      nadpisaniaList.forEach((n: any) => nadpisaniaMap.set(n.class_key, (n.title || n.nazwa || '').toLowerCase()));
+      const nadpisaniaStartsMap = new Map<string, string>();
+      nadpisaniaList.forEach((n: any) => {
+        nadpisaniaMap.set(n.class_key, (n.title || n.nazwa || '').toLowerCase());
+        if (n.start) nadpisaniaStartsMap.set(n.class_key, n.start);
+      });
 
-      const userConfirmedClassTitles: { title: string; date: Date; dateStr: string }[] = attendances.map((att: any) => {
+      const now = new Date();
+      const userConfirmedClassTitles: { title: string; date: Date; dateStr: string }[] = [];
+
+      attendances.forEach((att: any) => {
+        // 1. Weryfikacja obecności: musi być potwierdzona przez trenera (nie wystarczy sam zapis)
+        const isPresent = att.obecny === true || att.obecny === 1 || String(att.obecny).toLowerCase() === 'true';
+        const isAbsent = att.nieobecny === true || att.nieobecny === 1 || String(att.nieobecny).toLowerCase() === 'true';
+        const isWaitlist = att.status === 'krzesełko';
+
+        if (!isPresent || isAbsent || isWaitlist) return;
+
         const cKey = String(att.class_key || '');
         const parts = cKey.split('_');
         const cId = parts[0];
-        const dPart = parts[1] || '';
         
         let title = nadpisaniaMap.get(cKey) || classNamesById.get(cId) || '';
-        
-        let dateObj = new Date();
-        if (dPart.includes('-')) {
-          dateObj = new Date(dPart);
-        } else if (dPart.includes('/')) {
-          const [d, m] = dPart.split('/').map(Number);
-          dateObj = new Date(new Date().getFullYear(), m - 1, d);
-        } else if (att.created_at) {
-          dateObj = new Date(att.created_at);
-        }
+        let startTime = nadpisaniaStartsMap.get(cKey) || classStartTimesById.get(cId) || '00:00';
+
+        const dateObj = parseDateFromClassKey(cKey);
+        const [sh = '00', sm = '00'] = startTime.split(':');
+        const fullStartDateTime = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
+
+        // 2. Weryfikacja daty: trening musiał się już odbyć (wyklucza przyszłe zapisy)
+        if (fullStartDateTime.getTime() > now.getTime()) return;
 
         const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-        return { title, date: dateObj, dateStr };
+        userConfirmedClassTitles.push({ title, date: dateObj, dateStr });
       });
 
       const { data: userChallengesRaw } = await supabase
@@ -275,8 +325,7 @@ export default function WyzwaniaPage() {
 
       const regDateRaw = clientInfo?.Zarejestrowany || clientInfo?.registered || clientInfo?.created_at || new Date().toISOString();
       const regDate = new Date(regDateRaw);
-      const today = new Date();
-      const tenureDays = Math.max(0, Math.floor((today.getTime() - regDate.getTime()) / (1000 * 60 * 60 * 24)));
+      const tenureDays = Math.max(0, Math.floor((now.getTime() - regDate.getTime()) / (1000 * 60 * 60 * 24)));
 
       const { data: reductionWinsRaw } = await supabase
         .from("klub_redukcja_uczestnicy")
@@ -454,7 +503,6 @@ export default function WyzwaniaPage() {
           }
         }
 
-        // Pomiń konto systemowe Forma Marzeń (ID 5000) z listy zwykłych klubowiczów
         const enriched = (klienciData || [])
           .filter((c: any) => c && c.id && Number(c.id) !== SYSTEM_ID)
           .map((c: any) => {
@@ -567,7 +615,6 @@ export default function WyzwaniaPage() {
       10
     );
     if (data) {
-      // Wyklucz konto systemowe oraz domyślne wpisy "Klubowicz" z przypisanych odznak
       const filtered = data.filter((item: any) => {
         const uId = Number(item.klient_id);
         const name = (item.klienci?.Imię || "").toLowerCase();
@@ -597,7 +644,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // RANKINGI Z CAŁKOWITYM POMINIĘCIEM KONTA SYSTEMOWEGO I NAZWY "KLUBOWICZ"
   const fetchRankings = async (clientsData: any[], badgesData?: any[]) => {
     const challengesData = await fetchAllFromSupabase("klub_wyzwania_historia", "zwyciezca_id", "id", false, 5);
     const clientsMap = new Map<string, any>();
