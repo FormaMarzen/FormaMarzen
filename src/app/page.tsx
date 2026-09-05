@@ -1285,8 +1285,8 @@ export default function DashboardPage() {
         if (!juzMaBlokadeUmowy) {
           const updatedClientKarnety = (client.karnetyKlubowicza || []).map((k: any) => ({
             ...k,
-            blokadaDo: endOfCurrentMonthStr,
-            powodBlokady: powod
+            blokadaDo: isContractPass(k) ? endOfCurrentMonthStr : k.blokadaDo,
+            powodBlokady: isContractPass(k) ? powod : k.powodBlokady
           }));
 
           await supabase.from('klienci').update({
@@ -2390,11 +2390,20 @@ export default function DashboardPage() {
     const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
     const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
+    const isContract = isContractPass(extendPassTarget) || isContractPass(defKarnetu);
     const effectiveDiscount = getEffectiveDiscount(profileClient);
-    const finalPriceNum = effectiveDiscount.percent > 0 
+    const finalPriceNum = (effectiveDiscount.percent > 0 && !isContract)
       ? bazowaCenaNum * (1 - effectiveDiscount.percent / 100) 
       : bazowaCenaNum;
     const nowaCena = `${finalPriceNum.toFixed(2)} PLN`;
+
+    let updatedRata = extendPassTarget.rata;
+    if (isContract) {
+      const currentRataMatch = (extendPassTarget.rata || '0 / 12').match(/(\d+)\s*\/\s*(\d+)/);
+      const currentRataNum = currentRataMatch ? parseInt(currentRataMatch[1], 10) : 0;
+      const totalRat = currentRataMatch ? parseInt(currentRataMatch[2], 10) : 12;
+      updatedRata = `${Math.min(totalRat, currentRataNum + 1)} / ${totalRat}`;
+    }
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === extendPassTarget.id) {
@@ -2403,10 +2412,13 @@ export default function DashboardPage() {
           nazwa: extendSelectedNewPassName || k.nazwa, 
           waznyDo: extendNewDate, 
           cena: nowaCena, 
+          rata: isContract ? updatedRata : k.rata,
           zaznaczoneZajecia: extendSelectedNewPassName ? allowedClasses : k.zaznaczoneZajecia,
           dostepDo: extendSelectedNewPassName ? dostepDo : k.dostepDo,
-          znizkaProcentowa: effectiveDiscount.label,
-          statusTekst: `Ważny do: ${extendNewDate}` 
+          znizkaProcentowa: isContract ? '' : effectiveDiscount.label,
+          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata || '0/12'} • Ważny do: ${extendNewDate})` : `Ważny do: ${extendNewDate}`,
+          blokadaDo: isContract ? null : k.blokadaDo,
+          powodBlokady: isContract ? null : k.powodBlokady
         };
       }
       return k;
@@ -2417,10 +2429,16 @@ export default function DashboardPage() {
       karnetyKlubowicza: uaktualnioneKarnety, 
       pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), 
       price: nowaCena, 
-      expiresDate: extendNewDate 
+      expiresDate: extendNewDate,
+      ...(isContract ? { umowa_oplacona_do: extendNewDate, blokadaDo: null, powodBlokady: null } : {})
     };
 
-    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety, expiresDate: extendNewDate };
+    if (isContract) {
+      dbPayload.umowa_oplacona_do = extendNewDate;
+      dbPayload.blokadaDo = null;
+      dbPayload.powodBlokady = null;
+    }
     if (profileClient.Cena !== undefined) dbPayload.Cena = nowaCena;
     else if (profileClient.cena !== undefined) dbPayload.cena = nowaCena;
 
@@ -2437,6 +2455,8 @@ export default function DashboardPage() {
     if (!confirm(`Czy na pewno chcesz kupić karnet: ${selectedBuyPass}?`)) return;
     
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
+    const isContract = isContractPass(defKarnetu) || isContractPass({ nazwa: selectedBuyPass });
+
     let dniWażności = 30;
     if (defKarnetu && defKarnetu.dlugosc) {
       const dlugoscStr = defKarnetu.dlugosc.toLowerCase();
@@ -2452,7 +2472,7 @@ export default function DashboardPage() {
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     
     const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const cenaWartosc = effectiveDiscount.percent > 0 
+    const cenaWartosc = (effectiveDiscount.percent > 0 && !isContract)
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
       : basePriceNum;
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
@@ -2488,8 +2508,8 @@ export default function DashboardPage() {
             cena: cenaStr, 
             zaznaczoneZajecia: allowedClasses,
             dostepDo: dostepDo,
-            znizkaProcentowa: effectiveDiscount.label,
-            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
+            znizkaProcentowa: isContract ? '' : effectiveDiscount.label,
+            statusTekst: isContract ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${nowaDataWygasnieciaStr})` : `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
         return k;
@@ -2507,9 +2527,11 @@ export default function DashboardPage() {
         cena: cenaStr, 
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
-        znizkaProcentowa: effectiveDiscount.label, 
-        rata: '1 / 1', 
-        statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
+        znizkaProcentowa: isContract ? '' : effectiveDiscount.label, 
+        rata: isContract ? '0 / 12' : '1 / 1', 
+        statusTekst: isContract ? `Umowa 12M (Rata 0 / 12 • Ważny do: ${nowaDataWygasnieciaStr})` : `Ważny do: ${nowaDataWygasnieciaStr}`, 
+        isContract12M: isContract,
+        contractSuspensionDaysLeft: isContract ? 30 : undefined,
         blokadaDo: null, 
         powodBlokady: null,
         zawieszonyOd: null, 
@@ -2533,6 +2555,9 @@ export default function DashboardPage() {
     const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
     const ostatecznaDataWygasniecia = updatedKarnety[updatedKarnety.length - 1]?.waznyDo || '';
     
+    const endOfMonth = new Date(nowLocal.getFullYear(), nowLocal.getMonth() + 1, 0);
+    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+
     const updatedClient = { 
       ...currentUser, 
       karnetyKlubowicza: updatedKarnety, 
@@ -2540,10 +2565,14 @@ export default function DashboardPage() {
       price: cenaStr, 
       expiresDate: ostatecznaDataWygasniecia, 
       wallet: nowyStanPortfelaStr, 
-      walletHistory: updatedWalletHistory
+      walletHistory: updatedWalletHistory,
+      ...(isContract ? { umowa_oplacona_do: endOfMonthStr } : {})
     };
 
     const dbPayload: any = { karnetyKlubowicza: updatedKarnety };
+    if (isContract) {
+      dbPayload.umowa_oplacona_do = endOfMonthStr;
+    }
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr; 
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
     if (currentUser.Portfel !== undefined) dbPayload.Portfel = nowyStanPortfelaStr; 
@@ -2554,7 +2583,7 @@ export default function DashboardPage() {
       if (cenaWartosc > 0) {
         await supabase.from('transakcje').insert([{ 
           klient_id: currentUser.id, 
-          typ_operacji: 'zakup_karnetu', 
+          typ_operacji: isContract ? 'zakup_umowy' : 'zakup_karnetu', 
           kwota: -cenaWartosc, 
           opis: `Zakup (Panel klienta): ${selectedBuyPass}${effectiveDiscount.label ? ` ${effectiveDiscount.label}` : ''}` 
         }]);
@@ -2614,6 +2643,7 @@ export default function DashboardPage() {
     if (!profileClient || !editingPassModal) return;
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
     const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
+    const isContract = isContractPass(editingPassModal) || isContractPass(bazowyKarnet);
     const cenaRegularna = bazowyKarnet ? parseFloat(bazowyKarnet.cena) : null;
     const nowaCenaWartosc = parseFloat(editingPassModal.cena.replace(/[^0-9.]/g, '')) || 0;
     
@@ -2621,7 +2651,7 @@ export default function DashboardPage() {
     const dostepDo = bazowyKarnet?.dostep_do_zajec || 'wszystkich zajęć';
 
     let znizkaTekst = '';
-    if (cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
+    if (!isContract && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
       const roznica = cenaRegularna - nowaCenaWartosc;
       const procent = Math.round((roznica / cenaRegularna) * 100);
       znizkaTekst = `(-${procent}%)`;
@@ -2639,9 +2669,11 @@ export default function DashboardPage() {
           cena: editingPassModal.cena.includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
           zaznaczoneZajecia: allowedClasses,
           dostepDo: dostepDo,
-          znizkaProcentowa: znizkaTekst, 
-          rata: editingPassModal.rata, 
-          statusTekst: `Ważny do: ${editingPassModal.waznyDo}`
+          znizkaProcentowa: isContract ? '' : znizkaTekst, 
+          rata: isContract ? editingPassModal.rata : (editingPassModal.rata || '1 / 1'), 
+          isContract12M: isContract,
+          contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft ?? 30) : undefined,
+          statusTekst: isContract ? `Umowa 12M (${editingPassModal.rata || '0 / 12'} • Ważny do: ${editingPassModal.waznyDo})` : `Ważny do: ${editingPassModal.waznyDo}`
         };
       }
       return k;
@@ -2938,14 +2970,29 @@ export default function DashboardPage() {
   const handleCancelBlock = async (karnetTarget: any) => {
     if (!profileClient || !karnetTarget) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
+    const isContract = isContractPass(karnetTarget);
+    const endOfMonth = new Date(nowLocal.getFullYear(), nowLocal.getMonth() + 1, 0);
+    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === karnetTarget.id) { 
         return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null }; 
       }
       return k;
     });
-    const updatedClient = { ...profileClient, karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: null, powodBlokady: null };
-    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety, blokadaDo: null, powodBlokady: null };
+    const updatedClient = { 
+      ...profileClient, 
+      karnetyKlubowicza: uaktualnioneKarnety, 
+      blokadaDo: null, 
+      powodBlokady: null,
+      ...(isContract ? { umowa_oplacona_do: endOfMonthStr } : {})
+    };
+    const dbPayload: any = { 
+      karnetyKlubowicza: uaktualnioneKarnety, 
+      blokadaDo: null, 
+      powodBlokady: null,
+      ...(isContract ? { umowa_oplacona_do: endOfMonthStr } : {})
+    };
     await updateSupabaseClient(updatedClient, dbPayload);
     showToast("Blokada została odwołana.");
     setIsSuspendModalOpen(false);
@@ -3013,7 +3060,6 @@ export default function DashboardPage() {
     });
     return count;
   };
-
   // OPTYMISTYCZNA OBSŁUGA OBECNOŚCI (0 MS OPÓŹNIENIA)
   const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
@@ -3156,6 +3202,8 @@ export default function DashboardPage() {
 
     const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
+      // Umowa 12M nigdy nie znika i jest traktowana jako ważna umowa
+      if (isContractPass(k)) return true;
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
         expDate.setHours(23, 59, 59, 999);
@@ -3180,7 +3228,7 @@ export default function DashboardPage() {
     }
     const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
-      if (k.waznyDo) {
+      if (!isContractPass(k) && k.waznyDo) {
         const expDate = new Date(k.waznyDo);
         expDate.setHours(23, 59, 59, 999);
         if (expDate < dzisiajDateObj) return false;
@@ -3347,7 +3395,9 @@ export default function DashboardPage() {
       ? currentUser.karnetyKlubowicza[0].nazwa
       : (currentUser.pass || 'OPEN');
 
-    if (currentUser.expiresDate) {
+    const isContract = isContractPass({ nazwa: passName }) || (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.some((k: any) => isContractPass(k)));
+
+    if (currentUser.expiresDate && !isContract) {
       const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
       const expDate = new Date(currentUser.expiresDate);
       expDate.setDate(expDate.getDate() + graceDays);
@@ -3921,7 +3971,7 @@ export default function DashboardPage() {
     }
 
     const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
-      if (k.waznyDo) {
+      if (!isContractPass(k) && k.waznyDo) {
         const expDate = new Date(k.waznyDo);
         expDate.setHours(23, 59, 59, 999);
         if (expDate < new Date()) return false;
@@ -4077,9 +4127,6 @@ export default function DashboardPage() {
       return; 
     }
 
-    // REGULA DLA RÓL:
-    // Administrator: pyta czy zwrócić wejście
-    // Trener: NIE pyta czy zwrócić wejście, zawsze wejście przepada (nie jest zwracane do puli)
     let zwrocicWejscie = false;
     if (appRole === 'admin') {
       zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
@@ -4283,7 +4330,7 @@ export default function DashboardPage() {
   const karnetySales: { [key: string]: { count: number, total: number } } = {};
   let totalEarnings = 0;
   filteredTransakcje.forEach(t => {
-    if (t.typ_operacji === 'zakup_karnetu' || (t.opis && t.opis.toLowerCase().includes('karnet'))) {
+    if (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && t.opis.toLowerCase().includes('karnet'))) {
       let amount = Math.abs(Number(t.kwota) || 0);
       let passName = 'Inny karnet';
       let matchedPass = null;
@@ -4293,8 +4340,9 @@ export default function DashboardPage() {
       if (amount === 0 && matchedPass) {
         const basePrice = parseFloat(matchedPass.cena) || 0;
         const client = klienciList.find(c => c.id === t.klient_id);
+        const isContract = isContractPass(matchedPass);
         const effectiveDiscount = getEffectiveDiscount(client);
-        if (effectiveDiscount.percent > 0) { 
+        if (effectiveDiscount.percent > 0 && !isContract) { 
           amount = basePrice * (1 - effectiveDiscount.percent / 100); 
         } else { 
           amount = basePrice; 
@@ -4321,22 +4369,53 @@ export default function DashboardPage() {
 
   if (['klubowicz', 'trener'].includes(appRole) && currentUser) {
     const karnety = currentUser.karnetyKlubowicza || [];
-    if (karnety.length === 0) { needsNewPass = true; } else {
-      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
+    if (karnety.length === 0) { 
+      needsNewPass = true; 
+    } else {
+      const todayDate = new Date(); 
+      todayDate.setHours(0, 0, 0, 0);
       let hasAnyValid = false;
       for (const k of karnety) {
-        let isValid = true; let isExpiring = false; let msg = "";
-        if (k.waznyDo) {
-          const expDate = new Date(k.waznyDo); expDate.setHours(0, 0, 0, 0);
-          const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-          if (diffDays < 0) { isValid = false; } else if (diffDays <= 5) { isExpiring = true; msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`; }
+        let isValid = true; 
+        let isExpiring = false; 
+        let msg = "";
+
+        if (isContractPass(k)) {
+          // Umowa 12M nigdy nie wygasa z końcem miesiąca – nie wyzwala braku aktywnego karnetu
+          isValid = true;
+        } else {
+          if (k.waznyDo) {
+            const expDate = new Date(k.waznyDo); 
+            expDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.ceil((expDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays < 0) { 
+              isValid = false; 
+            } else if (diffDays <= 5) { 
+              isExpiring = true; 
+              msg = `Twój karnet "${k.nazwa}" kończy się za ${diffDays} ${diffDays === 1 ? 'dzień' : 'dni'}!`; 
+            }
+          }
+          if (isQuantityPass(k) && k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
+            if (k.pozostaloWejsc <= 0) { 
+              isValid = false; 
+            } else if (k.pozostaloWejsc <= 2) { 
+              isExpiring = true; 
+              msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`; 
+            }
+          }
         }
-        if (isQuantityPass(k) && k.pozostaloWejsc !== undefined && k.pozostaloWejsc !== null) {
-          if (k.pozostaloWejsc <= 0) { isValid = false; } else if (k.pozostaloWejsc <= 2) { isExpiring = true; msg = `W karnecie "${k.nazwa}" ${k.pozostaloWejsc === 1 ? 'zostało tylko 1 wejście' : `zostały tylko ${k.pozostaloWejsc} wejścia`}!`; }
+
+        if (isValid) { 
+          hasAnyValid = true; 
+          if (isExpiring) { 
+            isPassExpiringSoon = true; 
+            expiringMessage = msg; 
+          } 
         }
-        if (isValid) { hasAnyValid = true; if (isExpiring) { isPassExpiringSoon = true; expiringMessage = msg; } }
       }
-      if (!hasAnyValid) { needsNewPass = true; }
+      if (!hasAnyValid) { 
+        needsNewPass = true; 
+      }
     }
 
     prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
@@ -4483,7 +4562,11 @@ export default function DashboardPage() {
               <span className="text-2xl">🚫</span>
             </div>
             <div>
-              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Konto zablokowane!</h3>
+              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">
+                {currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty')
+                  ? 'Zablokowano ze względu na brak płatności za umowę 12M'
+                  : 'Konto zablokowane!'}
+              </h3>
               <p className="text-xs text-rose-800 font-medium mt-0.5">
                 {currentUser.powodBlokady || `Posiadasz aktywną blokadę zapisów na zajęcia do ${currentUser.blokadaDo}.`}
               </p>
@@ -4503,9 +4586,13 @@ export default function DashboardPage() {
               <span className="text-2xl">🔒</span>
             </div>
             <div>
-              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">Twój karnet został zablokowany!</h3>
+              <h3 className="font-black text-rose-950 text-sm sm:text-base uppercase tracking-wider">
+                {activePassBlocked.powodBlokady?.toLowerCase().includes('umow') || activePassBlocked.powodBlokady?.toLowerCase().includes('wpłaty') || isContractPass(activePassBlocked)
+                  ? 'Zablokowano ze względu na brak płatności za umowę 12M'
+                  : 'Twój karnet został zablokowany!'}
+              </h3>
               <p className="text-xs text-rose-800 font-medium mt-0.5">
-                Karnet "{activePassBlocked.nazwa}" jest zablokowany w okresie {activePassBlocked.blokadaOd ? `od ${activePassBlocked.blokadaOd} ` : ''}do {activePassBlocked.blokadaDo}.
+                {activePassBlocked.powodBlokady || `Karnet "${activePassBlocked.nazwa}" jest zablokowany w okresie ${activePassBlocked.blokadaOd ? `od ${activePassBlocked.blokadaOd} ` : ''}do ${activePassBlocked.blokadaDo}.`}
               </p>
             </div>
           </div>
@@ -4514,7 +4601,6 @@ export default function DashboardPage() {
           </span>
         </div>
       )}
-
       {/* BANNER 3: ZAWIESZONY KARNET */}
       {['klubowicz', 'trener'].includes(appRole) && currentUser && activePassSuspended && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
@@ -4562,7 +4648,7 @@ export default function DashboardPage() {
         return null;
       })()}
 
-      {/* BANNER 5: BRAK KARNETU */}
+      {/* BANNER 5: BRAK KARNETU (POKAZYWANY TYLKO GDY BRAK JAKIEGOKOLWIEK KARNETU LUB UMOWY) */}
       {appRole === 'klubowicz' && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -4583,7 +4669,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* BANNER 6: KOŃCZĄCY SIĘ KARNET */}
+      {/* BANNER 6: KOŃCZĄCY SIĘ KARNET STANDARDOWY */}
       {appRole === 'klubowicz' && !needsNewPass && isPassExpiringSoon && (
         <div className="bg-rose-100 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -4751,13 +4837,18 @@ export default function DashboardPage() {
                     <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-xs font-bold border border-slate-200">
                       Aktywne zapisy: {prawdziweZapisyKlubowicza}
                     </span>
+                    {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && isContractPass(currentUser.karnetyKlubowicza[0]) && (
+                      <span className="bg-amber-100 text-amber-900 px-4 py-1.5 rounded-full text-xs font-black border border-amber-300 uppercase tracking-wider">
+                        Umowa 12M • Rata: {currentUser.karnetyKlubowicza[0].rata || '0 / 12'}
+                      </span>
+                    )}
                     {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && isQuantityPass(currentUser.karnetyKlubowicza[0]) && currentUser.karnetyKlubowicza[0].pozostaloWejsc !== null && currentUser.karnetyKlubowicza[0].pozostaloWejsc !== undefined && (
                       <span className="bg-sky-100 text-sky-900 px-4 py-1.5 rounded-full text-xs font-black border border-sky-200 flex items-center gap-1">
                         <span>🎟️ Wejścia:</span> 
                         <span className="text-amber-700">{currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span> / <span>{currentUser.karnetyKlubowicza[0].poczatkoweWejsc || currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span>
                       </span>
                     )}
-                    {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && (
+                    {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && currentUser.karnetyKlubowicza[0].waznyDo && (
                       <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-xs font-bold border border-slate-200">
                         Ważny do: {currentUser.karnetyKlubowicza[0].waznyDo}
                       </span>
@@ -5591,8 +5682,9 @@ export default function DashboardPage() {
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
         const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
+        const isContract = isContractPass(selectedPassDef) || isContractPass({ nazwa: selectedBuyPass });
         const basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
-        const discountedPrice = effectiveDiscount.percent > 0 
+        const discountedPrice = (effectiveDiscount.percent > 0 && !isContract) 
           ? basePrice * (1 - effectiveDiscount.percent / 100) 
           : basePrice;
 
@@ -5617,13 +5709,14 @@ export default function DashboardPage() {
                   >
                     <option value="" disabled>-- Wybierz karnet --</option>
                     {dostepneKarnety.map(k => {
+                      const isItemContract = isContractPass(k);
                       const kBasePrice = parseFloat(k.cena) || 0;
-                      const kFinalPrice = effectiveDiscount.percent > 0 
+                      const kFinalPrice = (effectiveDiscount.percent > 0 && !isItemContract) 
                         ? (kBasePrice * (1 - effectiveDiscount.percent / 100)).toFixed(2)
                         : k.cena;
                       return (
                         <option key={k.id} value={k.nazwa}>
-                          {k.nazwa} (Cena: {kFinalPrice} PLN {effectiveDiscount.percent > 0 ? `| Rabat ${effectiveDiscount.percent}%` : ''})
+                          {k.nazwa} (Cena: {kFinalPrice} PLN {effectiveDiscount.percent > 0 && !isItemContract ? `| Rabat ${effectiveDiscount.percent}%` : ''} {isItemContract ? '• Umowa 12M' : ''})
                         </option>
                       );
                     })}
@@ -5636,7 +5729,7 @@ export default function DashboardPage() {
                       <span>Cena katalogowa:</span>
                       <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                     </div>
-                    {effectiveDiscount.percent > 0 && (
+                    {effectiveDiscount.percent > 0 && !isContract && (
                       <div className="flex justify-between text-emerald-700 font-bold">
                         <span>Naliczony rabat {effectiveDiscount.label}:</span>
                         <span>-{effectiveDiscount.percent}% (-{(basePrice - discountedPrice).toFixed(2)} PLN)</span>
@@ -5986,7 +6079,6 @@ export default function DashboardPage() {
                               </span>
                             </div>
                           )}
-
                           <div className="flex items-start justify-between">
                             <div>
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -6545,7 +6637,9 @@ export default function DashboardPage() {
                         let isExpiring = false;
                         let isPending = karnet.statusTekst?.includes('Oczekujący');
                         const czyZawieszony = !!karnet.zawieszonyOd;
-                        if (!isPending) {
+                        const isContract = isContractPass(karnet);
+
+                        if (!isPending && !isContract) {
                           if (karnet.waznyDo) {
                             const todayDate = new Date();
                             todayDate.setHours(0, 0, 0, 0);
@@ -6575,6 +6669,11 @@ export default function DashboardPage() {
                               <div className="space-y-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <h4 className="font-black text-slate-900 text-base">{karnet.nazwa}</h4>
+                                  {isContract && (
+                                    <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded border border-amber-300 uppercase">
+                                      Umowa 12M • Rata {karnet.rata || '0/12'}
+                                    </span>
+                                  )}
                                   {karnet.blokadaDo && karnet.blokadaDo >= todayStr && (
                                     <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded border border-rose-200">
                                       ⚠️ Zablokowane: {karnet.blokadaOd ? `od ${karnet.blokadaOd} ` : ''}do {karnet.blokadaDo}
@@ -6593,6 +6692,11 @@ export default function DashboardPage() {
                                   <span className="bg-slate-100 text-slate-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-slate-200">
                                     Cena: {karnet.cena}
                                   </span>
+                                  {isContract && (
+                                    <span className="bg-sky-100 text-sky-900 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-sky-200">
+                                      Pula: {karnet.contractSuspensionDaysLeft !== undefined ? karnet.contractSuspensionDaysLeft : 30} / 30 dni
+                                    </span>
+                                  )}
                                   {isQuantityPass(karnet) && karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined && (
                                     <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
                                       <span>🎟️ Wejścia:</span> 
@@ -6990,8 +7094,9 @@ export default function DashboardPage() {
       {isExtendPassModalOpen && profileClient && extendPassTarget && (() => {
         const effectiveDiscount = getEffectiveDiscount(profileClient);
         const defKarnetu = dostepneKarnety.find(k => k.nazwa === (extendSelectedNewPassName || extendPassTarget.nazwa));
+        const isContract = isContractPass(extendPassTarget) || isContractPass(defKarnetu);
         const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget.cena.replace(/[^0-9.]/g, '')) || 0;
-        const finalPrice = effectiveDiscount.percent > 0 ? basePrice * (1 - effectiveDiscount.percent / 100) : basePrice;
+        const finalPrice = (effectiveDiscount.percent > 0 && !isContract) ? basePrice * (1 - effectiveDiscount.percent / 100) : basePrice;
 
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -7011,11 +7116,13 @@ export default function DashboardPage() {
                         className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 font-bold cursor-pointer"
                       >
                         {dostepneKarnety.map(k => (
-                          <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
+                          <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN){isContractPass(k) ? ' • Umowa 12M' : ''}</option>
                         ))}
                       </select>
                     ) : (
-                      <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold">{extendSelectedNewPassName}</div>
+                      <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold">
+                        {extendSelectedNewPassName || extendPassTarget.nazwa}
+                      </div>
                     )}
                     <button type="button" onClick={() => setIsEditingNewPassType(!isEditingNewPassType)} className="p-2 border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer">✏️</button>
                   </div>
@@ -7026,7 +7133,7 @@ export default function DashboardPage() {
                     <span>Cena katalogowa:</span>
                     <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                   </div>
-                  {effectiveDiscount.percent > 0 && (
+                  {effectiveDiscount.percent > 0 && !isContract && (
                     <div className="flex justify-between text-emerald-700 font-bold">
                       <span>Rabat {effectiveDiscount.label}:</span>
                       <span>-{effectiveDiscount.percent}% (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
