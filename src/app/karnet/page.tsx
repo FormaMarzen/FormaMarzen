@@ -574,7 +574,7 @@ export default function KarnetyPage() {
     };
   };
 
-  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW (W TYM WERYFIKACJA KARNETU OPEN DLA AMBASADORA)
+  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number, targetPassNameToCheck?: string) => {
     if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false, ambassadorPercent: 0, ambassadorTierName: '', isPassQualifiedForAmbassador: true };
     
@@ -586,7 +586,6 @@ export default function KarnetyPage() {
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client, basePriceToCheck) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
-    // PRECYZYJNA WERYFIKACJA: CZY TEN PROG AMBASADORA OBEJMUJE WYBRANY KARNET?
     const rawAmbDiscountVal = Number(client.ambassadorDiscountPercent) || 0;
     const ambassadorTierName = client.ambassadorTierName || '';
     const tierTargetPass = (client.ambassadorTargetPass || 'all').toLowerCase().trim();
@@ -852,6 +851,7 @@ export default function KarnetyPage() {
               rabat_za_ciaglosc: rawContinuity !== null ? `${rawContinuity}%` : null,
               'Rabat za ciągłość': rawContinuity !== null ? `${rawContinuity}%` : null,
               system_discount_offset: c.system_discount_offset || 0,
+              umowa_oplacona_do: c.umowa_oplacona_do || null,
               karnetyKlubowicza: verifiedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: displayWallet,
@@ -884,6 +884,7 @@ export default function KarnetyPage() {
                rabat: 0,
                rabat_za_ciaglosc: '0%',
                system_discount_offset: 0,
+               umowa_oplacona_do: null,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -904,6 +905,7 @@ export default function KarnetyPage() {
                  rabat_za_ciaglosc: '0%',
                  'Rabat za ciągłość': '0%',
                  system_discount_offset: 0,
+                 umowa_oplacona_do: null,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN',
                  ambassadorDiscountPercent: 0,
@@ -1347,7 +1349,31 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // Pewny zapis salda do Portfela - bez względu na wielkość liter w bazie
+    // ROZLICZENIE UMOWY: AKTUALIZACJA umowa_oplacona_do ORAZ ZDJĘCIE BLOKADY PŁATNICZEJ
+    if (isContract) {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const lastDayOfMonth = new Date(year, month, 0).getDate();
+      let targetPaidUntil = `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
+      const currentOplacone = currentUser.umowa_oplacona_do || null;
+      if (currentOplacone && String(currentOplacone) >= `${year}-${String(month).padStart(2, '0')}-01`) {
+        const nextMonthDate = new Date(year, month, 1);
+        const lastDayNextMonth = new Date(nextMonthDate.getFullYear(), nextMonthDate.getMonth() + 1, 0).getDate();
+        targetPaidUntil = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(lastDayNextMonth).padStart(2, '0')}`;
+      }
+
+      dbPayload.umowa_oplacona_do = targetPaidUntil;
+
+      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę');
+      if (isBlockedForContract) {
+        dbPayload.blokadaDo = null;
+        dbPayload.powodBlokady = null;
+      }
+    }
+
+    // Zapis salda do Portfela
     const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
       ? nowyStanPortfela
       : nowyStanPortfelaStr;
@@ -1378,7 +1404,7 @@ export default function KarnetyPage() {
       return;
     }
 
-        let createdTransactionId: number | null = null;
+    let createdTransactionId: number | null = null;
     if (cenaPoRabacie > 0) {
       const opisOperacji = isContract 
         ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`
@@ -1432,7 +1458,10 @@ export default function KarnetyPage() {
       hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
       Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
       portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
-      wallet: nowyStanPortfelaStr
+      wallet: nowyStanPortfelaStr,
+      umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
+      blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
+      powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
     });
     
     if (isBonus13thPeriod) {
@@ -1470,7 +1499,6 @@ export default function KarnetyPage() {
       calculatedFirstPayment = contractInfo.proRataFirstMonth;
     }
     
-    // Weryfikacja rabatu Ambasadora dla wybranego do zakupu karnetu
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
@@ -1584,7 +1612,8 @@ export default function KarnetyPage() {
         newWalletBalance: nowyStanPortfelaStr,
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
-        appliedDiscountCodeId: appliedDiscountCode?.id || null
+        appliedDiscountCodeId: appliedDiscountCode?.id || null,
+        umowa_oplacona_do: isContract && contractInfo ? contractInfo.endOfFirstMonthStr : null
       };
 
       setIsBuyPassModalOpen(false);
@@ -1610,7 +1639,17 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // Pewny zapis salda do Portfela - bez względu na wielkość liter w bazie
+    // ROZLICZENIE UMOWY PRZY ZAKUPIE
+    if (isContract && contractInfo) {
+      dbPayload.umowa_oplacona_do = contractInfo.endOfFirstMonthStr;
+      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę');
+      if (isBlockedForContract) {
+        dbPayload.blokadaDo = null;
+        dbPayload.powodBlokady = null;
+      }
+    }
+
+    // Zapis salda do Portfela
     const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
       ? nowyStanPortfela
       : nowyStanPortfelaStr;
@@ -1681,7 +1720,10 @@ export default function KarnetyPage() {
       hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
       Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
       portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
-      wallet: nowyStanPortfelaStr
+      wallet: nowyStanPortfelaStr,
+      umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
+      blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
+      powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
     });
 
     showToast(
@@ -1695,7 +1737,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -1787,7 +1828,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA (Z NOWĄ LOGIKĄ WEEKENDÓW DLA UMOWY 12M)
+  // ZATWIERDZENIE ZAWIESZENIA
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -2374,7 +2415,7 @@ export default function KarnetyPage() {
           </div>
         )}
 
-        {/* BANER INFORMACYJNY O AKTYWNYM RABACIE (W TYM PROGRAM AMBASADOR) */}
+        {/* BANER INFORMACYJNY O AKTYWNYM RABACIE */}
         {!birthdayStatus.isBirthdayWindow && effectiveDiscount.percent > 0 && (
           <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 flex items-center justify-between shadow-sm">
             <div className="flex items-center gap-3">
@@ -2647,7 +2688,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
-
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3240,7 +3280,7 @@ export default function KarnetyPage() {
                           />
                           <div className="flex flex-col">
                             <span className="font-bold text-slate-800">Od dzisiaj</span>
-                            <span className="text-[10px] text-slate-500">Karnet zostanie aktywowaty natychmiast</span>
+                            <span className="text-[10px] text-slate-500">Karnet zostanie aktywowany natychmiast</span>
                           </div>
                         </label>
                         <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${activationMode === 'after' ? 'bg-sky-50 border-blue-400' : 'bg-white border-slate-200 hover:border-blue-300'}`}>
@@ -3634,9 +3674,9 @@ export default function KarnetyPage() {
                         {dostepneRodzajeZajec.map((zaj: any) => (
                           <label key={zaj.id || zaj.nazwa} className="flex items-center gap-2.5 py-1.5 px-2 hover:bg-sky-50 rounded-xl cursor-pointer transition-colors">
                             <input 
-                              type="checkbox"
-                              checked={zaznaczoneZajecia.includes(zaj.nazwa)}
-                              onChange={() => handleToggleZajecie(zaj.nazwa)}
+                              type="checkbox" 
+                              checked={zaznaczoneZajecia.includes(zaj.nazwa)} 
+                              onChange={() => handleToggleZajecie(zaj.nazwa)} 
                               className="w-4 h-4 accent-amber-700 rounded cursor-pointer"
                             />
                             <span className="font-semibold text-slate-800 text-xs">{zaj.nazwa}</span>
