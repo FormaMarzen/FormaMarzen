@@ -131,9 +131,18 @@ const extractClientContinuityDiscount = (client: any): number | null => {
   return null;
 };
 
+// POMOCNICZA FUNKCJA DO IDENTYFIKACJI CZY KARNET TO UMOWA 12M
+const isContractPassCheck = (karnet: any): boolean => {
+  if (!karnet) return false;
+  if (karnet.isContract12M === true || karnet.isContract12M === 'true') return true;
+  const nazwa = (karnet.nazwa || karnet.pass || '').toLowerCase();
+  const typ = (karnet.typKarnetu || karnet.typ_karnetu || '').toLowerCase();
+  return typ.includes('umowa') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12m');
+};
+
 // POMOCNICZA FUNKCJA DO OBSŁUGI STANU RATY I BONUSU DLA UMOWY 12M
 const getContractRataInfo = (karnet: any) => {
-  if (!karnet || !karnet.isContract12M) {
+  if (!karnet || !isContractPassCheck(karnet)) {
     return {
       isContract: false,
       rataNum: 0,
@@ -178,9 +187,10 @@ const getContractRataInfo = (karnet: any) => {
   };
 };
 
-// POMOCNICZA FUNKCJA SPRAWDZAJĄCA CZY KARNET JEST AKTYWNY
+// NOWA LOGIKA: UMOWA 12M NIGDY NIE ZNIKA Z WIDOKU AKTYWNYCH
 const isPassActive = (k: any) => {
   if (!k) return false;
+  if (isContractPassCheck(k)) return true;
   const today = new Date().toISOString().split('T')[0];
   if (k.waznyDo && k.waznyDo < today) {
     return false;
@@ -529,7 +539,7 @@ export default function KarnetyPage() {
     let maxCykl = 1;
 
     for (const k of activePasses) {
-      if (k.isContract12M) continue;
+      if (isContractPassCheck(k)) continue;
 
       const passCycle = typeof k.cykl === 'number' ? k.cykl : 1;
       maxCykl = Math.max(maxCykl, passCycle);
@@ -726,7 +736,6 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
-
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -778,6 +787,12 @@ export default function KarnetyPage() {
 
             let karnetyChanged = false;
             const verifiedKarnety = parsedKarnety.map((k: any) => {
+              if (isContractPassCheck(k)) {
+                return {
+                  ...k,
+                  isContract12M: true
+                };
+              }
               if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
                 if (k.waznyDo && k.waznyDo < todayDateOnly && k.pozostaloWejsc > 0) {
                   karnetyChanged = true;
@@ -1167,7 +1182,7 @@ export default function KarnetyPage() {
     if (!currentUser || !passToExtend) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
-    const isContract = passToExtend.isContract12M || defKarnetu?.isContract12M || defKarnetu?.typKarnetu === 'Umowa 12 miesięcy';
+    const isContract = isContractPassCheck(passToExtend) || isContractPassCheck(defKarnetu);
     
     let nextRataStr = '1 / 1';
     let nowaDataWygasnieciaStr = '';
@@ -1176,11 +1191,11 @@ export default function KarnetyPage() {
 
     let basePriceNum = 0;
     if (isContract && passToExtend.cena) {
-      basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
+      basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]/g, "")) || 0;
     } else if (defKarnetu) {
       basePriceNum = parseFloat(defKarnetu.cena) || 0;
     } else {
-      basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+      basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]/g, "")) || 0;
     }
 
     if (isContract) {
@@ -1280,8 +1295,10 @@ export default function KarnetyPage() {
           isContract12M: isContract,
           bonusActivated: isBonus13thPeriod ? true : k.bonusActivated,
           bonusClaimed: isBonus13thPeriod ? true : k.bonusClaimed,
+          blokadaDo: isContract ? null : k.blokadaDo,
+          powodBlokady: isContract ? null : k.powodBlokady,
           historiaPrzedluzen: nowaHistoria,
-          znizkaProcentowa: appliedLabel,
+          znizkaProcentowa: isContract ? '' : appliedLabel,
           statusTekst: statusFinalTekst,
           pozostaloWejsc: isContract ? null : updatedRemaining,
           poczatkoweWejsc: isContract ? null : updatedInitial
@@ -1366,7 +1383,7 @@ export default function KarnetyPage() {
 
       dbPayload.umowa_oplacona_do = targetPaidUntil;
 
-      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę');
+      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty');
       if (isBlockedForContract) {
         dbPayload.blokadaDo = null;
         dbPayload.powodBlokady = null;
@@ -1489,7 +1506,7 @@ export default function KarnetyPage() {
       : [];
     
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
-    const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
+    const isContract = isContractPassCheck(defKarnetu) || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
     
     let calculatedFirstPayment = basePriceNum;
     let contractInfo: any = null;
@@ -1533,7 +1550,7 @@ export default function KarnetyPage() {
         poczatkoweWejsc: null,
         cena: `${basePriceNum.toFixed(2)} PLN`,
         cykl: 1,
-        znizkaProcentowa: appliedLabel,
+        znizkaProcentowa: '',
         rata: '0 / 12',
         statusTekst: statusTekst,
         isContract12M: true,
@@ -1642,7 +1659,7 @@ export default function KarnetyPage() {
     // ROZLICZENIE UMOWY PRZY ZAKUPIE
     if (isContract && contractInfo) {
       dbPayload.umowa_oplacona_do = contractInfo.endOfFirstMonthStr;
-      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę');
+      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty');
       if (isBlockedForContract) {
         dbPayload.blokadaDo = null;
         dbPayload.powodBlokady = null;
@@ -1737,6 +1754,7 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -1851,7 +1869,7 @@ export default function KarnetyPage() {
     if (karnetIndex === -1) return;
     
     const targetKarnet = karnetyList[karnetIndex];
-    const isContract = targetKarnet.isContract12M;
+    const isContract = isContractPassCheck(targetKarnet);
 
     const { weekdaysCount, weekendDaysCount, totalCalendarDays } = calculateSuspensionBreakdown(suspendStartDate, suspendEndDate);
     const requestedDays = totalCalendarDays;
@@ -2103,7 +2121,7 @@ export default function KarnetyPage() {
     let plannedDeducted = getDaysBetween(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
     let actualDeducted = 0;
 
-    if (targetKarnet.isContract12M) {
+    if (isContractPassCheck(targetKarnet)) {
       const plannedBreakdown = calculateSuspensionBreakdown(targetKarnet.zawieszonyOd, targetKarnet.zawieszonyDo);
       if (plannedBreakdown.weekendDaysCount >= 1 && plannedBreakdown.weekdaysCount === 1) {
         plannedDeducted = 1;
@@ -2144,7 +2162,7 @@ export default function KarnetyPage() {
     let updatedSuspensionDaysLeft = targetKarnet.contractSuspensionDaysLeft;
     let updatedTotalSuspendedDaysUsed = targetKarnet.totalSuspendedDaysUsed || 0;
 
-    if (targetKarnet.isContract12M) {
+    if (isContractPassCheck(targetKarnet)) {
       const currentPool = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
       updatedSuspensionDaysLeft = Math.min(30, currentPool + unusedDaysRefund);
       updatedTotalSuspendedDaysUsed = Math.max(0, updatedTotalSuspendedDaysUsed - unusedDaysRefund);
@@ -2185,7 +2203,7 @@ export default function KarnetyPage() {
       contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
       totalSuspendedDaysUsed: updatedTotalSuspendedDaysUsed,
       historiaZawieszen: updatedPassHist,
-      statusTekst: targetKarnet.isContract12M 
+      statusTekst: isContractPassCheck(targetKarnet) 
         ? (targetKarnet.rata === 'Bonus / 12' 
             ? `Umowa 12M (Bonus z zawieszenia • Ważny do: ${correctedExpiryDate})`
             : `Umowa 12M (Rata ${targetKarnet.rata || '0 / 12'} • Ważny do: ${correctedExpiryDate})`)
@@ -2460,11 +2478,23 @@ export default function KarnetyPage() {
                 let isExpiring = false;
                 let isPending = karnet.statusTekst?.includes('Oczekujący');
                 let isSuspendedLocal = !!karnet.zawieszonyOd;
-                const isContract = karnet.isContract12M;
+                const isContract = isContractPassCheck(karnet);
                 const contractInfo = getContractRataInfo(karnet);
                 const isBonus13thActive = contractInfo.isBonusActive;
 
-                if (!isPending && !isSuspendedLocal && !isBonus13thActive) {
+                // WERYFIKACJA PŁATNOŚCI UMOWY 12M
+                const currentYear = new Date().getFullYear();
+                const currentMonthNum = new Date().getMonth() + 1;
+                const firstDayOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-01`;
+                const oplaconaDo = currentUser?.umowa_oplacona_do || karnet.umowa_oplacona_do || karnet.waznyDo;
+                const czyOplaconyBiezacyMiesiac = oplaconaDo && String(oplaconaDo) >= firstDayOfCurrentMonthStr;
+                const isLatePaymentBlocked = isContract && (
+                  (karnet.blokadaDo && karnet.blokadaDo >= todayStr && (karnet.powodBlokady?.toLowerCase().includes('umow') || karnet.powodBlokady?.toLowerCase().includes('wpłat'))) ||
+                  (currentUser?.blokadaDo && currentUser?.blokadaDo >= todayStr && (currentUser?.powodBlokady?.toLowerCase().includes('umow') || currentUser?.powodBlokady?.toLowerCase().includes('wpłat'))) ||
+                  (!czyOplaconyBiezacyMiesiac && new Date().getDate() >= 4)
+                );
+
+                if (!isPending && !isSuspendedLocal && !isBonus13thActive && !isContract) {
                   if (karnet.waznyDo) {
                     const todayDate = new Date();
                     todayDate.setHours(0, 0, 0, 0);
@@ -2479,7 +2509,8 @@ export default function KarnetyPage() {
                 }
 
                 let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
-                if (isSuspendedLocal) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
+                if (isLatePaymentBlocked) statusColorClass = 'bg-rose-100 text-rose-800 border-rose-300';
+                else if (isSuspendedLocal) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
                 else if (isBonus13thActive) statusColorClass = 'bg-purple-100 text-purple-900 border-purple-300';
                 else if (contractInfo.canActivateBonus) statusColorClass = 'bg-purple-50 text-purple-800 border-purple-300';
                 else if (isPending) statusColorClass = 'bg-amber-100 text-amber-800 border-amber-200'; 
@@ -2493,20 +2524,24 @@ export default function KarnetyPage() {
                           <h3 className="text-xl font-black text-slate-900">{karnet.nazwa}</h3>
                           {isContract && (
                             <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-md border uppercase ${
-                              contractInfo.canActivateBonus
+                              isLatePaymentBlocked
+                                ? 'bg-rose-100 text-rose-900 border-rose-300 animate-pulse'
+                                : contractInfo.canActivateBonus
                                 ? 'bg-purple-100 text-purple-900 border-purple-300'
                                 : isBonus13thActive 
                                 ? 'bg-purple-100 text-purple-900 border-purple-300' 
                                 : 'bg-amber-500/20 text-amber-900 border-amber-300'
                             }`}>
-                              {contractInfo.canActivateBonus 
+                              {isLatePaymentBlocked
+                                ? '⚠️ Brak wpłaty za bieżący miesiąc'
+                                : contractInfo.canActivateBonus 
                                 ? `Umowa 12M • Dni bonusowe (+${contractInfo.totalSuspUsed} dni)` 
                                 : isBonus13thActive 
                                 ? 'Umowa 12M • Dni bonusowe' 
                                 : `Umowa 12M • Rata ${karnet.rata || '0/12'}`}
                             </span>
                           )}
-                          {karnet.znizkaProcentowa && (
+                          {karnet.znizkaProcentowa && !isContract && (
                             <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded border border-emerald-200">
                               {karnet.znizkaProcentowa}
                             </span>
@@ -2517,7 +2552,9 @@ export default function KarnetyPage() {
                             Aktywne zapisy: {karnet.pozostaloWejsc !== null && karnet.pozostaloWejsc !== undefined ? karnet.pozostaloWejsc : 'Bez limitu'}
                           </span>
                           <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
-                            {karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
+                            {isLatePaymentBlocked
+                              ? 'Blokada zapisów (Brak wpłaty do 3. dnia m-ca)'
+                              : karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                           </span>
                           {karnet.cena && !isBonus13thActive && (
                             <span className="bg-slate-100 text-slate-700 font-semibold px-3 py-1 rounded-full text-xs border border-slate-200">
@@ -2532,6 +2569,29 @@ export default function KarnetyPage() {
                         </div>
                       </div>
                     </div>
+
+                    {/* DEDYKOWANY BANER BLOKADY RATALNEJ DLA UMOWY 12M */}
+                    {isLatePaymentBlocked && (
+                      <div className="bg-rose-50 border border-rose-300 text-rose-800 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-2xl shrink-0">⚠️</span>
+                          <div>
+                            <strong className="block text-xs uppercase tracking-wide text-rose-950">
+                              Karnet zablokowany ze względu na brak płatności za umowę 12M
+                            </strong>
+                            <span className="text-[11px] text-rose-800 leading-tight block mt-0.5">
+                              Opłać ratę za bieżący miesiąc, aby odblokować możliwość zapisów na treningi oraz wstęp do klubu.
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                          className="bg-rose-600 hover:bg-rose-700 text-white font-black text-xs px-4 py-2 rounded-xl shrink-0 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+                        >
+                          💳 OPŁAĆ RATĘ TERAZ
+                        </button>
+                      </div>
+                    )}
                     
                     <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
                       {isSuspendedLocal ? (
@@ -2552,9 +2612,9 @@ export default function KarnetyPage() {
                         ) : !contractInfo.isFullyPaid ? (
                           <button 
                             onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
-                            className="bg-amber-600 hover:bg-amber-700 border border-amber-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                            className={`${isLatePaymentBlocked ? 'bg-rose-600 hover:bg-rose-700 border-rose-700' : 'bg-amber-600 hover:bg-amber-700 border-amber-700'} text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5`}
                           >
-                            <span className="text-sm">💳</span> OPŁAĆ KOLEJNĄ RATĘ
+                            <span className="text-sm">💳</span> {isLatePaymentBlocked ? 'OPŁAĆ ZALEGŁĄ RATĘ' : 'OPŁAĆ KOLEJNĄ RATĘ'}
                           </button>
                         ) : null
                       ) : (
@@ -2593,7 +2653,6 @@ export default function KarnetyPage() {
               <span className="text-base leading-none">ℹ️</span> Zasady zawieszania karnetów
             </button>
           </div>
-          
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex-1 text-center sm:text-left">
@@ -2688,6 +2747,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
+
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
