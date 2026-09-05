@@ -462,6 +462,7 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
+
   // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
@@ -1255,6 +1256,62 @@ export default function DashboardPage() {
   // REF DLA OCHRONY PRZED PĘTLĄ ZAPYTANIA
   const isFetchingRef = useRef(false);
 
+  // AUTOMATYCZNA WERYFIKACJA PŁATNOŚCI UMÓW (4. I 7. DZIEŃ MIESIĄCA)
+  const checkContractPaymentEnforcement = async (allClients: any[]) => {
+    const today = new Date();
+    const dayOfMonth = today.getDate();
+    const currentYear = today.getFullYear();
+    const currentMonthNum = today.getMonth() + 1; // 1-12
+    const firstDayOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-01`;
+    const endOfCurrentMonth = new Date(currentYear, currentMonthNum, 0);
+    const endOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-${String(endOfCurrentMonth.getDate()).padStart(2, '0')}`;
+
+    // Weryfikujemy dyscyplinę płatności tylko od 4. dnia miesiąca
+    if (dayOfMonth < 4) return;
+
+    for (const client of allClients) {
+      const hasContract = client.karnetyKlubowicza && client.karnetyKlubowicza.some((k: any) => isContractPass(k));
+      if (!hasContract) continue;
+
+      // Sprawdzamy pole umowa_oplacona_do
+      const oplaconaDo = client.umowa_oplacona_do || client.umowaOplaconaDo;
+      const czyOplaconyBiezacyMiesiac = oplaconaDo && String(oplaconaDo) >= firstDayOfCurrentMonthStr;
+
+      if (!czyOplaconyBiezacyMiesiac) {
+        const powod = "Nieopłacenie karnetu na umowę (brak wpłaty do 3. dnia miesiąca)";
+
+        // 4. DZIEŃ MIESIĄCA - NAKŁADANIE BLOKADY ZAPISÓW
+        const juzMaBlokadeUmowy = client.blokadaDo && client.powodBlokady === powod;
+        if (!juzMaBlokadeUmowy) {
+          const updatedClientKarnety = (client.karnetyKlubowicza || []).map((k: any) => ({
+            ...k,
+            blokadaDo: endOfCurrentMonthStr,
+            powodBlokady: powod
+          }));
+
+          await supabase.from('klienci').update({
+            blokadaDo: endOfCurrentMonthStr,
+            powodBlokady: powod,
+            karnetyKlubowicza: updatedClientKarnety
+          }).eq('id', client.id);
+
+          await supabase.from('booking_logs').insert([{
+            action_type: 'CONTRACT_UNPAID_BLOCKED',
+            status: 'BLOCKED',
+            reason: `Klubowicz ID:${client.id} zablokowany z powodu braku wpłaty do 3. dnia miesiąca.`,
+            rule_applied: 'contract_payment_day_4_enforcement',
+            payload: { klient_id: client.id, umowa_oplacona_do: oplaconaDo, blokada_do: endOfCurrentMonthStr }
+          }]);
+        }
+
+        // 7. DZIEŃ MIESIĄCA - AUTOMATYCZNE WYPISANIE ZE WSZYSTKICH ZAJĘĆ
+        if (dayOfMonth >= 7) {
+          await handleAutoWypiszPoZablokowaniu(client.id, client, powod, undefined);
+        }
+      }
+    }
+  };
+
   // RÓWNOLEGŁE POBIERANIE DANYCH
   const loadData = async () => {
     if (isFetchingRef.current) return;
@@ -1419,6 +1476,7 @@ export default function DashboardPage() {
             birthDate: c.Urodziny || c.birthDate || '',
             blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
             powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
+            umowa_oplacona_do: c.umowa_oplacona_do || null,
             karnetyKlubowicza: parsedKarnety,
             walletHistory: c.walletHistory || [],
             transakcje: clientTransakcje,
@@ -1429,6 +1487,9 @@ export default function DashboardPage() {
           };
         });
         setKlienciList(enriched);
+        
+        // Weryfikacja umów w tle
+        checkContractPaymentEnforcement(enriched);
         
         if (userEmail) {
           matchedCurrentClient = enriched.find((c: any) => c.email === userEmail);
@@ -1445,7 +1506,6 @@ export default function DashboardPage() {
           }
         }
       }
-
       // Ogłoszenia
       if (ogloszeniaData) {
         const activeUserId = matchedCurrentClient ? String(matchedCurrentClient.id) : null;
@@ -2916,6 +2976,7 @@ export default function DashboardPage() {
     setWalletAmountInput(''); setWalletReasonInput(''); setIsTopUpWalletOpen(false);
     showToast("Saldo portfela zostało zaktualizowane.");
   };
+
   const getPrawdziweAktywneZapisy = (klientId: number) => {
     let count = 0;
     const now = new Date();
@@ -2953,6 +3014,7 @@ export default function DashboardPage() {
     return count;
   };
 
+  // OPTYMISTYCZNA OBSŁUGA OBECNOŚCI (0 MS OPÓŹNIENIA)
   const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
@@ -2960,21 +3022,129 @@ export default function DashboardPage() {
     const szukany = aktualni.find(k => k.id === klientId);
     if (!szukany) return;
     const nowyStanObecny = !szukany.obecny;
-    await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny, nieobecny: false }).in('class_key', keys).eq('klient_id', klientId);
-    loadData();
+
+    // Natychmiastowa zmiana w stanie komponentu (Optimistic UI)
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      keys.forEach(k => {
+        if (updated[k]) {
+          updated[k] = updated[k].map(item => 
+            item.id === klientId ? { ...item, obecny: nowyStanObecny, nieobecny: false } : item
+          );
+        }
+      });
+      return updated;
+    });
+
+    // W tle: synchronizacja z Supabase
+    await supabase
+      .from('zapisy_zajec')
+      .update({ obecny: nowyStanObecny, nieobecny: false })
+      .in('class_key', keys)
+      .eq('klient_id', klientId);
   };
 
+  // OBSŁUGA NIEOBECNOŚCI: TRENER (AUTO BLOKADA 3 DNI, BRAK PYTANIA O ZWROT) VS ADMIN
   const toggleNieobecnyAction = async (osobaZapisana: any, klient: any) => {
     if (!selectedClass) return;
+
     if (osobaZapisana.nieobecny) {
+      // Odznaczenie nieobecności - Optimistic UI
       const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      setZapisyNaZajecia(prev => {
+        const updated = { ...prev };
+        keys.forEach(k => {
+          if (updated[k]) {
+            updated[k] = updated[k].map(item => 
+              item.id === klient.id ? { ...item, nieobecny: false, obecny: false } : item
+            );
+          }
+        });
+        return updated;
+      });
       await supabase.from('zapisy_zajec').update({ nieobecny: false, obecny: false }).in('class_key', keys).eq('klient_id', klient.id);
       loadData();
     } else {
-      setBlokadaZapisow(true);
-      setDlugoscBlokady(String(bookingRules.absence_ban_days || 3));
-      setClientToMarkAbsent(klient);
+      if (appRole === 'trener') {
+        // ROLA TRENERA: Natychmiastowe odebranie wejścia bez pytania, auto blokada 3 dni i wypisanie z kolejnych zajęć
+        await wykonajNieobecnoscDlaTrenera(osobaZapisana, klient);
+      } else {
+        // ROLA ADMINISTRATORA: Bez zmian, dialog z potwierdzeniem
+        setBlokadaZapisow(true);
+        setDlugoscBlokady(String(bookingRules.absence_ban_days || 3));
+        setClientToMarkAbsent(klient);
+      }
     }
+  };
+
+  // DEDYKOWANA LOGIKA DLA TRENERA (BŁYSKAWICZNA DYSKRYMINACJA NIEOBECNOŚCI)
+  const wykonajNieobecnoscDlaTrenera = async (osobaZapisana: any, klient: any) => {
+    if (!selectedClass) return;
+    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+
+    // Optimistic UI - natychmiastowe oznaczenie na czerwono
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      keys.forEach(k => {
+        if (updated[k]) {
+          updated[k] = updated[k].map(item => 
+            item.id === klient.id ? { ...item, obecny: false, nieobecny: true } : item
+          );
+        }
+      });
+      return updated;
+    });
+
+    await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', klient.id);
+
+    // Automatyczna 3-dniowa blokada zapisów
+    const dni = 3;
+    const dataWygaśnięcia = new Date();
+    dataWygaśnięcia.setDate(dataWygaśnięcia.getDate() + dni);
+    const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
+    const powod = `Blokada zapisów na 3 dni za nieobecność na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+
+    let updatedClientKarnety = (klient.karnetyKlubowicza || []).map((k: any) => ({
+      ...k,
+      blokadaDo: dataStr,
+      powodBlokady: powod
+    }));
+
+    await supabase.from('klienci').update({
+      blokadaDo: dataStr,
+      powodBlokady: powod,
+      karnetyKlubowicza: updatedClientKarnety
+    }).eq('id', klient.id);
+
+    // Rejestracja w transakcjach
+    let d = 1, m = 1;
+    if (selectedClass.displayDate.includes('/')) {
+      [d, m] = selectedClass.displayDate.split('/').map(Number);
+    }
+    const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+
+    await supabase.from('transakcje').insert([{
+      klient_id: klient.id,
+      typ_operacji: 'nieobecnosc_trener',
+      class_key: classKey,
+      opis: `${klient.firstName} ${klient.lastName} - Trener oznaczył NIEOBECNOŚĆ na: ${selectedClass.title} (${selectedClass.displayDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Nałożono 3 dni blokady zapisów (do ${dataStr}). Wejście NIE zostało zwrócone.`
+    }]);
+
+    await supabase.from('booking_logs').insert([{
+      action_type: 'TRAINER_MARKED_ABSENT',
+      status: 'BLOCKED',
+      reason: `Trener oznaczył nieobecność klubowicza ID:${klient.id}. Blokada do ${dataStr}. Brak zwrotu wejścia.`,
+      rule_applied: 'trainer_absence_auto_ban',
+      payload: { klient_id: klient.id, class_key: classKey, ban_until: dataStr }
+    }]);
+
+    // Automatyczne wypisanie klubowicza ze wszystkich przyszłych zajęć w okresie trwania blokady
+    await handleAutoWypiszPoZablokowaniu(klient.id, klient, powod, classKey);
+
+    showToast(`Oznaczono nieobecność. Nałożono 3 dni blokady zapisów na ${klient.firstName} ${klient.lastName}.`);
+    loadData();
   };
 
   const handleKlubowiczZapiszSie = async () => {
@@ -3008,7 +3178,6 @@ export default function DashboardPage() {
       showToast("Nie możesz zapisać się na zajęcia! Nie posiadasz aktywnego karnetu. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
       return;
     }
-
     const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
       if (!k) return false;
       if (k.waznyDo) {
@@ -3288,12 +3457,36 @@ export default function DashboardPage() {
     
     if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
+    // Optimistic UI - natychmiastowe zaktualizowanie zapisu na kafelku
+    const newEntry = {
+      id: currentUser.id,
+      klient_id: currentUser.id,
+      firstName: currentUser.firstName,
+      lastName: currentUser.lastName,
+      status: 'zapisany',
+      waitlist_cutoff_minutes: null,
+      obecny: false,
+      nieobecny: false
+    };
+
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      allVariantKeys.forEach(vk => {
+        if (!updated[vk]) updated[vk] = [];
+        if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
+          updated[vk] = [...updated[vk], newEntry];
+        }
+      });
+      return updated;
+    });
+
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
     ]);
     
     if (error) { 
       showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
+      loadData();
       return; 
     }
 
@@ -3332,16 +3525,40 @@ export default function DashboardPage() {
     }]);
 
     showToast("Zostałeś pomyślnie zapisany na zajęcia!");
-    loadData();
     setSelectedClass(null);
+    loadData();
   };
 
   const handleConfirmWaitlistSignup = async (cutoffMinutes: number) => {
     if (!currentUser || !selectedClass) return;
 
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+    const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const limitZajec = selectedClass.limit || 12;
     const aktualni = zapisyNaZajecia[classKey] || [];
+
+    // Optimistic UI - dodanie na krzesełko natychmiast
+    const waitlistEntry = {
+      id: currentUser.id,
+      klient_id: currentUser.id,
+      firstName: currentUser.firstName,
+      lastName: currentUser.lastName,
+      status: 'krzesełko',
+      waitlist_cutoff_minutes: cutoffMinutes,
+      obecny: false,
+      nieobecny: false
+    };
+
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      allVariantKeys.forEach(vk => {
+        if (!updated[vk]) updated[vk] = [];
+        if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
+          updated[vk] = [...updated[vk], waitlistEntry];
+        }
+      });
+      return updated;
+    });
 
     const { error } = await supabase.from('zapisy_zajec').insert([
       { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
@@ -3349,6 +3566,7 @@ export default function DashboardPage() {
 
     if (error) {
       showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
+      loadData();
       return;
     }
 
@@ -3399,8 +3617,8 @@ export default function DashboardPage() {
 
     setIsWaitlistModalOpen(false);
     showToast(`Dopisano do listy rezerwowej! System wypisze Cię automatycznie na ${cutoffLabel} przed startem, jeśli nie zwolni się miejsce.`);
-    loadData();
     setSelectedClass(null);
+    loadData();
   };
 
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
@@ -3439,6 +3657,17 @@ export default function DashboardPage() {
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[classKey] || [];
 
+    // Optimistic UI - natychmiastowe usunięcie z widoku
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      keysToDelete.forEach(vk => {
+        if (updated[vk]) {
+          updated[vk] = updated[vk].filter(item => item.id !== currentUser.id);
+        }
+      });
+      return updated;
+    });
+
     const { error } = await supabase
       .from('zapisy_zajec')
       .delete()
@@ -3447,6 +3676,7 @@ export default function DashboardPage() {
 
     if (error) { 
       showToast(`Nie udało się wypisać z zajęć: ${error.message}`, 'error'); 
+      loadData();
       return; 
     }
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
@@ -3522,8 +3752,8 @@ export default function DashboardPage() {
     }
 
     showToast("Zostałeś pomyślnie wypisany z zajęć.");
-    loadData();
     setSelectedClass(null);
+    loadData();
   };
 
   // WYPISANIE KLUBOWICZA Z LISTY AKTYWNYCH ZAPISÓW (PANEL GŁÓWNY)
@@ -3817,11 +4047,23 @@ export default function DashboardPage() {
     showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}! (${statusZpisu === 'krzesełko' ? 'Krzesełko' : 'Lista główna'})`);
   };
 
+  // OBSŁUGA WYPISYWANIA: TRENER (ZAWSZE ODEJMUJE WEJŚCIE, PYTA O BLOKADĘ) VS ADMIN (PYTA O ZWROT)
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[classKey] || [];
+
+    // Optimistic UI - natychmiastowe usunięcie klienta z listy
+    setZapisyNaZajecia(prev => {
+      const updated = { ...prev };
+      keysToDelete.forEach(k => {
+        if (updated[k]) {
+          updated[k] = updated[k].filter(item => item.id !== clientToUnregister.id);
+        }
+      });
+      return updated;
+    });
 
     const { error } = await supabase
       .from('zapisy_zajec')
@@ -3831,10 +4073,20 @@ export default function DashboardPage() {
 
     if (error) { 
       showToast(`Nie udało się wypisać: ${error.message}`, 'error'); 
+      loadData();
       return; 
     }
 
-    const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
+    // REGULA DLA RÓL:
+    // Administrator: pyta czy zwrócić wejście
+    // Trener: NIE pyta czy zwrócić wejście, zawsze wejście przepada (nie jest zwracane do puli)
+    let zwrocicWejscie = false;
+    if (appRole === 'admin') {
+      zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
+    } else {
+      zwrocicWejscie = false;
+    }
+
     let updatedKarnety = [...(clientToUnregister.karnetyKlubowicza || [])];
     if (zwrocicWejscie) {
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -3877,7 +4129,7 @@ export default function DashboardPage() {
         klient_id: clientToUnregister.id, 
         typ_operacji: 'zajecia_wypis', 
         class_key: classKey, 
-        opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z treningu przez klub: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}).${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}` 
+        opis: `${clientToUnregister.firstName} ${clientToUnregister.lastName} - Wypisanie z treningu przez ${appRole === 'trener' ? 'trenera' : 'klub'}: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}).${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ' Wejście NIE zostało zwrócone.'}` 
       },
       { 
         klient_id: clientToUnregister.id, 
@@ -3904,7 +4156,7 @@ export default function DashboardPage() {
       const dataWygaśnięcia = new Date();
       dataWygaśnięcia.setDate(dataWygaśnięcia.getDate() + dni);
       const dataStr = `${dataWygaśnięcia.getFullYear()}-${String(dataWygaśnięcia.getMonth() + 1).padStart(2, '0')}-${String(dataWygaśnięcia.getDate()).padStart(2, '0')}`;
-      const powod = `Blokada zapisów na ${dni} dni za brak obecności na treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
+      const powod = `Blokada zapisów na ${dni} dni po wypisaniu z treningu ${selectedClass.title} w dniu ${selectedClass.displayDate}.`;
       
       let updatedClientKarnety = (clientToUnregister.karnetyKlubowicza || []).map((k: any) => ({
         ...k,
@@ -3926,7 +4178,7 @@ export default function DashboardPage() {
     await loadData();
     showToast(autoCancelled 
       ? "Wypisano klienta. Trening został automatycznie odwołany ze względu na brak minimalnej liczby uczestników." 
-      : "Wypisano klienta z zajęć."
+      : `Wypisano klienta z zajęć.${!zwrocicWejscie ? ' Wejście nie zostało zwrócone.' : ''}`
     );
   };
 
@@ -4567,7 +4819,6 @@ export default function DashboardPage() {
               📋 Tabela Operacji ({wszystkieTransakcje.length})
             </button>
           </div>
-
           <div className="flex items-center gap-2">
             {adminViewTab === 'grafik' && appRole === 'admin' && (
               <button 
@@ -4587,7 +4838,7 @@ export default function DashboardPage() {
       {/* ZAKŁADKA 1: TABELA OPERACJI I ZAPISÓW (PEŁNE PRECYZYJNE DANE Z GRAFIKU) */}
       {(appRole === 'admin' || appRole === 'trener') && adminViewTab === 'operacje' && (
         <section className="space-y-4 animate-in fade-in">
-          {/* Pasek wyszukiwania i filtrów ze zrzutu ekranu */}
+          {/* Pasek wyszukiwania i filtrów */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
             <div className="relative flex-1">
               <input
@@ -4643,7 +4894,6 @@ export default function DashboardPage() {
                     const opDateFormatted = `${opDate.getFullYear()}-${String(opDate.getMonth() + 1).padStart(2, '0')}-${String(opDate.getDate()).padStart(2, '0')}`;
                     const opTimeFormatted = `${String(opDate.getHours()).padStart(2, '0')}:${String(opDate.getMinutes()).padStart(2, '0')}`;
 
-                    // Rozszyfrowanie zajęć na wypadek generycznego opisu
                     let classDetailsResolved: any = null;
                     if (op.class_key && op.class_key.includes('_')) {
                       const [cId, dPart] = op.class_key.split('_');
@@ -5474,7 +5724,6 @@ export default function DashboardPage() {
         
         const canManageClass = appRole === 'admin' || appRole === 'trener';
 
-        // Precyzyjne sformatowanie daty treningu
         let d = '01', m = '01';
         if (selectedClass.displayDate && selectedClass.displayDate.includes('/')) {
           [d, m] = selectedClass.displayDate.split('/');
@@ -6000,7 +6249,6 @@ export default function DashboardPage() {
                   ))}
                 </div>
               </div>
-
               <div className="pt-3 flex justify-end gap-2 border-t border-sky-100">
                 <button
                   type="button"
@@ -6647,7 +6895,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: POTWIERDZENIE WYPISANIA */}
+      {/* MODAL: POTWIERDZENIE WYPISANIA (ADMIN I TRENER) */}
       {clientToUnregister && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
@@ -6657,6 +6905,13 @@ export default function DashboardPage() {
             </div>
             <div className="space-y-3 text-xs text-slate-700">
               <p>Czy na pewno chcesz wypisać użytkownika <strong>{clientToUnregister.firstName} {clientToUnregister.lastName}</strong> z zajęć?</p>
+              
+              {appRole === 'trener' && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-rose-800 font-medium">
+                  ℹ️ Tryb trenera: Wejście z karnetu ilościowego <strong>zostanie odjęte</strong> (brak zwrotu wejścia).
+                </div>
+              )}
+
               <div className="bg-sky-50 p-3 rounded-xl border border-sky-200 space-y-2">
                 <label className="flex items-center gap-2 cursor-pointer font-bold text-sky-950">
                   <input
@@ -6665,7 +6920,7 @@ export default function DashboardPage() {
                     onChange={(e) => setBlokadaZapisow(e.target.checked)}
                     className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
                   />
-                  <span>Nałóż blokadę zapisów (np. za niestawienie się)</span>
+                  <span>Nałóż blokadę zapisów</span>
                 </label>
                 {blokadaZapisow && (
                   <div className="pl-6 pt-1 space-y-1">
@@ -6689,7 +6944,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* MODAL: OZNACZ JAKO NIEOBECNEGO */}
+      {/* MODAL: OZNACZ JAKO NIEOBECNEGO (TYLKO ADMINISTRATOR) */}
       {clientToMarkAbsent && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-amber-200">
@@ -6905,7 +7160,6 @@ export default function DashboardPage() {
             </div>
             
             <form onSubmit={handleSaveMultiDayEvent} className="space-y-4 text-xs">
-              {/* Przełącznik: Wydarzenie jednodniowe vs kilkudniowe */}
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 block">Typ wydarzenia:</label>
                 <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
