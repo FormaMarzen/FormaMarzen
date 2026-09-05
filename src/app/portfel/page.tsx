@@ -9,12 +9,13 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 let globalCreatingLock = false;
 
-// Pomocnik do identyfikacji karnetu na umowę
-const isContractPass = (k: any) => {
+// Pomocnik do precyzyjnej identyfikacji karnetu na umowę
+const isContractPass = (k: any): boolean => {
   if (!k) return false;
+  if (k.isContract12M === true || k.isContract12M === 'true') return true;
   const lower = (k.nazwa || k.pass || '').toLowerCase();
   const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
-  return k.isContract12M === true || typ.includes('umowa') || lower.includes('umowa');
+  return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m');
 };
 
 export default function PortfelPage() {
@@ -113,6 +114,13 @@ export default function PortfelPage() {
               const typ = (t.typ_operacji || '').toLowerCase();
               const opis = (t.opis || '').toLowerCase();
 
+              const isContractFinanceOp = 
+                typ.includes('oplata_umowa') || 
+                typ.includes('oplata_raty_12m') || 
+                typ.includes('zakup_umowy') || 
+                opis.includes('umow') || 
+                opis.includes('rata');
+
               const isNonFinancialLog = 
                 (typ.includes('zajecia') ||
                 typ.includes('zapis') ||
@@ -125,11 +133,16 @@ export default function PortfelPage() {
                 opis.includes('usunięcie karnetu') ||
                 opis.includes('auto-blokada') ||
                 opis.includes('obłożenie:')) &&
-                !typ.includes('oplata_umowa') &&
-                !opis.includes('umow');
+                !isContractFinanceOp;
 
               if (isNonFinancialLog) return;
               if (isNaN(kwotaVal) || kwotaVal === 0) return;
+
+              // Rejestracja powiązanego orderId jeśli istnieje w opisie
+              const orderMatch = t.opis?.match(/(TOP|DEBT|BUY|EXT|CON)-\d+-\d+/);
+              if (orderMatch) {
+                processedOrderIds.add(orderMatch[0]);
+              }
 
               const isAutopayType = typ.includes('autopay');
               const uniqueSig = `${t.created_at || t.data}_${kwotaVal}_${t.opis}`;
@@ -157,21 +170,37 @@ export default function PortfelPage() {
               const statusVal = a.status || 'pending';
               const gatewayInfo = a.gateway_response;
 
-              if (a.type === 'pass_purchase' || a.type === 'pass_extend' || a.type === 'contract_installment') {
-                if (processedOrderIds.has(a.order_id)) return;
+              // Sprawdzenie czy dana płatność nie została już ujęta z tabeli transakcje
+              if (a.order_id && processedOrderIds.has(a.order_id)) {
+                return;
+              }
+              if (a.order_id) {
                 processedOrderIds.add(a.order_id);
               }
 
               let defaultOpis = 'Doładowanie portfela Autopay';
-              if (a.type === 'wallet_settlement') defaultOpis = 'Spłata zadłużenia portfela (Autopay)';
-              else if (a.type === 'pass_purchase') defaultOpis = 'Zakup karnetu (Płatność Autopay)';
-              else if (a.type === 'pass_extend') defaultOpis = 'Przedłużenie karnetu (Płatność Autopay)';
-              else if (a.type === 'contract_installment') defaultOpis = 'Opłata za karnet na umowę (Płatność Autopay)';
+              let isOutflow = false;
+
+              if (a.type === 'wallet_settlement') {
+                defaultOpis = 'Spłata zadłużenia portfela (Autopay)';
+              } else if (a.type === 'pass_purchase') {
+                defaultOpis = 'Zakup karnetu (Płatność Autopay)';
+                isOutflow = true;
+              } else if (a.type === 'pass_extend') {
+                defaultOpis = 'Przedłużenie karnetu (Płatność Autopay)';
+                isOutflow = true;
+              } else if (a.type === 'contract_installment') {
+                defaultOpis = 'Opłata za karnet na umowę (Płatność Autopay)';
+                isOutflow = true;
+              }
 
               const itemOpis = gatewayInfo?.opis || defaultOpis;
               const uniqueSig = `${a.created_at}_${kwotaVal}_${itemOpis}`;
               if (processedUniqueSignatures.has(uniqueSig)) return;
               processedUniqueSignatures.add(uniqueSig);
+
+              // Wyznaczamy kwotę: dla wydatków ujemna, dla zasileń dodatnia
+              const finalAmount = isOutflow ? -Math.abs(kwotaVal) : Math.abs(kwotaVal);
 
               combinedHistory.push({
                 id: `ap-${a.id}`,
@@ -179,7 +208,7 @@ export default function PortfelPage() {
                 opis: itemOpis,
                 zrodlo: 'Bramka Autopay',
                 kategoria: 'autopay',
-                kwota: a.type === 'wallet_topup' || a.type === 'wallet_settlement' ? Math.abs(kwotaVal) : (statusVal === 'success' ? Math.abs(kwotaVal) : kwotaVal),
+                kwota: finalAmount,
                 status: statusVal,
                 statusTekst: statusVal === 'success' ? 'Opłacona' : statusVal === 'failed' ? 'Nieudana' : 'Oczekuje',
                 orderId: a.order_id
@@ -191,10 +220,15 @@ export default function PortfelPage() {
           setHistoriaWszystkichOperacji(combinedHistory);
 
           // Formatowanie stanu salda portfela
-          const rawWalletStr = rawClient.Portfel || rawClient.portfel || rawClient.wallet || '0.00 PLN';
-          const isNegativeWallet = String(rawWalletStr).includes('-');
-          let parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
-          if (isNegativeWallet) parsedWalletNum = -Math.abs(parsedWalletNum);
+          const rawWalletStr = rawClient.Portfel ?? rawClient.portfel ?? rawClient.wallet ?? '0.00 PLN';
+          let parsedWalletNum = 0;
+          if (typeof rawWalletStr === 'number') {
+            parsedWalletNum = rawWalletStr;
+          } else {
+            const isNegativeWallet = String(rawWalletStr).includes('-');
+            parsedWalletNum = parseFloat(String(rawWalletStr).replace(/[^0-9.]/g, "")) || 0;
+            if (isNegativeWallet) parsedWalletNum = -Math.abs(parsedWalletNum);
+          }
 
           let parsedKarnety = [];
           if (Array.isArray(rawClient.karnetyKlubowicza)) {
@@ -233,7 +267,7 @@ export default function PortfelPage() {
     }
   }, [loadData]);
 
-  const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string) => {
+  const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata?: any) => {
     setIsProcessingPayment(true);
     try {
       const response = await fetch('/api/autopay/init', {
@@ -245,7 +279,8 @@ export default function PortfelPage() {
           userId: currentUser.id,
           description: description,
           email: currentUser["E-mail"] || currentUser.email || '',
-          type: type
+          type: type,
+          metadata: metadata || null
         })
       });
 
@@ -335,7 +370,7 @@ export default function PortfelPage() {
     const lastDayOfMonth = new Date(year, month, 0).getDate();
     const endOfMonthStr = `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
     
-    const oplaconaDo = currentUser?.umowa_oplacona_do || null;
+    const oplaconaDo = currentUser?.umowa_oplacona_do || activeContractPass.umowa_oplacona_do || null;
     const isPaidThisMonth = oplaconaDo && String(oplaconaDo) >= firstDayOfMonthStr;
 
     let statusType: 'paid' | 'pending' | 'blocked' | 'cancelled' = 'pending';
@@ -390,10 +425,10 @@ export default function PortfelPage() {
         targetPaidUntil = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(lastDayNextMonth).padStart(2, '0')}`;
       }
 
-      const newWalletNum = walletVal - contractMonthlyFee;
+      const newWalletNum = Math.max(0, walletVal - contractMonthlyFee);
       const newWalletStr = `${newWalletNum.toFixed(2)} PLN`;
 
-      // Aktualizacja raty w karnecie
+      // Aktualizacja raty i terminu ważności w karnecie
       let updatedKarnety = (currentUser.karnetyKlubowicza || []).map((k: any) => {
         if (isContractPass(k)) {
           let updatedRata = k.rata || '1 / 12';
@@ -405,23 +440,32 @@ export default function PortfelPage() {
           }
           return {
             ...k,
+            waznyDo: targetPaidUntil,
             rata: updatedRata,
             blokadaDo: null,
             powodBlokady: null,
-            statusTekst: `Umowa 12M (Rata ${updatedRata} • Ważny do: ${k.waznyDo})`
+            statusTekst: `Umowa 12M (Rata ${updatedRata} • Ważny do: ${targetPaidUntil})`
           };
         }
         return k;
       });
 
+      const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
+        ? newWalletNum
+        : newWalletStr;
+
       const updatePayload: any = {
-        Portfel: newWalletStr,
+        Portfel: walletValToSave,
         umowa_oplacona_do: targetPaidUntil,
         karnetyKlubowicza: updatedKarnety
       };
 
+      if ('portfel' in currentUser && currentUser.portfel !== undefined) {
+        updatePayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? newWalletNum : walletValToSave;
+      }
+
       // Jeżeli blokada konta była spowodowana brakiem wpłaty za umowę, zdejmujemy ją
-      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę');
+      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłat');
       if (isBlockedForContract) {
         updatePayload.blokadaDo = null;
         updatePayload.powodBlokady = null;
@@ -437,9 +481,9 @@ export default function PortfelPage() {
       // Zapis w tabeli transakcje
       await supabase.from('transakcje').insert([{
         klient_id: currentUser.id,
-        typ_operacji: 'oplata_umowa',
+        typ_operacji: 'oplata_raty_12m',
         kwota: -contractMonthlyFee,
-        opis: `Opłata za karnet na umowę: ${activeContractPass.nazwa} (opłacono do ${targetPaidUntil}) - Portfel`
+        opis: `Opłata raty umowy 12M: ${activeContractPass.nazwa} (opłacono do ${targetPaidUntil}) - Portfel`
       }]);
 
       await supabase.from('booking_logs').insert([{
@@ -462,12 +506,26 @@ export default function PortfelPage() {
 
   // OPŁATA RATY UMOWY PRZEZ AUTOPAY ONLINE
   const handlePayContractViaAutopay = async () => {
-    if (!currentUser || !activeContractPass || isProcessingPayment) return;
+    if (!currentUser || !activeContractPass || !contractBillingInfo || isProcessingPayment) return;
 
     const orderId = `CON-${currentUser.id}-${Date.now()}`.substring(0, 32);
     const opis = `Rata karnetu na umowe: ${activeContractPass.nazwa}`.substring(0, 100);
 
-    await redirectToAutopay(contractMonthlyFee, orderId, opis, 'contract_installment');
+    let targetPaidUntil = contractBillingInfo.endOfMonthStr;
+    if (contractBillingInfo.isPaidThisMonth && contractBillingInfo.oplaconaDo) {
+      const nextMonthDate = new Date(contractBillingInfo.year, contractBillingInfo.month, 1);
+      const lastDayNextMonth = new Date(nextMonthDate.getFullYear(), nextMonthDate.getMonth() + 1, 0).getDate();
+      targetPaidUntil = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(lastDayNextMonth).padStart(2, '0')}`;
+    }
+
+    const metadata = {
+      contractPassId: activeContractPass.id,
+      contractPassName: activeContractPass.nazwa,
+      targetPaidUntil: targetPaidUntil,
+      monthlyFee: contractMonthlyFee
+    };
+
+    await redirectToAutopay(contractMonthlyFee, orderId, opis, 'contract_installment', metadata);
   };
 
   const filteredHistory = useMemo(() => {
@@ -661,8 +719,14 @@ export default function PortfelPage() {
                   filteredHistory.map((item: any) => {
                     const kwotaNum = Number(item.kwota) || 0;
                     const formattedDate = item.data ? item.data.replace('T', ' ').substring(0, 16) : '-';
-                    const isPositive = (kwotaNum > 0 && item.kategoria === 'autopay') || item.opis.includes('Doładowanie') || item.opis.includes('Spłata');
-                    const isNegativeAmount = kwotaNum < 0 || (!isPositive && item.kategoria === 'wallet');
+                    
+                    // Zdefiniowanie dodatniego zasilenia salda
+                    const isPositive = kwotaNum > 0 && (
+                      item.opis.toLowerCase().includes('doładowanie') || 
+                      item.opis.toLowerCase().includes('spłata') || 
+                      item.opis.toLowerCase().includes('uznanie')
+                    );
+                    const isNegativeAmount = kwotaNum < 0 || (!isPositive && item.kategoria === 'wallet') || (!isPositive && item.kategoria === 'autopay');
 
                     return (
                       <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
