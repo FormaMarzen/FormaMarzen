@@ -12,6 +12,14 @@ function extractXmlTag(xml: string, tag: string): string {
   return match ? match[1].trim() : '';
 }
 
+function isContractPass(k: any): boolean {
+  if (!k) return false;
+  if (k.isContract12M === true || k.isContract12M === 'true') return true;
+  const lower = (k.nazwa || k.pass || '').toLowerCase();
+  const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
+  return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m');
+}
+
 async function sendPushToAdmins(title: string, body: string, url: string = '/klienci') {
   try {
     const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
@@ -278,7 +286,94 @@ export async function POST(req: Request) {
           );
         }
 
-      // D. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
+      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M PRZEZ AUTOPAY
+      } else if (transakcja.type === 'contract_installment') {
+        if (klient) {
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = now.getMonth() + 1;
+          const lastDayOfMonth = new Date(year, month, 0).getDate();
+          const defaultEndOfMonth = `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
+          const targetPaidUntil = metadata.targetPaidUntil || defaultEndOfMonth;
+
+          let parsedKarnety: any[] = [];
+          if (Array.isArray(klient.karnetyKlubowicza)) {
+            parsedKarnety = klient.karnetyKlubowicza;
+          } else if (typeof klient.karnetyKlubowicza === 'string') {
+            try { parsedKarnety = JSON.parse(klient.karnetyKlubowicza); } catch(e) {}
+          }
+
+          let passName = metadata.contractPassName || 'OPEN - umowa 12 miesięcy';
+          let updatedRataDisplay = '1 / 12';
+
+          const updatedKarnety = parsedKarnety.map((k: any) => {
+            if (isContractPass(k) || (metadata.contractPassId && String(k.id) === String(metadata.contractPassId))) {
+              passName = k.nazwa || passName;
+              let currentRataNum = 1;
+              let maxRata = 12;
+
+              if (typeof k.rata === 'string' && k.rata.includes('/')) {
+                const parts = k.rata.split('/');
+                currentRataNum = parseInt(parts[0].trim(), 10) || 1;
+                maxRata = parseInt(parts[1].trim(), 10) || 12;
+              }
+
+              const nextRata = Math.min(maxRata, currentRataNum + 1);
+              updatedRataDisplay = `${nextRata} / ${maxRata}`;
+
+              return {
+                ...k,
+                waznyDo: targetPaidUntil,
+                rata: updatedRataDisplay,
+                blokadaDo: null,
+                powodBlokady: null,
+                statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} • Ważny do: ${targetPaidUntil})`
+              };
+            }
+            return k;
+          });
+
+          const clientUpdatePayload: Record<string, any> = {
+            umowa_oplacona_do: targetPaidUntil,
+            karnetyKlubowicza: updatedKarnety
+          };
+
+          // Zdejmujemy blokadę jeśli była spowodowana brakiem wpłaty za umowę
+          const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat');
+          if (isBlockedForContract || klient.blokadaDo) {
+            clientUpdatePayload.blokadaDo = null;
+            clientUpdatePayload.powodBlokady = null;
+          }
+
+          await supabase
+            .from('klienci')
+            .update(clientUpdatePayload)
+            .eq('id', klient.id);
+
+          await supabase.from('transakcje').insert([{
+            klient_id: klient.id,
+            typ_operacji: 'oplata_raty_12m_autopay',
+            kwota: transactionAmount,
+            opis: `Opłata raty umowy 12M: ${passName} (Rata ${updatedRataDisplay}, opłacono online Autopay do ${targetPaidUntil})`
+          }]);
+
+          await supabase.from('booking_logs').insert([{
+            action_type: 'CONTRACT_PAID_AUTOPAY',
+            status: 'SUCCESS',
+            reason: `Klubowicz ID:${klient.id} opłacił ratę umowy online Autopay do ${targetPaidUntil}. Zdjęto blokadę ratalną.`,
+            rule_applied: 'contract_autopay_settlement',
+            payload: { klient_id: klient.id, amount: transactionAmount, paid_until: targetPaidUntil, order_id: orderID }
+          }]);
+
+          await sendPushToAdmins(
+            'Opłacono ratę umowy 12M! 💳',
+            `${clientName} opłacił(a) ratę umowy online Autopay (${transactionAmount.toFixed(2)} PLN, ważność do ${targetPaidUntil})`,
+            '/klienci'
+          );
+        }
+
+      // E. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
       } else if (transakcja.type === 'pass_purchase' || transakcja.type === 'pass_extend') {
         if (klient) {
           const clientUpdatePayload: Record<string, any> = {};
@@ -302,6 +397,35 @@ export async function POST(req: Request) {
             clientUpdatePayload.Cena = metadata.cenaStr;
           }
 
+          // Weryfikacja czy zakup/przedłużenie dotyczyło umowy 12M
+          let isContractOperation = false;
+          if (metadata.umowa_oplacona_do) {
+            clientUpdatePayload.umowa_oplacona_do = metadata.umowa_oplacona_do;
+            isContractOperation = true;
+          } else if (metadata.updatedKarnetyList && Array.isArray(metadata.updatedKarnetyList)) {
+            const contractItem = metadata.updatedKarnetyList.find((k: any) => isContractPass(k));
+            if (contractItem) {
+              isContractOperation = true;
+              const now = new Date();
+              const year = now.getFullYear();
+              const month = now.getMonth() + 1;
+              const lastDayOfMonth = new Date(year, month, 0).getDate();
+              clientUpdatePayload.umowa_oplacona_do = contractItem.waznyDo || `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+            }
+          }
+
+          if (isContractOperation) {
+            const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat');
+            if (isBlockedForContract || klient.blokadaDo) {
+              clientUpdatePayload.blokadaDo = null;
+              clientUpdatePayload.powodBlokady = null;
+            }
+          }
+
+          if (metadata.walletDeduction && metadata.newWalletBalance) {
+            clientUpdatePayload.Portfel = metadata.newWalletBalance;
+          }
+
           if (Object.keys(clientUpdatePayload).length > 0) {
             await supabase
               .from('klienci')
@@ -310,12 +434,15 @@ export async function POST(req: Request) {
           }
 
           const opDescription = transakcja.gateway_response?.opis || (transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu');
+          const typOp = isContractOperation
+            ? (transakcja.type === 'pass_extend' ? 'oplata_raty_12m_autopay' : 'zakup_umowy_autopay')
+            : (transakcja.type === 'pass_extend' ? 'przedluzenie_karnetu_autopay' : 'zakup_karnetu_autopay');
 
           const { data: insertedTrans } = await supabase
             .from('transakcje')
             .insert([{
               klient_id: klient.id,
-              typ_operacji: transakcja.type === 'pass_extend' ? 'przedluzenie_karnetu_autopay' : 'zakup_karnetu_autopay',
+              typ_operacji: typOp,
               kwota: transactionAmount,
               opis: `${opDescription} (Opłacono online Autopay)`,
               kod_rabatowy: metadata.kod_rabatowy || null
@@ -354,7 +481,7 @@ export async function POST(req: Request) {
           );
         }
 
-      // E. OBSŁUGA DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
+      // F. OBSŁUGA DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
       } else {
         if (klient) {
           const rawWalletStr = klient.Portfel || klient.portfel || '0.00 PLN';
@@ -365,23 +492,33 @@ export async function POST(req: Request) {
           const newWalletNum = currentWalletNum + transactionAmount;
           const formattedNewWallet = `${newWalletNum.toFixed(2)} PLN`;
 
+          const clientWalletUpdate: Record<string, any> = { Portfel: formattedNewWallet };
+
+          // Jeśli spłacono zadłużenie i blokada wynikała z portfela, odblokowujemy konto
+          if (newWalletNum >= 0 && (klient.powodBlokady?.toLowerCase().includes('portfel') || klient.powodBlokady?.toLowerCase().includes('zadłużen'))) {
+            clientWalletUpdate.blokadaDo = null;
+            clientWalletUpdate.powodBlokady = null;
+          }
+
           // 1. Aktualizacja salda portfela klubowicza
           await supabase
             .from('klienci')
-            .update({ Portfel: formattedNewWallet })
+            .update(clientWalletUpdate)
             .eq('id', klient.id);
 
           // 2. Rejestracja transakcji finansowej (przychód klubu)
           await supabase.from('transakcje').insert([{
             klient_id: klient.id,
-            typ_operacji: 'doladowanie_portfela_autopay',
+            typ_operacji: transakcja.type === 'wallet_settlement' ? 'splata_zadluzenia_autopay' : 'doladowanie_portfela_autopay',
             kwota: transactionAmount,
-            opis: `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN)`
+            opis: transakcja.type === 'wallet_settlement'
+              ? `Spłata zadłużenia portfela (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN)`
+              : `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN)`
           }]);
 
           await sendPushToAdmins(
-            'Doładowanie portfela / Spłata 💰',
-            `${clientName} doładował(a) portfel kwotą ${transactionAmount.toFixed(2)} PLN`,
+            transakcja.type === 'wallet_settlement' ? 'Spłata zadłużenia portfela 💰' : 'Doładowanie portfela 💰',
+            `${clientName} dokonał(a) wpłaty na portfel w kwocie ${transactionAmount.toFixed(2)} PLN (Nowy stan: ${formattedNewWallet})`,
             '/klienci'
           );
         }
