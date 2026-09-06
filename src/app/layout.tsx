@@ -525,6 +525,7 @@ export default function RootLayout({
       title: "Główne",
       items: [
         { href: '/', label: 'Panel główny', icon: '📊' },
+        { href: '/raporty/klienci', label: 'Klienci', icon: '👥' },
         { href: '/moje-wyniki', label: 'Wyniki klubowiczów', icon: '🏆' },
         { href: '/moje-zapisy?ranking=true', label: 'Ranking Klubowiczów', icon: '👑' },
         { href: '/analiza-formy', label: 'Analiza formy', icon: '⚖️' },
@@ -540,7 +541,6 @@ export default function RootLayout({
       items: [
         { href: '/raporty/centrum', label: 'Centrum raportów', icon: '📈' },
         { href: '/raporty/transakcje', label: 'Transakcje', icon: '💳' },
-        { href: '/raporty/klienci', label: 'Klienci', icon: '👥' },
         { href: '/raporty/zajecia-i-zapisy', label: 'Zajęcia i zapisy', icon: '🏋️' },
         { href: '/raporty/automatyczne-zapisy', label: 'Automatyczne zapisy', icon: '⚡' },
         { href: '/raporty/trenerzy', label: 'Trenerzy', icon: '🧢' },
