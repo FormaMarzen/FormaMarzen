@@ -736,6 +736,7 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
+
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -1348,7 +1349,6 @@ export default function KarnetyPage() {
       await redirectToAutopay(amountToPayAutopay, orderId, opisOperacji, 'pass_extend', passMetadata);
       return;
     }
-
     const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
 
     const dbPayload: any = {
@@ -1846,13 +1846,26 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA
+  // ZATWIERDZENIE ZAWIESZENIA (Z KULOODPORNĄ BLOKADĄ ZAWIESZANIA DLA ZABLOKOWANYCH KARNETÓW)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
     
     if (!passToSuspendId || !suspendStartDate || !suspendEndDate) {
       setSuspendError('Wypełnij wszystkie pola.');
+      return;
+    }
+
+    const karnetIndex = karnetyList.findIndex((k: any) => k.id.toString() === passToSuspendId.toString());
+    if (karnetIndex === -1) return;
+    
+    const targetKarnet = karnetyList[karnetIndex];
+
+    // RYGOR YSTYCZNA BLOKADA: KARNET ZABLOKOWANY LUB KONTO ZABLOKOWANE NIE MOŻE ZOSTAĆ ZAWIESZONE
+    const isPassBlocked = (targetKarnet.blokadaDo && targetKarnet.blokadaDo >= todayStr) || 
+                          (currentUser?.blokadaDo && currentUser?.blokadaDo >= todayStr);
+    if (isPassBlocked) {
+      setSuspendError('Nie możesz zawiesić zablokowanego karnetu. Najpierw ureguluj zaległości i zdejmij blokadę konta.');
       return;
     }
 
@@ -1864,11 +1877,6 @@ export default function KarnetyPage() {
       setSuspendError('Data zakończenia nie może być wcześniejsza niż data rozpoczęcia.');
       return;
     }
-
-    const karnetIndex = karnetyList.findIndex((k: any) => k.id.toString() === passToSuspendId.toString());
-    if (karnetIndex === -1) return;
-    
-    const targetKarnet = karnetyList[karnetIndex];
     const isContract = isContractPassCheck(targetKarnet);
 
     const { weekdaysCount, weekendDaysCount, totalCalendarDays } = calculateSuspensionBreakdown(suspendStartDate, suspendEndDate);
@@ -2236,7 +2244,12 @@ export default function KarnetyPage() {
     setIsUnsuspendModalOpen(false);
   };
 
+  // LISTA KARNETÓW DO ZAWIESZENIA Z UWZGLĘDNIENIEM BLOKAD
   const activePassesForSuspend = karnetyList.filter((k: any) => {
+    const isGloballyBlocked = currentUser?.blokadaDo && currentUser?.blokadaDo >= todayStr;
+    const isLocallyBlocked = k.blokadaDo && k.blokadaDo >= todayStr;
+    if (isGloballyBlocked || isLocallyBlocked) return false;
+
     const isActive = !k.statusTekst?.includes('Oczekujący') && !k.zawieszonyOd && k.waznyDo;
     return isActive;
   });
@@ -2672,6 +2685,14 @@ export default function KarnetyPage() {
               ) : (
                 <button 
                   onClick={() => {
+                    const isGloballyBlocked = currentUser?.blokadaDo && currentUser?.blokadaDo >= todayStr;
+                    const anyPassBlocked = karnetyList.some((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
+
+                    if (isGloballyBlocked || anyPassBlocked) {
+                      showToast('Twój karnet posiada aktywną blokadę. Nie możesz zawiesić zablokowanego karnetu.', 'error');
+                      return;
+                    }
+
                     if (activePassesForSuspend.length === 0) {
                       showToast('Nie posiadasz aktualnie aktywnego karnetu, który można by zawiesić.', 'info');
                       return;
@@ -2747,7 +2768,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
-
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2773,6 +2793,7 @@ export default function KarnetyPage() {
                   </li>
                   <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy). W przypadku zawieszenia na przełomie kwartałów, dni są rozliczane proporcjonalnie w każdym kwartale.</li>
                   <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
+                  <li><strong>Aktywna blokada konta / karnetu:</strong> Zawieszenie karnetu jest niedozwolone w przypadku aktywnej blokady konta lub braku opłaty ratalnej.</li>
                   <li><strong>Odwieszenie przed czasem:</strong> Karnet możesz odwiesić w dowolnym momencie, a niewykorzystane dni zostaną automatycznie zwrócone do puli i uwzględnione w ważności karnetu.</li>
                 </ul>
               </div>
