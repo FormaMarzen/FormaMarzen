@@ -26,7 +26,7 @@ const fetchAllFromSupabase = async (
   table: string,
   orderBy: string = 'created_at',
   ascending: boolean = false,
-  maxPages: number = 50 // Bezpieczny limit do 50 000 rekordów zamiast domyślnego limitu 1000
+  maxPages: number = 50 // Bezpieczny limit do 50 000 rekordów
 ) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
@@ -65,6 +65,10 @@ export default function DashboardPage() {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 4000);
   };
+
+  // ZABEZPIECZENIE PRZED WIELOKROTNYM SZYBKIM KLIKNIĘCIEM (ANTI-DOUBLE CLICK / OVERBOOKING)
+  const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
+  const isSubmittingRef = useRef(false);
 
   // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY
   const getKeysVariants = (classId: string | number, dateStr: string) => {
@@ -339,7 +343,6 @@ export default function DashboardPage() {
 
   // STANY DANYCH I WIDOKU
   const [adminViewTab, setAdminViewTab] = useState<'grafik' | 'operacje'>('grafik');
-  const [salesPeriod, setSalesPeriod] = useState('Dziś');
   const [clientSearch, setClientSearch] = useState('');
   const [operationsSearchQuery, setOperationsSearchQuery] = useState('');
   const [operationsDateRange, setOperationsDateRange] = useState({
@@ -462,7 +465,6 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
-
   // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
@@ -1261,26 +1263,23 @@ export default function DashboardPage() {
     const today = new Date();
     const dayOfMonth = today.getDate();
     const currentYear = today.getFullYear();
-    const currentMonthNum = today.getMonth() + 1; // 1-12
+    const currentMonthNum = today.getMonth() + 1;
     const firstDayOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-01`;
     const endOfCurrentMonth = new Date(currentYear, currentMonthNum, 0);
     const endOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-${String(endOfCurrentMonth.getDate()).padStart(2, '0')}`;
 
-    // Weryfikujemy dyscyplinę płatności tylko od 4. dnia miesiąca
     if (dayOfMonth < 4) return;
 
     for (const client of allClients) {
       const hasContract = client.karnetyKlubowicza && client.karnetyKlubowicza.some((k: any) => isContractPass(k));
       if (!hasContract) continue;
 
-      // Sprawdzamy pole umowa_oplacona_do
       const oplaconaDo = client.umowa_oplacona_do || client.umowaOplaconaDo;
       const czyOplaconyBiezacyMiesiac = oplaconaDo && String(oplaconaDo) >= firstDayOfCurrentMonthStr;
 
       if (!czyOplaconyBiezacyMiesiac) {
         const powod = "Nieopłacenie karnetu na umowę (brak wpłaty do 3. dnia miesiąca)";
 
-        // 4. DZIEŃ MIESIĄCA - NAKŁADANIE BLOKADY ZAPISÓW
         const juzMaBlokadeUmowy = client.blokadaDo && client.powodBlokady === powod;
         if (!juzMaBlokadeUmowy) {
           const updatedClientKarnety = (client.karnetyKlubowicza || []).map((k: any) => ({
@@ -1304,7 +1303,6 @@ export default function DashboardPage() {
           }]);
         }
 
-        // 7. DZIEŃ MIESIĄCA - AUTOMATYCZNE WYPISANIE ZE WSZYSTKICH ZAJĘĆ
         if (dayOfMonth >= 7) {
           await handleAutoWypiszPoZablokowaniu(client.id, client, powod, undefined);
         }
@@ -1488,7 +1486,6 @@ export default function DashboardPage() {
         });
         setKlienciList(enriched);
         
-        // Weryfikacja umów w tle
         checkContractPaymentEnforcement(enriched);
         
         if (userEmail) {
@@ -1498,7 +1495,6 @@ export default function DashboardPage() {
             subscribeToPushNotifications(matchedCurrentClient.id);
           }
         }
-
         if (profileClient) {
           const currentActive = enriched.find((c: any) => c.id === profileClient.id);
           if (currentActive) {
@@ -2237,7 +2233,6 @@ export default function DashboardPage() {
     loadData();
     return true;
   };
-
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -3060,6 +3055,7 @@ export default function DashboardPage() {
     });
     return count;
   };
+
   // OPTYMISTYCZNA OBSŁUGA OBECNOŚCI (0 MS OPÓŹNIENIA)
   const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
@@ -3196,481 +3192,517 @@ export default function DashboardPage() {
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
-    const karnetyUzytkownika = currentUser.karnetyKlubowicza || [];
-    const dzisiajDateObj = new Date();
-    dzisiajDateObj.setHours(0, 0, 0, 0);
-
-    const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
-      if (!k) return false;
-      // Umowa 12M nigdy nie znika i jest traktowana jako ważna umowa
-      if (isContractPass(k)) return true;
-      if (k.waznyDo) {
-        const expDate = new Date(k.waznyDo);
-        expDate.setHours(23, 59, 59, 999);
-        if (expDate < dzisiajDateObj) return false;
-      }
-      if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
-        if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
-      }
-      return true;
-    });
-
-    if (karnetyUzytkownika.length === 0 || !posiadaAktywnyKarnet) {
-      await supabase.from('booking_logs').insert([{
-        action_type: 'BOOKING_BLOCKED',
-        status: 'BLOCKED',
-        reason: `${currentUser.firstName || 'Klubowicz'}: Brak aktywnego karnetu na koncie.`,
-        rule_applied: 'no_active_pass',
-        payload: { klient_id: currentUser.id, class_id: selectedClass.id }
-      }]);
-      showToast("Nie możesz zapisać się na zajęcia! Nie posiadasz aktywnego karnetu. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
-      return;
-    }
-    const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
-      if (!k) return false;
-      if (!isContractPass(k) && k.waznyDo) {
-        const expDate = new Date(k.waznyDo);
-        expDate.setHours(23, 59, 59, 999);
-        if (expDate < dzisiajDateObj) return false;
-      }
-      if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
-        if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
-      }
-      return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
-    });
-
-    if (!passAllowsThisClass) {
-      await supabase.from('booking_logs').insert([{
-        action_type: 'BOOKING_BLOCKED',
-        status: 'BLOCKED',
-        reason: `${currentUser.firstName || 'Klubowicz'}: Posiadany karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}".`,
-        rule_applied: 'pass_class_restriction',
-        payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title }
-      }]);
-      showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`, 'error');
-      return;
-    }
-
-    const classKeyCurrent = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const zapisaniCurrent = zapisyNaZajecia[classKeyCurrent] || [];
-    const autoCancelStatus = checkClassAutoCancellation(selectedClass, selectedClass.displayDate, zapisaniCurrent);
+    // Zabezpieczenie przed wielokrotnym kliknięciem
+    if (isSubmittingRef.current || isSubmittingBooking) return;
+    isSubmittingRef.current = true;
+    setIsSubmittingBooking(true);
     
-    if (selectedClass.isOdwołane || selectedClass.isUsunięte || autoCancelStatus.isAutoCancelled) { 
-      showToast(autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : "Nie można zapisać się na odwołane lub usunięte zajęcia!", 'error'); 
-      return; 
-    }
-    const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    if (walletVal < 0) { 
-      showToast("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać.", 'error'); 
-      return; 
-    }
-    
-    const now = new Date();
-    const dzisiajData = todayStr;
+    try {
+      const karnetyUzytkownika = currentUser.karnetyKlubowicza || [];
+      const dzisiajDateObj = new Date();
+      dzisiajDateObj.setHours(0, 0, 0, 0);
 
-    const clientBanDate = currentUser.blokadaDo || currentUser.blokada_do;
-    const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
-    const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
-    
-    if (isClientBlocked || isPassBlocked) {
-      const errReason = currentUser.powodBlokady || (isClientBlocked ? `Twoje konto posiada aktywną blokadę do ${clientBanDate}.` : 'Twój karnet posiada aktywną blokadę.');
-      await supabase.from('booking_logs').insert([{
-        action_type: 'BOOKING_BLOCKED',
-        status: 'BLOCKED',
-        reason: `${currentUser.firstName || 'Klubowicz'}: ${errReason}`,
-        rule_applied: 'absence_ban',
-        payload: { klient_id: currentUser.id, class_id: selectedClass.id }
-      }]);
-      showToast(`Nie możesz się zapisać! ${errReason}`, 'error');
-      return;
-    }
+      const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
+        if (!k) return false;
+        // Umowa 12M nigdy nie znika i jest traktowana jako ważna umowa
+        if (isContractPass(k)) return true;
+        if (k.waznyDo) {
+          const expDate = new Date(k.waznyDo);
+          expDate.setHours(23, 59, 59, 999);
+          if (expDate < dzisiajDateObj) return false;
+        }
+        if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+          if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
+        }
+        return true;
+      });
 
-    const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const parts = classKeyStr.split('_');
-    const dateStr = parts[1];
-    let d = 1, m = 1;
-    if (dateStr.includes('/')) {
-      [d, m] = dateStr.split('/').map(Number);
-    } else if (dateStr.includes('-')) {
-      const p = dateStr.split('-').map(Number);
-      m = p[1];
-      d = p[2];
-    }
-    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
-    const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
-    const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
-    const calcClassDateStr = `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-
-    const isPassSuspended = (currentUser.karnetyKlubowicza || []).some((k: any) => {
-      if (k.zawieszonyOd) {
-         const sOd = k.zawieszonyOd;
-         const sDo = k.zawieszonyDo || '9999-12-31';
-         return calcClassDateStr >= sOd && calcClassDateStr <= sDo;
+      if (karnetyUzytkownika.length === 0 || !posiadaAktywnyKarnet) {
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${currentUser.firstName || 'Klubowicz'}: Brak aktywnego karnetu na koncie.`,
+          rule_applied: 'no_active_pass',
+          payload: { klient_id: currentUser.id, class_id: selectedClass.id }
+        }]);
+        showToast("Nie możesz zapisać się na zajęcia! Nie posiadasz aktywnego karnetu. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
+        return;
       }
-      return false;
-    });
+      
+      const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
+        if (!k) return false;
+        if (!isContractPass(k) && k.waznyDo) {
+          const expDate = new Date(k.waznyDo);
+          expDate.setHours(23, 59, 59, 999);
+          if (expDate < dzisiajDateObj) return false;
+        }
+        if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+          if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
+        }
+        return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
+      });
 
-    if (isPassSuspended) {
-      showToast(`Twój karnet jest zawieszony w dniu tych zajęć (${calcClassDateStr}).`, 'warning');
-      return;
-    }
+      if (!passAllowsThisClass) {
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${currentUser.firstName || 'Klubowicz'}: Posiadany karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}".`,
+          rule_applied: 'pass_class_restriction',
+          payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title }
+        }]);
+        showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`, 'error');
+        return;
+      }
 
-    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      const classKeyCurrent = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const zapisaniCurrent = zapisyNaZajecia[classKeyCurrent] || [];
+      const autoCancelStatus = checkClassAutoCancellation(selectedClass, selectedClass.displayDate, zapisaniCurrent);
+      
+      if (selectedClass.isOdwołane || selectedClass.isUsunięte || autoCancelStatus.isAutoCancelled) { 
+        showToast(autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : "Nie można zapisać się na odwołane lub usunięte zajęcia!", 'error'); 
+        return; 
+      }
+      
+      const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+      if (walletVal < 0) { 
+        showToast("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać.", 'error'); 
+        return; 
+      }
+      
+      const now = new Date();
+      const dzisiajData = todayStr;
 
-    const { data: liveSignupsDb } = await supabase
-      .from('zapisy_zajec')
-      .select('id, status, klient_id')
-      .in('class_key', allVariantKeys);
+      const clientBanDate = currentUser.blokadaDo || currentUser.blokada_do;
+      const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
+      const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
+      
+      if (isClientBlocked || isPassBlocked) {
+        const errReason = currentUser.powodBlokady || (isClientBlocked ? `Twoje konto posiada aktywną blokadę do ${clientBanDate}.` : 'Twój karnet posiada aktywną blokadę.');
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${currentUser.firstName || 'Klubowicz'}: ${errReason}`,
+          rule_applied: 'absence_ban',
+          payload: { klient_id: currentUser.id, class_id: selectedClass.id }
+        }]);
+        showToast(`Nie możesz się zapisać! ${errReason}`, 'error');
+        return;
+      }
 
-    const actualDbSignups = liveSignupsDb || [];
-    if (actualDbSignups.some(k => String(k.klient_id) === String(currentUser.id))) { 
-      showToast("Jesteś już zapisany na te zajęcia!", 'info'); 
-      return; 
-    }
+      const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const parts = classKeyStr.split('_');
+      const dateStr = parts[1];
+      let d = 1, m = 1;
+      if (dateStr.includes('/')) {
+        [d, m] = dateStr.split('/').map(Number);
+      } else if (dateStr.includes('-')) {
+        const p = dateStr.split('-').map(Number);
+        m = p[1];
+        d = p[2];
+      }
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
+      const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
+      const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+      const calcClassDateStr = `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-    // SPRAWDZENIE NADRZĘDNEGO INDYWIDUALNEGO LIMITU ZAPISU W PRZÓD DLA KLUBOWICZA
-    const userFullName = `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase();
-    const userIndividualLimit = indywidualneLimity.find((l: any) => 
-      (l.klubowicz_id && String(l.klubowicz_id) === String(currentUser.id)) ||
-      (l.klubowicz_nazwa && l.klubowicz_nazwa.trim().toLowerCase() === userFullName)
-    );
+      const isPassSuspended = (currentUser.karnetyKlubowicza || []).some((k: any) => {
+        if (k.zawieszonyOd) {
+           const sOd = k.zawieszonyOd;
+           const sDo = k.zawieszonyDo || '9999-12-31';
+           return calcClassDateStr >= sOd && calcClassDateStr <= sDo;
+        }
+        return false;
+      });
 
-    let bookingWindowDays = 14;
-    let isIndividualRuleApplied = false;
+      if (isPassSuspended) {
+        showToast(`Twój karnet jest zawieszony w dniu tych zajęć (${calcClassDateStr}).`, 'warning');
+        return;
+      }
 
-    if (userIndividualLimit && Number(userIndividualLimit.dni_w_przod) > 0) {
-      bookingWindowDays = Number(userIndividualLimit.dni_w_przod);
-      isIndividualRuleApplied = true;
-    } else {
+      const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+
+      // DODATKOWA WALIDACJA W BAZIE W CZASIE RZECZYWISTYM DLA PEWNOŚCI
+      const { data: liveSignupsDb } = await supabase
+        .from('zapisy_zajec')
+        .select('id, status, klient_id')
+        .in('class_key', allVariantKeys);
+
+      const actualDbSignups = liveSignupsDb || [];
+      if (actualDbSignups.some(k => String(k.klient_id) === String(currentUser.id))) { 
+        showToast("Jesteś już zapisany na te zajęcia!", 'info'); 
+        return; 
+      }
+
+      // SPRAWDZENIE NADRZĘDNEGO INDYWIDUALNEGO LIMITU ZAPISU W PRZÓD DLA KLUBOWICZA
+      const userFullName = `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase();
+      const userIndividualLimit = indywidualneLimity.find((l: any) => 
+        (l.klubowicz_id && String(l.klubowicz_id) === String(currentUser.id)) ||
+        (l.klubowicz_nazwa && l.klubowicz_nazwa.trim().toLowerCase() === userFullName)
+      );
+
+      let bookingWindowDays = 14;
+      let isIndividualRuleApplied = false;
+
+      if (userIndividualLimit && Number(userIndividualLimit.dni_w_przod) > 0) {
+        bookingWindowDays = Number(userIndividualLimit.dni_w_przod);
+        isIndividualRuleApplied = true;
+      } else {
+        const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
+          ? currentUser.karnetyKlubowicza[0].nazwa
+          : (currentUser.pass || 'OPEN');
+        bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
+      }
+
+      const maxBookingDate = new Date();
+      maxBookingDate.setDate(maxBookingDate.getDate() + bookingWindowDays);
+      maxBookingDate.setHours(23, 59, 59, 999);
+
+      if (classStartDateTime > maxBookingDate) {
+        const reason = isIndividualRuleApplied
+          ? `Posiadasz indywidualne ograniczenie zapisów do ${bookingWindowDays} dni w przód.`
+          : `Dla Twojego karnetu zapisy otwierają się ${bookingWindowDays} dni przed terminem zajęć.`;
+
+        await supabase.from('booking_logs').insert([{
+          action_type: 'BOOKING_BLOCKED',
+          status: 'BLOCKED',
+          reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
+          rule_applied: isIndividualRuleApplied ? 'INDYWIDUALNY_LIMIT_ZAPISOW' : 'booking_window_per_pass',
+          payload: { klient_id: currentUser.id, class_key: classKey, window_days: bookingWindowDays, is_individual: isIndividualRuleApplied }
+        }]);
+        showToast(`Nie możesz się zapisać! ${reason}`, 'error');
+        return;
+      }
+
+      const trainingName = selectedClass.title || '';
+      const cutoffMinutes = bookingRules.booking_cutoff_per_class?.[trainingName] !== undefined
+        ? bookingRules.booking_cutoff_per_class[trainingName]
+        : bookingRules.booking_cutoff_minutes;
+
+      if (cutoffMinutes !== null && cutoffMinutes !== undefined && cutoffMinutes > 0) {
+        const cutoffMs = cutoffMinutes * 60 * 1000;
+        const diffMs = classStartDateTime.getTime() - now.getTime();
+        if (diffMs > 0 && diffMs < cutoffMs) {
+          const reason = `Zapisy na "${trainingName}" są blokowane na ${cutoffMinutes} minut przed rozpoczęciem.`;
+          await supabase.from('booking_logs').insert([{
+            action_type: 'BOOKING_BLOCKED',
+            status: 'BLOCKED',
+            reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
+            rule_applied: 'booking_cutoff_per_class',
+            payload: { klient_id: currentUser.id, class_key: classKey, training: trainingName, cutoff: cutoffMinutes }
+          }]);
+          showToast(`Nie możesz się zapisać! ${reason}`, 'error');
+          return;
+        }
+      }
+
       const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
         ? currentUser.karnetyKlubowicza[0].nazwa
         : (currentUser.pass || 'OPEN');
-      bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
-    }
 
-    const maxBookingDate = new Date();
-    maxBookingDate.setDate(maxBookingDate.getDate() + bookingWindowDays);
-    maxBookingDate.setHours(23, 59, 59, 999);
+      const isContract = isContractPass({ nazwa: passName }) || (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.some((k: any) => isContractPass(k)));
 
-    if (classStartDateTime > maxBookingDate) {
-      const reason = isIndividualRuleApplied
-        ? `Posiadasz indywidualne ograniczenie zapisów do ${bookingWindowDays} dni w przód.`
-        : `Dla Twojego karnetu zapisy otwierają się ${bookingWindowDays} dni przed terminem zajęć.`;
+      if (currentUser.expiresDate && !isContract) {
+        const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
+        const expDate = new Date(currentUser.expiresDate);
+        expDate.setDate(expDate.getDate() + graceDays);
+        expDate.setHours(23, 59, 59, 999);
 
-      await supabase.from('booking_logs').insert([{
-        action_type: 'BOOKING_BLOCKED',
-        status: 'BLOCKED',
-        reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-        rule_applied: isIndividualRuleApplied ? 'INDYWIDUALNY_LIMIT_ZAPISOW' : 'booking_window_per_pass',
-        payload: { klient_id: currentUser.id, class_key: classKey, window_days: bookingWindowDays, is_individual: isIndividualRuleApplied }
-      }]);
-      showToast(`Nie możesz się zapisać! ${reason}`, 'error');
-      return;
-    }
-
-    const trainingName = selectedClass.title || '';
-    const cutoffMinutes = bookingRules.booking_cutoff_per_class?.[trainingName] !== undefined
-      ? bookingRules.booking_cutoff_per_class[trainingName]
-      : bookingRules.booking_cutoff_minutes;
-
-    if (cutoffMinutes !== null && cutoffMinutes !== undefined && cutoffMinutes > 0) {
-      const cutoffMs = cutoffMinutes * 60 * 1000;
-      const diffMs = classStartDateTime.getTime() - now.getTime();
-      if (diffMs > 0 && diffMs < cutoffMs) {
-        const reason = `Zapisy na "${trainingName}" są blokowane na ${cutoffMinutes} minut przed rozpoczęciem.`;
-        await supabase.from('booking_logs').insert([{
-          action_type: 'BOOKING_BLOCKED',
-          status: 'BLOCKED',
-          reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-          rule_applied: 'booking_cutoff_per_class',
-          payload: { klient_id: currentUser.id, class_key: classKey, training: trainingName, cutoff: cutoffMinutes }
-        }]);
-        showToast(`Nie możesz się zapisać! ${reason}`, 'error');
-        return;
+        if (classStartDateTime > expDate) {
+          const reason = `Karnet "${passName}" wygasł. Okres karencji wynosił ${graceDays} dni.`;
+          await supabase.from('booking_logs').insert([{
+            action_type: 'BOOKING_BLOCKED',
+            status: 'BLOCKED',
+            reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
+            rule_applied: 'expired_pass_grace_per_pass',
+            payload: { klient_id: currentUser.id, class_key: classKey, pass: passName, grace_days: graceDays }
+          }]);
+          showToast(`Nie możesz się zapisać! ${reason}`, 'error');
+          return;
+        }
       }
-    }
 
-    const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
-      ? currentUser.karnetyKlubowicza[0].nazwa
-      : (currentUser.pass || 'OPEN');
+      const maxSameType = bookingRules.max_daily_same_type_bookings ?? 1;
+      if (maxSameType < 999) {
+        let sameTypeCount = 0;
+        const stdDnia = zapisaneZajecia.map(item => ({ ...item, displayDate: selectedClass.displayDate }));
+        const jednorazDnia = jednorazoweZajecia.filter(j => j.displayDate === selectedClass.displayDate);
+        const allClassesDnia = [...stdDnia, ...jednorazDnia];
 
-    const isContract = isContractPass({ nazwa: passName }) || (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.some((k: any) => isContractPass(k)));
+        allClassesDnia.forEach(c => {
+          const cKey = `${c.id}_${selectedClass.displayDate}`;
+          const cTitle = (c.title || '').trim().toLowerCase();
+          const sTitle = (selectedClass.title || '').trim().toLowerCase();
+          if (cTitle === sTitle && zapisyNaZajecia[cKey]) {
+            if (zapisyNaZajecia[cKey].some((u: any) => String(u.id) === String(currentUser.id))) {
+              sameTypeCount++;
+            }
+          }
+        });
 
-    if (currentUser.expiresDate && !isContract) {
-      const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
-      const expDate = new Date(currentUser.expiresDate);
-      expDate.setDate(expDate.getDate() + graceDays);
-      expDate.setHours(23, 59, 59, 999);
-
-      if (classStartDateTime > expDate) {
-        const reason = `Karnet "${passName}" wygasł. Okres karencji wynosił ${graceDays} dni.`;
-        await supabase.from('booking_logs').insert([{
-          action_type: 'BOOKING_BLOCKED',
-          status: 'BLOCKED',
-          reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-          rule_applied: 'expired_pass_grace_per_pass',
-          payload: { klient_id: currentUser.id, class_key: classKey, pass: passName, grace_days: graceDays }
-        }]);
-        showToast(`Nie możesz się zapisać! ${reason}`, 'error');
-        return;
+        if (sameTypeCount >= maxSameType) {
+          const reason = `Osiągnąłeś limit (${maxSameType}) zapisów na trening "${selectedClass.title}" w tym dniu.`;
+          await supabase.from('booking_logs').insert([{
+            action_type: 'BOOKING_BLOCKED',
+            status: 'BLOCKED',
+            reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
+            rule_applied: 'max_daily_same_type_bookings',
+            payload: { klient_id: currentUser.id, class_key: classKey, same_type_limit: maxSameType }
+          }]);
+          showToast(`Nie możesz się zapisać! ${reason}`, 'error');
+          return;
+        }
       }
-    }
 
-    const maxSameType = bookingRules.max_daily_same_type_bookings ?? 1;
-    if (maxSameType < 999) {
-      let sameTypeCount = 0;
-      const stdDnia = zapisaneZajecia.map(item => ({ ...item, displayDate: selectedClass.displayDate }));
-      const jednorazDnia = jednorazoweZajecia.filter(j => j.displayDate === selectedClass.displayDate);
-      const allClassesDnia = [...stdDnia, ...jednorazDnia];
+      let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
+        ? bookingRules.max_daily_bookings
+        : Infinity;
 
-      allClassesDnia.forEach(c => {
-        const cKey = `${c.id}_${selectedClass.displayDate}`;
-        const cTitle = (c.title || '').trim().toLowerCase();
-        const sTitle = (selectedClass.title || '').trim().toLowerCase();
-        if (cTitle === sTitle && zapisyNaZajecia[cKey]) {
-          if (zapisyNaZajecia[cKey].some((u: any) => String(u.id) === String(currentUser.id))) {
-            sameTypeCount++;
+      if (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0) {
+        const activePass = currentUser.karnetyKlubowicza[0];
+        const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
+        if (passDef) {
+          let meta: any = {};
+          try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
+          const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
+          const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
+          if (typLimitu === 'Niestandardowy') {
+            dailyLimit = Math.min(dailyLimit, parseInt(iloscLimitu, 10) || Infinity);
+          }
+        }
+      }
+
+      let userSignupsOnThisDate = 0;
+      const countedDayClassKeys = new Set<string>();
+      Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
+        if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
+          const classId = cKey.split('_')[0];
+          const normalizedKey = `${classId}_${selectedClass.displayDate}`;
+          if (!countedDayClassKeys.has(normalizedKey)) {
+            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
+              userSignupsOnThisDate++;
+              countedDayClassKeys.add(normalizedKey);
+            }
           }
         }
       });
 
-      if (sameTypeCount >= maxSameType) {
-        const reason = `Osiągnąłeś limit (${maxSameType}) zapisów na trening "${selectedClass.title}" w tym dniu.`;
+      if (userSignupsOnThisDate >= dailyLimit) { 
+        const reason = `Wykorzystałeś już swój dzienny limit wejść na ten dzień (${dailyLimit}).`;
         await supabase.from('booking_logs').insert([{
           action_type: 'BOOKING_BLOCKED',
           status: 'BLOCKED',
           reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-          rule_applied: 'max_daily_same_type_bookings',
-          payload: { klient_id: currentUser.id, class_key: classKey, same_type_limit: maxSameType }
+          rule_applied: 'max_daily_bookings',
+          payload: { klient_id: currentUser.id, class_key: classKey, daily_limit: dailyLimit }
         }]);
-        showToast(`Nie możesz się zapisać! ${reason}`, 'error');
+        showToast(`Nie możesz się zapisać! ${reason}`, 'error'); 
+        return; 
+      }
+
+      const limitZajec = selectedClass.limit || 12;
+      const liveGlownaCount = actualDbSignups.filter((u: any) => u.status === 'zapisany').length;
+      const isWaitlistTarget = liveGlownaCount >= limitZajec;
+
+      if (isWaitlistTarget) {
+        setSelectedWaitlistCutoff(30);
+        setIsWaitlistModalOpen(true);
         return;
       }
-    }
+      
+      if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
-    let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
-      ? bookingRules.max_daily_bookings
-      : Infinity;
+      // Optimistic UI - natychmiastowe zaktualizowanie zapisu na kafelku
+      const newEntry = {
+        id: currentUser.id,
+        klient_id: currentUser.id,
+        firstName: currentUser.firstName,
+        lastName: currentUser.lastName,
+        status: 'zapisany',
+        waitlist_cutoff_minutes: null,
+        obecny: false,
+        nieobecny: false
+      };
 
-    if (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0) {
-      const activePass = currentUser.karnetyKlubowicza[0];
-      const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
-      if (passDef) {
-        let meta: any = {};
-        try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
-        const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
-        const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
-        if (typLimitu === 'Niestandardowy') {
-          dailyLimit = Math.min(dailyLimit, parseInt(iloscLimitu, 10) || Infinity);
-        }
-      }
-    }
-
-    let userSignupsOnThisDate = 0;
-    const countedDayClassKeys = new Set<string>();
-    Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
-      if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
-        const classId = cKey.split('_')[0];
-        const normalizedKey = `${classId}_${selectedClass.displayDate}`;
-        if (!countedDayClassKeys.has(normalizedKey)) {
-          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
-            userSignupsOnThisDate++;
-            countedDayClassKeys.add(normalizedKey);
+      setZapisyNaZajecia(prev => {
+        const updated = { ...prev };
+        allVariantKeys.forEach(vk => {
+          if (!updated[vk]) updated[vk] = [];
+          if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
+            updated[vk] = [...updated[vk], newEntry];
           }
+        });
+        return updated;
+      });
+
+      const { error } = await supabase.from('zapisy_zajec').insert([
+        { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
+      ]);
+      
+      if (error) { 
+        showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
+        loadData();
+        return; 
+      }
+
+      let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+        if (!isNaN(currentRemaining) && currentRemaining > 0) {
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: currentRemaining - 1
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
         }
       }
-    });
 
-    if (userSignupsOnThisDate >= dailyLimit) { 
-      const reason = `Wykorzystałeś już swój dzienny limit wejść na ten dzień (${dailyLimit}).`;
-      await supabase.from('booking_logs').insert([{
-        action_type: 'BOOKING_BLOCKED',
-        status: 'BLOCKED',
-        reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-        rule_applied: 'max_daily_bookings',
-        payload: { klient_id: currentUser.id, class_key: classKey, daily_limit: dailyLimit }
+      const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+      const dayOfWeekName = dayNames[classStartDateTime.getDay()];
+      const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+      const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+      const oblozenieStr = `${liveGlownaCount + 1}/${limitZajec}`;
+      
+      await supabase.from('transakcje').insert([{ 
+        klient_id: currentUser.id, 
+        typ_operacji: 'zajecia_zapis', 
+        class_key: classKey, 
+        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Zapis na trening: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Status: ✅ Lista główna. Obłożenie: ${oblozenieStr}` 
       }]);
-      showToast(`Nie możesz się zapisać! ${reason}`, 'error'); 
-      return; 
-    }
 
-    const limitZajec = selectedClass.limit || 12;
-    const liveGlownaCount = actualDbSignups.filter((u: any) => u.status === 'zapisany').length;
-    const isWaitlistTarget = liveGlownaCount >= limitZajec;
+      await supabase.from('booking_logs').insert([{
+        action_type: 'BOOKING_SUCCESS',
+        status: 'SUCCESS',
+        reason: `${currentUser.firstName || 'Klubowicz'} zapisany do ${classKey} (zapisany)`,
+        rule_applied: isIndividualRuleApplied ? 'INDYWIDUALNY_LIMIT_ZAPISOW' : 'VALIDATION_PASSED',
+        payload: { klient_id: currentUser.id, class_key: classKey, status: 'zapisany', is_individual: isIndividualRuleApplied }
+      }]);
 
-    if (isWaitlistTarget) {
-      setSelectedWaitlistCutoff(30);
-      setIsWaitlistModalOpen(true);
-      return;
-    }
-    
-    if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
-
-    // Optimistic UI - natychmiastowe zaktualizowanie zapisu na kafelku
-    const newEntry = {
-      id: currentUser.id,
-      klient_id: currentUser.id,
-      firstName: currentUser.firstName,
-      lastName: currentUser.lastName,
-      status: 'zapisany',
-      waitlist_cutoff_minutes: null,
-      obecny: false,
-      nieobecny: false
-    };
-
-    setZapisyNaZajecia(prev => {
-      const updated = { ...prev };
-      allVariantKeys.forEach(vk => {
-        if (!updated[vk]) updated[vk] = [];
-        if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
-          updated[vk] = [...updated[vk], newEntry];
-        }
-      });
-      return updated;
-    });
-
-    const { error } = await supabase.from('zapisy_zajec').insert([
-      { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
-    ]);
-    
-    if (error) { 
-      showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
+      showToast("Zostałeś pomyślnie zapisany na zajęcia!");
+      setSelectedClass(null);
       loadData();
-      return; 
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmittingBooking(false);
     }
-
-    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-    if (passIndex !== -1) {
-      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-      if (!isNaN(currentRemaining) && currentRemaining > 0) {
-        updatedKarnety[passIndex] = {
-          ...updatedKarnety[passIndex],
-          pozostaloWejsc: currentRemaining - 1
-        };
-        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
-      }
-    }
-
-    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
-    const dayOfWeekName = dayNames[classStartDateTime.getDay()];
-    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
-    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
-    const oblozenieStr = `${liveGlownaCount + 1}/${limitZajec}`;
-    
-    await supabase.from('transakcje').insert([{ 
-      klient_id: currentUser.id, 
-      typ_operacji: 'zajecia_zapis', 
-      class_key: classKey, 
-      opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Zapis na trening: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Status: ✅ Lista główna. Obłożenie: ${oblozenieStr}` 
-    }]);
-
-    await supabase.from('booking_logs').insert([{
-      action_type: 'BOOKING_SUCCESS',
-      status: 'SUCCESS',
-      reason: `${currentUser.firstName || 'Klubowicz'} zapisany do ${classKey} (zapisany)`,
-      rule_applied: isIndividualRuleApplied ? 'INDYWIDUALNY_LIMIT_ZAPISOW' : 'VALIDATION_PASSED',
-      payload: { klient_id: currentUser.id, class_key: classKey, status: 'zapisany', is_individual: isIndividualRuleApplied }
-    }]);
-
-    showToast("Zostałeś pomyślnie zapisany na zajęcia!");
-    setSelectedClass(null);
-    loadData();
   };
 
   const handleConfirmWaitlistSignup = async (cutoffMinutes: number) => {
     if (!currentUser || !selectedClass) return;
+    
+    // Zabezpieczenie przed podwójnym kliknięciem
+    if (isSubmittingRef.current || isSubmittingBooking) return;
+    isSubmittingRef.current = true;
+    setIsSubmittingBooking(true);
 
-    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
-    const limitZajec = selectedClass.limit || 12;
-    const aktualni = zapisyNaZajecia[classKey] || [];
+    try {
+      const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      
+      // Podwójne sprawdzenie w bazie, czy już nie zapisano ułamki sekundy temu
+      const { data: liveDbCheck } = await supabase
+        .from('zapisy_zajec')
+        .select('id')
+        .in('class_key', allVariantKeys)
+        .eq('klient_id', currentUser.id);
 
-    // Optimistic UI - dodanie na krzesełko natychmiast
-    const waitlistEntry = {
-      id: currentUser.id,
-      klient_id: currentUser.id,
-      firstName: currentUser.firstName,
-      lastName: currentUser.lastName,
-      status: 'krzesełko',
-      waitlist_cutoff_minutes: cutoffMinutes,
-      obecny: false,
-      nieobecny: false
-    };
-
-    setZapisyNaZajecia(prev => {
-      const updated = { ...prev };
-      allVariantKeys.forEach(vk => {
-        if (!updated[vk]) updated[vk] = [];
-        if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
-          updated[vk] = [...updated[vk], waitlistEntry];
-        }
-      });
-      return updated;
-    });
-
-    const { error } = await supabase.from('zapisy_zajec').insert([
-      { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
-    ]);
-
-    if (error) {
-      showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
-      loadData();
-      return;
-    }
-
-    let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-    if (passIndex !== -1) {
-      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-      if (!isNaN(currentRemaining) && currentRemaining > 0) {
-        updatedKarnety[passIndex] = {
-          ...updatedKarnety[passIndex],
-          pozostaloWejsc: currentRemaining - 1
-        };
-        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+      if (liveDbCheck && liveDbCheck.length > 0) {
+        showToast("Już znajdujesz się na liście uczestników dla tych zajęć.", 'info');
+        setIsWaitlistModalOpen(false);
+        return;
       }
+
+      const limitZajec = selectedClass.limit || 12;
+      const aktualni = zapisyNaZajecia[classKey] || [];
+
+      // Optimistic UI - dodanie na krzesełko natychmiast
+      const waitlistEntry = {
+        id: currentUser.id,
+        klient_id: currentUser.id,
+        firstName: currentUser.firstName,
+        lastName: currentUser.lastName,
+        status: 'krzesełko',
+        waitlist_cutoff_minutes: cutoffMinutes,
+        obecny: false,
+        nieobecny: false
+      };
+
+      setZapisyNaZajecia(prev => {
+        const updated = { ...prev };
+        allVariantKeys.forEach(vk => {
+          if (!updated[vk]) updated[vk] = [];
+          if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
+            updated[vk] = [...updated[vk], waitlistEntry];
+          }
+        });
+        return updated;
+      });
+
+      const { error } = await supabase.from('zapisy_zajec').insert([
+        { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
+      ]);
+
+      if (error) {
+        showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
+        loadData();
+        return;
+      }
+
+      let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
+      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+        if (!isNaN(currentRemaining) && currentRemaining > 0) {
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: currentRemaining - 1
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
+        }
+      }
+
+      let d = 1, m = 1;
+      if (selectedClass.displayDate.includes('/')) {
+        [d, m] = selectedClass.displayDate.split('/').map(Number);
+      } else if (selectedClass.displayDate.includes('-')) {
+        const p = selectedClass.displayDate.split('-').map(Number);
+        m = p[1]; d = p[2];
+      }
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const classDateObj = new Date(classYear, m - 1, d);
+      const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+      const dayOfWeekName = dayNames[classDateObj.getDay()];
+      const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+      const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+
+      const rezerwaCount = aktualni.filter((u: any) => u.status === 'krzesełko').length + 1;
+      const cutoffLabel = cutoffMinutes >= 60 ? `${cutoffMinutes / 60}h` : `${cutoffMinutes} min`;
+
+      await supabase.from('transakcje').insert([{ 
+        klient_id: currentUser.id, 
+        typ_operacji: 'zajecia_zapis', 
+        class_key: classKey, 
+        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Zapis na listę rezerwową (krzesełko #${rezerwaCount}): ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Czas gotowości: ${cutoffLabel} przed startem. Status: 🪑 Krzesełko.` 
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'WAITLIST_JOIN',
+        status: 'SUCCESS',
+        reason: `${currentUser.firstName || 'Klubowicz'} dopisany do krzesełka w ${classKey} (Limit: ${cutoffMinutes} min)`,
+        rule_applied: 'VALIDATION_PASSED',
+        payload: { klient_id: currentUser.id, class_key: classKey, status: 'krzesełko', cutoff_minutes: cutoffMinutes }
+      }]);
+
+      setIsWaitlistModalOpen(false);
+      showToast(`Dopisano do listy rezerwowej! System wypisze Cię automatycznie na ${cutoffLabel} przed startem, jeśli nie zwolni się miejsce.`);
+      setSelectedClass(null);
+      loadData();
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmittingBooking(false);
     }
-
-    let d = 1, m = 1;
-    if (selectedClass.displayDate.includes('/')) {
-      [d, m] = selectedClass.displayDate.split('/').map(Number);
-    } else if (selectedClass.displayDate.includes('-')) {
-      const p = selectedClass.displayDate.split('-').map(Number);
-      m = p[1]; d = p[2];
-    }
-    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-    const classDateObj = new Date(classYear, m - 1, d);
-    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
-    const dayOfWeekName = dayNames[classDateObj.getDay()];
-    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
-    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
-
-    const rezerwaCount = aktualni.filter((u: any) => u.status === 'krzesełko').length + 1;
-    const cutoffLabel = cutoffMinutes >= 60 ? `${cutoffMinutes / 60}h` : `${cutoffMinutes} min`;
-
-    await supabase.from('transakcje').insert([{ 
-      klient_id: currentUser.id, 
-      typ_operacji: 'zajecia_zapis', 
-      class_key: classKey, 
-      opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Zapis na listę rezerwową (krzesełko #${rezerwaCount}): ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Czas gotowości: ${cutoffLabel} przed startem. Status: 🪑 Krzesełko.` 
-    }]);
-
-    await supabase.from('booking_logs').insert([{
-      action_type: 'WAITLIST_JOIN',
-      status: 'SUCCESS',
-      reason: `${currentUser.firstName || 'Klubowicz'} dopisany do krzesełka w ${classKey} (Limit: ${cutoffMinutes} min)`,
-      rule_applied: 'VALIDATION_PASSED',
-      payload: { klient_id: currentUser.id, class_key: classKey, status: 'krzesełko', cutoff_minutes: cutoffMinutes }
-    }]);
-
-    setIsWaitlistModalOpen(false);
-    showToast(`Dopisano do listy rezerwowej! System wypisze Cię automatycznie na ${cutoffLabel} przed startem, jeśli nie zwolni się miejsce.`);
-    setSelectedClass(null);
-    loadData();
   };
-
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
@@ -3931,170 +3963,179 @@ export default function DashboardPage() {
       showToast("Nie można zapisać na odwołane lub usunięte zajęcia!", 'error'); 
       return; 
     }
+
+    if (isSubmittingRef.current || isSubmittingBooking) return;
+    isSubmittingRef.current = true;
+    setIsSubmittingBooking(true);
     
-    const dzisiajData = todayStr;
-    const clientBanDate = klient.blokadaDo || klient.blokada_do;
-    const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
-    const isPassBlocked = (klient.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
-    
-    if (isClientBlocked || isPassBlocked) { 
-      showToast(`Nie można zapisać klienta! ${klient.powodBlokady || (isClientBlocked ? `Klient posiada aktywną blokadę konta do ${clientBanDate}.` : 'Klient posiada aktywną blokadę karnetu.')}`, 'error'); 
-      return; 
-    }
-
-    const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const parts = classKeyStr.split('_');
-    const dateStr = parts[1];
-    let d = 1, m = 1;
-    if (dateStr.includes('/')) {
-      [d, m] = dateStr.split('/').map(Number);
-    } else if (dateStr.includes('-')) {
-      const p = dateStr.split('-').map(Number);
-      m = p[1];
-      d = p[2];
-    }
-    const classDateObj = new Date(new Date().getFullYear(), m - 1, d);
-    const calcClassDateStr = `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
-
-    const isPassSuspended = (klient.karnetyKlubowicza || []).some((k: any) => {
-      if (k.zawieszonyOd) {
-         const sOd = k.zawieszonyOd;
-         const sDo = k.zawieszonyDo || '9999-12-31';
-         return calcClassDateStr >= sOd && calcClassDateStr <= sDo;
+    try {
+      const dzisiajData = todayStr;
+      const clientBanDate = klient.blokadaDo || klient.blokada_do;
+      const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
+      const isPassBlocked = (klient.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
+      
+      if (isClientBlocked || isPassBlocked) { 
+        showToast(`Nie można zapisać klienta! ${klient.powodBlokady || (isClientBlocked ? `Klient posiada aktywną blokadę konta do ${clientBanDate}.` : 'Klient posiada aktywną blokadę karnetu.')}`, 'error'); 
+        return; 
       }
-      return false;
-    });
 
-    if (isPassSuspended) {
-      showToast(`Karnet klienta jest zawieszony w dniu tych zajęć (${calcClassDateStr}).`, 'warning');
-      return;
-    }
-
-    const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
-      if (!isContractPass(k) && k.waznyDo) {
-        const expDate = new Date(k.waznyDo);
-        expDate.setHours(23, 59, 59, 999);
-        if (expDate < new Date()) return false;
+      const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const parts = classKeyStr.split('_');
+      const dateStr = parts[1];
+      let d = 1, m = 1;
+      if (dateStr.includes('/')) {
+        [d, m] = dateStr.split('/').map(Number);
+      } else if (dateStr.includes('-')) {
+        const p = dateStr.split('-').map(Number);
+        m = p[1];
+        d = p[2];
       }
-      if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) {
+      const classDateObj = new Date(new Date().getFullYear(), m - 1, d);
+      const calcClassDateStr = `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
+
+      const isPassSuspended = (klient.karnetyKlubowicza || []).some((k: any) => {
+        if (k.zawieszonyOd) {
+           const sOd = k.zawieszonyOd;
+           const sDo = k.zawieszonyDo || '9999-12-31';
+           return calcClassDateStr >= sOd && calcClassDateStr <= sDo;
+        }
         return false;
-      }
-      return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
-    });
+      });
 
-    if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && !passAllowsClass) {
-      if (!confirm(`UWAGA: Karnet klienta "${klient.pass || ''}" nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`)) {
+      if (isPassSuspended) {
+        showToast(`Karnet klienta jest zawieszony w dniu tych zajęć (${calcClassDateStr}).`, 'warning');
         return;
       }
-    }
 
-    const walletVal = parseFloat(String(klient.wallet || klient.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-    if (walletVal < 0) {
-      if (!confirm(`UWAGA: Klubowicz ${klient.firstName} ${klient.lastName} posiada zadłużenie (${klient.wallet || klient.Portfel}). Zapisać mimo to?`)) return;
-    } else {
-      if (!confirm(`Czy na pewno chcesz zapisać klienta ${klient.firstName} ${klient.lastName} na zajęcia?`)) return;
-    }
+      const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
+        if (!isContractPass(k) && k.waznyDo) {
+          const expDate = new Date(k.waznyDo);
+          expDate.setHours(23, 59, 59, 999);
+          if (expDate < new Date()) return false;
+        }
+        if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) {
+          return false;
+        }
+        return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
+      });
 
-    const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
-
-    const { data: liveDbSignups } = await supabase
-      .from('zapisy_zajec')
-      .select('id, status, klient_id')
-      .in('class_key', allVariantKeys);
-
-    const actualDbList = liveDbSignups || [];
-    if (actualDbList.some(k => String(k.klient_id) === String(klient.id))) { 
-      showToast("Ten klient jest już na liście tych zajęć!", 'info'); 
-      return; 
-    }
-    
-    let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
-      ? bookingRules.max_daily_bookings
-      : Infinity;
-
-    if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0) {
-      const activePass = klient.karnetyKlubowicza[0];
-      const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
-      if (passDef) {
-        let meta: any = {};
-        try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
-        const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
-        const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
-        if (typLimitu === 'Niestandardowy') dailyLimit = Math.min(dailyLimit, parseInt(iloscLimitu, 10) || Infinity);
-      }
-    }
-
-    let userSignupsOnThisDate = 0;
-    const countedDayKeys = new Set<string>();
-    Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
-      if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
-        const classId = cKey.split('_')[0];
-        const normalizedKey = `${classId}_${selectedClass.displayDate}`;
-        if (!countedDayKeys.has(normalizedKey)) {
-          if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) {
-            userSignupsOnThisDate++;
-            countedDayKeys.add(normalizedKey);
-          }
+      if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && !passAllowsClass) {
+        if (!confirm(`UWAGA: Karnet klienta "${klient.pass || ''}" nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`)) {
+          return;
         }
       }
-    });
 
-    if (userSignupsOnThisDate >= dailyLimit) { 
-      showToast(`Nie można zapisać! Wykorzystano dzienny limit (${dailyLimit}).`, 'error'); 
-      return; 
-    }
-    
-    const limitZajec = selectedClass.limit || 12;
-    const glownaLiveCount = actualDbList.filter((u: any) => u.status === 'zapisany').length;
-    const statusZpisu = glownaLiveCount >= limitZajec ? 'krzesełko' : 'zapisany';
-
-    const { error } = await supabase.from('zapisy_zajec').insert([
-      { class_key: classKey, klient_id: klient.id, status: statusZpisu, waitlist_cutoff_minutes: statusZpisu === 'krzesełko' ? 30 : null, obecny: false }
-    ]);
-    
-    if (error) { 
-      showToast(`Nie udało się zapisać: ${error.message}`, 'error'); 
-      return; 
-    }
-
-    let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
-    const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-    if (passIndex !== -1) {
-      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-      if (!isNaN(currentRemaining) && currentRemaining > 0) {
-        updatedKarnety[passIndex] = {
-          ...updatedKarnety[passIndex],
-          pozostaloWejsc: currentRemaining - 1
-        };
-        await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klient.id);
+      const walletVal = parseFloat(String(klient.wallet || klient.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+      if (walletVal < 0) {
+        if (!confirm(`UWAGA: Klubowicz ${klient.firstName} ${klient.lastName} posiada zadłużenie (${klient.wallet || klient.Portfel}). Zapisać mimo to?`)) return;
+      } else {
+        if (!confirm(`Czy na pewno chcesz zapisać klienta ${klient.firstName} ${klient.lastName} na zajęcia?`)) return;
       }
+
+      const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+
+      const { data: liveDbSignups } = await supabase
+        .from('zapisy_zajec')
+        .select('id, status, klient_id')
+        .in('class_key', allVariantKeys);
+
+      const actualDbList = liveDbSignups || [];
+      if (actualDbList.some(k => String(k.klient_id) === String(klient.id))) { 
+        showToast("Ten klient jest już na liście tych zajęć!", 'info'); 
+        return; 
+      }
+      
+      let dailyLimit = bookingRules.max_daily_bookings !== null && bookingRules.max_daily_bookings !== undefined
+        ? bookingRules.max_daily_bookings
+        : Infinity;
+
+      if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0) {
+        const activePass = klient.karnetyKlubowicza[0];
+        const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
+        if (passDef) {
+          let meta: any = {};
+          try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
+          const typLimitu = meta.dziennyLimit || passDef.dziennyLimit;
+          const iloscLimitu = meta.niestandardowyDziennyIlosc || passDef.niestandardowyDziennyIlosc;
+          if (typLimitu === 'Niestandardowy') dailyLimit = Math.min(dailyLimit, parseInt(iloscLimitu, 10) || Infinity);
+        }
+      }
+
+      let userSignupsOnThisDate = 0;
+      const countedDayKeys = new Set<string>();
+      Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
+        if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
+          const classId = cKey.split('_')[0];
+          const normalizedKey = `${classId}_${selectedClass.displayDate}`;
+          if (!countedDayKeys.has(normalizedKey)) {
+            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) {
+              userSignupsOnThisDate++;
+              countedDayKeys.add(normalizedKey);
+            }
+          }
+        }
+      });
+
+      if (userSignupsOnThisDate >= dailyLimit) { 
+        showToast(`Nie można zapisać! Wykorzystano dzienny limit (${dailyLimit}).`, 'error'); 
+        return; 
+      }
+      
+      const limitZajec = selectedClass.limit || 12;
+      const glownaLiveCount = actualDbList.filter((u: any) => u.status === 'zapisany').length;
+      const statusZpisu = glownaLiveCount >= limitZajec ? 'krzesełko' : 'zapisany';
+
+      const { error } = await supabase.from('zapisy_zajec').insert([
+        { class_key: classKey, klient_id: klient.id, status: statusZpisu, waitlist_cutoff_minutes: statusZpisu === 'krzesełko' ? 30 : null, obecny: false }
+      ]);
+      
+      if (error) { 
+        showToast(`Nie udało się zapisać: ${error.message}`, 'error'); 
+        return; 
+      }
+
+      let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
+      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      if (passIndex !== -1) {
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
+        if (!isNaN(currentRemaining) && currentRemaining > 0) {
+          updatedKarnety[passIndex] = {
+            ...updatedKarnety[passIndex],
+            pozostaloWejsc: currentRemaining - 1
+          };
+          await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klient.id);
+        }
+      }
+
+      const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+      const dayOfWeekName = dayNames[classDateObj.getDay()];
+      const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classDateObj.getFullYear()}`;
+      const durationText = calculateDuration(selectedClass.start, selectedClass.end);
+      const oblozenieStr = `${glownaLiveCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
+      const statusLabel = statusZpisu === 'krzesełko' ? '🪑 Krzesełko (Lista rezerwowa)' : '✅ Lista główna';
+      
+      await supabase.from('transakcje').insert([{ 
+        klient_id: klient.id, 
+        typ_operacji: 'zajecia_zapis', 
+        class_key: classKey, 
+        opis: `${klient.firstName} ${klient.lastName} - Zapis na trening: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Status: ${statusLabel}. Obłożenie: ${oblozenieStr}` 
+      }]);
+
+      await sendPushNotification(klient.id, {
+        title: `Zapisano na trening: ${selectedClass.title}`,
+        body: `Zostałeś zapisany na trening "${selectedClass.title}" (${selectedClass.displayDate} ${selectedClass.start}) - ${statusZpisu === 'krzesełko' ? 'Lista rezerwowa' : 'Lista główna'}.`,
+        url: '/'
+      });
+
+      setIsSearchingClient(false); 
+      setSearchClientQuery(''); 
+      await loadData();
+      showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}! (${statusZpisu === 'krzesełko' ? 'Krzesełko' : 'Lista główna'})`);
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmittingBooking(false);
     }
-
-    const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
-    const dayOfWeekName = dayNames[classDateObj.getDay()];
-    const formattedFullDate = `${dayOfWeekName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classDateObj.getFullYear()}`;
-    const durationText = calculateDuration(selectedClass.start, selectedClass.end);
-    const oblozenieStr = `${glownaLiveCount + (statusZpisu === 'zapisany' ? 1 : 0)}/${limitZajec}`;
-    const statusLabel = statusZpisu === 'krzesełko' ? '🪑 Krzesełko (Lista rezerwowa)' : '✅ Lista główna';
-    
-    await supabase.from('transakcje').insert([{ 
-      klient_id: klient.id, 
-      typ_operacji: 'zajecia_zapis', 
-      class_key: classKey, 
-      opis: `${klient.firstName} ${klient.lastName} - Zapis na trening: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Status: ${statusLabel}. Obłożenie: ${oblozenieStr}` 
-    }]);
-
-    await sendPushNotification(klient.id, {
-      title: `Zapisano na trening: ${selectedClass.title}`,
-      body: `Zostałeś zapisany na trening "${selectedClass.title}" (${selectedClass.displayDate} ${selectedClass.start}) - ${statusZpisu === 'krzesełko' ? 'Lista rezerwowa' : 'Lista główna'}.`,
-      url: '/'
-    });
-
-    setIsSearchingClient(false); 
-    setSearchClientQuery(''); 
-    await loadData();
-    showToast(`Pomyślnie zapisano ${klient.firstName} ${klient.lastName}! (${statusZpisu === 'krzesełko' ? 'Krzesełko' : 'Lista główna'})`);
   };
 
   // OBSŁUGA WYPISYWANIA: TRENER (ZAWSZE ODEJMUJE WEJŚCIE, PYTA O BLOKADĘ) VS ADMIN (PYTA O ZWROT)
@@ -4319,51 +4360,7 @@ export default function DashboardPage() {
     };
   });
 
-  const currentMonthStr = todayStr.substring(0, 7);
-  const filteredTransakcje = wszystkieTransakcje.filter(t => {
-    const tDate = t.created_at ? t.created_at.split('T')[0] : '';
-    if (salesPeriod === 'Dziś') return tDate === todayStr;
-    if (salesPeriod === 'Miesiąc') return tDate.startsWith(currentMonthStr);
-    return true;
-  });
-
-  const karnetySales: { [key: string]: { count: number, total: number } } = {};
-  let totalEarnings = 0;
-  filteredTransakcje.forEach(t => {
-    if (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && t.opis.toLowerCase().includes('karnet'))) {
-      let amount = Math.abs(Number(t.kwota) || 0);
-      let passName = 'Inny karnet';
-      let matchedPass = null;
-      for (const k of dostepneKarnety) {
-        if (t.opis && t.opis.includes(k.nazwa)) { passName = k.nazwa; matchedPass = k; break; }
-      }
-      if (amount === 0 && matchedPass) {
-        const basePrice = parseFloat(matchedPass.cena) || 0;
-        const client = klienciList.find(c => c.id === t.klient_id);
-        const isContract = isContractPass(matchedPass);
-        const effectiveDiscount = getEffectiveDiscount(client);
-        if (effectiveDiscount.percent > 0 && !isContract) { 
-          amount = basePrice * (1 - effectiveDiscount.percent / 100); 
-        } else { 
-          amount = basePrice; 
-        }
-      }
-      if (amount > 0) {
-        if (!karnetySales[passName]) { karnetySales[passName] = { count: 0, total: 0 }; }
-        karnetySales[passName].count += 1;
-        karnetySales[passName].total += amount;
-        totalEarnings += amount;
-      }
-    }
-  });
-
-  const groupedSalesArray = Object.entries(karnetySales).map(([name, data]) => ({ name, count: data.count, total: data.total }));
-
-  let salesPeriodTitle = '';
-  if (salesPeriod === 'Dziś') salesPeriodTitle = todayStr;
-  if (salesPeriod === 'Miesiąc') salesPeriodTitle = `Miesiąc ${currentMonthStr}`;
   let needsNewPass = false; let isPassExpiringSoon = false; let expiringMessage = "";
-  
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
 
@@ -4381,7 +4378,6 @@ export default function DashboardPage() {
         let msg = "";
 
         if (isContractPass(k)) {
-          // Umowa 12M nigdy nie wygasa z końcem miesiąca – nie wyzwala braku aktywnego karnetu
           isValid = true;
         } else {
           if (k.waznyDo) {
@@ -4601,6 +4597,7 @@ export default function DashboardPage() {
           </span>
         </div>
       )}
+
       {/* BANNER 3: ZAWIESZONY KARNET */}
       {['klubowicz', 'trener'].includes(appRole) && currentUser && activePassSuspended && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
@@ -4648,7 +4645,7 @@ export default function DashboardPage() {
         return null;
       })()}
 
-      {/* BANNER 5: BRAK KARNETU (POKAZYWANY TYLKO GDY BRAK JAKIEGOKOLWIEK KARNETU LUB UMOWY) */}
+      {/* BANNER 5: BRAK KARNETU */}
       {appRole === 'klubowicz' && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
           <div className="flex items-center gap-4">
@@ -4885,8 +4882,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* PANEL GŁÓWNY: PRZEŁĄCZNIK WIDOKÓW DLA OBSŁUGI KLUBU (GRAFIK vs TABELA OPERACJI) */}
-      {(appRole === 'admin' || appRole === 'trener') && (
+      {/* PANEL GŁÓWNY: PRZEŁĄCZNIK WIDOKÓW TYLKO DLA ADMINA (UKRYTE U TRENERA ZGODNIE Z PKT 3) */}
+      {appRole === 'admin' && (
         <div className="flex items-center justify-between bg-white border border-sky-200 p-3 rounded-2xl shadow-sm">
           <div className="flex items-center gap-2">
             <button
@@ -4907,11 +4904,11 @@ export default function DashboardPage() {
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              📋 Tabela Operacji ({wszystkieTransakcje.length})
+              📋 Tabela Operacji (Ostatnie {Math.min(1000, filteredOperationsList.length)})
             </button>
           </div>
           <div className="flex items-center gap-2">
-            {adminViewTab === 'grafik' && appRole === 'admin' && (
+            {adminViewTab === 'grafik' && (
               <button 
                 onClick={() => {
                   setEventModeType('kilkudniowe');
@@ -4926,8 +4923,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ZAKŁADKA 1: TABELA OPERACJI I ZAPISÓW (PEŁNE PRECYZYJNE DANE Z GRAFIKU) */}
-      {(appRole === 'admin' || appRole === 'trener') && adminViewTab === 'operacje' && (
+      {/* ZAKŁADKA 1: TABELA OPERACJI I ZAPISÓW (TYLKO ADMIN, MAX 1000 REKORDÓW) */}
+      {appRole === 'admin' && adminViewTab === 'operacje' && (
         <section className="space-y-4 animate-in fade-in">
           {/* Pasek wyszukiwania i filtrów */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
@@ -4976,7 +4973,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                  {filteredOperationsList.map((op) => {
+                  {filteredOperationsList.slice(0, 1000).map((op) => {
                     const client = klienciList.find(c => c.id === op.klient_id);
                     const clientName = client ? `${client.firstName || ''} ${client.lastName || ''}`.trim() : `Klubowicz #${op.klient_id}`;
                     const clientEmail = client?.email || '';
@@ -5061,7 +5058,7 @@ export default function DashboardPage() {
       )}
 
       {/* ZAKŁADKA 2: GRAFIK ZAJĘĆ */}
-      {(!((appRole === 'admin' || appRole === 'trener') && adminViewTab === 'operacje')) && (
+      {(appRole !== 'admin' || adminViewTab === 'grafik') && (
         <section className="space-y-4">
           <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 ${(appRole === 'admin' || appRole === 'trener') ? 'bg-white border border-sky-200 p-4 rounded-2xl shadow-sm' : 'mt-8'}`}>
             <div className="flex items-center gap-3">
@@ -5461,76 +5458,10 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* SEKCJE DLA ADMINA: SPRZEDAŻ I KLIENCI */}
+      {/* SEKCJA DLA ADMINA: KLIENCI (ROZCIĄGNIĘTA NA PEŁNĄ SZEROKOŚĆ PO USUNIĘCIU BŁĘDNEJ TABELI SPRZEDAŻY) */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
-          <section className="lg:col-span-6 space-y-3">
-            <div className="flex items-center justify-between">
-              <Link
-                href="/raporty/transakcje"
-                className="text-base font-bold uppercase tracking-wider text-sky-900 hover:text-sky-700 flex items-center gap-2 transition-colors cursor-pointer group"
-              >
-                SPRZEDAŻ Z BAZY <span className="text-xs group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
-              </Link>
-            </div>
-            <div className="bg-white border border-sky-200 rounded-2xl p-5 space-y-4 shadow-sm">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center font-bold text-sky-700 text-sm">
-                    $
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-slate-800 uppercase">RAPORT FINANSOWY</div>
-                    <div className="text-[10px] text-slate-500">{salesPeriodTitle}</div>
-                  </div>
-                </div>
-                <select
-                  value={salesPeriod}
-                  onChange={(e) => setSalesPeriod(e.target.value)}
-                  className="bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
-                >
-                  <option value="Dziś">Dziś</option>
-                  <option value="Miesiąc">Ten miesiąc</option>
-                </select>
-              </div>
-              <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 flex justify-between items-center text-xs">
-                <span className="text-emerald-900 font-bold uppercase tracking-wider text-[10px]">Łączny przychód:</span>
-                <span className="font-black text-sm text-emerald-700">
-                  +{totalEarnings.toFixed(2)} PLN
-                </span>
-              </div>
-              <div className="text-[11px] max-h-60 overflow-y-auto pr-2">
-                <div className="flex justify-between text-slate-500 pb-2 border-b border-sky-100 font-bold sticky top-0 bg-white z-10 uppercase tracking-wider text-[9px]">
-                  <span className="w-1/2">Karnet</span>
-                  <span className="w-1/4 text-center">Ilość</span>
-                  <span className="w-1/4 text-right">Zysk brutto</span>
-                </div>
-                {groupedSalesArray.length === 0 ? (
-                  <div className="flex justify-between text-slate-400 py-6 border-b border-slate-100 text-center">
-                    <span className="w-full">Brak sprzedanych karnetów w tym okresie.</span>
-                  </div>
-                ) : (
-                  groupedSalesArray.map((sale, idx) => (
-                    <div key={idx} className="flex justify-between items-center text-slate-700 py-3 border-b border-slate-100">
-                      <span className="w-1/2 font-bold truncate pr-2 text-sky-950" title={sale.name}>{sale.name}</span>
-                      <span className="w-1/4 text-center font-black bg-slate-100 text-slate-600 rounded-md py-0.5">{sale.count} szt.</span>
-                      <span className="w-1/4 text-right font-black text-emerald-600">
-                        +{sale.total.toFixed(2)} PLN
-                      </span>
-                    </div>
-                  ))
-                )}
-                <div className="flex justify-between items-center text-slate-900 pt-4 font-black text-xs sticky bottom-0 bg-white">
-                  <span className="uppercase tracking-wider">Suma zysków:</span>
-                  <span className="text-emerald-700 text-sm">
-                    +{totalEarnings.toFixed(2)} PLN
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="lg:col-span-6 space-y-3">
+          <section className="lg:col-span-12 space-y-3">
             <div className="flex items-center justify-between">
               <Link
                 href="/raporty/klienci"
@@ -5549,7 +5480,7 @@ export default function DashboardPage() {
                   className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
                 />
               </div>
-              <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[450px] overflow-y-auto pr-1">
                 {filteredClients.length === 0 ? (
                   <div className="text-center py-10 text-slate-400 text-xs font-medium">
                     Brak klientów pasujących do wyszukiwania.
@@ -5790,6 +5721,7 @@ export default function DashboardPage() {
           </div>
         );
       })()}
+
       {/* MODAL: ZARZĄDZANIE UCZESTNIKAMI ZAJĘĆ */}
       {selectedClass && (() => {
         const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -6193,20 +6125,30 @@ export default function DashboardPage() {
                       return (
                         <button
                           onClick={handleKlubowiczZapiszSie}
+                          disabled={isSubmittingBooking}
                           className={`w-full font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
-                            isFull
+                            isSubmittingBooking
+                              ? 'bg-slate-400 text-white cursor-not-allowed'
+                              : isFull
                               ? 'bg-blue-600 hover:bg-blue-700 text-white'
                               : 'bg-emerald-600 hover:bg-emerald-700 text-white'
                           }`}
                         >
-                          {isFull ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' : '✅ Zapisz się na zajęcia'}
+                          {isSubmittingBooking 
+                            ? 'Przetwarzanie zapisu...' 
+                            : isFull 
+                            ? '🪑 Zapisz się na listę rezerwową (Krzesełko)' 
+                            : '✅ Zapisz się na zajęcia'}
                         </button>
                       );
                     })()
                   ) : (
                     <button
                       onClick={handleKlubowiczWypiszSie}
-                      className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                      disabled={isSubmittingBooking}
+                      className={`w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                        isSubmittingBooking ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
                     >
                       ❌ Wypisz się z zajęć
                     </button>
@@ -6217,6 +6159,7 @@ export default function DashboardPage() {
                   {!isSearchingClient ? (
                     <button
                       onClick={() => setIsSearchingClient(true)}
+                      disabled={isSubmittingBooking}
                       className={`w-full font-black py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-sm uppercase tracking-wider cursor-pointer ${
                         isFull
                           ? 'bg-blue-600 hover:bg-blue-700 text-white'
@@ -6248,8 +6191,10 @@ export default function DashboardPage() {
                             filteredSuggestions.map((klient) => (
                               <div
                                 key={klient.id}
-                                onClick={() => handleZapiszKlientaDoZajec(klient)}
-                                className="px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors"
+                                onClick={() => !isSubmittingBooking && handleZapiszKlientaDoZajec(klient)}
+                                className={`px-3.5 py-2.5 hover:bg-sky-50 cursor-pointer flex items-center justify-between text-xs transition-colors ${
+                                  isSubmittingBooking ? 'opacity-50 pointer-events-none' : ''
+                                }`}
                               >
                                 <div>
                                   <span className="font-bold text-slate-900">{klient.firstName} {klient.lastName}</span>
@@ -6352,9 +6297,12 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => handleConfirmWaitlistSignup(selectedWaitlistCutoff)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                  disabled={isSubmittingBooking}
+                  className={`bg-blue-600 hover:bg-blue-700 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                    isSubmittingBooking ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                 >
-                  Potwierdź krzesełko
+                  {isSubmittingBooking ? 'Zapisywanie...' : 'Potwierdź krzesełko'}
                 </button>
               </div>
             </div>
