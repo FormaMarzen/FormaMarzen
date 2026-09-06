@@ -110,6 +110,22 @@ export interface BadaniaKrwiPlik {
   nazwa: string;
 }
 
+// Struktura wpisu w tabeli własnych badań krwi klubowicza
+export interface WlasneBadanieWpis {
+  id: string;
+  data_badania: string;
+  wynik: number;
+  jednostka?: string;
+}
+
+// Struktura pojedynczej tabeli wskaźnika krwi (max 15 tabel)
+export interface WlasnaTabelaBadan {
+  id: string;
+  nazwa: string;
+  jednostka_domyslna?: string;
+  wpisy: WlasneBadanieWpis[];
+}
+
 export interface BadaniaKrwiWpis {
   id: number;
   klient_id: number | string;
@@ -123,6 +139,7 @@ export interface BadaniaKrwiWpis {
   zalecenia?: string | null;
   suplementacja_trener?: SuplementTrenera[] | string[];
   suplementacja_klubowicz?: SuplementKlubowicza[];
+  wlasne_tabele?: WlasnaTabelaBadan[];
   nowa_interpretacja?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -132,7 +149,7 @@ export const extractPdfFiles = (b?: BadaniaKrwiWpis | null): BadaniaKrwiPlik[] =
   if (!b) return [];
   if (b.pliki_pdf && Array.isArray(b.pliki_pdf) && b.pliki_pdf.length > 0) {
     return b.pliki_pdf.map((f: any) => 
-      typeof f === 'string' ? { url: f, nazwa: f.split('/').pop() || 'Dokument.pdf' } : f
+      typeof f === 'string' ? { url: f, nazwa: decodeURIComponent(f.split('/').pop() || 'Dokument.pdf') } : f
     );
   }
   if (b.plik_pdf_url) {
@@ -140,7 +157,11 @@ export const extractPdfFiles = (b?: BadaniaKrwiWpis | null): BadaniaKrwiPlik[] =
       const trimmed = b.plik_pdf_url.trim();
       if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
         const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.map((item: any) => 
+            typeof item === 'string' ? { url: item, nazwa: decodeURIComponent(item.split('/').pop() || 'Dokument.pdf') } : item
+          );
+        }
       }
     } catch (e) {}
     return [{ url: b.plik_pdf_url, nazwa: b.plik_pdf_nazwa || 'Wyniki.pdf' }];
@@ -196,6 +217,7 @@ const fetchAllFromSupabase = async (
 
 export default function AnalizaFormyPage() {
   const [activeTab, setActiveTab] = useState<'pomiary' | 'makro' | 'redukcja' | 'badania'>('pomiary');
+  const [activeBadaniaSubTab, setActiveBadaniaSubTab] = useState<'dokumenty' | 'wlasne_tabele'>('dokumenty');
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
@@ -210,6 +232,9 @@ export default function AnalizaFormyPage() {
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [editingMeasurementId, setEditingMeasurementId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Stan zwijania lat w tabeli pomiarów
+  const [expandedMeasurementYears, setExpandedMeasurementYears] = useState<Record<string, boolean>>({});
 
   // Stany Wyzwania Redukcji
   const [edycjeRedukcji, setEdycjeRedukcji] = useState<RedukcjaEdycja[]>([]);
@@ -245,6 +270,19 @@ export default function AnalizaFormyPage() {
   const [isBadaniaModalOpen, setIsBadaniaModalOpen] = useState<boolean>(false);
   const [isDetailViewOpen, setIsDetailViewOpen] = useState<boolean>(false);
   const [editingBadanieId, setEditingBadanieId] = useState<number | null>(null);
+
+  // Stan własnych tabel badań krwi klubowicza (max 15 tabel)
+  const [wlasneTabeleBadan, setWlasneTabeleBadan] = useState<WlasnaTabelaBadan[]>([]);
+  const [isAddTabelaModalOpen, setIsAddTabelaModalOpen] = useState<boolean>(false);
+  const [newTabelaNazwa, setNewTabelaNazwa] = useState<string>('');
+  const [newTabelaJednostka, setNewTabelaJednostka] = useState<string>('');
+  const [expandedTableHistory, setExpandedTableHistory] = useState<Record<string, boolean>>({});
+  const [tabelaDoWpisuModal, setTabelaDoWpisuModal] = useState<string | null>(null);
+  const [wpisBadaniaForm, setWpisBadaniaForm] = useState({
+    data_badania: new Date().toISOString().split('T')[0],
+    wynik: '',
+    jednostka: ''
+  });
 
   const [isUploadingPdf, setIsUploadingPdf] = useState<boolean>(false);
   const [isUploadingImages, setIsUploadingImages] = useState<boolean>(false);
@@ -380,6 +418,68 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // Ładowanie i synchronizacja własnych tabel badań krwi z bazy
+  const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
+    try {
+      const tKey = `wlasne_badania_tabele_${klientId || email}`;
+      const { data, error } = await supabase
+        .from('klub_wlasne_badania')
+        .select('*')
+        .or(`klient_id.eq.${klientId || 0},email_klienta.ilike.${email.trim()}`)
+        .maybeSingle();
+
+      if (data && data.dane_tabel && Array.isArray(data.dane_tabel)) {
+        setWlasneTabeleBadan(data.dane_tabel as WlasnaTabelaBadan[]);
+      } else {
+        // Fallback localStorage dla kompatybilności
+        if (typeof window !== 'undefined') {
+          const cached = localStorage.getItem(tKey);
+          if (cached) {
+            try {
+              setWlasneTabeleBadan(JSON.parse(cached));
+            } catch (e) {
+              setWlasneTabeleBadan([]);
+            }
+          } else {
+            setWlasneTabeleBadan([]);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Własne tabele badań: tryb offline/fallback:", err);
+      const tKey = `wlasne_badania_tabele_${klientId || email}`;
+      if (typeof window !== 'undefined') {
+        const cached = localStorage.getItem(tKey);
+        if (cached) {
+          try { setWlasneTabeleBadan(JSON.parse(cached)); } catch (e) { setWlasneTabeleBadan([]); }
+        }
+      }
+    }
+  };
+
+  const saveWlasneTabeleDoBazy = async (updatedTables: WlasnaTabelaBadan[]) => {
+    const tKlientId = selectedKlient?.id || currentUserId;
+    const tEmail = selectedKlient ? selectedKlient['E-mail'] : currentUserEmail;
+    if (!tEmail) return;
+
+    setWlasneTabeleBadan(updatedTables);
+    const tKey = `wlasne_badania_tabele_${tKlientId || tEmail}`;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(tKey, JSON.stringify(updatedTables));
+    }
+
+    try {
+      await supabase.from('klub_wlasne_badania').upsert([{
+        klient_id: tKlientId || null,
+        email_klienta: tEmail,
+        dane_tabel: updatedTables,
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'email_klienta' });
+    } catch (err) {
+      console.warn("Zapisano tabele w lokalnym cache:", err);
+    }
+  };
+
   const fetchBadaniaKrwi = async (klientId: number | string | null, email: string) => {
     try {
       let query = supabase.from('klub_badania_krwi').select('*').order('data_badania', { ascending: false });
@@ -395,12 +495,12 @@ export default function AnalizaFormyPage() {
       } else {
         setBadaniaList([]);
       }
+      await fetchWlasneTabele(klientId, email);
     } catch (err) {
       console.error("Błąd pobierania badań krwi:", err);
       setBadaniaList([]);
     }
   };
-
   const markInterpretationAsRead = async (badanieId?: number) => {
     try {
       if (badanieId) {
@@ -557,6 +657,7 @@ export default function AnalizaFormyPage() {
       loadEdycjaDetails(selectedEdycjaId);
     }
   }, [selectedEdycjaId]);
+
   const fetchMeasurements = async (klientId: number | string, email: string) => {
     try {
       let query = supabase
@@ -757,7 +858,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF JEDNOCZEŚNIE LUB PARTIAMI
+  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF JEDNOCZEŚNIE (Pewny Public URL)
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -780,14 +881,16 @@ export default function AnalizaFormyPage() {
 
         const { data: uploadData, error: uploadErr } = await supabase.storage
           .from('badania')
-          .upload(fileName, file, { upsert: true });
+          .upload(fileName, file, { upsert: true, contentType: 'application/pdf' });
 
         let publicUrl = '';
         if (!uploadErr && uploadData) {
           const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
           publicUrl = urlData.publicUrl;
         } else {
-          publicUrl = URL.createObjectURL(file);
+          // W przypadku błędu uprawnień spróbuj wygenerować signed URL na 1 rok
+          const { data: signedData } = await supabase.storage.from('badania').createSignedUrl(fileName, 31536000);
+          publicUrl = signedData?.signedUrl || URL.createObjectURL(file);
         }
 
         uploadedPdfs.push({
@@ -825,6 +928,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
+  // OBSŁUGA ZDJĘĆ / SKANÓW (Trwały zapis w bazie i storage)
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -846,7 +950,9 @@ export default function AnalizaFormyPage() {
           const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
           newUrls.push(urlData.publicUrl);
         } else {
-          newUrls.push(URL.createObjectURL(file));
+          // Fallback signed URL
+          const { data: sData } = await supabase.storage.from('badania').createSignedUrl(fileName, 31536000);
+          newUrls.push(sData?.signedUrl || URL.createObjectURL(file));
         }
       }
 
@@ -935,7 +1041,7 @@ export default function AnalizaFormyPage() {
       plik_pdf_url: mainPdfUrl,
       plik_pdf_nazwa: mainPdfName,
       pliki_pdf: badanieFormData.pliki_pdf && badanieFormData.pliki_pdf.length > 0 ? badanieFormData.pliki_pdf : null,
-      zdjecia: isTrainerOrAdmin ? (badanieFormData.zdjecia || []) : (existingBadanie?.zdjecia || []),
+      zdjecia: badanieFormData.zdjecia || [],
       interpretacja: isTrainerOrAdmin ? (badanieFormData.interpretacja || null) : (existingBadanie?.interpretacja || null),
       zalecenia: isTrainerOrAdmin ? (badanieFormData.zalecenia || null) : (existingBadanie?.zalecenia || null),
       suplementacja_trener: isTrainerOrAdmin ? filteredCoachSupplements : (existingBadanie?.suplementacja_trener || []),
@@ -949,7 +1055,6 @@ export default function AnalizaFormyPage() {
         ? await supabase.from('klub_badania_krwi').update(payload).eq('id', editingBadanieId)
         : await supabase.from('klub_badania_krwi').insert([payload]);
 
-      // Obsługa kompatybilności wstecznej bazy w przypadku braku dedykowanej kolumny jsonb 'pliki_pdf'
       if (res.error && res.error.message && res.error.message.includes('pliki_pdf')) {
         delete payload.pliki_pdf;
         if (badanieFormData.pliki_pdf && badanieFormData.pliki_pdf.length > 0) {
@@ -975,6 +1080,91 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // --- ZARZĄDZANIE WŁASNYMI TABELAMI BADAŃ KRWI (MAX 15 TABEL) ---
+  const handleAddNewCustomTable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTabelaNazwa.trim()) return;
+
+    if (wlasneTabeleBadan.length >= 15) {
+      alert("Osiągnięto limit maksymalnie 15 tabel wskaźników krwi.");
+      return;
+    }
+
+    const nowaTabela: WlasnaTabelaBadan = {
+      id: `tab_${Date.now()}`,
+      nazwa: newTabelaNazwa.trim(),
+      jednostka_domyslna: newTabelaJednostka.trim() || undefined,
+      wpisy: []
+    };
+
+    const updated = [...wlasneTabeleBadan, nowaTabela];
+    await saveWlasneTabeleDoBazy(updated);
+    setNewTabelaNazwa('');
+    setNewTabelaJednostka('');
+    setIsAddTabelaModalOpen(false);
+  };
+
+  const handleDeleteCustomTable = async (tableId: string) => {
+    if (!confirm("Czy na pewno chcesz usunąć tę tabelę wraz ze wszystkimi wpisami i wykresem?")) return;
+    const updated = wlasneTabeleBadan.filter(t => t.id !== tableId);
+    await saveWlasneTabeleDoBazy(updated);
+  };
+
+  const handleAddMeasurementToTable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tabelaDoWpisuModal || !wpisBadaniaForm.wynik) return;
+
+    const numVal = parseFloat(wpisBadaniaForm.wynik);
+    if (isNaN(numVal)) {
+      alert("Wynik musi być prawidłową liczbą.");
+      return;
+    }
+
+    const targetTable = wlasneTabeleBadan.find(t => t.id === tabelaDoWpisuModal);
+    if (!targetTable) return;
+
+    const newWpis: WlasneBadanieWpis = {
+      id: `wpis_${Date.now()}`,
+      data_badania: wpisBadaniaForm.data_badania,
+      wynik: numVal,
+      jednostka: wpisBadaniaForm.jednostka.trim() || targetTable.jednostka_domyslna || ''
+    };
+
+    const updated = wlasneTabeleBadan.map(t => {
+      if (t.id === tabelaDoWpisuModal) {
+        const sortedWpisy = [...t.wpisy, newWpis].sort((a, b) => 
+          new Date(b.data_badania).getTime() - new Date(a.data_badania).getTime()
+        );
+        return { ...t, wpisy: sortedWpisy };
+      }
+      return t;
+    });
+
+    await saveWlasneTabeleDoBazy(updated);
+    setTabelaDoWpisuModal(null);
+    setWpisBadaniaForm({
+      data_badania: new Date().toISOString().split('T')[0],
+      wynik: '',
+      jednostka: ''
+    });
+  };
+
+  const handleDeleteMeasurementFromTable = async (tableId: string, wpisId: string) => {
+    if (!confirm("Czy na pewno chcesz usunąć ten wynik z tabeli?")) return;
+    const updated = wlasneTabeleBadan.map(t => {
+      if (t.id === tableId) {
+        return { ...t, wpisy: t.wpisy.filter(w => w.id !== wpisId) };
+      }
+      return t;
+    });
+    await saveWlasneTabeleDoBazy(updated);
+  };
+
+  const toggleTableHistory = (tableId: string) => {
+    setExpandedTableHistory(prev => ({ ...prev, [tableId]: !prev[tableId] }));
+  };
+
+  // --- REDUKCJA LOGIKA ---
   const handleCreateEdycja = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!edycjaFormData.nazwa.trim()) return;
@@ -1488,14 +1678,35 @@ export default function AnalizaFormyPage() {
     return diff > 0 ? `+${diff.toFixed(1)}` : `${diff.toFixed(1)}`;
   };
 
-  const chartData24Months = useMemo(() => {
+  // ZAKRES DANYCH ANALIZY ROZSZERZONY NA 8 LAT
+  const chartData8Years = useMemo(() => {
     const cutoffDate = new Date();
-    cutoffDate.setMonth(cutoffDate.getMonth() - 24);
+    cutoffDate.setFullYear(cutoffDate.getFullYear() - 8);
     
     return [...(measurements || [])]
       .filter(m => m.data_pomiaru && new Date(m.data_pomiaru) >= cutoffDate)
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
+
+  // LOGIKA PODZIAŁU POMIARÓW: 5 NAJNOWSZYCH + ARCHIWUM WG LAT
+  const { top5Measurements, olderMeasurementsByYear, availableYears } = useMemo(() => {
+    const top5 = measurements.slice(0, 5);
+    const older = measurements.slice(5);
+
+    const byYear: Record<string, AnalizaFormyWpis[]> = {};
+    older.forEach(m => {
+      const year = m.data_pomiaru ? m.data_pomiaru.substring(0, 4) : 'Brak roku';
+      if (!byYear[year]) byYear[year] = [];
+      byYear[year].push(m);
+    });
+
+    const years = Object.keys(byYear).sort((a, b) => b.localeCompare(a));
+    return { top5Measurements: top5, olderMeasurementsByYear: byYear, availableYears: years };
+  }, [measurements]);
+
+  const toggleYearExpand = (year: string) => {
+    setExpandedMeasurementYears(prev => ({ ...prev, [year]: !prev[year] }));
+  };
 
   const calculateKatchMcArdle = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
@@ -1549,6 +1760,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
+  // GENERATOR WYKRESÓW ANALIZY FORMY (ZAKRES 8 LAT)
   const renderLineChart = (
     title: string, 
     dataKey: keyof AnalizaFormyWpis, 
@@ -1556,7 +1768,7 @@ export default function AnalizaFormyPage() {
     strokeColor: string, 
     fillGradient: string
   ) => {
-    const validPoints = (chartData24Months || [])
+    const validPoints = (chartData8Years || [])
       .map(item => ({
         date: item.data_pomiaru,
         val: item[dataKey] !== null && item[dataKey] !== undefined ? Number(item[dataKey]) : null
@@ -1567,8 +1779,8 @@ export default function AnalizaFormyPage() {
       return (
         <div className="bg-white p-4 rounded-2xl border border-sky-200 shadow-sm flex flex-col justify-between">
           <div className="text-xs font-black text-sky-950 uppercase tracking-wider">{title} ({unit})</div>
-          <div className="h-40 flex items-center justify-center text-xs text-slate-400 font-bold">
-            Wymagane min. 2 pomiary w okresie 24 msc do wygenerowania wykresu.
+          <div className="h-40 flex items-center justify-center text-xs text-slate-400 font-bold text-center px-4">
+            Wymagane min. 2 pomiary w okresie 8 lat do wygenerowania wykresu.
           </div>
         </div>
       );
@@ -1626,13 +1838,87 @@ export default function AnalizaFormyPage() {
                 </text>
                 {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
                   <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
-                    {p.date ? p.date.substring(5) : ''}
+                    {p.date ? p.date.substring(2) : ''}
                   </text>
                 )}
               </g>
             ))}
           </svg>
         </div>
+      </div>
+    );
+  };
+
+  // GENERATOR WYKRESÓW DLA BADAŃ KRWI KLUBOWICZA (ZAKRES 5 LAT)
+  const renderBloodParamChart = (wpisy: WlasneBadanieWpis[], nazwaBadania: string, jednostka: string) => {
+    const cutoffDate = new Date();
+    cutoffDate.setFullYear(cutoffDate.getFullYear() - 5);
+
+    const validPoints = wpisy
+      .filter(w => w.data_badania && new Date(w.data_badania) >= cutoffDate && w.wynik !== null && !isNaN(w.wynik))
+      .sort((a, b) => new Date(a.data_badania).getTime() - new Date(b.data_badania).getTime());
+
+    if (validPoints.length < 2) {
+      return (
+        <div className="h-32 flex items-center justify-center text-[11px] text-slate-400 font-bold bg-slate-50/50 rounded-2xl border border-dashed border-sky-200">
+          Min. 2 pomiary w okresie 5 lat wygenerują wykres trendu
+        </div>
+      );
+    }
+
+    const minVal = Math.min(...validPoints.map(p => p.wynik));
+    const maxVal = Math.max(...validPoints.map(p => p.wynik));
+    const padding = (maxVal - minVal) === 0 ? 2 : (maxVal - minVal) * 0.15;
+    const yMin = Math.max(0, minVal - padding);
+    const yMax = maxVal + padding;
+
+    const width = 360;
+    const height = 130;
+    const margin = { top: 12, right: 15, bottom: 20, left: 30 };
+
+    const points = validPoints.map((p, index) => {
+      const x = margin.left + (index / (validPoints.length - 1)) * (width - margin.left - margin.right);
+      const y = height - margin.bottom - ((p.wynik - yMin) / (yMax - yMin || 1)) * (height - margin.top - margin.bottom);
+      return { x, y, val: p.wynik, date: p.data_badania };
+    });
+
+    const pathD = points.reduce((acc, p, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${p.x},${p.y}`, '');
+    const areaD = `${pathD} L ${points[points.length - 1].x},${height - margin.bottom} L ${points[0].x},${height - margin.bottom} Z`;
+
+    return (
+      <div className="w-full overflow-x-auto bg-gradient-to-b from-sky-50/50 to-white p-3 rounded-2xl border border-sky-100">
+        <div className="flex items-center justify-between mb-1 text-[10px] font-bold">
+          <span className="text-slate-400 uppercase tracking-wider">Trend 5-letni</span>
+          <span className="text-amber-600 font-black">Ost: {validPoints[validPoints.length - 1].wynik} {jednostka}</span>
+        </div>
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-28">
+          <defs>
+            <linearGradient id={`grad-blood-${nazwaBadania.replace(/\s+/g, '')}`} x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          <line x1={margin.left} y1={margin.top} x2={width - margin.right} y2={margin.top} stroke="#f1f5f9" strokeWidth="1" />
+          <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#e2e8f0" strokeWidth="1" />
+
+          <path d={areaD} fill={`url(#grad-blood-${nazwaBadania.replace(/\s+/g, '')})`} />
+          <path d={pathD} fill="none" stroke="#d97706" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
+          {points.map((p, idx) => (
+            <g key={idx}>
+              <circle cx={p.x} cy={p.y} r="3" fill="#ffffff" stroke="#d97706" strokeWidth="2" />
+              <text x={p.x} y={p.y - 5} textAnchor="middle" fontSize="8.5" fontWeight="bold" fill="#0f172a">
+                {p.val}
+              </text>
+              {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
+                <text x={p.x} y={height - 6} textAnchor="middle" fontSize="7.5" fill="#64748b">
+                  {p.date ? p.date.substring(2) : ''}
+                </text>
+              )}
+            </g>
+          ))}
+        </svg>
       </div>
     );
   };
@@ -1670,6 +1956,90 @@ export default function AnalizaFormyPage() {
     );
   }
 
+  // Funkcja renderująca pojedynczy wiersz pomiaru w tabeli
+  const renderMeasurementRow = (m: AnalizaFormyWpis) => {
+    const isStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
+    return (
+      <tr key={m.id} className="hover:bg-sky-50/50 transition-colors">
+        <td className="p-3 font-black text-sky-950 border-r border-sky-100 sticky left-0 bg-white z-10 whitespace-nowrap">
+          <div>{m.data_pomiaru}</div>
+          <div className="mt-1">
+            {isStudio ? (
+              <span className="inline-flex items-center gap-1 bg-amber-500 text-slate-950 text-[9px] font-black px-2 py-0.5 rounded shadow-xs uppercase tracking-wider">
+                🏢 STUDIO
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-[9px] font-bold px-2 py-0.5 rounded border border-slate-300" title={m.miejsce_pomiaru || ''}>
+                📍 {m.miejsce_pomiaru || 'Inne'}
+              </span>
+            )}
+          </div>
+        </td>
+        <td className="p-3 text-center border-r border-sky-100">{m.obwod_pasa || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.klatka || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.ramie || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.talia || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.biodra || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.udo || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-200">{m.lydka || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100 font-black text-sky-950">{m.waga}</td>
+        <td className="p-3 text-center border-r border-sky-100 font-semibold">{m.tkanka_tluszczowa ? `${m.tkanka_tluszczowa}%` : '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.miesnie || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.kosci || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
+        <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
+        <td className="p-3 text-center border-r border-sky-200">{m.tluszcz_wisceralny || '-'}</td>
+        <td className="p-3 text-center">
+          <div className="flex items-center justify-center gap-1.5">
+            <button
+              onClick={() => {
+                setEditingMeasurementId(m.id);
+                const isMStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
+                setFormData({
+                  data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
+                  miejsce_typ: isMStudio ? 'STUDIO' : 'INNE',
+                  miejsce_inne_opis: isMStudio ? '' : (m.miejsce_pomiaru || ''),
+                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : ''),
+                  waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
+                  obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
+                  klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
+                  ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
+                  talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
+                  biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
+                  udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
+                  lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
+                  tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
+                  miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
+                  kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
+                  wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
+                  woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
+                  tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
+                  kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
+                  bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
+                  tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
+                  weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
+                  uwagi_trenera: m.uwagi_trenera || '',
+                  notatki_klubowicza: m.notatki_klubowicza || ''
+                });
+                setIsAddModalOpen(true);
+              }}
+              className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+              title="Edytuj ten wpis"
+            >
+              ✏️
+            </button>
+            <button
+              onClick={() => handleDeleteMeasurement(m.id)}
+              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
+              title="Usuń wpis"
+            >
+              🗑️
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  };
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 font-sans antialiased">
       
@@ -1740,12 +2110,22 @@ export default function AnalizaFormyPage() {
             </button>
           )}
 
-          {activeTab === 'badania' && (
+          {activeTab === 'badania' && activeBadaniaSubTab === 'dokumenty' && (
             <button
               onClick={handleOpenNewBadanieModal}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider"
             >
               <span>+</span> {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wyniki / Analizę Krwi'}
+            </button>
+          )}
+
+          {activeTab === 'badania' && activeBadaniaSubTab === 'wlasne_tabele' && (
+            <button
+              onClick={() => setIsAddTabelaModalOpen(true)}
+              disabled={wlasneTabeleBadan.length >= 15}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-wider disabled:opacity-50"
+            >
+              <span>+</span> Dodaj nową tabelę ({wlasneTabeleBadan.length}/15)
             </button>
           )}
 
@@ -1760,7 +2140,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK */}
+      {/* PASEK ZAKŁADEK GŁÓWNYCH */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -1974,6 +2354,7 @@ export default function AnalizaFormyPage() {
           </div>
         )
       )}
+
       {/* ZAKŁADKA 1: POMIARY */}
       {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
@@ -2049,13 +2430,14 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
+          {/* TABELA POMIARÓW: 5 NAJNOWSZYCH + ROZWIJANA LISTA NA LATA */}
           <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
             <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
               <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>📋</span> Karta Pomiarów i Składu Ciała (Historia)
+                <span>📋</span> Karta Pomiarów i Składu Ciała (Ostatnie 5 wpisów)
               </h3>
               <span className="text-[10px] font-bold text-slate-500">
-                Liczba wpisów: {measurements.length}
+                Łącznie w bazie: {measurements.length}
               </span>
             </div>
 
@@ -2088,91 +2470,8 @@ export default function AnalizaFormyPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-100">
-                  {measurements.length > 0 ? (
-                    measurements.map((m) => {
-                      const isStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
-
-                      return (
-                        <tr key={m.id} className="hover:bg-sky-50/50 transition-colors">
-                          <td className="p-3 font-black text-sky-950 border-r border-sky-100 sticky left-0 bg-white z-10 whitespace-nowrap">
-                            <div>{m.data_pomiaru}</div>
-                            <div className="mt-1">
-                              {isStudio ? (
-                                <span className="inline-flex items-center gap-1 bg-amber-500 text-slate-950 text-[9px] font-black px-2 py-0.5 rounded shadow-xs uppercase tracking-wider">
-                                  🏢 STUDIO
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-[9px] font-bold px-2 py-0.5 rounded border border-slate-300" title={m.miejsce_pomiaru || ''}>
-                                  📍 {m.miejsce_pomiaru || 'Inne'}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.obwod_pasa || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.klatka || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.ramie || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.talia || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.biodra || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.udo || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-200">{m.lydka || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100 font-black text-sky-950">{m.waga}</td>
-                          <td className="p-3 text-center border-r border-sky-100 font-semibold">{m.tkanka_tluszczowa ? `${m.tkanka_tluszczowa}%` : '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.miesnie || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.kosci || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.wiek_metaboliczny || '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-100">{m.woda ? `${m.woda}%` : '-'}</td>
-                          <td className="p-3 text-center border-r border-sky-200">{m.tluszcz_wisceralny || '-'}</td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                onClick={() => {
-                                  setEditingMeasurementId(m.id);
-                                  const isMStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
-                                  setFormData({
-                                    data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
-                                    miejsce_typ: isMStudio ? 'STUDIO' : 'INNE',
-                                    miejsce_inne_opis: isMStudio ? '' : (m.miejsce_pomiaru || ''),
-                                    wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : ''),
-                                    waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
-                                    obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
-                                    klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
-                                    ramie: m.ramie !== null && m.ramie !== undefined ? String(m.ramie) : '',
-                                    talia: m.talia !== null && m.talia !== undefined ? String(m.talia) : '',
-                                    biodra: m.biodra !== null && m.biodra !== undefined ? String(m.biodra) : '',
-                                    udo: m.udo !== null && m.udo !== undefined ? String(m.udo) : '',
-                                    lydka: m.lydka !== null && m.lydka !== undefined ? String(m.lydka) : '',
-                                    tkanka_tluszczowa: m.tkanka_tluszczowa !== null && m.tkanka_tluszczowa !== undefined ? String(m.tkanka_tluszczowa) : '',
-                                    miesnie: m.miesnie !== null && m.miesnie !== undefined ? String(m.miesnie) : '',
-                                    kosci: m.kosci !== null && m.kosci !== undefined ? String(m.kosci) : '',
-                                    wiek_metaboliczny: m.wiek_metaboliczny !== null && m.wiek_metaboliczny !== undefined ? String(m.wiek_metaboliczny) : '',
-                                    woda: m.woda !== null && m.woda !== undefined ? String(m.woda) : '',
-                                    tluszcz_wisceralny: m.tluszcz_wisceralny !== null && m.tluszcz_wisceralny !== undefined ? String(m.tluszcz_wisceralny) : '',
-                                    kcal: m.kcal !== null && m.kcal !== undefined ? String(m.kcal) : '',
-                                    bialko: m.bialko !== null && m.bialko !== undefined ? String(m.bialko) : '',
-                                    tluszcz: m.tluszcz !== null && m.tluszcz !== undefined ? String(m.tluszcz) : '',
-                                    weglowodany: m.weglowodany !== null && m.weglowodany !== undefined ? String(m.weglowodany) : '',
-                                    uwagi_trenera: m.uwagi_trenera || '',
-                                    notatki_klubowicza: m.notatki_klubowicza || ''
-                                  });
-                                  setIsAddModalOpen(true);
-                                }}
-                                className="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                                title="Edytuj ten wpis"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                onClick={() => handleDeleteMeasurement(m.id)}
-                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold p-1.5 rounded-lg transition-colors cursor-pointer"
-                                title="Usuń wpis"
-                              >
-                                🗑️
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
+                  {top5Measurements.length > 0 ? (
+                    top5Measurements.map((m) => renderMeasurementRow(m))
                   ) : (
                     <tr>
                       <td colSpan={16} className="p-6 text-center text-slate-400 font-bold">
@@ -2183,15 +2482,56 @@ export default function AnalizaFormyPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* LISTA ROZWIJANA DLA POMIARÓW POWYŻEJ 5 WPISÓW Z PODZIAŁEM NA LATA */}
+            {availableYears.length > 0 && (
+              <div className="p-4 bg-sky-50/50 border-t border-sky-200 space-y-3">
+                <div className="text-xs font-black text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                  <span>📂</span> Pomiary archiwalne (podział na lata):
+                </div>
+                <div className="space-y-2">
+                  {availableYears.map(year => {
+                    const isExpanded = !!expandedMeasurementYears[year];
+                    const count = olderMeasurementsByYear[year]?.length || 0;
+                    return (
+                      <div key={year} className="bg-white rounded-xl border border-sky-200 shadow-2xs overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => toggleYearExpand(year)}
+                          className="w-full p-3 flex items-center justify-between font-bold text-xs text-sky-950 hover:bg-sky-50 transition-colors cursor-pointer"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span>📅</span> <b>Rok {year}</b> ({count} {count === 1 ? 'wpis' : 'wpisów'})
+                          </span>
+                          <span className="text-amber-600 text-sm font-black">
+                            {isExpanded ? '▲ Zwiń' : '▼ Rozwiń rok'}
+                          </span>
+                        </button>
+                        {isExpanded && (
+                          <div className="overflow-x-auto border-t border-sky-100">
+                            <table className="w-full text-xs text-left border-collapse min-w-[1100px]">
+                              <tbody className="divide-y divide-sky-100">
+                                {olderMeasurementsByYear[year].map(m => renderMeasurementRow(m))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
+          {/* WYKRESY PROGRESU ZMIENIONE NA 8 LAT */}
           <div className="space-y-4 pt-4">
             <div className="flex items-center justify-between border-b border-sky-200 pb-2">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>📈</span> Wykresy Progresu (Ostatnie 24 Miesiące)
+                <span>📈</span> Wykresy Progresu (Zakres 8 Lat)
               </h3>
               <span className="text-xs text-slate-500 font-bold">
-                Liczba pomiarów: {chartData24Months.length}
+                Liczba pomiarów w okresie 8 lat: {chartData8Years.length}
               </span>
             </div>
 
@@ -2629,7 +2969,6 @@ export default function AnalizaFormyPage() {
                         </span>
                       </div>
                       
-                      {/* PRZEŁĄCZNIK WIDOCZNOŚCI DLA UCZESTNIKA */}
                       {activeUserParticipant && (
                         <button
                           type="button"
@@ -2708,7 +3047,6 @@ export default function AnalizaFormyPage() {
                       </div>
                     </div>
 
-                    {/* STALE WIDOCZNE IKONY EDYCJI I USUNIĘCIA DLA ADMINISTRATORA */}
                     {appRole === 'admin' && (
                       <div className="flex items-center gap-1.5 shrink-0 ml-2">
                         <button
@@ -2872,7 +3210,6 @@ export default function AnalizaFormyPage() {
                 </span>
               </div>
 
-              {/* LOGIKA WIDOCZNOŚCI KOLUMN */}
               {(() => {
                 const canSeeDetails = appRole === 'admin' || isCurrentUserJoined;
 
@@ -2954,7 +3291,6 @@ export default function AnalizaFormyPage() {
                                 </td>
                               )}
 
-                              {/* KOLUMNY SZCZEGÓŁOWE - WIDOCZNE TYLKO DLA UCZESTNIKÓW I ADMINA */}
                               {canSeeDetails && (
                                 <>
                                   <td className="p-3 text-center font-bold text-slate-800">
@@ -3040,7 +3376,6 @@ export default function AnalizaFormyPage() {
                               {appRole === 'admin' && (
                                 <td className="p-3 text-center relative">
                                   <div className="flex items-center justify-center gap-1.5">
-                                    {/* PRZEŁĄCZNIK WIDOCZNOŚCI DLA ADMINA */}
                                     <button
                                       type="button"
                                       onClick={() => handleTogglePokazPomiary(row.id, row.pokaz_pomiary)}
@@ -3182,171 +3517,483 @@ export default function AnalizaFormyPage() {
 
         </div>
       )}
-      {/* ZAKŁADKA 4: BADANIA KRWI */}
+
+      {/* ZAKŁADKA 4: BADANIA KRWI (Z POD-KARTAMI: DOKUMENTY ORAZ WŁASNE TABELE) */}
       {activeTab === 'badania' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
 
-          {/* DISCLAIMER */}
-          <div className="bg-gradient-to-r from-amber-50 via-rose-50/40 to-sky-50 p-5 rounded-3xl border border-amber-200/80 shadow-sm space-y-2">
-            <div className="flex items-center gap-2.5 text-amber-950 font-black text-xs uppercase tracking-wider">
-              <span className="text-xl">🩺</span>
-              <span>Ważna Informacja i Zastrzeżenie Prawne</span>
-            </div>
-            <p className="text-xs text-slate-700 leading-relaxed font-medium">
-              Przedstawione analizy, interpretacje parametrów krwi oraz propozycje suplementacyjne mają charakter wyłącznie edukacyjno-informacyjny, profilaktyczny i sportowy. <b>Nie jestem lekarzem</b>, a zawarte tu wskazówki <b>nie stanowią porady lekarskiej, diagnozy medycznej ani leczenia</b>. Wszelkie niepokojące objawy, nieprawidłowe wartości wskaźników lub wątpliwości dotyczące Twojego stanu zdrowia należy bezwzględnie skonsultować z lekarzem medycyny.
-            </p>
-          </div>
-
-          {/* KAFEL INFORMACYJNY */}
-          <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                <span>💬</span> Instrukcja dla Klubowicza
-              </div>
-              <p className="text-xs text-sky-200 font-medium">
-                Po dodaniu plików PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
-              </p>
-            </div>
+          {/* PRZEŁĄCZNIK DWÓCH KART W BADANIACH KRWI */}
+          <div className="flex rounded-2xl bg-sky-100/70 p-1.5 border border-sky-200 text-xs font-black shadow-inner max-w-lg">
             <button
-              onClick={handleOpenNewBadanieModal}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer"
+              onClick={() => setActiveBadaniaSubTab('dokumenty')}
+              className={`flex-1 py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                activeBadaniaSubTab === 'dokumenty'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-slate-600 hover:text-sky-950'
+              }`}
             >
-              + {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wpis Badań'}
+              <span>📄</span> 1. Pliki Badań i Analiza
+            </button>
+            <button
+              onClick={() => setActiveBadaniaSubTab('wlasne_tabele')}
+              className={`flex-1 py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                activeBadaniaSubTab === 'wlasne_tabele'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-slate-600 hover:text-sky-950'
+              }`}
+            >
+              <span>📊</span> 2. Własne Tabele i Wykresy (max 15)
             </button>
           </div>
 
-          {/* TABELA LISTY BADAŃ */}
-          <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
-            <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
-              <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>📋</span> Historia Badań Krwi i Interpretacji Trenera
-              </h3>
-              <span className="text-[10px] font-bold text-slate-500">
-                Liczba wpisów: {badaniaList.length}
-              </span>
-            </div>
+          {/* POD-KARTA 1: DOKUMENTY I INTERPRETACJE TRENERA */}
+          {activeBadaniaSubTab === 'dokumenty' && (
+            <div className="space-y-6">
+              {/* DISCLAIMER */}
+              <div className="bg-gradient-to-r from-amber-50 via-rose-50/40 to-sky-50 p-5 rounded-3xl border border-amber-200/80 shadow-sm space-y-2">
+                <div className="flex items-center gap-2.5 text-amber-950 font-black text-xs uppercase tracking-wider">
+                  <span className="text-xl">🩺</span>
+                  <span>Ważna Informacja i Zastrzeżenie Prawne</span>
+                </div>
+                <p className="text-xs text-slate-700 leading-relaxed font-medium">
+                  Przedstawione analizy, interpretacje parametrów krwi oraz propozycje suplementacyjne mają charakter wyłącznie edukacyjno-informacyjny, profilaktyczny i sportowy. <b>Nie jestem lekarzem</b>, a zawarte tu wskazówki <b>nie stanowią porady lekarskiej, diagnozy medycznej ani leczenia</b>. Wszelkie niepokojące objawy, nieprawidłowe wartości wskaźników lub wątpliwości dotyczące Twojego stanu zdrowia należy bezwzględnie skonsultować z lekarzem medycyny.
+                </p>
+              </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse min-w-[800px]">
-                <thead>
-                  <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
-                    <th className="p-3 w-28">Data Badania</th>
-                    <th className="p-3 w-48">Dokumenty PDF</th>
-                    <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
-                    <th className="p-3">Główne Wnioski / Interpretacja</th>
-                    <th className="p-3 w-36 text-center">Suplementacja</th>
-                    <th className="p-3 text-center w-36">Akcje</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-sky-100">
-                  {badaniaList.length > 0 ? (
-                    badaniaList.map((b) => {
-                      const pdfList = extractPdfFiles(b);
+              {/* KAFEL INFORMACYJNY */}
+              <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                    <span>💬</span> Instrukcja dla Klubowicza
+                  </div>
+                  <p className="text-xs text-sky-200 font-medium">
+                    Po dodaniu plików PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
+                  </p>
+                </div>
+                <button
+                  onClick={handleOpenNewBadanieModal}
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer"
+                >
+                  + {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wpis Badań'}
+                </button>
+              </div>
 
-                      return (
-                        <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
-                          <td className="p-3 font-black text-sky-950 whitespace-nowrap">
-                            <div className="flex items-center gap-1.5">
-                              {b.nowa_interpretacja && (
-                                <span className="relative flex h-2.5 w-2.5">
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
-                                </span>
-                              )}
-                              <span>{b.data_badania}</span>
-                            </div>
-                          </td>
-                          <td className="p-3">
-                            {pdfList.length > 0 ? (
-                              <div className="space-y-1.5 max-w-[220px]">
-                                {pdfList.map((pdf, pIdx) => (
-                                  <a
-                                    key={pIdx}
-                                    href={pdf.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors"
-                                    title={pdf.nazwa}
+              {/* TABELA LISTY BADAŃ */}
+              <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
+                <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
+                  <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                    <span>📋</span> Historia Badań Krwi i Interpretacji Trenera
+                  </h3>
+                  <span className="text-[10px] font-bold text-slate-500">
+                    Liczba wpisów: {badaniaList.length}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left border-collapse min-w-[800px]">
+                    <thead>
+                      <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
+                        <th className="p-3 w-28">Data Badania</th>
+                        <th className="p-3 w-48">Dokumenty PDF</th>
+                        <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
+                        <th className="p-3">Główne Wnioski / Interpretacja</th>
+                        <th className="p-3 w-36 text-center">Suplementacja</th>
+                        <th className="p-3 text-center w-36">Akcje</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-sky-100">
+                      {badaniaList.length > 0 ? (
+                        badaniaList.map((b) => {
+                          const pdfList = extractPdfFiles(b);
+
+                          return (
+                            <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
+                              <td className="p-3 font-black text-sky-950 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5">
+                                  {b.nowa_interpretacja && (
+                                    <span className="relative flex h-2.5 w-2.5">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                                    </span>
+                                  )}
+                                  <span>{b.data_badania}</span>
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                {pdfList.length > 0 ? (
+                                  <div className="space-y-1.5 max-w-[220px]">
+                                    {pdfList.map((pdf, pIdx) => (
+                                      <a
+                                        key={pIdx}
+                                        href={pdf.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors"
+                                        title={pdf.nazwa}
+                                      >
+                                        <span className="shrink-0">📄</span>
+                                        <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
+                                      </a>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 italic">Brak pliku PDF</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-center font-bold text-slate-700">
+                                {(b.zdjecia || []).length > 0 ? (
+                                  <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
+                                    📷 {b.zdjecia?.length} szt.
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
+                                {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="space-y-0.5 text-[10px]">
+                                  <span className="block font-bold text-emerald-700">
+                                    Trener: {(b.suplementacja_trener || []).length} poz.
+                                  </span>
+                                  <span className="block font-bold text-sky-700">
+                                    Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    onClick={() => {
+                                      setSelectedBadanieDetail(b);
+                                      setIsDetailViewOpen(true);
+                                      markInterpretationAsRead(b.id);
+                                    }}
+                                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
+                                    title="Otwórz szczegóły"
                                   >
-                                    <span className="shrink-0">📄</span>
-                                    <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
-                                  </a>
-                                ))}
+                                    🔍 Podgląd
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleEditBadanie(b)}
+                                    className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
+                                    title="Edytuj wpis"
+                                  >
+                                    ✏️
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleDeleteBadanie(b.id)}
+                                    className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
+                                    title="Usuń wpis"
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
+                            Brak zarejestrowanych badań krwi dla wybranego profilu.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* POD-KARTA 2: WŁASNE TABELE KLUBOWICZA (MAX 15 TABEL + WYKRES 5 LAT + ZWIJANIE POWYŻEJ 3 WPISÓW) */}
+          {activeBadaniaSubTab === 'wlasne_tabele' && (
+            <div className="space-y-6">
+              <div className="bg-gradient-to-r from-sky-900 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                    <span>📊</span> Własne Karty Wskaźników Krwi i Wykresy (5 Lat)
+                  </h3>
+                  <p className="text-xs text-sky-200 mt-1">
+                    Możesz dodać do 15 tabel dla konkretnych badań (np. Witamina D3, Morfologia, Glukoza, TSH). Do każdej tabeli automatycznie generowany jest wykres liniowy.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsAddTabelaModalOpen(true)}
+                  disabled={wlasneTabeleBadan.length >= 15}
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer disabled:opacity-40"
+                >
+                  + Nowa Tabela ({wlasneTabeleBadan.length}/15)
+                </button>
+              </div>
+
+              {wlasneTabeleBadan.length > 0 ? (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {wlasneTabeleBadan.map((tab) => {
+                    const isExpanded = !!expandedTableHistory[tab.id];
+                    const displayedWpisy = isExpanded ? tab.wpisy : tab.wpisy.slice(0, 3);
+                    const hasMore = tab.wpisy.length > 3;
+
+                    return (
+                      <div key={tab.id} className="bg-white rounded-3xl border border-sky-200 shadow-sm p-5 space-y-4 flex flex-col justify-between">
+                        <div>
+                          {/* GŁÓWKA POJEDYNCZEJ TABELI */}
+                          <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">🩸</span>
+                              <div>
+                                <h4 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                                  {tab.nazwa}
+                                </h4>
+                                <span className="text-[10px] text-slate-400 font-bold">
+                                  Jednostka: {tab.jednostka_domyslna || 'nieokreślona'} • Wpisów: {tab.wpisy.length}
+                                </span>
                               </div>
-                            ) : (
-                              <span className="text-slate-400 italic">Brak pliku PDF</span>
-                            )}
-                          </td>
-                          <td className="p-3 text-center font-bold text-slate-700">
-                            {(b.zdjecia || []).length > 0 ? (
-                              <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
-                                📷 {b.zdjecia?.length} szt.
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </td>
-                          <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
-                            {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
-                          </td>
-                          <td className="p-3 text-center">
-                            <div className="space-y-0.5 text-[10px]">
-                              <span className="block font-bold text-emerald-700">
-                                Trener: {(b.suplementacja_trener || []).length} poz.
-                              </span>
-                              <span className="block font-bold text-sky-700">
-                                Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
-                              </span>
                             </div>
-                          </td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
+                            <div className="flex items-center gap-2">
                               <button
                                 onClick={() => {
-                                  setSelectedBadanieDetail(b);
-                                  setIsDetailViewOpen(true);
-                                  markInterpretationAsRead(b.id);
+                                  setTabelaDoWpisuModal(tab.id);
+                                  setWpisBadaniaForm({
+                                    data_badania: new Date().toISOString().split('T')[0],
+                                    wynik: '',
+                                    jednostka: tab.jednostka_domyslna || ''
+                                  });
                                 }}
-                                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
-                                title="Otwórz szczegóły"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-xs"
+                                title="Dodaj nowy pomiar do tej tabeli"
                               >
-                                🔍 Podgląd
+                                + Wynik
                               </button>
-
                               <button
-                                onClick={() => handleEditBadanie(b)}
-                                className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
-                                title="Edytuj wpis"
-                              >
-                                ✏️
-                              </button>
-
-                              <button
-                                onClick={() => handleDeleteBadanie(b.id)}
-                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
-                                title="Usuń wpis"
+                                onClick={() => handleDeleteCustomTable(tab.id)}
+                                className="text-rose-500 hover:text-rose-700 text-xs font-bold p-1 cursor-pointer"
+                                title="Usuń tabelę"
                               >
                                 🗑️
                               </button>
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : (
-                    <tr>
-                      <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
-                        Brak zarejestrowanych badań krwi dla wybranego profilu.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                          </div>
+
+                          {/* WYKRES 5-LETNI TEGO BADANIA */}
+                          <div className="pt-3">
+                            {renderBloodParamChart(tab.wpisy, tab.nazwa, tab.jednostka_domyslna || '')}
+                          </div>
+
+                          {/* TABELKA Z WYNIKAMI */}
+                          <div className="pt-3">
+                            <table className="w-full text-xs text-left border-collapse">
+                              <thead>
+                                <tr className="text-[10px] font-black uppercase text-slate-400 border-b border-sky-100">
+                                  <th className="pb-1.5">Nazwa badania</th>
+                                  <th className="pb-1.5">Data</th>
+                                  <th className="pb-1.5 text-center">Wynik badania</th>
+                                  <th className="pb-1.5 text-right">Akcja</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-sky-50">
+                                {displayedWpisy.map((w) => (
+                                  <tr key={w.id} className="hover:bg-sky-50/40 transition-colors">
+                                    <td className="py-2.5 font-black text-sky-950">{tab.nazwa}</td>
+                                    <td className="py-2.5 text-slate-600">{w.data_badania}</td>
+                                    <td className="py-2.5 text-center font-black text-amber-600">
+                                      {w.wynik} {w.jednostka || tab.jednostka_domyslna || ''}
+                                    </td>
+                                    <td className="py-2.5 text-right">
+                                      <button
+                                        onClick={() => handleDeleteMeasurementFromTable(tab.id, w.id)}
+                                        className="text-rose-500 hover:text-rose-700 font-bold text-xs p-1 cursor-pointer"
+                                        title="Usuń ten wynik"
+                                      >
+                                        ✕
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {tab.wpisy.length === 0 && (
+                                  <tr>
+                                    <td colSpan={4} className="py-4 text-center text-slate-400 italic text-xs">
+                                      Brak zarejestrowanych wyników. Kliknij "+ Wynik", aby dodać pierwszy wpis.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* ROZWIJANA LISTA GDY POWYŻEJ 3 WPISÓW */}
+                        {hasMore && (
+                          <div className="pt-2 border-t border-sky-100">
+                            <button
+                              type="button"
+                              onClick={() => toggleTableHistory(tab.id)}
+                              className="w-full py-2 bg-sky-50 hover:bg-sky-100 text-sky-950 font-bold text-[11px] rounded-xl transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <span>{isExpanded ? '▲ Zwiń do 3 ostatnich' : `▼ Rozwiń całą historię (jeszcze ${tab.wpisy.length - 3})`}</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="bg-white p-12 rounded-3xl border border-sky-200 text-center space-y-3">
+                  <span className="text-4xl block">📊</span>
+                  <h4 className="font-black text-base text-sky-950 uppercase">Brak stworzonych tabel badań krwi</h4>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    Klubowicz może utworzyć do 15 tabel dla wybranych badań krwi i samodzielnie śledzić swoje postępy na 5-letnich wykresach trendu.
+                  </p>
+                  <button
+                    onClick={() => setIsAddTabelaModalOpen(true)}
+                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-2.5 rounded-xl uppercase tracking-wider shadow cursor-pointer transition-all"
+                  >
+                    + Utwórz pierwszą tabelę
+                  </button>
+                </div>
+              )}
             </div>
-          </div>
+          )}
 
         </div>
       )}
+
+      {/* MODAL: UTWÓRZ NOWĄ TABELĘ WŁASNYCH BADAŃ (MAX 15) */}
+      {isAddTabelaModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100 animate-in fade-in zoom-in-95 duration-100">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <div>
+                <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                  Nowa Tabela Badań Krwi
+                </h3>
+                <p className="text-[11px] text-slate-500">Maksymalnie 15 tabel w Twoim profilu</p>
+              </div>
+              <button onClick={() => setIsAddTabelaModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleAddNewCustomTable} className="space-y-4 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Nazwa Badania * (np. Ferrytyna, TSH, Witamina D3)</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="np. Witamina D3 (25-OH)"
+                  value={newTabelaNazwa}
+                  onChange={(e) => setNewTabelaNazwa(e.target.value)}
+                  className="w-full p-3 border border-sky-200 rounded-xl font-bold bg-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Domyślna jednostka (opcjonalnie)</label>
+                <input
+                  type="text"
+                  placeholder="np. ng/ml, µIU/ml, mg/dl"
+                  value={newTabelaJednostka}
+                  onChange={(e) => setNewTabelaJednostka(e.target.value)}
+                  className="w-full p-3 border border-sky-200 rounded-xl font-medium bg-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddTabelaModalOpen(false)}
+                  className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow"
+                >
+                  Utwórz Tabelę
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DODAWANIE WYNIKU DO KONKRETNEJ TABELI BADAŃ */}
+      {tabelaDoWpisuModal && (() => {
+        const tObj = wlasneTabeleBadan.find(t => t.id === tabelaDoWpisuModal);
+        return (
+          <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-sky-100 animate-in fade-in zoom-in-95 duration-100">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                    Dodaj Wynik Badania
+                  </h3>
+                  <p className="text-[11px] text-amber-600 font-bold">{tObj?.nazwa}</p>
+                </div>
+                <button onClick={() => setTabelaDoWpisuModal(null)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+              </div>
+
+              <form onSubmit={handleAddMeasurementToTable} className="space-y-4 text-xs">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Data Badania *</label>
+                  <input
+                    type="date"
+                    required
+                    value={wpisBadaniaForm.data_badania}
+                    onChange={(e) => setWpisBadaniaForm({...wpisBadaniaForm, data_badania: e.target.value})}
+                    className="w-full p-3 border border-sky-200 rounded-xl font-bold bg-white focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Wynik badania (liczba) *</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      placeholder="np. 45.2"
+                      value={wpisBadaniaForm.wynik}
+                      onChange={(e) => setWpisBadaniaForm({...wpisBadaniaForm, wynik: e.target.value})}
+                      className="w-full p-3 border border-sky-200 rounded-xl font-black text-sky-950 bg-white focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Jednostka</label>
+                    <input
+                      type="text"
+                      placeholder={tObj?.jednostka_domyslna || "np. ng/ml"}
+                      value={wpisBadaniaForm.jednostka}
+                      onChange={(e) => setWpisBadaniaForm({...wpisBadaniaForm, jednostka: e.target.value})}
+                      className="w-full p-3 border border-sky-200 rounded-xl font-bold bg-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setTabelaDoWpisuModal(null)}
+                    className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl cursor-pointer"
+                  >
+                    Anuluj
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow"
+                  >
+                    Zapisz Wynik
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* MODAL 1: FORMULARZ BADAŃ KRWI */}
       {isBadaniaModalOpen && (
@@ -3375,7 +4022,6 @@ export default function AnalizaFormyPage() {
 
             <form onSubmit={handleSaveBadanieFull} className="space-y-6 text-xs">
               
-              {/* DATA BADANIA */}
               <div className="bg-sky-50/50 p-4 rounded-2xl border border-sky-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <label className="font-bold text-slate-700">Data wykonania badania krwi *</label>
                 <input
@@ -3410,7 +4056,7 @@ export default function AnalizaFormyPage() {
                           <a
                             href={fileItem.url}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             className="text-[11px] font-bold text-sky-700 hover:underline px-2 py-1 bg-white rounded border border-sky-200"
                           >
                             Podgląd ↗
@@ -3739,7 +4385,7 @@ export default function AnalizaFormyPage() {
                           <a
                             href={p.url}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] px-3 py-1.5 rounded-lg transition-all shadow-xs cursor-pointer shrink-0"
                           >
                             Otwórz PDF ↗
@@ -4128,7 +4774,8 @@ export default function AnalizaFormyPage() {
                   value={nagrodaFormData.tytul}
                   onChange={(e) => setNagrodaFormData({...nagrodaFormData, tytul: e.target.value})}
                   className="w-full p-3 border rounded-xl font-bold bg-white"
-                />
+                >
+                </input>
               </div>
 
               <div>
