@@ -59,6 +59,7 @@ interface Sugestia {
   id: number;
   nazwa: string;
   klient_email: string | null;
+  klient_nazwa?: string | null;
   status: string;
   created_at: string;
 }
@@ -221,9 +222,9 @@ export default function BazaWiedzyPage() {
       ] = await Promise.all([
         supabase
           .from("klienci")
-          .select("id, Imię, imie, Imie, Nazwisko, nazwisko, E-mail, email, mail")
+          .select("*")
           .order("id", { ascending: false })
-          .limit(2000),
+          .limit(3000),
         supabase
           .from("suplementy")
           .select("*")
@@ -263,16 +264,30 @@ export default function BazaWiedzyPage() {
 
       if (klienciRes.data && Array.isArray(klienciRes.data)) {
         klienciRes.data.forEach((row: any) => {
-          const imie = String(row["Imię"] || row["imie"] || row["Imie"] || "").trim();
-          const nazwisko = String(row["Nazwisko"] || row["nazwisko"] || "").trim();
-          const mail = String(row["E-mail"] || row["email"] || row["mail"] || "").toLowerCase().trim();
+          const imie = String(
+            row["Imię"] || row["imie"] || row["Imie"] || row["first_name"] || ""
+          ).trim();
+          const nazwisko = String(
+            row["Nazwisko"] || row["nazwisko"] || row["last_name"] || ""
+          ).trim();
+          const mail = String(
+            row["E-mail"] || row["email"] || row["mail"] || row["user_email"] || ""
+          ).toLowerCase().trim();
           const idNum = Number(row.id);
+          const authUid = String(row["user_id"] || row["auth_id"] || row["uid"] || "").toLowerCase().trim();
 
           const full = `${imie} ${nazwisko}`.trim();
-          if (mail && full) {
-            newKlienciMap[mail] = full;
+
+          if (full) {
+            if (mail) {
+              newKlienciMap[mail] = full;
+            }
             if (!isNaN(idNum)) {
-              newKlienciIdMap[mail] = idNum;
+              newKlienciMap[String(idNum)] = full;
+              if (mail) newKlienciIdMap[mail] = idNum;
+            }
+            if (authUid) {
+              newKlienciMap[authUid] = full;
             }
             if (mail === cleanEmail) {
               currentFullName = full;
@@ -454,13 +469,40 @@ export default function BazaWiedzyPage() {
     [klienciMap]
   );
 
-  const getKlientDisplayFromEmail = useCallback(
-    (emailOrName: string | null | undefined) => {
-      if (!emailOrName) return "Klubowicz";
-      const clean = emailOrName.toLowerCase().trim();
-      if (klienciMap[clean]) return klienciMap[clean];
-      if (clean.includes("maciejklaput")) return "Maciej Kłaput";
-      if (!clean.includes("@") && clean !== "klubowicz") return emailOrName;
+  const getKlientDisplayFromSugestia = useCallback(
+    (sug: Sugestia) => {
+      if (sug.klient_nazwa && sug.klient_nazwa !== "Klubowicz" && !sug.klient_nazwa.includes("@")) {
+        return sug.klient_nazwa;
+      }
+
+      const emailVal = sug.klient_email;
+      if (!emailVal) return "Klubowicz";
+
+      const clean = emailVal.toLowerCase().trim();
+      if (klienciMap[clean]) {
+        return klienciMap[clean];
+      }
+
+      if (clean.includes("maciejklaput")) {
+        return "Maciej Kłaput";
+      }
+
+      if (!clean.includes("@") && clean !== "klubowicz") {
+        return emailVal;
+      }
+
+      if (clean.includes("@")) {
+        const usernamePart = clean.split("@")[0];
+        const formatted = usernamePart
+          .replace(/[._-]+/g, " ")
+          .trim()
+          .split(" ")
+          .filter(Boolean)
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(" ");
+        if (formatted.length > 2) return formatted;
+      }
+
       return "Klubowicz";
     },
     [klienciMap]
@@ -599,12 +641,14 @@ export default function BazaWiedzyPage() {
 
     setIsSendingSugestia(true);
     const zglaszajacyEmail = userEmail || "anonim@klubowicz.pl";
+    const zglaszajacyNazwa = userImieNazwisko !== "Klubowicz" ? userImieNazwisko : "";
 
     try {
       const { error } = await supabase.from("sugestie_suplementow").insert([
         {
           nazwa: nazwaWpisu,
           klient_email: zglaszajacyEmail,
+          klient_nazwa: zglaszajacyNazwa || null,
           status: "oczekujace",
         },
       ]);
@@ -877,7 +921,6 @@ export default function BazaWiedzyPage() {
       payload.tluszcze = Number(form.tluszcze) || 0;
       payload.weglowodany = Number(form.weglowodany) || 0;
 
-      // Zabezpieczenie autora: w przypadku edycji nie nadpisujemy danych dodającego autora
       if (!editingId) {
         payload.autor_email = userEmail || "klubowicz@formamarzen.pl";
         payload.autor_nazwa = userImieNazwisko || "Klubowicz";
@@ -1186,7 +1229,7 @@ export default function BazaWiedzyPage() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {sugestie.map((sug) => {
-                    const zglaszajacy = getKlientDisplayFromEmail(sug.klient_email);
+                    const zglaszajacy = getKlientDisplayFromSugestia(sug);
                     return (
                       <div
                         key={sug.id}
@@ -1857,7 +1900,7 @@ export default function BazaWiedzyPage() {
               </h3>
               {originatingSugestiaEmail && (
                 <p className="text-xs text-amber-700 font-bold mt-1">
-                  💡 Dodajesz pozycję z propozycji klubowicza ({getKlientDisplayFromEmail(originatingSugestiaEmail)}). Po zapisaniu otrzyma on powiadomienie na czacie.
+                  💡 Dodajesz pozycję z propozycji klubowicza ({klienciMap[originatingSugestiaEmail.toLowerCase().trim()] || originatingSugestiaEmail}). Po zapisaniu otrzyma on powiadomienie na czacie.
                 </p>
               )}
             </div>
