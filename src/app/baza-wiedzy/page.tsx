@@ -142,6 +142,10 @@ export default function BazaWiedzyPage() {
 
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingExistingRecipeAuthor, setEditingExistingRecipeAuthor] = useState<{
+    email?: string;
+    nazwa?: string;
+  } | null>(null);
   const [originatingSugestiaId, setOriginatingSugestiaId] = useState<number | null>(null);
   const [originatingSugestiaEmail, setOriginatingSugestiaEmail] = useState<string | null>(null);
 
@@ -206,7 +210,6 @@ export default function BazaWiedzyPage() {
         setIsAdmin(true);
       }
 
-      // Wszystkie zapytania pobierają rekordy OD NAJNOWSZYCH
       const [
         klienciRes,
         suplRes,
@@ -254,7 +257,6 @@ export default function BazaWiedzyPage() {
           .limit(1000),
       ]);
 
-      // Przetwarzanie klientów
       const newKlienciMap: Record<string, string> = {};
       const newKlienciIdMap: Record<string, number> = {};
       let currentFullName = "";
@@ -302,7 +304,6 @@ export default function BazaWiedzyPage() {
         setPrzepisy(sortedPrzepisy);
       }
 
-      // Oceny przepisów
       if (ocenyRes.data && Array.isArray(ocenyRes.data)) {
         const grouped: Record<number, OcenaPrzepisu[]> = {};
         ocenyRes.data.forEach((row: any) => {
@@ -349,15 +350,18 @@ export default function BazaWiedzyPage() {
     } catch (e) {}
   };
 
-  const calculateRecipeRating = useCallback((przepisId: number) => {
-    const list = ocenyMap[przepisId] || [];
-    if (list.length === 0) return { avg: 0, count: 0 };
-    const sum = list.reduce((acc, curr) => acc + (curr.srednia || 0), 0);
-    return {
-      avg: Number((sum / list.length).toFixed(1)),
-      count: list.length,
-    };
-  }, [ocenyMap]);
+  const calculateRecipeRating = useCallback(
+    (przepisId: number) => {
+      const list = ocenyMap[przepisId] || [];
+      if (list.length === 0) return { avg: 0, count: 0 };
+      const sum = list.reduce((acc, curr) => acc + (curr.srednia || 0), 0);
+      return {
+        avg: Number((sum / list.length).toFixed(1)),
+        count: list.length,
+      };
+    },
+    [ocenyMap]
+  );
 
   const getStorageKeyPrefix = (tab: TabType) => {
     if (tab === "suplementy") return "seen_supl_";
@@ -366,10 +370,13 @@ export default function BazaWiedzyPage() {
     return "seen_przepis_";
   };
 
-  const isItemUnread = useCallback((item: any, tab: TabType) => {
-    const key = `${getStorageKeyPrefix(tab)}${item.id}`;
-    return !seenKeysSet.has(key);
-  }, [seenKeysSet]);
+  const isItemUnread = useCallback(
+    (item: any, tab: TabType) => {
+      const key = `${getStorageKeyPrefix(tab)}${item.id}`;
+      return !seenKeysSet.has(key);
+    },
+    [seenKeysSet]
+  );
 
   const markItemAsSeen = (item: any, tab: TabType) => {
     if (typeof window === "undefined") return;
@@ -430,19 +437,34 @@ export default function BazaWiedzyPage() {
     return hasUnreadPrzepisy;
   }, [activeTab, hasUnreadSuplementy, hasUnreadSport, hasUnreadOdzywianie, hasUnreadPrzepisy]);
 
-  const getAutorDisplay = useCallback((item: Przepis) => {
-    const emailKey = (item.autor_email || "").toLowerCase().trim();
-    if (emailKey && klienciMap[emailKey]) {
-      return klienciMap[emailKey];
-    }
-    if (emailKey.includes("maciejklaput")) {
-      return "Maciej Kłaput";
-    }
-    if (item.autor_nazwa && !item.autor_nazwa.includes("@") && item.autor_nazwa !== "Klubowicz") {
-      return item.autor_nazwa;
-    }
-    return "Klubowicz";
-  }, [klienciMap]);
+  const getAutorDisplay = useCallback(
+    (item: Przepis) => {
+      const emailKey = (item.autor_email || "").toLowerCase().trim();
+      if (emailKey && klienciMap[emailKey]) {
+        return klienciMap[emailKey];
+      }
+      if (emailKey.includes("maciejklaput")) {
+        return "Maciej Kłaput";
+      }
+      if (item.autor_nazwa && !item.autor_nazwa.includes("@") && item.autor_nazwa !== "Klubowicz") {
+        return item.autor_nazwa;
+      }
+      return "Klubowicz";
+    },
+    [klienciMap]
+  );
+
+  const getKlientDisplayFromEmail = useCallback(
+    (emailOrName: string | null | undefined) => {
+      if (!emailOrName) return "Klubowicz";
+      const clean = emailOrName.toLowerCase().trim();
+      if (klienciMap[clean]) return klienciMap[clean];
+      if (clean.includes("maciejklaput")) return "Maciej Kłaput";
+      if (!clean.includes("@") && clean !== "klubowicz") return emailOrName;
+      return "Klubowicz";
+    },
+    [klienciMap]
+  );
 
   const parseCategories = useCallback((kategoria: string | string[] | undefined | null): string[] => {
     if (!kategoria) return [];
@@ -610,6 +632,7 @@ export default function BazaWiedzyPage() {
 
   const handleQuickAddFromSugestia = (sugestia: Sugestia) => {
     setEditingId(null);
+    setEditingExistingRecipeAuthor(null);
     setOriginatingSugestiaId(sugestia.id);
     setOriginatingSugestiaEmail(sugestia.klient_email || null);
     setForm({
@@ -632,6 +655,7 @@ export default function BazaWiedzyPage() {
 
   const handleOpenAdd = () => {
     setEditingId(null);
+    setEditingExistingRecipeAuthor(null);
     setOriginatingSugestiaId(null);
     setOriginatingSugestiaEmail(null);
     const domyslnaKategoria = currentCategoryList[0]?.id || "sniadanie";
@@ -661,6 +685,15 @@ export default function BazaWiedzyPage() {
     }
 
     setEditingId(item.id);
+    if (activeTab === "przepisy") {
+      setEditingExistingRecipeAuthor({
+        email: item.autor_email,
+        nazwa: item.autor_nazwa,
+      });
+    } else {
+      setEditingExistingRecipeAuthor(null);
+    }
+
     setOriginatingSugestiaId(null);
     setOriginatingSugestiaEmail(null);
     setForm({
@@ -843,8 +876,15 @@ export default function BazaWiedzyPage() {
       payload.bialko = Number(form.bialko) || 0;
       payload.tluszcze = Number(form.tluszcze) || 0;
       payload.weglowodany = Number(form.weglowodany) || 0;
-      payload.autor_email = userEmail || "klubowicz@formamarzen.pl";
-      payload.autor_nazwa = userImieNazwisko || "Klubowicz";
+
+      // Zabezpieczenie autora: w przypadku edycji nie nadpisujemy danych dodającego autora
+      if (!editingId) {
+        payload.autor_email = userEmail || "klubowicz@formamarzen.pl";
+        payload.autor_nazwa = userImieNazwisko || "Klubowicz";
+      } else if (editingExistingRecipeAuthor) {
+        payload.autor_email = editingExistingRecipeAuthor.email;
+        payload.autor_nazwa = editingExistingRecipeAuthor.nazwa;
+      }
     } else {
       payload.wskazowki = form.wskazowki;
     }
@@ -875,6 +915,7 @@ export default function BazaWiedzyPage() {
       setOriginatingSugestiaEmail(null);
     }
 
+    setEditingExistingRecipeAuthor(null);
     setIsAdminModalOpen(false);
     fetchData();
   };
@@ -1145,8 +1186,7 @@ export default function BazaWiedzyPage() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {sugestie.map((sug) => {
-                    const cleanMail = (sug.klient_email || "").toLowerCase().trim();
-                    const zglaszajacy = klienciMap[cleanMail] || sug.klient_email || "Klubowicz";
+                    const zglaszajacy = getKlientDisplayFromEmail(sug.klient_email);
                     return (
                       <div
                         key={sug.id}
@@ -1817,7 +1857,7 @@ export default function BazaWiedzyPage() {
               </h3>
               {originatingSugestiaEmail && (
                 <p className="text-xs text-amber-700 font-bold mt-1">
-                  💡 Dodajesz pozycję z propozycji klubowicza ({originatingSugestiaEmail}). Po zapisaniu otrzyma on powiadomienie na czacie.
+                  💡 Dodajesz pozycję z propozycji klubowicza ({getKlientDisplayFromEmail(originatingSugestiaEmail)}). Po zapisaniu otrzyma on powiadomienie na czacie.
                 </p>
               )}
             </div>
