@@ -817,14 +817,15 @@ export default function RootLayout({
             <>
               {isMenuOpen && (
                 <div 
-                  className="fixed inset-0 bg-slate-950/60 z-20 transition-opacity backdrop-blur-sm"
+                  className="fixed inset-0 bg-slate-950/60 z-40 transition-opacity backdrop-blur-sm"
                   onClick={() => setIsMenuOpen(false)}
                 />
               )}
 
-              <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white p-4 flex flex-col justify-between shrink-0 z-30 transition-transform duration-300 ease-in-out h-[100dvh] overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
-                <div>
-                  <div className="flex items-center justify-between mb-6 px-2 pt-2">
+              <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white flex flex-col justify-between shrink-0 z-50 transition-transform duration-300 ease-in-out h-[100dvh] overflow-hidden pt-[env(safe-area-inset-top)] ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
+                {/* Wewnętrzny kontener scrollowalny menu */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                  <div className="flex items-center justify-between pb-2 px-1 pt-1">
                     <span className="text-sm font-black text-sky-950 uppercase tracking-wider flex items-center flex-wrap">
                       Forma Marzeń 
                       <span className={`text-[9px] px-2 py-0.5 rounded font-bold ml-1 mt-1 ${
@@ -898,18 +899,21 @@ export default function RootLayout({
                   </nav>
                 </div>
 
-                <div className="border-t border-sky-100 pt-4 px-2 flex items-center gap-3 mt-6 shrink-0">
-                  <div className="w-8 h-8 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500">
-                    {profileAvatar ? (
-                      <img src={profileAvatar} alt="Avatar" className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="uppercase">{avatarInitials}</span>
-                    )}
-                  </div>
-                  <div className="overflow-hidden">
-                    <div className="text-xs font-bold text-slate-900 truncate">{profileName || 'Użytkownik'}</div>
-                    <div className="text-[10px] text-slate-500">
-                      {appRole === 'admin' ? 'Administrator' : appRole === 'trener' ? 'Trener' : 'Klubowicz'}
+                {/* Stała stopka profilu użytkownika - bezpieczna dla iOS Home Bar */}
+                <div className="border-t border-sky-100 p-4 shrink-0 bg-white/95 backdrop-blur-sm pb-[max(1rem,env(safe-area-inset-bottom))]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500 shadow-sm">
+                      {profileAvatar ? (
+                        <img src={profileAvatar} alt="Avatar" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="uppercase">{avatarInitials}</span>
+                      )}
+                    </div>
+                    <div className="overflow-hidden min-w-0 flex-1">
+                      <div className="text-xs font-bold text-slate-900 truncate leading-tight">{profileName || 'Użytkownik'}</div>
+                      <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                        {appRole === 'admin' ? 'Administrator' : appRole === 'trener' ? 'Trener' : 'Klubowicz'}
+                      </div>
                     </div>
                   </div>
                 </div>
