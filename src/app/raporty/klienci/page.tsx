@@ -580,7 +580,7 @@ export default function KlienciPage() {
     const transakcjeKarnetow = (client.transakcje || []).filter(
       (t: any) =>
         new Date(t.created_at) > new Date(lastResetDate) &&
-        (t.typ_operacji === 'zakup_karnetu' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) &&
+        (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) &&
         (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))
     );
 
@@ -1496,6 +1496,7 @@ export default function KlienciPage() {
     };
     reader.readAsDataURL(file);
   };
+
   // PRZEDŁUŻENIE KARNETU (KALKULACJA KALENDARZOWA + RATY + ZABEZPIECZENIE PORTFELA)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget) return;
@@ -1545,7 +1546,6 @@ export default function KlienciPage() {
       const nextRataNum = Math.min(totalRat, currentRataNum + 1);
       updatedRata = `${nextRataNum} / ${totalRat}`;
     }
-
     let metaExt: Record<string, any> = {};
     try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
     const extWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
@@ -1972,6 +1972,74 @@ export default function KlienciPage() {
     }
   };
 
+  // NOWA METODA 1: BEZPOŚREDNIE ODBLOKOWANIE KONTA BEZ RUSZANIA ZAWIESZEŃ
+  const handleDirectUnblockAccount = async (targetClient: any) => {
+    if (!targetClient) return;
+    if (!confirm(`Czy na pewno chcesz natychmiast odblokować konto klubowicza ${targetClient.firstName} ${targetClient.lastName}? Zaplanowane lub trwające zawieszenia karnetu pozostaną nienaruszone.`)) {
+      return;
+    }
+
+    const stareKarnety = safeJsonParse(targetClient.karnetyKlubowicza, []);
+    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+      // Zdejmujemy tylko flagi blokady, zachowując zawieszonyOd i zawieszonyDo
+      if (k.blokadaDo || k.powodBlokady) {
+        return {
+          ...k,
+          blokadaOd: null,
+          blokadaDo: null,
+          powodBlokady: null
+        };
+      }
+      return k;
+    });
+
+    const isContractBlock = targetClient.powodBlokady?.toLowerCase().includes('umow') || 
+                            targetClient.powodBlokady?.toLowerCase().includes('umowę') ||
+                            targetClient.powodBlokady?.toLowerCase().includes('wpłat');
+
+    const now = new Date();
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+
+    const updatePayload: any = {
+      blokadaDo: null,
+      powodBlokady: null,
+      karnetyKlubowicza: uaktualnioneKarnety
+    };
+
+    if (isContractBlock) {
+      updatePayload.umowa_oplacona_do = endOfMonthStr;
+    }
+
+    const { error } = await supabase.from('klienci').update(updatePayload).eq('id', targetClient.id);
+
+    if (!error) {
+      await supabase.from('transakcje').insert([{
+        klient_id: targetClient.id,
+        typ_operacji: 'odblokowanie_konta',
+        kwota: null,
+        opis: `Ręczne odblokowanie konta klubowicza przez zarządcę (zdjęto blokadę zapisów i wstępu). Zawieszenia karnetów pozostały nienaruszone.`
+      }]);
+
+      await supabase.from('booking_logs').insert([{
+        action_type: 'MANUAL_UNBLOCK',
+        status: 'SUCCESS',
+        reason: `Zarządca odblokował konto klubowicza ID:${targetClient.id}.`,
+        rule_applied: 'admin_manual_unblock',
+        payload: { klient_id: targetClient.id }
+      }]);
+
+      setClients(prev => prev.map(c => c.id === targetClient.id ? { ...c, ...updatePayload } : c));
+      if (profileClient && profileClient.id === targetClient.id) {
+        setProfileClient((prev: any) => ({ ...prev, ...updatePayload }));
+      }
+      alert(`Konto klubowicza ${targetClient.firstName} ${targetClient.lastName} zostało pomyślnie odblokowane!`);
+      loadData(targetClient.id);
+    } else {
+      alert(`Błąd podczas odblokowywania konta: ${error.message}`);
+    }
+  };
+
   const handleSavePassEditSubmit = async () => {
     if (!profileClient || !editingPassModal) return;
 
@@ -2333,15 +2401,15 @@ export default function KlienciPage() {
                     </td>
                     <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">{client.lastName}</td>
                     
-                    {/* KOMPAKTOWA KOLUMNA KARNET BEZ UTRATY ŻADNYCH INFORMACJI */}
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      <div className="flex flex-col gap-0.5 max-w-[270px]">
+                    {/* ZMODYFIKOWANA, NIEUCIĘTA KOLUMNA KARNET */}
+                    <td className="py-2.5 px-3">
+                      <div className="flex flex-col gap-0.5 min-w-[200px] max-w-[340px]">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-bold text-slate-900 text-xs truncate max-w-[170px]" title={nazwaKarnetu || 'Brak karnetu'}>
+                          <span className="font-bold text-slate-900 text-xs whitespace-normal break-words leading-tight" title={nazwaKarnetu || 'Brak karnetu'}>
                             {nazwaKarnetu || 'Brak karnetu'}
                           </span>
                           {aktywnyKarnetObj?.isContract12M && (
-                            <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-1.5 py-0.2 rounded border border-amber-300 uppercase">
+                            <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-1.5 py-0.2 rounded border border-amber-300 uppercase shrink-0 whitespace-nowrap">
                               12M • {aktywnyKarnetObj.rata || '0/12'}
                             </span>
                           )}
@@ -2499,7 +2567,6 @@ export default function KlienciPage() {
           </table>
         </div>
       </div>
-
       {/* PŁYWAJĄCE MENU 3 KROPEK */}
       {actionMenuPos && (
         <>
@@ -2508,7 +2575,7 @@ export default function KlienciPage() {
             onClick={() => { setOpenDropdownId(null); setActionMenuPos(null); }}
           />
           <div 
-            className="fixed z-[9999] w-48 bg-white rounded-xl shadow-2xl border border-sky-200 py-1.5 text-xs font-semibold text-slate-700 animate-in fade-in zoom-in-95"
+            className="fixed z-[9999] w-52 bg-white rounded-xl shadow-2xl border border-sky-200 py-1.5 text-xs font-semibold text-slate-700 animate-in fade-in zoom-in-95"
             style={{ top: `${actionMenuPos.top}px`, right: `${actionMenuPos.right}px` }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -2534,6 +2601,19 @@ export default function KlienciPage() {
             >
               <span>✏️</span> Edycja / Narzędzia
             </button>
+            {(actionMenuPos.client.blokadaDo || (actionMenuPos.client.karnetyKlubowicza && actionMenuPos.client.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
+              <button 
+                onClick={() => {
+                  const c = actionMenuPos.client;
+                  setOpenDropdownId(null);
+                  setActionMenuPos(null);
+                  handleDirectUnblockAccount(c);
+                }} 
+                className="w-full text-left px-3.5 py-2 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2 cursor-pointer font-black"
+              >
+                <span>🔓</span> Odblokuj konto
+              </button>
+            )}
             <div className="border-t border-slate-100 my-1"></div>
             <button 
               onClick={() => {
@@ -2568,6 +2648,31 @@ export default function KlienciPage() {
               </div>
               <button onClick={() => setTableActionClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
             </div>
+
+            {/* BANER BLOKADY W OKNIE AKCJI */}
+            {(tableActionClient.blokadaDo || (tableActionClient.karnetyKlubowicza && tableActionClient.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
+              <div className="bg-rose-50 border border-rose-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl">⚠️</span>
+                  <div>
+                    <strong className="text-xs font-black text-rose-950 uppercase block">Konto zablokowane</strong>
+                    <span className="text-[11px] text-rose-800 font-medium leading-tight block">
+                      {tableActionClient.powodBlokady || 'Aktywna blokada zapisów i wejścia do klubu.'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    const c = tableActionClient;
+                    setTableActionClient(null);
+                    handleDirectUnblockAccount(c);
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+                >
+                  🔓 Odblokuj teraz
+                </button>
+              </div>
+            )}
 
             <div className="space-y-2">
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Klubowicz</div>
@@ -2669,6 +2774,15 @@ export default function KlienciPage() {
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
               <button onClick={() => setProfileClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
               <div className="flex items-center gap-2">
+                {(profileClient.blokadaDo || (profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
+                  <button 
+                    onClick={() => handleDirectUnblockAccount(profileClient)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-black shadow-sm transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                    title="Zdejmij blokadę bez naruszania zaplanowanych zawieszeń"
+                  >
+                    <span>🔓</span> ODBLOKUJ KONTO
+                  </button>
+                )}
                 <button onClick={() => setIsWalletHistoryOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer whitespace-nowrap">🕒 LOGI UŻYTKOWNIKA</button>
               </div>
             </div>
@@ -2744,6 +2858,34 @@ export default function KlienciPage() {
                   </div>
                 </div>
               </div>
+
+              {/* BANER BLOKADY W PROFILU Z PRZYCISKIEM ODBLOKOWANIA */}
+              {(profileClient.blokadaDo || (profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
+                <div className="bg-rose-50 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-rose-100 border border-rose-300 rounded-xl flex items-center justify-center text-xl shrink-0">
+                      🚫
+                    </div>
+                    <div>
+                      <h4 className="font-black text-rose-950 text-xs uppercase tracking-wider">
+                        {profileClient.powodBlokady?.toLowerCase().includes('umow') || profileClient.powodBlokady?.toLowerCase().includes('wpłat')
+                          ? 'Konto zablokowane ze względu na brak płatności za umowę 12M'
+                          : 'Konto posiada aktywną blokadę'}
+                      </h4>
+                      <p className="text-xs text-rose-800 font-medium mt-0.5">
+                        {profileClient.powodBlokady || `Blokada do dnia: ${profileClient.blokadaDo}`}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDirectUnblockAccount(profileClient)}
+                    className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer shrink-0 flex items-center justify-center gap-2"
+                  >
+                    <span>🔓</span> ODBLOKUJ KONTO TERAZ
+                  </button>
+                </div>
+              )}
+
               {/* SEKCJA KARNETÓW & RABATÓW */}
               <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2898,7 +3040,7 @@ export default function KlienciPage() {
                                   </span>
                                 )}
                                 {karnet.blokadaDo && karnet.blokadaDo >= todayStr && (
-                                  <span className="bg-rose-100 text-rose-800 text-xs font-black px-2 py-0.5 rounded border border-rose-200">
+                                  <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-0.5 rounded border border-rose-200">
                                     ⚠️ Zablokowane do {karnet.blokadaDo}
                                   </span>
                                 )}
@@ -2920,7 +3062,7 @@ export default function KlienciPage() {
                                     <span>🎟️ Wejścia:</span> 
                                     <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
                                   </span>
-                                  )}
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
@@ -2957,7 +3099,7 @@ export default function KlienciPage() {
                                   const defK = dostepneKarnety.find(dk => dk.nazwa === karnet.nazwa);
                                   setExtendNewDate(getCalendarExpiryDate(karnet.waznyDo, defK?.limitCzasowy));
                                   setIsExtendPassModalOpen(true);
-                                }}
+                                }} 
                                 className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
                               >
                                 🕒 Przedłuż
@@ -3012,7 +3154,6 @@ export default function KlienciPage() {
                 </div>
 
               </div>
-
               {/* Sekcja Portfel */}
               <div className="space-y-3">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
@@ -3102,7 +3243,7 @@ export default function KlienciPage() {
                             const isAuto = clientAutoEnrollments.some((az: any) => String(az.grafik_id) === String(classDetails?.classId));
                             const authorAudit = resolveAuthorAndMovementDetails(profileClient.id, z.class_key, wszystkieTransakcje, z.zapisujacy, isAuto);
 
-                            const finalTitle = classDetails ? classDetails.title : (z.class_title || z.tytul || 'Trening grupowy');
+                            const finalTitle = classDetails ? classDetails.title : (z.class_title || z.tytul || 'Trening klubowy');
                             const dateFormatted = classDetails 
                               ? `${classDetails.fullDateFormatted} ${classDetails.timeFormatted} (${classDetails.durationText})`
                               : `${dateObj.toISOString().split('T')[0]}`;
@@ -3825,7 +3966,7 @@ export default function KlienciPage() {
             <form onSubmit={handleSaveProfileInfoSubmit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Imię *</label>
+                  <label className="font-bold text-slate-700 whitespace-nowrap">Imię *</label>
                   <input 
                     type="text" 
                     required
@@ -3835,7 +3976,7 @@ export default function KlienciPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Nazwisko *</label>
+                  <label className="font-bold text-slate-700 whitespace-nowrap">Nazwisko *</label>
                   <input 
                     type="text" 
                     required
@@ -4051,9 +4192,9 @@ export default function KlienciPage() {
                         <input 
                           type="text" 
                           placeholder="np. 4 / 12"
-                          value={newPassCustomRata}
-                          onChange={(e) => setNewPassCustomRata(e.target.value)}
-                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                          value={newPassCustomRata} 
+                          onChange={(e) => setNewPassCustomRata(e.target.value)} 
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
                         />
                       </div>
                       <div className="space-y-1">
@@ -4063,9 +4204,9 @@ export default function KlienciPage() {
                           min="0" 
                           max="30" 
                           placeholder="30"
-                          value={newPassCustomSuspensionDays}
-                          onChange={(e) => setNewPassCustomSuspensionDays(e.target.value)}
-                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800"
+                          value={newPassCustomSuspensionDays} 
+                          onChange={(e) => setNewPassCustomSuspensionDays(e.target.value)} 
+                          className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
                         />
                       </div>
                     </div>
@@ -4470,6 +4611,7 @@ export default function KlienciPage() {
                         type="number" 
                         min="0" 
                         max="30" 
+                        placeholder="30"
                         value={newClient.customSuspensionDays} 
                         onChange={(e) => setNewClient({...newClient, customSuspensionDays: e.target.value})} 
                         className="w-full bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800" 
