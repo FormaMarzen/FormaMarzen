@@ -56,6 +56,7 @@ export default function RootLayout({
   const [hasUnreadWydarzenia, setHasUnreadWydarzenia] = useState<boolean>(false);
   const [hasUnreadBazaWiedzy, setHasUnreadBazaWiedzy] = useState<boolean>(false);
   const [hasUnreadOdziez, setHasUnreadOdziez] = useState<boolean>(false);
+  const [hasUnreadWyzwania, setHasUnreadWyzwania] = useState<boolean>(false);
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
@@ -192,6 +193,37 @@ export default function RootLayout({
         }
       }
       setHasUnreadOdziez(unreadOdziez);
+
+      // 6. Wyzwania i Odznaki (Pojedynki)
+      let unreadWyzwania = false;
+      if (role === 'admin') {
+        const { data: adminChallenges } = await supabase
+          .from('klub_wyzwania')
+          .select('id')
+          .eq('status', 'oczekujace')
+          .limit(1);
+        if (adminChallenges && adminChallenges.length > 0) {
+          unreadWyzwania = true;
+        }
+      } else if (cId) {
+        const { data: userChallenges } = await supabase
+          .from('klub_wyzwania')
+          .select('id, tworca_id, przeciwnik_id, status, termin_status, data_zaproponowana_przez')
+          .or(`tworca_id.eq.${cId},przeciwnik_id.eq.${cId}`)
+          .in('status', ['oczekujace', 'aktywne']);
+
+        if (userChallenges && userChallenges.length > 0) {
+          const needsAction = userChallenges.some((w: any) => {
+            const isOpponentPending = String(w.przeciwnik_id) === String(cId) && w.status === 'oczekujace';
+            const isDateProposedByOther = w.status === 'aktywne' && 
+              w.termin_status === 'oczekuje' && 
+              String(w.data_zaproponowana_przez) !== String(cId);
+            return isOpponentPending || isDateProposedByOther;
+          });
+          if (needsAction) unreadWyzwania = true;
+        }
+      }
+      setHasUnreadWyzwania(unreadWyzwania);
 
     } catch (err) {
       console.error("Błąd sprawdzania powiadomień w menu:", err);
@@ -640,8 +672,8 @@ export default function RootLayout({
       : klientMenuSections;
 
   const hasAnyBadgeInMenu = useMemo(() => {
-    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez;
-  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez]);
+    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez || hasUnreadWyzwania;
+  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez, hasUnreadWyzwania]);
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -865,6 +897,8 @@ export default function RootLayout({
                               showBadge = hasUnreadBazaWiedzy;
                             } else if (item.href === '/odziez') {
                               showBadge = hasUnreadOdziez;
+                            } else if (item.href === '/wyzwania') {
+                              showBadge = hasUnreadWyzwania;
                             }
 
                             return (
@@ -899,7 +933,7 @@ export default function RootLayout({
                   </nav>
                 </div>
 
-                {/* Stała stopka profilu użytkownika - bezpieczna dla iOS Home Bar */}
+                {/* Stała stopka profilu użytkownika */}
                 <div className="border-t border-sky-100 p-4 shrink-0 bg-white/95 backdrop-blur-sm pb-[max(1rem,env(safe-area-inset-bottom))]">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500 shadow-sm">
