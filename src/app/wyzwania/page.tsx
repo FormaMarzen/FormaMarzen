@@ -104,6 +104,9 @@ export default function WyzwaniaPage() {
   const [rankingList, setRankingList] = useState<any[]>([]);
   const [badgeRankingList, setBadgeRankingList] = useState<any[]>([]);
   
+  // Wskaźniki postępu użytkownika dla każdej reguły
+  const [currentUserMetrics, setCurrentUserMetrics] = useState<Record<string, number>>({});
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [isWinnerModalOpen, setIsWinnerModalOpen] = useState(false);
@@ -112,6 +115,11 @@ export default function WyzwaniaPage() {
   const [selectedMemberForComparison, setSelectedMemberForComparison] = useState<any | null>(null);
   const [selectedBadgeForZoom, setSelectedBadgeForZoom] = useState<any | null>(null);
   
+  // Modal ustalania terminu wyzwania
+  const [isDateModalOpen, setIsDateModalOpen] = useState(false);
+  const [selectedChallengeForDate, setSelectedChallengeForDate] = useState<any | null>(null);
+  const [proposedDateInput, setProposedDateInput] = useState("");
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOpponent, setSelectedOpponent] = useState<any | null>(null);
   const [dyscyplina, setDyscyplina] = useState("");
@@ -153,7 +161,7 @@ export default function WyzwaniaPage() {
   const [adminSubTab, setAdminSubTab] = useState<'wyzwania' | 'odznaki' | 'katalog_odznak' | 'dyscypliny'>('wyzwania');
   const [isLoading, setIsLoading] = useState(true);
 
-  // STANY DLA NOWYCH FUNKCJI: PRZYPOMNIENIA, RANKINGI ROZWIJANE I WYSZUKIWARKI
+  // Stany przypomnień i rankingów
   const [remindingId, setRemindingId] = useState<number | null>(null);
   const [searchH2H, setSearchH2H] = useState("");
   const [isH2HExpanded, setIsH2HExpanded] = useState(false);
@@ -205,7 +213,7 @@ export default function WyzwaniaPage() {
     if (!dateString) return "-";
     try {
       const d = new Date(dateString);
-      if (isNaN(d.getTime())) return "-";
+      if (isNaN(d.getTime())) return String(dateString);
       return d.toLocaleString('pl-PL', {
         day: '2-digit',
         month: '2-digit',
@@ -214,7 +222,7 @@ export default function WyzwaniaPage() {
         minute: '2-digit'
       });
     } catch {
-      return "-";
+      return String(dateString);
     }
   };
 
@@ -261,7 +269,42 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // AUTOMATYCZNY MECHANIZM 5 DNI (PRZYPOMNIENIE) ORAZ 10 DNI (WALKOWER)
+  // LICZNIK I KALKULACJA BRAKUJĄCYCH WARUNKÓW DO ODZNAKI
+  const getBadgeProgress = (badgeDef: any, metrics: Record<string, number>) => {
+    const ruleType = badgeDef.typ_reguly || "RECZNA";
+    const threshold = Number(badgeDef.wartosc_progowa) || 1;
+    const current = metrics[ruleType] ?? 0;
+    const diff = Math.max(0, threshold - current);
+
+    if (ruleType === "RECZNA") {
+      return { text: "Nadawana wyłącznie przez Trenera / Admina", current: 0, threshold: 1, diff: 0, percent: 0 };
+    }
+    if (ruleType === "REJESTRACJA") {
+      return { 
+        text: current >= 1 ? "Odznaka zdobyta!" : "Zaloguj się w aplikacji", 
+        current: current >= 1 ? 1 : 0, 
+        threshold: 1, 
+        diff: current >= 1 ? 0 : 1, 
+        percent: current >= 1 ? 100 : 0 
+      };
+    }
+
+    let unit = "jednostek";
+    if (ruleType.startsWith("TRENINGI")) unit = "obecności na treningu";
+    else if (ruleType === "STAZ_DNI") unit = "dni stażu w klubie";
+    else if (ruleType.includes("WYGRANE") || ruleType.includes("SERIA")) unit = "wygranych wyzwań";
+    else if (ruleType.includes("UDZIAL")) unit = "ukończonych pojedynków";
+    else if (ruleType === "REDUKCJA_WYGRANA") unit = "wygranych edycji redukcji";
+
+    const percent = Math.min(100, Math.round((current / threshold) * 100));
+    const text = diff === 0 
+      ? `Warunek spełniony! (${current}/${threshold})` 
+      : `Brakuje ${diff} ${unit} (Masz: ${current}/${threshold})`;
+
+    return { text, current, threshold, diff, percent };
+  };
+
+  // AUTOMATYCZNY MECHANIZM: 5 DNI (PRZYPOMNIENIE), 10 DNI (WALKOWER ZA BRAK AKCEPTACJI), 30 DNI (WALKOWER PO PRZYJĘCIU)
   const processPendingChallengesAuto = async (challengesList: any[], clientsList: any[]) => {
     if (!challengesList || challengesList.length === 0 || autoCheckProcessedRef.current) return;
     autoCheckProcessedRef.current = true;
@@ -270,87 +313,134 @@ export default function WyzwaniaPage() {
       const nowMs = new Date().getTime();
       const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
       const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
       let shouldRefresh = false;
 
       for (const ch of challengesList) {
-        if (ch.status !== 'oczekujace' || !ch.created_at) continue;
-
-        const createdMs = new Date(ch.created_at).getTime();
-        const diff = nowMs - createdMs;
-
         const tworcaClient = clientsList.find(c => String(c.id) === String(ch.tworca_id));
         const przeciwnikClient = clientsList.find(c => String(c.id) === String(ch.przeciwnik_id));
         const tworcaNazwa = tworcaClient ? tworcaClient.name : "Klubowicz";
         const przeciwnikNazwa = przeciwnikClient ? przeciwnikClient.name : "Klubowicz";
 
-        // 10 DNI -> AUTOMATYCZNY WALKOWER
-        if (diff >= tenDaysMs) {
-          shouldRefresh = true;
-          await supabase
-            .from("klub_wyzwania")
-            .update({ 
-              status: 'walkower', 
-              updated_at: new Date().toISOString() 
-            })
-            .eq("id", ch.id);
+        // 1. ZASADA 30 DNI: Po przyjęciu wyzwania brak rozstrzygnięcia -> wyzwany oddaje walkower
+        if (ch.status === 'aktywne' && (ch.accepted_at || ch.data_przyjecia || ch.updated_at)) {
+          const acceptedMs = new Date(ch.accepted_at || ch.data_przyjecia || ch.updated_at).getTime();
+          if (nowMs - acceptedMs >= thirtyDaysMs) {
+            shouldRefresh = true;
+            await supabase
+              .from("klub_wyzwania")
+              .update({ 
+                status: 'walkower', 
+                zwyciezca_id: ch.tworca_id, // Rzucający wygrywa walkowerem
+                updated_at: new Date().toISOString() 
+              })
+              .eq("id", ch.id);
 
-          const walkowerMsgOpponent = `🚫 Upłynęło 10 dni od rzucenia wyzwania w dyscyplinie "${ch.dyscyplina}" przez ${tworcaNazwa}. Z powodu braku akceptacji wyzwanie zostało poddane walkowerem.`;
-          const walkowerMsgCreator = `🏆 Informacja: Klubowicz ${przeciwnikNazwa} nie przyjął Twojego wyzwania w dyscyplinie "${ch.dyscyplina}" przez 10 dni. Wyzwanie zakończone walkowerem (wynik trafia do tabeli walkowerów).`;
+            const msg30d = `🚫 Minęło 30 dni od przyjęcia wyzwania w dyscyplinie "${ch.dyscyplina}". Z powodu braku rozstrzygnięcia w wyznaczonym terminie, wyzwany (${przeciwnikNazwa}) oddaje pojedynek walkowerem na korzyść rzucającego (${tworcaNazwa}).`;
 
-          await supabase.from("czat_wiadomosci").insert([
-            {
-              nadawca_id: SYSTEM_ID,
-              nadawca_nazwa: "Forma Marzeń",
-              nadawca_avatar: null,
-              odbiorca_id: ch.przeciwnik_id,
-              tresc: walkowerMsgOpponent,
-              przeczytana: false
-            },
-            {
-              nadawca_id: SYSTEM_ID,
-              nadawca_nazwa: "Forma Marzeń",
-              nadawca_avatar: null,
-              odbiorca_id: ch.tworca_id,
-              tresc: walkowerMsgCreator,
-              przeczytana: false
-            }
-          ]);
+            await supabase.from("czat_wiadomosci").insert([
+              {
+                nadawca_id: SYSTEM_ID,
+                nadawca_nazwa: "Forma Marzeń",
+                nadawca_avatar: null,
+                odbiorca_id: ch.przeciwnik_id,
+                tresc: msg30d,
+                przeczytana: false
+              },
+              {
+                nadawca_id: SYSTEM_ID,
+                nadawca_nazwa: "Forma Marzeń",
+                nadawca_avatar: null,
+                odbiorca_id: ch.tworca_id,
+                tresc: msg30d,
+                przeczytana: false
+              }
+            ]);
 
-          await sendPushNotification([ch.tworca_id, ch.przeciwnik_id], {
-            title: "🚫 Walkower w wyzwaniu",
-            body: `Wyzwanie "${ch.dyscyplina}" zakończone walkowerem z powodu upływu 10 dni.`,
-            url: "/wyzwania"
-          });
+            await sendPushNotification([ch.tworca_id, ch.przeciwnik_id], {
+              title: "🚫 Walkower (30 dni po przyjęciu)",
+              body: `Wyzwanie "${ch.dyscyplina}" zakończone walkowerem po upływie 30 dni od akceptacji.`,
+              url: "/wyzwania"
+            });
+            continue;
+          }
         }
-        // 5 DNI -> AUTOMATYCZNE SYSTEMOWE PRZYPOMNIENIE
-        else if (diff >= fiveDaysMs && !ch.reminder_5d_sent) {
-          shouldRefresh = true;
-          await supabase
-            .from("klub_wyzwania")
-            .update({ 
-              reminder_5d_sent: true,
-              updated_at: new Date().toISOString() 
-            })
-            .eq("id", ch.id);
 
-          const reminderMsg = `⏰ SYSTEMOWE PRZYPOMNIENIE: Minęło 5 dni od wyzwania w dyscyplinie "${ch.dyscyplina}" rzuconego przez ${tworcaNazwa}! Masz jeszcze 5 dni na podjęcie decyzji. Po 10 dniach system automatycznie przyzna walkower.`;
+        // 2. ZASADY DLA WYKONAŃ OCZEKUJĄCYCH (PRZED AKCEPTACJĄ)
+        if (ch.status === 'oczekujace' && ch.created_at) {
+          const createdMs = new Date(ch.created_at).getTime();
+          const diff = nowMs - createdMs;
 
-          await supabase.from("czat_wiadomosci").insert([
-            {
-              nadawca_id: SYSTEM_ID,
-              nadawca_nazwa: "Forma Marzeń",
-              nadawca_avatar: null,
-              odbiorca_id: ch.przeciwnik_id,
-              tresc: reminderMsg,
-              przeczytana: false
-            }
-          ]);
+          // 10 DNI -> AUTOMATYCZNY WALKOWER ZA BRAK REAKCJI
+          if (diff >= tenDaysMs) {
+            shouldRefresh = true;
+            await supabase
+              .from("klub_wyzwania")
+              .update({ 
+                status: 'walkower', 
+                zwyciezca_id: ch.tworca_id,
+                updated_at: new Date().toISOString() 
+              })
+              .eq("id", ch.id);
 
-          await sendPushNotification(ch.przeciwnik_id, {
-            title: "⏰ Czas ucieka! Wyzwanie czeka",
-            body: `Minęło 5 dni od wyzwania w "${ch.dyscyplina}" od ${tworcaNazwa}. Przyjmij wyzwanie zanim upłynie 10 dni!`,
-            url: "/wyzwania"
-          });
+            const walkowerMsgOpponent = `🚫 Upłynęło 10 dni od rzucenia wyzwania w dyscyplinie "${ch.dyscyplina}" przez ${tworcaNazwa}. Z powodu braku akceptacji wyzwanie zostało poddane walkowerem.`;
+            const walkowerMsgCreator = `🏆 Informacja: Klubowicz ${przeciwnikNazwa} nie przyjął Twojego wyzwania w dyscyplinie "${ch.dyscyplina}" przez 10 dni. Wyzwanie zakończone walkowerem na Twoją korzyść.`;
+
+            await supabase.from("czat_wiadomosci").insert([
+              {
+                nadawca_id: SYSTEM_ID,
+                nadawca_nazwa: "Forma Marzeń",
+                nadawca_avatar: null,
+                odbiorca_id: ch.przeciwnik_id,
+                tresc: walkowerMsgOpponent,
+                przeczytana: false
+              },
+              {
+                nadawca_id: SYSTEM_ID,
+                nadawca_nazwa: "Forma Marzeń",
+                nadawca_avatar: null,
+                odbiorca_id: ch.tworca_id,
+                tresc: walkowerMsgCreator,
+                przeczytana: false
+              }
+            ]);
+
+            await sendPushNotification([ch.tworca_id, ch.przeciwnik_id], {
+              title: "🚫 Walkower w wyzwaniu",
+              body: `Wyzwanie "${ch.dyscyplina}" zakończone walkowerem z powodu upływu 10 dni.`,
+              url: "/wyzwania"
+            });
+          }
+          // 5 DNI -> AUTOMATYCZNE SYSTEMOWE PRZYPOMNIENIE
+          else if (diff >= fiveDaysMs && !ch.reminder_5d_sent) {
+            shouldRefresh = true;
+            await supabase
+              .from("klub_wyzwania")
+              .update({ 
+                reminder_5d_sent: true,
+                updated_at: new Date().toISOString() 
+              })
+              .eq("id", ch.id);
+
+            const reminderMsg = `⏰ SYSTEMOWE PRZYPOMNIENIE: Minęło 5 dni od wyzwania w dyscyplinie "${ch.dyscyplina}" rzuconego przez ${tworcaNazwa}! Masz jeszcze 5 dni na podjęcie decyzji. Po 10 dniach system automatycznie przyzna walkower.`;
+
+            await supabase.from("czat_wiadomosci").insert([
+              {
+                nadawca_id: SYSTEM_ID,
+                nadawca_nazwa: "Forma Marzeń",
+                nadawca_avatar: null,
+                odbiorca_id: ch.przeciwnik_id,
+                tresc: reminderMsg,
+                przeczytana: false
+              }
+            ]);
+
+            await sendPushNotification(ch.przeciwnik_id, {
+              title: "⏰ Czas ucieka! Wyzwanie czeka",
+              body: `Minęło 5 dni od wyzwania w "${ch.dyscyplina}" od ${tworcaNazwa}. Przyjmij wyzwanie zanim upłynie 10 dni!`,
+              url: "/wyzwania"
+            });
+          }
         }
       }
 
@@ -359,7 +449,100 @@ export default function WyzwaniaPage() {
         if (refreshed) setWyzwania(refreshed);
       }
     } catch (err) {
-      console.error("Błąd automatycznej weryfikacji 5/10 dni wyzwań:", err);
+      console.error("Błąd automatycznej weryfikacji 5/10/30 dni wyzwań:", err);
+    }
+  };
+
+  // OBSŁUGA NEGOCJACJI TERMINU WYZWANIA
+  const handleOpenDateModal = (challenge: any) => {
+    setSelectedChallengeForDate(challenge);
+    setProposedDateInput(challenge.proponowana_data || "");
+    setIsDateModalOpen(true);
+  };
+
+  const handleProposeDate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedChallengeForDate || !proposedDateInput.trim() || !currentUserId) return;
+
+    const challengeId = selectedChallengeForDate.id;
+    const opponentId = String(selectedChallengeForDate.tworca_id) === String(currentUserId) 
+      ? selectedChallengeForDate.przeciwnik_id 
+      : selectedChallengeForDate.tworca_id;
+
+    const { error } = await supabase
+      .from("klub_wyzwania")
+      .update({
+        proponowana_data: proposedDateInput.trim(),
+        data_zaproponowana_przez: currentUserId,
+        termin_status: "oczekuje",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", challengeId);
+
+    if (!error) {
+      const msg = `📅 ${currentUserName} proponuje termin pojedynku w dyscyplinie "${selectedChallengeForDate.dyscyplina}": "${proposedDateInput.trim()}". Wejdź w zakładkę Wyzwania, aby zaakceptować lub zaproponować inny dzień!`;
+
+      await supabase.from("czat_wiadomosci").insert([{
+        nadawca_id: SYSTEM_ID,
+        nadawca_nazwa: "Forma Marzeń",
+        nadawca_avatar: null,
+        odbiorca_id: opponentId,
+        tresc: msg,
+        przeczytana: false
+      }]);
+
+      await sendPushNotification(opponentId, {
+        title: "📅 Nowa propozycja terminu wyzwania!",
+        body: `${currentUserName} proponuje termin: ${proposedDateInput.trim()}. Sprawdź i zaakceptuj!`,
+        url: "/wyzwania"
+      });
+
+      alert("Propozycja terminu została wysłana rywalowi!");
+      setIsDateModalOpen(false);
+      setSelectedChallengeForDate(null);
+      fetchWyzwania();
+    } else {
+      alert("Błąd zapisu terminu: " + error.message);
+    }
+  };
+
+  const handleAcceptProposedDate = async (challenge: any) => {
+    if (!challenge || !currentUserId) return;
+
+    const opponentId = String(challenge.tworca_id) === String(currentUserId) 
+      ? challenge.przeciwnik_id 
+      : challenge.tworca_id;
+
+    const { error } = await supabase
+      .from("klub_wyzwania")
+      .update({
+        termin_status: "zaakceptowany",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", challenge.id);
+
+    if (!error) {
+      const msg = `🤝 ${currentUserName} zaakceptował termin pojedynku w dyscyplinie "${challenge.dyscyplina}": ${challenge.proponowana_data}! Data została oficjalnie potwierdzona. Do dzieła!`;
+
+      await supabase.from("czat_wiadomosci").insert([{
+        nadawca_id: SYSTEM_ID,
+        nadawca_nazwa: "Forma Marzeń",
+        nadawca_avatar: null,
+        odbiorca_id: opponentId,
+        tresc: msg,
+        przeczytana: false
+      }]);
+
+      await sendPushNotification(opponentId, {
+        title: "🤝 Termin wyzwania zatwierdzony!",
+        body: `${currentUserName} potwierdził termin pojedynku: ${challenge.proponowana_data}!`,
+        url: "/wyzwania"
+      });
+
+      alert("Termin wyzwania został oficjalnie potwierdzony!");
+      fetchWyzwania();
+    } else {
+      alert("Błąd akceptacji terminu: " + error.message);
     }
   };
 
@@ -412,8 +595,7 @@ export default function WyzwaniaPage() {
         def.typ_reguly && def.typ_reguly !== 'RECZNA' && !ownedBadgeIds.has(Number(def.id))
       );
 
-      if (badgesToEvaluate.length === 0) return;
-
+      // POBRANIE POTWIERDZONYCH OBECNOŚCI ZAJĘĆ
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
         .select("id, class_key, obecny, nieobecny, status, created_at")
@@ -465,6 +647,7 @@ export default function WyzwaniaPage() {
         const [sh = '00', sm = '00'] = startTime.split(':');
         const fullStartDateTime = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
 
+        // Trening musiał już się odbyć
         if (fullStartDateTime.getTime() > now.getTime()) return;
 
         const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
@@ -477,7 +660,7 @@ export default function WyzwaniaPage() {
         .or(`tworca_id.eq.${userId},przeciwnik_id.eq.${userId}`);
 
       const userChallenges = userChallengesRaw || [];
-      const verifiedChallenges = userChallenges.filter((c: any) => c.status === 'zweryfikowane');
+      const verifiedChallenges = userChallenges.filter((c: any) => c.status === 'zweryfikowane' || c.status === 'walkower');
 
       const { data: clientInfo } = await supabase
         .from("klienci")
@@ -578,6 +761,11 @@ export default function WyzwaniaPage() {
       metricValues["STAZ_DNI"] = tenureDays;
       metricValues["REDUKCJA_WYGRANA"] = reductionWinsCount;
 
+      if (String(userId) === String(currentUserId)) {
+        setCurrentUserMetrics(metricValues);
+      }
+
+      // NADAWANIE ZASŁUŻONYCH ODZNAK
       for (const badgeDef of badgesToEvaluate) {
         const ruleType = badgeDef.typ_reguly;
         const threshold = Number(badgeDef.wartosc_progowa) || 1;
@@ -1138,7 +1326,7 @@ export default function WyzwaniaPage() {
     e.preventDefault();
     if (!selectedOpponent || !dyscyplina.trim() || !currentUserId) return;
 
-    const { error: challengeErr } = await supabase
+    const { data: insertedChallenge, error: challengeErr } = await supabase
       .from("klub_wyzwania")
       .insert([
         {
@@ -1148,9 +1336,12 @@ export default function WyzwaniaPage() {
           opis: opisWyzwania.trim() || "Brak dodatkowego opisu",
           status: "oczekujace",
           kategoria_wyzwania: modalKategoria,
+          termin_status: "brak",
           created_at: new Date().toISOString()
         }
-      ]);
+      ])
+      .select()
+      .single();
 
     if (challengeErr) {
       alert("Błąd podczas rzucania wyzwania: " + challengeErr.message);
@@ -1158,7 +1349,7 @@ export default function WyzwaniaPage() {
     }
 
     const ikonaKategorii = modalKategoria === 'zywienie' ? '🥗' : '⚔️';
-    const chatMessage = `${ikonaKategorii} Rzuciłem Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"! Wejdź w zakładkę Wyzwania i Odznaki, aby je przyjąć.`;
+    const chatMessage = `${ikonaKategorii} Rzuciłem Ci wyzwanie w dyscyplinie: "${dyscyplina.trim()}"! Wejdź w zakładkę Wyzwania i Odznaki, aby je przyjąć i ustalić dogodny termin pojedynku.`;
     
     await supabase.from("czat_wiadomosci").insert([
       {
@@ -1193,6 +1384,8 @@ export default function WyzwaniaPage() {
 
     if (newStatus === "aktywne") {
       updatePayload.accepted_at = new Date().toISOString();
+      updatePayload.data_przyjecia = new Date().toISOString();
+      updatePayload.termin_status = "brak";
     }
 
     const { error } = await supabase
@@ -1205,9 +1398,18 @@ export default function WyzwaniaPage() {
       if (challengeObj && newStatus === "aktywne") {
         await sendPushNotification(challengeObj.tworca_id, {
           title: "⚔️ Wyzwanie przyjęte!",
-          body: `${currentUserName} przyjął Twoje wyzwanie w dyscyplinie: "${challengeObj.dyscyplina}"! Do dzieła!`,
+          body: `${currentUserName} przyjął Twoje wyzwanie w dyscyplinie: "${challengeObj.dyscyplina}"! Ustalcie teraz termin w aplikacji.`,
           url: "/wyzwania"
         });
+
+        await supabase.from("czat_wiadomosci").insert([{
+          nadawca_id: SYSTEM_ID,
+          nadawca_nazwa: "Forma Marzeń",
+          nadawca_avatar: null,
+          odbiorca_id: challengeObj.tworca_id,
+          tresc: `⚔️ ${currentUserName} przyjął Twoje wyzwanie w dyscyplinie "${challengeObj.dyscyplina}". Ustalcie dzień pojedynku w zakładce Wyzwania!`,
+          przeczytana: false
+        }]);
       }
 
       fetchWyzwania();
@@ -1232,6 +1434,18 @@ export default function WyzwaniaPage() {
     const found = klienci.find((c: any) => String(c.id) === String(id));
     return found ? found.name : "Klubowicz";
   };
+
+  // SPRAWDZENIE CZY ISTNIEJĄ OCZEKUJĄCE AKCJE (DO CZERWONEGO WYKRZYKNIKA W MENU)
+  const hasPendingActionIndicator = useMemo(() => {
+    if (!currentUserId) return false;
+    if (userRole === 'admin') {
+      return wyzwania.some((w: any) => w.status === 'oczekujace');
+    }
+    return wyzwania.some((w: any) => 
+      (String(w.przeciwnik_id) === String(currentUserId) && w.status === 'oczekujace') ||
+      (w.status === 'aktywne' && w.termin_status === 'oczekuje' && String(w.data_zaproponowana_przez) !== String(currentUserId))
+    );
+  }, [wyzwania, currentUserId, userRole]);
 
   // KALKULACJA RANKINGU WALKOWERÓW
   const walkowerRankingList = useMemo(() => {
@@ -1355,7 +1569,6 @@ export default function WyzwaniaPage() {
     });
     setBadgeMemberSearchQuery("");
   };
-
   const renderBadgeGraphic = (iconStr: string | null | undefined, sizeClasses = "w-14 h-14", textClasses = "text-2xl") => {
     if (!iconStr) return <span className={textClasses}>🏆</span>;
     const isImage = iconStr.startsWith("http") || iconStr.startsWith("data:") || iconStr.startsWith("/") || iconStr.includes(".png") || iconStr.includes(".jpg") || iconStr.includes(".jpeg") || iconStr.includes(".svg") || iconStr.includes(".webp");
@@ -1398,6 +1611,7 @@ export default function WyzwaniaPage() {
     return `${matched.ikona} Auto: ${matched.nazwa} (Próg: ${prog || 1})`;
   };
 
+  // RENDEROWANIE LISTY WYZWAŃ WRAZ Z NEGOCJACJĄ TERMINU I LICZNIKIEM 30 DNI
   const renderChallengesList = (kategoria: 'sport' | 'zywienie') => {
     const filteredActive = wyzwania.filter(w => {
       const kat = w.kategoria_wyzwania || 'sport';
@@ -1419,43 +1633,95 @@ export default function WyzwaniaPage() {
             const tworcaName = getClientName(w.tworca_id);
             const isChallenger = String(w.tworca_id) === String(currentUserId);
             const isOpponent = String(w.przeciwnik_id) === String(currentUserId);
+            const isParticipant = isChallenger || isOpponent;
+
+            // Wyliczanie pozostałych dni do 30-dniowego walkowera po przyjęciu
+            let remainingDays30 = 30;
+            if (w.status === 'aktywne' && (w.accepted_at || w.data_przyjecia || w.updated_at)) {
+              const acceptedMs = new Date(w.accepted_at || w.data_przyjecia || w.updated_at).getTime();
+              const elapsedDays = Math.floor((new Date().getTime() - acceptedMs) / (1000 * 60 * 60 * 24));
+              remainingDays30 = Math.max(0, 30 - elapsedDays);
+            }
+
+            const canAcceptProposedDate = w.status === 'aktywne' && 
+              w.termin_status === 'oczekuje' && 
+              w.proponowana_data && 
+              String(w.data_zaproponowana_przez) !== String(currentUserId);
 
             return (
-              <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4">
+              <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4 relative">
+                {/* Migający wykrzyknik w rogu kafelka dla akcji oczekujących */}
+                {((w.status === 'oczekujace' && isOpponent) || canAcceptProposedDate) && (
+                  <div className="absolute -top-2 -right-2 flex items-center justify-center">
+                    <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-6 w-6 bg-rose-600 text-white font-black text-xs items-center justify-center shadow-md">!</span>
+                  </div>
+                )}
+
                 <div className="flex items-start justify-between">
                   <div>
-                    <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full ${w.status === 'aktywne' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                      {w.status}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full ${w.status === 'aktywne' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {w.status}
+                      </span>
+                      {w.status === 'aktywne' && (
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${remainingDays30 <= 5 ? 'bg-rose-100 text-rose-800 animate-pulse' : 'bg-slate-100 text-slate-700'}`}>
+                          ⏳ Zostało: {remainingDays30} dni (do walkowera)
+                        </span>
+                      )}
+                    </div>
                     <h3 className="font-black text-sm text-slate-900 mt-2">{w.dyscyplina}</h3>
                     <p className="text-xs text-slate-600 mt-1">{w.opis}</p>
                   </div>
                   <span className="text-2xl">{isSport ? '🎯' : '🥗'}</span>
                 </div>
 
-                <div className="bg-sky-50/50 rounded-2xl p-3 border border-sky-100/70 text-[11px] space-y-1">
-  <div className="flex items-center justify-between text-slate-600">
-    <span className="text-slate-400 font-bold">📅 Rzucono:</span>
-    <span className="font-mono font-bold text-slate-800">{formatDateDisplay(w.created_at)}</span>
-  </div>
-  {w.status === 'aktywne' ? (
-    <div className="flex items-center justify-between text-emerald-800">
-      <span className="font-bold">✅ Przyjęto:</span>
-      <span className="font-mono font-black">
-        {w.accepted_at 
-          ? formatDateDisplay(w.accepted_at) 
-          : formatDateDisplay(w.updated_at) !== "-" 
-            ? formatDateDisplay(w.updated_at) 
-            : "W toku"}
-      </span>
-    </div>
-  ) : w.status === 'oczekujace' ? (
-    <div className="flex items-center justify-between text-amber-800 font-bold">
-      <span>⏳ Oczekiwanie:</span>
-      <span className="text-[10px] bg-amber-100 px-2 py-0.5 rounded-md">Brak akceptacji (Limit: 10 dni)</span>
-    </div>
-  ) : null}
-</div>
+                <div className="bg-sky-50/50 rounded-2xl p-3 border border-sky-100/70 text-[11px] space-y-1.5">
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span className="text-slate-400 font-bold">📅 Rzucono:</span>
+                    <span className="font-mono font-bold text-slate-800">{formatDateDisplay(w.created_at)}</span>
+                  </div>
+                  {w.status === 'aktywne' && (
+                    <div className="flex items-center justify-between text-emerald-800">
+                      <span className="font-bold">✅ Przyjęto:</span>
+                      <span className="font-mono font-black">
+                        {formatDateDisplay(w.accepted_at || w.data_przyjecia || w.updated_at)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* SEKCJA TERMINU POJEDYNKU */}
+                  {w.status === 'aktywne' && (
+                    <div className="pt-2 border-t border-sky-100 mt-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-700">🗓️ Ustalony termin:</span>
+                        <span className={`font-black text-xs px-2 py-0.5 rounded-lg ${
+                          w.termin_status === 'zaakceptowany' 
+                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' 
+                            : w.termin_status === 'oczekuje' 
+                            ? 'bg-amber-100 text-amber-900 border border-amber-300' 
+                            : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {w.proponowana_data 
+                            ? (w.termin_status === 'zaakceptowany' ? `Zatwierdzony: ${w.proponowana_data}` : `Propozycja: ${w.proponowana_data}`)
+                            : "Brak terminu"}
+                        </span>
+                      </div>
+
+                      {canAcceptProposedDate && (
+                        <div className="mt-2 p-2 bg-amber-50 rounded-xl border border-amber-200 flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-amber-900 font-bold">Ruch należy do Ciebie! Akceptujesz ten dzień?</span>
+                          <button
+                            onClick={() => handleAcceptProposedDate(w)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0"
+                          >
+                            ✓ Akceptuj termin
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div className="bg-slate-50 rounded-2xl p-4 text-xs flex items-center justify-between border border-sky-50">
                   <div>
@@ -1469,6 +1735,7 @@ export default function WyzwaniaPage() {
                   </div>
                 </div>
 
+                {/* PRZYCISKI AKCJI */}
                 {w.status === 'oczekujace' && isOpponent && (
                   <div className="flex items-center gap-2 pt-2 border-t border-sky-50">
                     <button onClick={() => handleUpdateStatus(w.id, 'aktywne')} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer">
@@ -1488,6 +1755,17 @@ export default function WyzwaniaPage() {
                       className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-2.5 rounded-xl text-xs transition-colors cursor-pointer shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       <span>🔔</span> {remindingId === w.id ? "Wysyłanie przypomnienia..." : "Przypomnij o wyzwaniu"}
+                    </button>
+                  </div>
+                )}
+
+                {w.status === 'aktywne' && isParticipant && (
+                  <div className="pt-2 border-t border-sky-50 flex gap-2">
+                    <button
+                      onClick={() => handleOpenDateModal(w)}
+                      className="flex-1 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 font-bold py-2 rounded-xl text-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <span>🗓️</span> {w.proponowana_data ? "Zaproponuj inny termin" : "Zaproponuj termin pojedynku"}
                     </button>
                   </div>
                 )}
@@ -1523,7 +1801,7 @@ export default function WyzwaniaPage() {
                     <td className="py-3 px-4 text-slate-600">{getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}</td>
                     <td className="py-3 px-4 font-bold text-amber-600">
                       {w.status === 'walkower' ? (
-                        <span className="text-purple-700 font-black">Walkower: {getClientName(w.tworca_id)}</span>
+                        <span className="text-purple-700 font-black">Walkower: {getClientName(w.zwyciezca_id || w.tworca_id)}</span>
                       ) : (
                         w.zwyciezca_id ? getClientName(w.zwyciezca_id) : "-"
                       )}
@@ -1560,6 +1838,11 @@ export default function WyzwaniaPage() {
         <div>
           <h1 className="text-xl font-black text-slate-950 uppercase tracking-wider flex items-center gap-2">
             <span>⚔️</span> Wyzwania i Odznaki Klubowe
+            {hasPendingActionIndicator && (
+              <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-rose-300 animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-rose-600"></span> Wymaga Twojej reakcji!
+              </span>
+            )}
             <button onClick={() => setIsInfoModalOpen(true)} className="text-[10px] bg-sky-100 text-sky-800 px-2.5 py-1 rounded-full cursor-pointer hover:bg-sky-200 transition-colors font-bold">ℹ️ Info</button>
           </h1>
           <p className="text-xs text-slate-500 mt-1">Rzucaj wyzwania sportowe i żywieniowe, rywalizuj z klubowiczami i zdobywaj trofea!</p>
@@ -1580,9 +1863,15 @@ export default function WyzwaniaPage() {
       <div className="flex flex-wrap rounded-2xl bg-white p-1 border border-sky-100 text-xs font-bold shadow-sm max-w-2xl gap-1">
         <button
           onClick={() => { setActiveTab('aktywne'); setSelectedMemberForComparison(null); }}
-          className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'aktywne' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+          className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer relative ${activeTab === 'aktywne' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
         >
           Pojedynki ⚔️
+          {hasPendingActionIndicator && (
+            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-600 text-white text-[8px] font-black items-center justify-center">!</span>
+            </span>
+          )}
         </button>
         <button
           onClick={() => { setActiveTab('zywienie'); setSelectedMemberForComparison(null); }}
@@ -1611,9 +1900,15 @@ export default function WyzwaniaPage() {
         {userRole === 'admin' && (
           <button
             onClick={() => { setActiveTab('admin'); setSelectedMemberForComparison(null); }}
-            className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'admin' ? 'bg-rose-600 text-white font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer relative ${activeTab === 'admin' ? 'bg-rose-600 text-white font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Admin Panel 🛠️
+            {wyzwania.some((w: any) => w.status === 'oczekujace') && (
+              <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+              </span>
+            )}
           </button>
         )}
       </div>
@@ -1674,6 +1969,7 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
+              {/* SEKCJIA: ODZNAKI ZDOBYTE PRZEZ TEGO KLUBOWICZA */}
               <div className="space-y-4">
                 <h3 className="text-xs font-black uppercase tracking-wider text-amber-400 px-2 flex items-center gap-2">
                   <span>🎖️</span> Zdobyte odznaki przez: {selectedMemberForComparison.name} ({(selectedMemberForComparison.badges || []).length})
@@ -1713,6 +2009,7 @@ export default function WyzwaniaPage() {
                 )}
               </div>
 
+              {/* PORÓWNANIE ZE WSZYSTKIMI ODZNAKAMI W KLUBIE WRAZ ZE WSKAŹNIKAMI POSTĘPU */}
               <div className="space-y-4 pt-6 border-t border-slate-800">
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">
                   Porównanie wszystkich odznak w klubie (Zdobyte na górze)
@@ -1721,9 +2018,10 @@ export default function WyzwaniaPage() {
                   {getSortedBadgesForComparison().map((def: any) => {
                     const userHasIt = odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id);
                     const memberHasIt = (selectedMemberForComparison.badges || []).some((o: any) => (o.klub_odznaki_definicje?.id === def.id) || (o.odznaka_id === def.id));
+                    const progress = getBadgeProgress(def, currentUserMetrics);
 
                     return (
-                      <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
+                      <div key={def.id} className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
                           <div 
                             onClick={() => setSelectedBadgeForZoom(def)}
@@ -1741,7 +2039,21 @@ export default function WyzwaniaPage() {
                             {def.warunek && (
                               <p className="text-[9px] text-amber-200/70 mt-1 font-mono">🎯 Warunek: {def.warunek}</p>
                             )}
-                            <div className="flex flex-wrap gap-2 items-center mt-1">
+                            
+                            {/* LICZNIK POSTĘPU DO TEJ ODZNAKI */}
+                            {!userHasIt && def.typ_reguly !== 'RECZNA' && (
+                              <div className="mt-2 bg-slate-900 p-2 rounded-xl border border-slate-800 max-w-sm">
+                                <div className="flex justify-between text-[10px] text-amber-300 font-bold mb-1">
+                                  <span>{progress.text}</span>
+                                  <span>{progress.percent}%</span>
+                                </div>
+                                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                  <div className="bg-amber-400 h-1.5 rounded-full transition-all duration-500" style={{ width: `${progress.percent}%` }}></div>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="flex flex-wrap gap-2 items-center mt-2">
                               <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Kat: {def.kategoria || 'Wyzwania'}</span>
                               <span className="text-[9px] bg-amber-500/10 text-amber-300 font-semibold px-2 py-0.5 rounded-md border border-amber-400/20">
                                 {formatRegulaLabel(def.typ_reguly, def.wartosc_progowa)}
@@ -1750,7 +2062,7 @@ export default function WyzwaniaPage() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-6 shrink-0">
+                        <div className="flex items-center gap-6 shrink-0 justify-end">
                           <div className="flex flex-col items-center">
                             <span className="text-[9px] text-slate-500 mb-1">Ty</span>
                             {userHasIt ? (
@@ -1776,8 +2088,9 @@ export default function WyzwaniaPage() {
             </div>
           ) : (
             <div className="space-y-8">
+              {/* Sekcja 1: Twoja gablota odznak */}
               <div className="space-y-4">
-                <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoja gablota odznak</h3>
+                <h3 className="font-black text-xs uppercase text-slate-400 px-2">Twoje zdobyte odznaki ({odznaki.length})</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {odznaki.map((o: any) => {
                     const def = o.klub_odznaki_definicje || {};
@@ -1815,6 +2128,61 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
+              {/* SEKCJA: ODZNAKI DO ZDOBYCIA WRAZ Z LICZNIKIEM I PASKIEM POSTĘPU */}
+              <div className="space-y-4 pt-6 border-t border-sky-100">
+                <div>
+                  <h3 className="font-black text-xs uppercase text-slate-800 tracking-wider flex items-center gap-2">
+                    <span>🎯</span> Odznaki do zdobycia - Zobacz ile Ci brakuje!
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Sprawdź ile treningów, wygranych pojedynków lub dni stażu dzieli Cię od kolejnych trofeów.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {wszystkieOdznaki
+                    .filter(def => !odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id))
+                    .map(def => {
+                      const progress = getBadgeProgress(def, currentUserMetrics);
+                      return (
+                        <div key={def.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between space-y-3">
+                          <div className="flex items-start gap-3.5">
+                            <div 
+                              onClick={() => setSelectedBadgeForZoom(def)}
+                              className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shrink-0 cursor-pointer grayscale opacity-85 hover:grayscale-0 transition-all"
+                            >
+                              {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <h4 className="font-black text-xs uppercase text-slate-900 truncate">{def.nazwa}</h4>
+                                <span className="text-[9px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{def.opis}</p>
+                              {def.warunek && (
+                                <p className="text-[9px] text-amber-800 font-mono mt-1">🎯 {def.warunek}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* DYNAMICZNY WSKAŹNIK BRAKUJĄCYCH OBECNOŚCI / DNI */}
+                          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
+                            <div className="flex justify-between items-center text-[10px] font-bold">
+                              <span className="text-slate-800">{progress.text}</span>
+                              <span className="text-sky-700 font-black">{progress.percent}%</span>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                              <div 
+                                className="bg-sky-600 h-2 rounded-full transition-all duration-500" 
+                                style={{ width: `${progress.percent}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* SEKCJA: WYSZUKIWARKA KLUBOWICZA ORAZ LISTA PROFILI */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2">
                   <div>
@@ -1937,7 +2305,7 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* RANKINGI I NOWA TABELA WALKOWERÓW */}
+      {/* RANKINGI I TABELA WALKOWERÓW */}
       {activeTab === 'ranking' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
@@ -1978,7 +2346,7 @@ export default function WyzwaniaPage() {
                       <th className="py-3 px-3.5 text-right">Wygrane</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
                     {displayedH2HList.map((row: any) => (
                       <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-3.5 font-black text-slate-700">
@@ -2055,7 +2423,7 @@ export default function WyzwaniaPage() {
                       <th className="py-3 px-3.5 text-right">Punkty (Odznaki)</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
                     {displayedBadgeRanking.map((row: any) => (
                       <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-3.5 font-black text-slate-700">
@@ -2098,14 +2466,14 @@ export default function WyzwaniaPage() {
             </div>
           </div>
 
-          {/* 3. NOWA TABELA: RANKING WALKOWERÓW */}
+          {/* 3. RANKING WALKOWERÓW */}
           <div className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                  <span>🚫</span> Tabela Walkowerów (Brak akceptacji po 10 dniach)
+                  <span>🚫</span> Tabela Walkowerów (Brak akceptacji lub rozstrzygnięcia)
                 </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">Podsumowanie pojedynków nierozstrzygniętych z powodu braku reakcji wyzwanego klubowicza.</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Podsumowanie pojedynków nierozstrzygniętych w terminie 10 dni (brak akceptacji) lub 30 dni (brak pojedynku).</p>
               </div>
               <span className="text-[10px] font-bold bg-purple-100 text-purple-900 px-2.5 py-1 rounded-full w-fit">
                 Łącznie walkowerów: {wyzwania.filter(w => w.status === 'walkower').length}
@@ -2132,7 +2500,7 @@ export default function WyzwaniaPage() {
                   <tr className="bg-slate-50 text-slate-400 uppercase font-bold text-[10px] border-b border-sky-100">
                     <th className="py-3 px-3.5 w-16">Miejsce</th>
                     <th className="py-3 px-3">Klubowicz</th>
-                    <th className="py-3 px-3.5 text-center">Oddane walkowery (Nieprzyjęte)</th>
+                    <th className="py-3 px-3.5 text-center">Oddane walkowery</th>
                     <th className="py-3 px-3.5 text-right">Zyskane walkowery</th>
                   </tr>
                 </thead>
@@ -2181,7 +2549,7 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
-      {/* ADMIN PANEL */}
+      {/* ADMIN PANEL: Z ROZDZIELONĄ TABELĄ NA AKTYWNE I ZAKOŃCZONE */}
       {activeTab === 'admin' && userRole === 'admin' && (
         <div className="bg-white rounded-3xl p-6 border border-rose-100 shadow-sm space-y-6">
           <div className="flex flex-wrap gap-2 text-xs font-bold border-b border-rose-100 pb-4">
@@ -2192,36 +2560,131 @@ export default function WyzwaniaPage() {
           </div>
           
           {adminSubTab === 'wyzwania' && (
-            <table className="w-full text-xs text-left">
-              <thead>
-                <tr className="border-b border-slate-100 text-slate-400 uppercase font-bold text-[10px]">
-                  <th className="py-3 px-2">Kategoria / Dyscyplina</th>
-                  <th className="py-3 px-2">Status</th>
-                  <th className="py-3 px-2 text-right">Akcja</th>
-                </tr>
-              </thead>
-              <tbody>{wyzwania.map(w => (
-                <tr key={w.id} className="border-b border-slate-50">
-                  <td className="py-4 px-2 font-bold text-slate-900">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${w.kategoria_wyzwania === 'zywienie' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                        {w.kategoria_wyzwania === 'zywienie' ? '🥗 Żywienie' : '⚔️ Sport'}
-                      </span>
-                      <span>{w.dyscyplina}</span>
-                    </div>
-                    {w.zwyciezca_id && <div className="text-[10px] text-amber-600 font-normal mt-0.5">Zwycięzca: {getClientName(w.zwyciezca_id)}</div>}
-                    {w.status === 'walkower' && <div className="text-[10px] text-purple-600 font-bold mt-0.5">Rozstrzygnięcie: Walkower</div>}
-                  </td>
-                  <td className="py-4 px-2 text-slate-600">{w.status}</td>
-                  <td className="py-4 px-2 text-right flex gap-2 justify-end">
-                    {w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && w.status !== 'walkower' && (
-                      <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors">Zatwierdź</button>
-                    )}
-                    <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer">Usuń</button>
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
+            <div className="space-y-8">
+              {/* TABELA 1: AKTYWNE I OCZEKUJĄCE WYZWANIA */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-black text-xs text-rose-950 uppercase tracking-wider flex items-center gap-2">
+                    <span>⚡</span> Aktywne i oczekujące wyzwania ({wyzwania.filter(w => w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && w.status !== 'walkower').length})
+                  </h3>
+                  <span className="text-[10px] text-slate-400 italic">Do rozstrzygnięcia przez Admina</span>
+                </div>
+
+                <div className="overflow-x-auto rounded-2xl border border-rose-100">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="border-b border-rose-100 text-slate-400 uppercase font-bold text-[10px] bg-rose-50/50">
+                        <th className="py-3 px-3">Kategoria / Dyscyplina</th>
+                        <th className="py-3 px-3">Uczestnicy</th>
+                        <th className="py-3 px-3">Status / Ustalony termin</th>
+                        <th className="py-3 px-3 text-right">Akcja</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {wyzwania
+                        .filter(w => w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && w.status !== 'walkower')
+                        .map(w => (
+                          <tr key={w.id} className="border-b border-slate-50 hover:bg-slate-50/60">
+                            <td className="py-3 px-3 font-bold text-slate-900">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${w.kategoria_wyzwania === 'zywienie' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                  {w.kategoria_wyzwania === 'zywienie' ? '🥗 Żywienie' : '⚔️ Sport'}
+                                </span>
+                                <span>{w.dyscyplina}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-normal mt-0.5">Rzucono: {formatDateDisplay(w.created_at)}</div>
+                            </td>
+                            <td className="py-3 px-3 text-slate-700 font-medium">
+                              {getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}
+                            </td>
+                            <td className="py-3 px-3 text-slate-600">
+                              <div className="font-bold text-slate-800 uppercase text-[10px]">{w.status}</div>
+                              {w.proponowana_data && (
+                                <div className="text-[10px] text-sky-700 font-mono mt-0.5">
+                                  Termin: {w.proponowana_data} ({w.termin_status})
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-right flex gap-2 justify-end">
+                              <button onClick={() => openWinnerModal(w)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold cursor-pointer transition-colors text-xs">
+                                Zatwierdź wynik
+                              </button>
+                              <button onClick={() => handleDeleteWyzwanie(w.id)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer text-xs">
+                                Usuń
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      {wyzwania.filter(w => w.status !== 'zweryfikowane' && w.status !== 'odrzucone' && w.status !== 'walkower').length === 0 && (
+                        <tr><td colSpan={4} className="py-6 text-center text-slate-400 italic">Brak aktywnych wyzwań w klubie.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* TABELA 2: ZAKOŃCZONE I PRZESZŁE WYZWANIA (NA DOLE STRONY) */}
+              <div className="space-y-3 pt-4 border-t border-slate-200">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-black text-xs text-slate-600 uppercase tracking-wider flex items-center gap-2">
+                    <span>📜</span> Historia zakończonych wyzwań ({wyzwania.filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone' || w.status === 'walkower').length})
+                  </h3>
+                  <span className="text-[10px] text-slate-400 italic">Zweryfikowane, odrzucone oraz walkowery</span>
+                </div>
+
+                <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-400 uppercase font-bold text-[10px] bg-slate-50">
+                        <th className="py-3 px-3">Dyscyplina</th>
+                        <th className="py-3 px-3">Uczestnicy</th>
+                        <th className="py-3 px-3">Rozstrzygnięcie / Zwycięzca</th>
+                        <th className="py-3 px-3 text-right">Status / Akcja</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {wyzwania
+                        .filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone' || w.status === 'walkower')
+                        .map(w => (
+                          <tr key={w.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                            <td className="py-3 px-3 font-bold text-slate-900">
+                              <div>{w.dyscyplina}</div>
+                              <div className="text-[10px] text-slate-400 font-normal">Data: {formatDateDisplay(w.created_at)}</div>
+                            </td>
+                            <td className="py-3 px-3 text-slate-700">
+                              {getClientName(w.tworca_id)} vs {getClientName(w.przeciwnik_id)}
+                            </td>
+                            <td className="py-3 px-3 font-bold">
+                              {w.status === 'walkower' ? (
+                                <span className="text-purple-700">Walkower: {getClientName(w.zwyciezca_id || w.tworca_id)}</span>
+                              ) : (
+                                w.zwyciezca_id ? <span className="text-amber-600">Zwycięzca: {getClientName(w.zwyciezca_id)}</span> : "-"
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-right flex items-center justify-end gap-2">
+                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                w.status === 'zweryfikowane' 
+                                  ? 'bg-emerald-100 text-emerald-800' 
+                                  : w.status === 'walkower'
+                                  ? 'bg-purple-100 text-purple-900'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}>
+                                {w.status}
+                              </span>
+                              <button onClick={() => handleDeleteWyzwanie(w.id)} className="text-slate-400 hover:text-rose-600 p-1 text-xs">
+                                🗑️
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      {wyzwania.filter(w => w.status === 'zweryfikowane' || w.status === 'odrzucone' || w.status === 'walkower').length === 0 && (
+                        <tr><td colSpan={4} className="py-6 text-center text-slate-400 italic">Brak przeszłych wyzwań.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           )}
 
           {adminSubTab === 'odznaki' && (
@@ -2587,6 +3050,52 @@ export default function WyzwaniaPage() {
         </div>
       )}
 
+      {/* MODAL USTALANIA TERMINU WYZWANIA */}
+      {isDateModalOpen && selectedChallengeForDate && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-[2rem] max-w-sm w-full p-6 shadow-2xl space-y-4 border border-sky-100">
+            <h3 className="font-black text-sm text-slate-950 uppercase tracking-wider">
+              🗓️ Propozycja terminu pojedynku
+            </h3>
+            <p className="text-xs text-slate-500">
+              Dyscyplina: <b className="text-slate-800">{selectedChallengeForDate.dyscyplina}</b>
+            </p>
+
+            <form onSubmit={handleProposeDate} className="space-y-4">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
+                  Wybierz lub wpisz proponowany termin:
+                </label>
+                <input
+                  type="text"
+                  placeholder="np. Środa, 15 września o 18:00"
+                  value={proposedDateInput}
+                  onChange={(e) => setProposedDateInput(e.target.value)}
+                  className="w-full p-3 border border-sky-200 rounded-xl text-xs font-bold bg-white"
+                  required
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDateModalOpen(false)}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-xs cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-black py-3 rounded-xl text-xs cursor-pointer shadow-md"
+                >
+                  Wyślij propozycję
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL ZOOM */}
       {selectedBadgeForZoom && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -2673,7 +3182,8 @@ export default function WyzwaniaPage() {
               <li>Rzuć wyzwanie przeciwnikowi w aplikacji.</li>
               <li>Jeśli wyzwanie odbywa się na treningu, <b>trener potwierdza wynik</b> bezpośrednio w klubie.</li>
               <li>Jeśli wyzwanie to bieg/teren/żywienie, <b>musisz przedstawić dowód</b> (np. zrzut z zegarka lub raport dietetyczny).</li>
-              <li>Administrator po sprawdzeniu dowodów zatwierdza wyzwanie i przyznaje status "Zweryfikowane".</li>
+              <li>Po zaakceptowaniu wyzwania uczestnicy mają <b>30 dni na jego rozegranie</b> (brak rozstrzygnięcia skutkuje walkowerem).</li>
+              <li>Administrator po sprawdzeniu zatwierdza wyzwanie i przyznaje status "Zweryfikowane".</li>
             </ul>
             <button onClick={() => setIsInfoModalOpen(false)} className="w-full bg-slate-900 text-white font-bold py-3 rounded-2xl text-xs cursor-pointer">Rozumiem</button>
           </div>
