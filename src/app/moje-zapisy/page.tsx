@@ -25,17 +25,23 @@ export default function MojeZapisyPage() {
 
   // Ranking globalny, wyszukiwarki i zwijanie powyżej 10 osób
   const [allUsersAttendance, setAllUsersAttendance] = useState<any[]>([]);
+  const [allUsersAbsence, setAllUsersAbsence] = useState<any[]>([]);
+  
   const [rankingFilterMonth, setRankingFilterMonth] = useState(new Date().getMonth());
   const [rankingFilterQuarter, setRankingFilterQuarter] = useState<number>(Math.floor(new Date().getMonth() / 3) + 1);
   const [rankingFilterYear, setRankingFilterYear] = useState(new Date().getFullYear());
+  
   const [rankingSearchMonth, setRankingSearchMonth] = useState('');
   const [rankingSearchQuarter, setRankingSearchQuarter] = useState('');
   const [rankingSearchYear, setRankingSearchYear] = useState('');
   const [rankingSearchAllTime, setRankingSearchAllTime] = useState('');
+  const [rankingSearchAbsence, setRankingSearchAbsence] = useState('');
+
   const [showAllRankingMonth, setShowAllRankingMonth] = useState(false);
   const [showAllRankingQuarter, setShowAllRankingQuarter] = useState(false);
   const [showAllRankingYear, setShowAllRankingYear] = useState(false);
   const [showAllRankingAllTime, setShowAllRankingAllTime] = useState(false);
+  const [showAllRankingAbsence, setShowAllRankingAbsence] = useState(false);
 
   // Statystyki użytkownika
   const [statsMonth, setStatsMonth] = useState(new Date().getMonth());
@@ -274,6 +280,7 @@ export default function MojeZapisyPage() {
         }
       }
 
+      // Budowanie globalnego rankingu obecności O(1)
       const rankingMap: Record<string, any> = {};
       const seenAttendanceKeys = new Set<string>();
 
@@ -304,6 +311,38 @@ export default function MojeZapisyPage() {
       });
 
       setAllUsersAttendance(Object.values(rankingMap));
+
+      // Budowanie globalnego rankingu nieobecności O(1)
+      const absenceMap: Record<string, any> = {};
+      const seenAbsenceKeys = new Set<string>();
+
+      allRecords.forEach((r: any) => {
+        const isAbsent = r.nieobecny === true || r.nieobecny === 1 || String(r.nieobecny).toLowerCase() === 'true';
+        if (!isAbsent) return;
+
+        const kIdStr = String(r.klient_id);
+        const absenceKey = `${kIdStr}_${r.class_key || r.id}`;
+        if (seenAbsenceKeys.has(absenceKey)) return;
+        seenAbsenceKeys.add(absenceKey);
+
+        if (!absenceMap[kIdStr]) {
+          const client = clientMap.get(kIdStr);
+          const imie = client ? (client['Imię'] || client.Imię || client.firstName || '') : '';
+          const nazwisko = client ? (client['Nazwisko'] || client.Nazwisko || client.lastName || '') : '';
+          const fullName = `${imie} ${nazwisko}`.trim();
+
+          absenceMap[kIdStr] = {
+            id: kIdStr,
+            name: fullName || `Klubowicz ID: ${kIdStr}`,
+            records: []
+          };
+        }
+
+        const dateObj = parseDateFromClassKey(r.class_key);
+        absenceMap[kIdStr].records.push({ date: dateObj });
+      });
+
+      setAllUsersAbsence(Object.values(absenceMap));
 
     } catch (err) {
       console.error("Ogólny błąd loadData:", err);
@@ -513,10 +552,22 @@ export default function MojeZapisyPage() {
     return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
   }, [allUsersAttendance]);
 
+  const getGlobalAbsenceRankingAllTime = useCallback(() => {
+    const results: Record<string, number> = {};
+    allUsersAbsence.forEach(u => {
+      const validRecords = u.records;
+      if (validRecords.length > 0) {
+        results[u.name] = validRecords.length;
+      }
+    });
+    return Object.entries(results).sort((a: any, b: any) => b[1] - a[1]);
+  }, [allUsersAbsence]);
+
   const rankingMonthData = useMemo(() => getGlobalRanking(false, rankingFilterYear, rankingFilterMonth), [getGlobalRanking, rankingFilterYear, rankingFilterMonth]);
   const rankingQuarterData = useMemo(() => getGlobalRankingQuarter(rankingFilterYear, rankingFilterQuarter), [getGlobalRankingQuarter, rankingFilterYear, rankingFilterQuarter]);
   const rankingYearData = useMemo(() => getGlobalRanking(true, rankingFilterYear), [getGlobalRanking, rankingFilterYear]);
   const rankingAllTimeData = useMemo(() => getGlobalRankingAllTime(), [getGlobalRankingAllTime]);
+  const rankingAbsenceData = useMemo(() => getGlobalAbsenceRankingAllTime(), [getGlobalAbsenceRankingAllTime]);
 
   const filteredRankingMonth = useMemo(() => {
     const q = rankingSearchMonth.toLowerCase().trim();
@@ -538,12 +589,17 @@ export default function MojeZapisyPage() {
     return rankingAllTimeData.map(([name, count], idx) => ({ name, count, position: idx + 1 })).filter(item => item.name.toLowerCase().includes(q));
   }, [rankingAllTimeData, rankingSearchAllTime]);
 
+  const filteredRankingAbsence = useMemo(() => {
+    const q = rankingSearchAbsence.toLowerCase().trim();
+    return rankingAbsenceData.map(([name, count], idx) => ({ name, count, position: idx + 1 })).filter(item => item.name.toLowerCase().includes(q));
+  }, [rankingAbsenceData, rankingSearchAbsence]);
+
   if (isLoading) {
     return <div className="p-16 text-center text-slate-400 font-bold uppercase tracking-widest text-xs">Ładowanie panelu klubowicza...</div>;
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
+    <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
       {!isOnlyRanking && (
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
@@ -829,7 +885,7 @@ export default function MojeZapisyPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 items-start">
             
             {/* Tabela 1: Ranking Miesięczny */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
@@ -1053,7 +1109,7 @@ export default function MojeZapisyPage() {
               )}
             </div>
 
-            {/* Tabela 4: Ranking Ogólny */}
+            {/* Tabela 4: Ranking Ogólny (Wszech czasów) */}
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-4">
                 <div className="flex items-center gap-2">
@@ -1115,6 +1171,73 @@ export default function MojeZapisyPage() {
                     className="text-xs font-bold text-sky-600 hover:text-sky-800 transition-colors cursor-pointer uppercase tracking-wider"
                   >
                     {showAllRankingAllTime ? 'Zwiń ↑' : `Pokaż wszystkie (${filteredRankingAllTime.length}) ↓`}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Tabela 5: Ranking Nieobecności */}
+            <div className="bg-white border border-rose-200 rounded-2xl shadow-sm p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-rose-100 pb-4">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-sm text-rose-950 uppercase tracking-wider">❌ Nieobecności</h3>
+                  {filteredRankingAbsence.length > 10 && (
+                    <span className="bg-rose-100 text-rose-900 font-bold text-[10px] px-2 py-0.5 rounded-full">
+                      Razem: {filteredRankingAbsence.length}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider px-2 py-1 bg-rose-50 rounded-lg border border-rose-200">
+                  Zestawienie
+                </div>
+              </div>
+
+              <div>
+                <input 
+                  type="text"
+                  placeholder="🔍 Wyszukaj..."
+                  value={rankingSearchAbsence}
+                  onChange={(e) => setRankingSearchAbsence(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3.5 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div className="overflow-x-auto text-xs">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-3 w-12">#</th>
+                      <th className="py-3 px-3">Klubowicz</th>
+                      <th className="py-3 px-3 text-right">Nieobecności</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {filteredRankingAbsence.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-8 text-center text-slate-400">Brak nieobecności.</td>
+                      </tr>
+                    ) : (
+                      (showAllRankingAbsence ? filteredRankingAbsence : filteredRankingAbsence.slice(0, 10)).map((item: any, idx: number) => (
+                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-rose-50/80 font-bold' : ''}`}>
+                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                            {item.position === 1 ? '1.' : item.position === 2 ? '2.' : item.position === 3 ? '3.' : `${item.position}.`}
+                          </td>
+                          <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                          <td className="py-3.5 px-3 text-right font-black text-rose-600 text-sm">{item.count}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {filteredRankingAbsence.length > 10 && (
+                <div className="pt-2 border-t border-slate-100 text-center">
+                  <button
+                    onClick={() => setShowAllRankingAbsence(!showAllRankingAbsence)}
+                    className="text-xs font-bold text-rose-600 hover:text-rose-800 transition-colors cursor-pointer uppercase tracking-wider"
+                  >
+                    {showAllRankingAbsence ? 'Zwiń ↑' : `Pokaż wszystkie (${filteredRankingAbsence.length}) ↓`}
                   </button>
                 </div>
               )}
