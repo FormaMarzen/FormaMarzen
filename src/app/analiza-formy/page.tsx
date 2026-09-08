@@ -169,6 +169,38 @@ export const extractPdfFiles = (b?: BadaniaKrwiWpis | null): BadaniaKrwiPlik[] =
   return [];
 };
 
+// Bezpieczne pobieranie podpisanych adresów URL (Signed URLs) z prywatnego folderu Supabase Storage
+export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> => {
+  if (!rawUrlOrPath) return '';
+  if (rawUrlOrPath.startsWith('blob:') || rawUrlOrPath.startsWith('data:')) return rawUrlOrPath;
+
+  try {
+    let filePath = rawUrlOrPath;
+    if (filePath.includes('/badania/')) {
+      filePath = filePath.split('/badania/')[1].split('?')[0];
+    } else if (filePath.startsWith('http')) {
+      const urlObj = new URL(filePath);
+      const parts = urlObj.pathname.split('/');
+      const bIndex = parts.indexOf('badania');
+      if (bIndex !== -1 && bIndex < parts.length - 1) {
+        filePath = parts.slice(bIndex + 1).join('/');
+      }
+    }
+    filePath = decodeURIComponent(filePath);
+
+    const { data, error } = await supabase.storage
+      .from('badania')
+      .createSignedUrl(filePath, 3600);
+
+    if (data?.signedUrl) {
+      return data.signedUrl;
+    }
+  } catch (err) {
+    console.error("Błąd generowania bezpiecznego URL:", err);
+  }
+  return rawUrlOrPath;
+};
+
 const calculateAge = (birthDateString?: string | null): number | null => {
   if (!birthDateString) return null;
   const birth = new Date(birthDateString);
@@ -266,12 +298,13 @@ export default function AnalizaFormyPage() {
 
   // Stany Badania Krwi
   const [badaniaList, setBadaniaList] = useState<BadaniaKrwiWpis[]>([]);
+  const [allPendingBloodTestsCount, setAllPendingBloodTestsCount] = useState<number>(0);
   const [selectedBadanieDetail, setSelectedBadanieDetail] = useState<BadaniaKrwiWpis | null>(null);
   const [isBadaniaModalOpen, setIsBadaniaModalOpen] = useState<boolean>(false);
   const [isDetailViewOpen, setIsDetailViewOpen] = useState<boolean>(false);
   const [editingBadanieId, setEditingBadanieId] = useState<number | null>(null);
 
-  // Stan własnych tabel badań krwi klubowicza (max 15 tabel)
+  // Stan własnych tabel badań krwi klubowicza (max 15 tabel z możliwością zmiany kolejności)
   const [wlasneTabeleBadan, setWlasneTabeleBadan] = useState<WlasnaTabelaBadan[]>([]);
   const [isAddTabelaModalOpen, setIsAddTabelaModalOpen] = useState<boolean>(false);
   const [newTabelaNazwa, setNewTabelaNazwa] = useState<string>('');
@@ -382,6 +415,12 @@ export default function AnalizaFormyPage() {
     return badaniaList.some(b => b.nowa_interpretacja === true);
   }, [badaniaList]);
 
+  // Wskaźnik dla administratora: czerwona migająca kropka, gdy klubowicz dodał badania oczekujące na analizę
+  const hasPendingBloodTestsForAdmin = useMemo(() => {
+    if (appRole !== 'admin' && appRole !== 'trener') return false;
+    return allPendingBloodTestsCount > 0;
+  }, [appRole, allPendingBloodTestsCount]);
+
   const markChallengeAsRead = (edycjaId?: number | null) => {
     if (typeof window === 'undefined') return;
     const targetId = edycjaId || selectedEdycjaId;
@@ -418,6 +457,69 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // Automatyczne sprawdzanie i wysyłanie wiadomości powiadomień na 10 i 5 dni przed końcem wyzwania
+  const checkAndSendRedukcjaAlerts = async (edycje: RedukcjaEdycja[]) => {
+    try {
+      const activeEdycje = edycje.filter(e => e.status === 'aktywne');
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      for (const ed of activeEdycje) {
+        if (!ed.data_koniec) continue;
+        const endDate = new Date(ed.data_koniec);
+        endDate.setHours(0, 0, 0, 0);
+
+        const diffTime = endDate.getTime() - today.getTime();
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 10 || diffDays === 5) {
+          const alertKey = `redukcja_alert_${ed.id}_${diffDays}d_sent`;
+          if (typeof window !== 'undefined' && localStorage.getItem(alertKey)) {
+            continue;
+          }
+
+          const { data: partData } = await supabase
+            .from('klub_redukcja_uczestnicy')
+            .select('klient_id')
+            .eq('edycja_id', ed.id);
+
+          if (partData && partData.length > 0) {
+            const notifications = partData.map(p => ({
+              klient_id: p.klient_id,
+              tytul: `Wyzwanie Redukcji: Zostało ${diffDays} dni!`,
+              tresc: `Przypomnienie: Do wielkiego finału wyzwania "${ed.nazwa}" pozostało już tylko ${diffDays} dni! Umów się z trenerem na wykonanie finałowego pomiaru na analizatorze.`,
+              przeczytane: false
+            }));
+
+            await supabase.from('powiadomienia').insert(notifications);
+          }
+
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(alertKey, 'true');
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Błąd procedury powiadomień redukcji:", err);
+    }
+  };
+
+  // Ładowanie liczby oczekujących badań krwi dla administratora
+  const checkAdminPendingBloodTests = async () => {
+    try {
+      const { count, error } = await supabase
+        .from('klub_badania_krwi')
+        .select('*', { count: 'exact', head: true })
+        .or('interpretacja.is.null,interpretacja.eq.""');
+
+      if (!error && count !== null) {
+        setAllPendingBloodTestsCount(count);
+      }
+    } catch (err) {
+      console.warn("Nie udało się pobrać licznika oczekujących badań:", err);
+    }
+  };
+
   // Ładowanie i synchronizacja własnych tabel badań krwi z bazy
   const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
     try {
@@ -431,7 +533,6 @@ export default function AnalizaFormyPage() {
       if (data && data.dane_tabel && Array.isArray(data.dane_tabel)) {
         setWlasneTabeleBadan(data.dane_tabel as WlasnaTabelaBadan[]);
       } else {
-        // Fallback localStorage dla kompatybilności
         if (typeof window !== 'undefined') {
           const cached = localStorage.getItem(tKey);
           if (cached) {
@@ -446,7 +547,7 @@ export default function AnalizaFormyPage() {
         }
       }
     } catch (err) {
-      console.warn("Własne tabele badań: tryb offline/fallback:", err);
+      console.warn("Własne tabele badań: tryb fallback:", err);
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
       if (typeof window !== 'undefined') {
         const cached = localStorage.getItem(tKey);
@@ -496,6 +597,7 @@ export default function AnalizaFormyPage() {
         setBadaniaList([]);
       }
       await fetchWlasneTabele(klientId, email);
+      await checkAdminPendingBloodTests();
     } catch (err) {
       console.error("Błąd pobierania badań krwi:", err);
       setBadaniaList([]);
@@ -513,10 +615,27 @@ export default function AnalizaFormyPage() {
           setBadaniaList(prev => prev.map(b => ({ ...b, nowa_interpretacja: false })));
         }
       }
+      await checkAdminPendingBloodTests();
     } catch (err) {
       console.error("Błąd oznaczania odczytania interpretacji:", err);
     }
   };
+
+  // Wskaźnik dla administratora: zakończone wyzwanie oczekujące na oficjalne podliczenie i rozdanie nagród
+  const hasFinishedChallengeAwaitingTally = useMemo(() => {
+    if (appRole !== 'admin') return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return edycjeRedukcji.some(e => {
+      if (e.status === 'aktywne' && e.data_koniec) {
+        const end = new Date(e.data_koniec);
+        end.setHours(0, 0, 0, 0);
+        return today > end;
+      }
+      return false;
+    });
+  }, [edycjeRedukcji, appRole]);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -601,6 +720,8 @@ export default function AnalizaFormyPage() {
         );
         setEdycjeRedukcji(sorted);
         
+        await checkAndSendRedukcjaAlerts(sorted);
+
         const activeEdycje = sorted.filter((e: any) => e.status === 'aktywne' || e.status === 'zapisy');
         
         if (activeEdycje.length > 0) {
@@ -801,6 +922,13 @@ export default function AnalizaFormyPage() {
     });
   };
 
+  // Bezpieczne otwieranie plików prywatnych (PDF/zdjęcia)
+  const handleOpenSecureFile = async (rawUrl: string) => {
+    if (!rawUrl) return;
+    const secureUrl = await getSecureFileUrl(rawUrl);
+    window.open(secureUrl, '_blank', 'noopener,noreferrer');
+  };
+
   // --- OBSŁUGA BADAŃ KRWI ---
   const handleOpenNewBadanieModal = () => {
     setEditingBadanieId(null);
@@ -849,6 +977,7 @@ export default function AnalizaFormyPage() {
           setIsDetailViewOpen(false);
           setSelectedBadanieDetail(null);
         }
+        await checkAdminPendingBloodTests();
         alert("Wpis badań krwi został usunięty.");
       } else {
         alert("Błąd podczas usuwania: " + error.message);
@@ -858,7 +987,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF JEDNOCZEŚNIE (Pewny Public URL)
+  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF JEDNOCZEŚNIE DO PRYWATNEGO STORAGE
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -883,18 +1012,15 @@ export default function AnalizaFormyPage() {
           .from('badania')
           .upload(fileName, file, { upsert: true, contentType: 'application/pdf' });
 
-        let publicUrl = '';
-        if (!uploadErr && uploadData) {
-          const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
-          publicUrl = urlData.publicUrl;
-        } else {
-          // W przypadku błędu uprawnień spróbuj wygenerować signed URL na 1 rok
-          const { data: signedData } = await supabase.storage.from('badania').createSignedUrl(fileName, 31536000);
-          publicUrl = signedData?.signedUrl || URL.createObjectURL(file);
+        if (uploadErr) {
+          console.error("Błąd zapisu pliku PDF w storage:", uploadErr);
         }
 
+        // Zapisujemy stałą ścieżkę do bucketa – podpisany URL generowany jest dynamicznie w locie
+        const storedPath = fileName;
+
         uploadedPdfs.push({
-          url: publicUrl,
+          url: storedPath,
           nazwa: file.name
         });
       }
@@ -928,7 +1054,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // OBSŁUGA ZDJĘĆ / SKANÓW (Trwały zapis w bazie i storage)
+  // OBSŁUGA ZDJĘĆ / SKANÓW (Trwały zapis w prywatnym buckecie)
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -942,17 +1068,15 @@ export default function AnalizaFormyPage() {
         const file = files[i];
         const ext = file.name.split('.').pop() || 'jpg';
         const fileName = `skan_${tKlientId}_${Date.now()}_${i}.${ext}`;
-        const { data: uploadData, error: uploadErr } = await supabase.storage
+        const { error: uploadErr } = await supabase.storage
           .from('badania')
           .upload(fileName, file, { upsert: true });
 
-        if (!uploadErr && uploadData) {
-          const { data: urlData } = supabase.storage.from('badania').getPublicUrl(fileName);
-          newUrls.push(urlData.publicUrl);
+        if (!uploadErr) {
+          newUrls.push(fileName);
         } else {
-          // Fallback signed URL
-          const { data: sData } = await supabase.storage.from('badania').createSignedUrl(fileName, 31536000);
-          newUrls.push(sData?.signedUrl || URL.createObjectURL(file));
+          console.error("Błąd uploadu zdjęcia:", uploadErr);
+          newUrls.push(URL.createObjectURL(file));
         }
       }
 
@@ -1110,6 +1234,26 @@ export default function AnalizaFormyPage() {
     await saveWlasneTabeleDoBazy(updated);
   };
 
+  // Zmiana kolejności tabel w górę
+  const handleMoveTableUp = async (index: number) => {
+    if (index <= 0) return;
+    const updated = [...wlasneTabeleBadan];
+    const item = updated[index];
+    updated.splice(index, 1);
+    updated.splice(index - 1, 0, item);
+    await saveWlasneTabeleDoBazy(updated);
+  };
+
+  // Zmiana kolejności tabel w dół
+  const handleMoveTableDown = async (index: number) => {
+    if (index >= wlasneTabeleBadan.length - 1) return;
+    const updated = [...wlasneTabeleBadan];
+    const item = updated[index];
+    updated.splice(index, 1);
+    updated.splice(index + 1, 0, item);
+    await saveWlasneTabeleDoBazy(updated);
+  };
+
   const handleAddMeasurementToTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tabelaDoWpisuModal || !wpisBadaniaForm.wynik) return;
@@ -1149,8 +1293,11 @@ export default function AnalizaFormyPage() {
     });
   };
 
+  // Usunięcie wyniku z tabeli z obowiązkowym potwierdzeniem
   const handleDeleteMeasurementFromTable = async (tableId: string, wpisId: string) => {
-    if (!confirm("Czy na pewno chcesz usunąć ten wynik z tabeli?")) return;
+    const isConfirmed = confirm("Czy na pewno chcesz usunąć ten wynik z tabeli?");
+    if (!isConfirmed) return;
+
     const updated = wlasneTabeleBadan.map(t => {
       if (t.id === tableId) {
         return { ...t, wpisy: t.wpisy.filter(w => w.id !== wpisId) };
@@ -1433,7 +1580,6 @@ export default function AnalizaFormyPage() {
       setIsProcessingPayment(false);
     }
   };
-
   const handleConfirmJoinWithPayment = async () => {
     const kId = selectedKlient?.id || currentUserId;
     if (!kId || !selectedEdycjaId) {
@@ -2040,6 +2186,7 @@ export default function AnalizaFormyPage() {
       </tr>
     );
   };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 font-sans antialiased">
       
@@ -2140,7 +2287,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK GŁÓWNYCH */}
+      {/* PASEK ZAKŁADEK GŁÓWNYCH Z KROPKAMI ALARMOWYMI */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -2176,7 +2323,15 @@ export default function AnalizaFormyPage() {
           <span>🔥</span> 
           <span>3. Redukcja</span>
 
-          {hasUnreadChallenge && (
+          {/* Czerwona kropka z wykrzyknikiem dla administratora po zakończeniu wyzwania */}
+          {appRole === 'admin' && hasFinishedChallengeAwaitingTally ? (
+            <span className="relative flex h-4 w-4 ml-1" title="Termin wyzwania upłynął! Podlicz wyniki i przydziel nagrody.">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                !
+              </span>
+            </span>
+          ) : hasUnreadChallenge && (
             <span className="relative flex h-4 w-4 ml-1">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
@@ -2199,7 +2354,15 @@ export default function AnalizaFormyPage() {
           <span>🩸</span> 
           <span>4. Badania Krwi</span>
 
-          {hasUnreadInterpretation && (
+          {/* Czerwona migająca kropka dla administratora o nowych badaniach do analizy */}
+          {(appRole === 'admin' || appRole === 'trener') && hasPendingBloodTestsForAdmin ? (
+            <span className="relative flex h-4 w-4 ml-1" title={`Nowe badania oczekujące na analizę: ${allPendingBloodTestsCount}`}>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                {allPendingBloodTestsCount}
+              </span>
+            </span>
+          ) : hasUnreadInterpretation && (
             <span className="relative flex h-4 w-4 ml-1">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
@@ -3517,8 +3680,7 @@ export default function AnalizaFormyPage() {
 
         </div>
       )}
-
-      {/* ZAKŁADKA 4: BADANIA KRWI (Z POD-KARTAMI: DOKUMENTY ORAZ WŁASNE TABELE) */}
+      {/* ZAKŁADKA 4: BADANIA KRWI (POD-KARTY: DOKUMENTY ORAZ WŁASNE TABELE) */}
       {activeTab === 'badania' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
 
@@ -3623,17 +3785,16 @@ export default function AnalizaFormyPage() {
                                 {pdfList.length > 0 ? (
                                   <div className="space-y-1.5 max-w-[220px]">
                                     {pdfList.map((pdf, pIdx) => (
-                                      <a
+                                      <button
                                         key={pIdx}
-                                        href={pdf.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors"
+                                        type="button"
+                                        onClick={() => handleOpenSecureFile(pdf.url)}
+                                        className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors cursor-pointer text-left w-full"
                                         title={pdf.nazwa}
                                       >
                                         <span className="shrink-0">📄</span>
                                         <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
-                                      </a>
+                                      </button>
                                     ))}
                                   </div>
                                 ) : (
@@ -3710,7 +3871,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* POD-KARTA 2: WŁASNE TABELE KLUBOWICZA (MAX 15 TABEL + WYKRES 5 LAT + ZWIJANIE POWYŻEJ 3 WPISÓW) */}
+          {/* POD-KARTA 2: WŁASNE TABELE KLUBOWICZA (MAX 15 TABEL, ZMIANA KOLEJNOŚCI, WYKRES 5 LAT, ZWIJANIE POWYŻEJ 3 WPISÓW) */}
           {activeBadaniaSubTab === 'wlasne_tabele' && (
             <div className="space-y-6">
               <div className="bg-gradient-to-r from-sky-900 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -3719,7 +3880,7 @@ export default function AnalizaFormyPage() {
                     <span>📊</span> Własne Karty Wskaźników Krwi i Wykresy (5 Lat)
                   </h3>
                   <p className="text-xs text-sky-200 mt-1">
-                    Możesz dodać do 15 tabel dla konkretnych badań (np. Witamina D3, Morfologia, Glukoza, TSH). Do każdej tabeli automatycznie generowany jest wykres liniowy.
+                    Możesz dodać do 15 tabel dla konkretnych parametrów (np. Witamina D3, Ferrytyna, Morfologia, TSH). Możesz zmieniać kolejność tabel strzałkami.
                   </p>
                 </div>
                 <button
@@ -3733,7 +3894,7 @@ export default function AnalizaFormyPage() {
 
               {wlasneTabeleBadan.length > 0 ? (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {wlasneTabeleBadan.map((tab) => {
+                  {wlasneTabeleBadan.map((tab, tIdx) => {
                     const isExpanded = !!expandedTableHistory[tab.id];
                     const displayedWpisy = isExpanded ? tab.wpisy : tab.wpisy.slice(0, 3);
                     const hasMore = tab.wpisy.length > 3;
@@ -3741,9 +3902,31 @@ export default function AnalizaFormyPage() {
                     return (
                       <div key={tab.id} className="bg-white rounded-3xl border border-sky-200 shadow-sm p-5 space-y-4 flex flex-col justify-between">
                         <div>
-                          {/* GŁÓWKA POJEDYNCZEJ TABELI */}
-                          <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                          {/* GŁÓWKA POJEDYNCZEJ TABELI ZE ZMIANĄ KOLEJNOŚCI */}
+                          <div className="flex items-center justify-between border-b border-sky-100 pb-3 gap-2">
                             <div className="flex items-center gap-2">
+                              {/* PRZYCISKI ZMIANY KOLEJNOŚCI GÓRA / DÓŁ */}
+                              <div className="flex flex-col gap-0.5">
+                                <button
+                                  type="button"
+                                  disabled={tIdx === 0}
+                                  onClick={() => handleMoveTableUp(tIdx)}
+                                  className="w-5 h-5 rounded bg-sky-50 hover:bg-sky-100 text-sky-900 font-black text-[10px] flex items-center justify-center border border-sky-200 disabled:opacity-20 cursor-pointer"
+                                  title="Przesuń tabelę wyżej"
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={tIdx === wlasneTabeleBadan.length - 1}
+                                  onClick={() => handleMoveTableDown(tIdx)}
+                                  className="w-5 h-5 rounded bg-sky-50 hover:bg-sky-100 text-sky-900 font-black text-[10px] flex items-center justify-center border border-sky-200 disabled:opacity-20 cursor-pointer"
+                                  title="Przesuń tabelę niżej"
+                                >
+                                  ▼
+                                </button>
+                              </div>
+
                               <span className="text-xl">🩸</span>
                               <div>
                                 <h4 className="font-black text-sm uppercase tracking-wider text-sky-950">
@@ -3754,6 +3937,7 @@ export default function AnalizaFormyPage() {
                                 </span>
                               </div>
                             </div>
+
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={() => {
@@ -3805,9 +3989,10 @@ export default function AnalizaFormyPage() {
                                     </td>
                                     <td className="py-2.5 text-right">
                                       <button
+                                        type="button"
                                         onClick={() => handleDeleteMeasurementFromTable(tab.id, w.id)}
                                         className="text-rose-500 hover:text-rose-700 font-bold text-xs p-1 cursor-pointer"
-                                        title="Usuń ten wynik"
+                                        title="Usuń ten wynik (wymaga potwierdzenia)"
                                       >
                                         ✕
                                       </button>
@@ -4053,14 +4238,13 @@ export default function AnalizaFormyPage() {
                           <span className="font-bold text-slate-900 truncate text-xs">{fileItem.nazwa || `Dokument_${fIdx + 1}.pdf`}</span>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <a
-                            href={fileItem.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[11px] font-bold text-sky-700 hover:underline px-2 py-1 bg-white rounded border border-sky-200"
+                          <button
+                            type="button"
+                            onClick={() => handleOpenSecureFile(fileItem.url)}
+                            className="text-[11px] font-bold text-sky-700 hover:underline px-2 py-1 bg-white rounded border border-sky-200 cursor-pointer"
                           >
                             Podgląd ↗
-                          </a>
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleRemovePdfFile(fIdx)}
@@ -4382,14 +4566,13 @@ export default function AnalizaFormyPage() {
                             <span className="text-base text-amber-600">📄</span>
                             <span className="text-xs font-black text-sky-950 truncate">{p.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
                           </div>
-                          <a
-                            href={p.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            type="button"
+                            onClick={() => handleOpenSecureFile(p.url)}
                             className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] px-3 py-1.5 rounded-lg transition-all shadow-xs cursor-pointer shrink-0"
                           >
                             Otwórz PDF ↗
-                          </a>
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -4420,7 +4603,10 @@ export default function AnalizaFormyPage() {
                   {selectedBadanieDetail.zdjecia?.map((imgUrl, idx) => (
                     <div
                       key={idx}
-                      onClick={() => setEnlargedImage(imgUrl)}
+                      onClick={async () => {
+                        const secUrl = await getSecureFileUrl(imgUrl);
+                        setEnlargedImage(secUrl);
+                      }}
                       className="aspect-square rounded-2xl overflow-hidden border border-sky-200 bg-slate-100 cursor-pointer hover:scale-105 transition-transform relative group shadow-xs"
                     >
                       <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
@@ -4774,8 +4960,7 @@ export default function AnalizaFormyPage() {
                   value={nagrodaFormData.tytul}
                   onChange={(e) => setNagrodaFormData({...nagrodaFormData, tytul: e.target.value})}
                   className="w-full p-3 border rounded-xl font-bold bg-white"
-                >
-                </input>
+                />
               </div>
 
               <div>
