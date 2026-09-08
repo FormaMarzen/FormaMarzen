@@ -42,6 +42,24 @@ const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | 
   return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+// KALKULATOR PRZEDŁUŻANIA UMÓW DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
+const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
+  const today = new Date();
+  let base = today;
+  if (baseDateStr && baseDateStr !== '-') {
+    const [y, m, d] = baseDateStr.split('-').map(Number);
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+      const parsed = new Date(y, m - 1, d);
+      if (parsed > today) base = parsed;
+    }
+  }
+  const targetYear = base.getFullYear();
+  const targetMonth = base.getMonth() + 1; // kolejny miesiąc kalendarzowy (1-indexed)
+  const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const resMonth = String(targetMonth + 1).padStart(2, '0');
+  return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
+};
+
 // KULOODPORNY KALKULATOR PRZEDŁUŻANIA KARNETU Z PRAWDZIWEGO KALENDARZA
 const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): string => {
   const today = new Date().toISOString().split('T')[0];
@@ -103,7 +121,7 @@ const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): 
   }
 };
 
-// KULOODPORNY PARSER DAT Z CLASS_KEY (OBSŁUGUJE 7_07/09, 7_07/09/2026, 7_2026-09-07)
+// KULOODPORNY PARSER DAT Z CLASS_KEY
 const parseDateFromClassKey = (classKey: string): Date => {
   const parts = classKey ? String(classKey).split('_') : [];
   const datePart = parts[1] || '';
@@ -139,7 +157,6 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
-// KULOODPORNY PARSER DAT STRING
 const parseClassDate = (dateStr: string): number => {
   if (!dateStr) return 0;
   let d = String(dateStr).trim();
@@ -202,7 +219,6 @@ const normalizeClassSignature = (dateStr: string, titleStr: string): string => {
   return `${day}_${cleanTitle}`;
 };
 
-// Kalkulacja czasu trwania treningu
 const calculateDuration = (start: string, end: string) => {
   if (!start || !end) return "60 min";
   try {
@@ -214,7 +230,6 @@ const calculateDuration = (start: string, end: string) => {
   return "60 min";
 };
 
-// Formatowanie daty i czasu treningu
 const formatDisplayClassDate = (dateRaw: string, timeRaw: string = '') => {
   if (!dateRaw) return { display: '-', sortTime: 0 };
   const rawCombined = `${dateRaw} ${timeRaw}`.trim();
@@ -233,7 +248,6 @@ const formatDisplayClassDate = (dateRaw: string, timeRaw: string = '') => {
   return { display: rawCombined, sortTime: 0 };
 };
 
-// OMIJANIE LIMITU 1000 WIERSZY W SUPABASE
 const fetchAllFromSupabase = async (
   table: string,
   orderBy: string = 'id',
@@ -265,7 +279,6 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
-// KULOODPORNY RESOLVER ZAJĘĆ Z GRAFIKU STAŁEGO I JEDNORAZOWYCH
 const findClassDetailsInGrafik = (
   classKey: string,
   grafikList: any[],
@@ -325,7 +338,6 @@ const findClassDetailsInGrafik = (
   };
 };
 
-// KULOODPORNY PARSER AUTORSTWA AKCJI I RUCHÓW AUDYTOWYCH
 const resolveAuthorAndMovementDetails = (
   clientId: number | string,
   classKey: string,
@@ -464,7 +476,6 @@ export default function KlienciPage() {
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
   const [zespolTrenerzy, setZespolTrenerzy] = useState<any[]>([]);
 
-  // Dane grafiku i zapisów
   const [zapisaneZajecia, setZapisaneZajecia] = useState<any[]>([]);
   const [jednorazoweZajecia, setJednorazoweZajecia] = useState<any[]>([]);
   const [nadpisaneZajeciaDni, setNadpisaneZajeciaDni] = useState<{ [key: string]: any }>({});
@@ -479,7 +490,6 @@ export default function KlienciPage() {
   const [profileClient, setProfileClient] = useState<any | null>(null);
   const [tableActionClient, setTableActionClient] = useState<any | null>(null);
   
-  // Stan pływającego menu 3 kropek
   const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
   const [actionMenuPos, setActionMenuPos] = useState<{ top: number; right: number; client: any } | null>(null);
 
@@ -495,7 +505,6 @@ export default function KlienciPage() {
   const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 4 Zakładki Aktywności Klubowicza
   const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'historia_zajec' | 'ruchy' | 'zawieszenia'>('nadchodzace');
 
   const [isWalletHistoryOpen, setIsWalletHistoryOpen] = useState(false);
@@ -503,7 +512,6 @@ export default function KlienciPage() {
   const [walletAmountInput, setWalletAmountInput] = useState('');
   const [walletReasonInput, setWalletReasonInput] = useState('');
 
-  // Stany dla zawieszeń i blokad
   const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
   const [suspendPassTarget, setSuspendPassTarget] = useState<any | null>(null);
   const [suspendStartDate, setSuspendStartDate] = useState(todayStr);
@@ -526,13 +534,11 @@ export default function KlienciPage() {
   const [newPassCustomSuspensionDays, setNewPassCustomSuspensionDays] = useState('30');
   const [newPassCustomPrice, setNewPassCustomPrice] = useState('');
 
-  // Stany rabatów
   const [isEditingDiscount, setIsEditingDiscount] = useState(false);
   const [discountInput, setDiscountInput] = useState('');
   const [isEditingSystemDiscount, setIsEditingSystemDiscount] = useState(false);
   const [systemDiscountInput, setSystemDiscountInput] = useState('');
 
-  // Historia kupionych karnetów
   const [isPassHistoryOpen, setIsPassHistoryOpen] = useState(false);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -701,10 +707,10 @@ export default function KlienciPage() {
 
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
+        // Zwiększenie puli bez sztucznego obcinania limitem początkowym
         updatedKarnety[passIndex] = {
           ...updatedKarnety[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+          pozostaloWejsc: currentRemaining + cancelledCount
         };
         await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
       }
@@ -712,7 +718,7 @@ export default function KlienciPage() {
       await supabase.from('transakcje').insert([{
         klient_id: klientId,
         typ_operacji: 'zajecia_wypis',
-        opis: `Wypisanie przez klub: automatycznie anulowano ${cancelledCount} przyszłych rezerwacji z powodu blokady konta (${powodBlokadyText}). Zwrócono ${cancelledCount} wejść.`
+        opis: `Wypisanie przez klub: automatycznie anulowano ${cancelledCount} przyszłych rezerwacji z powodu blokady konta (${powodBlokadyText}). Zwrócono ${cancelledCount} wejść do puli.`
       }]);
     }
   };
@@ -756,10 +762,9 @@ export default function KlienciPage() {
 
         if (passIndex !== -1) {
           const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-          const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
           updatedKarnety[passIndex] = {
             ...updatedKarnety[passIndex],
-            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+            pozostaloWejsc: currentRemaining + cancelledCount
           };
           await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
         }
@@ -768,7 +773,7 @@ export default function KlienciPage() {
       await supabase.from('transakcje').insert([{
         klient_id: klientId,
         typ_operacji: 'zajecia_wypis',
-        opis: `Wypisanie przez klub: automatycznie anulowano ${cancelledCount} przyszłych rezerwacji z powodu zawieszenia karnetu ${nazwaKarnetu}. Zwrócono ${cancelledCount} wejść.`
+        opis: `Wypisanie przez klub: automatycznie anulowano ${cancelledCount} przyszłych rezerwacji z powodu zawieszenia karnetu ${nazwaKarnetu}. Zwrócono ${cancelledCount} wejść do puli.`
       }]);
     }
   };
@@ -780,13 +785,13 @@ export default function KlienciPage() {
 
     let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
     if (zwrocicWejscie) {
+      // Zwracamy wejście na aktualny aktywny karnet ilościowy (zwiększając pulę)
       const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
         const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
-        const poczatkowe = parseInt(karnetyZaktualizowane[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
         karnetyZaktualizowane[passIndex] = {
           ...karnetyZaktualizowane[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+          pozostaloWejsc: currentRemaining + 1
         };
       }
     }
@@ -841,7 +846,7 @@ export default function KlienciPage() {
       typ_operacji: 'zajecia_wypis',
       kwota: null,
       class_key: zajecieItem.classKey || null,
-      opis: `${profileClient.firstName} ${profileClient.lastName} - Wypisanie z treningu przez klub: ${sessionName} (${sessionDate}).${zwrocicWejscie ? ' Zwrócono 1 wejście.' : ''}`
+      opis: `${profileClient.firstName} ${profileClient.lastName} - Wypisanie z treningu przez klub: ${sessionName} (${sessionDate}).${zwrocicWejscie ? ' Zwrócono 1 wejście do puli.' : ''}`
     }]);
 
     await loadData(profileClient.id);
@@ -861,10 +866,9 @@ export default function KlienciPage() {
       const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
         const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
-        const poczatkowe = parseInt(karnetyZaktualizowane[passIndex].poczatkoweWejsc || currentRemaining + upcomingItems.length, 10);
         karnetyZaktualizowane[passIndex] = {
           ...karnetyZaktualizowane[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + upcomingItems.length)
+          pozostaloWejsc: currentRemaining + upcomingItems.length
         };
       }
     }
@@ -910,13 +914,12 @@ export default function KlienciPage() {
       klient_id: profileClient.id,
       typ_operacji: 'zajecia_wypis',
       kwota: null,
-      opis: `${profileClient.firstName} ${profileClient.lastName} - Masowe wypisanie ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów) przez klub.${zwrocicWejscia ? ` Zwrócono ${upcomingItems.length} wejść.` : ''}`
+      opis: `${profileClient.firstName} ${profileClient.lastName} - Masowe wypisanie ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów) przez klub.${zwrocicWejscia ? ` Zwrócono ${upcomingItems.length} wejść do puli.` : ''}`
     }]);
 
     alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
     await loadData(profileClient.id);
   };
-
   const loadData = async (specificClientId?: number) => {
     const [
       klienciData,
@@ -979,6 +982,7 @@ export default function KlienciPage() {
 
     if (klienciData) {
       const todayDate = new Date();
+      const todayDateOnly = todayDate.toISOString().split('T')[0];
       const yesterday = new Date(todayDate);
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
@@ -1018,6 +1022,23 @@ export default function KlienciPage() {
               karnetyZmienione = true;
             }
           }
+
+          // AUTOMATYCZNE SPRAWDZANIE WEJŚĆ: 1 DZIEŃ ZAPASU DLA CIĄGŁOŚCI PO WYKORZYSTANIU OSTATNIEGO WEJŚCIA
+          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+            const tomorrowDate = new Date();
+            tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+            const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+
+            if (!k.zeroEntriesGraceUntil) {
+              karnetyZmienione = true;
+              k.zeroEntriesGraceUntil = tomorrowStr;
+              if (!k.waznyDo || k.waznyDo < tomorrowStr) {
+                k.waznyDo = tomorrowStr;
+              }
+              k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+            }
+          }
+
           return k;
         });
 
@@ -1026,7 +1047,8 @@ export default function KlienciPage() {
         let finalKarnety = [];
 
         for (const k of parsedKarnety) {
-          if (k.waznyDo && k.waznyDo < yesterdayStr && !k.isContract12M) {
+          const isZeroGraceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly;
+          if ((k.waznyDo && k.waznyDo < yesterdayStr && !k.isContract12M) || isZeroGraceExpired) {
             hasChanges = true;
           } else {
             finalKarnety.push(k);
@@ -1244,7 +1266,16 @@ export default function KlienciPage() {
       const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
       const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
       
-      dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+      if (isContract) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
+        const lastDay = new Date(year, month, 0).getDate();
+        initialUmowaOplaconaDo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        dataWygasnieciaStr = initialUmowaOplaconaDo;
+      } else {
+        dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+      }
 
       if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
         cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
@@ -1257,12 +1288,6 @@ export default function KlienciPage() {
       try { metaDef = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
       const initialWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaDef.ilosc_wejsc || metaDef.iloscTreningow || null) : null);
       const parsedInitialWejscia = initialWejsciaVal !== null ? parseInt(initialWejsciaVal, 10) : null;
-
-      if (isContract) {
-        const now = new Date();
-        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        initialUmowaOplaconaDo = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
-      }
 
       poczatkoweKarnety.push({
         id: Date.now(),
@@ -1361,7 +1386,6 @@ export default function KlienciPage() {
     loadData();
   };
 
-  // KULOODPORNA EDYCJA DANYCH KONTA
   const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient) return;
@@ -1497,7 +1521,7 @@ export default function KlienciPage() {
     reader.readAsDataURL(file);
   };
 
-  // PRZEDŁUŻENIE KARNETU (KALKULACJA KALENDARZOWA + RATY + ZABEZPIECZENIE PORTFELA)
+  // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget) return;
 
@@ -1518,19 +1542,25 @@ export default function KlienciPage() {
     const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
     const kwotaKarnetu = cenaPoRabacie;
 
+    // ZAWSZE DO KOŃCA MIESIĄCA KALENDARZOWEGO DLA UMÓW 12M
+    let targetExpiryDate = extendNewDate;
+    if (isContract) {
+      targetExpiryDate = getContractEndOfMonthDate(extendPassTarget.waznyDo);
+    }
+
     let nowyStanStr = profileClient.wallet;
     let logKwota = 0;
-    let logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Zapłacono z góry / Gotówka)`;
+    let logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Zapłacono z góry / Gotówka)`;
 
     if (paymentMethod === 'later' && kwotaKarnetu > 0) {
       const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
       const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
       nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       logKwota = -kwotaKarnetu;
-      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Obciążenie portfela - do zapłaty)`;
+      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Obciążenie portfela - do zapłaty)`;
     } else if (kwotaKarnetu === 0) {
       logKwota = 0;
-      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${extendNewDate} (Karnet 0.00 PLN - portfel bez zmian)`;
+      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Karnet 0.00 PLN - portfel bez zmian)`;
     }
 
     let znizkaTekst = '';
@@ -1557,14 +1587,15 @@ export default function KlienciPage() {
         return {
           ...k,
           nazwa: extendSelectedNewPassName,
-          waznyDo: extendNewDate,
+          waznyDo: targetExpiryDate,
           cena: nowaCena,
           znizkaProcentowa: znizkaTekst,
           rata: isContract ? updatedRata : (k.rata || '1 / 1'),
           isContract12M: isContract,
-          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata}) - Ważny do: ${extendNewDate}` : `Ważny do: ${extendNewDate}`,
-          pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? parsedExtWejscia : k.pozostaloWejsc),
-          poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? parsedExtWejscia : k.poczatkoweWejsc),
+          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata}) - Ważny do: ${targetExpiryDate}` : `Ważny do: ${targetExpiryDate}`,
+          pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.pozostaloWejsc || 0) + parsedExtWejscia) : k.pozostaloWejsc),
+          poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.poczatkoweWejsc || 0) + parsedExtWejscia) : k.poczatkoweWejsc),
+          zeroEntriesGraceUntil: null,
           blokadaDo: isContract ? null : k.blokadaDo,
           powodBlokady: isContract ? null : k.powodBlokady
         };
@@ -1582,7 +1613,7 @@ export default function KlienciPage() {
     };
 
     if (isContract) {
-      updatePayload.umowa_oplacona_do = extendNewDate;
+      updatePayload.umowa_oplacona_do = targetExpiryDate;
       const isContractBlock = profileClient.powodBlokady?.toLowerCase().includes('umow') || profileClient.powodBlokady?.toLowerCase().includes('umowę');
       if (isContractBlock) {
         updatePayload.blokadaDo = null;
@@ -1606,7 +1637,6 @@ export default function KlienciPage() {
     loadData(profileClient.id);
   };
 
-  // SPŁATA CAŁKOWITEGO ZADŁUŻENIA PORTFELA
   const handleSplatZadluzenie = async () => {
     if (!profileClient) return;
     const currentWalletNum = getWalletNumber(profileClient.wallet);
@@ -1648,7 +1678,13 @@ export default function KlienciPage() {
     const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
     const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
     
-    const dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+    let dataWygasnieciaStr = '';
+    if (isContract) {
+      dataWygasnieciaStr = getContractEndOfMonthDate(todayStr);
+    } else {
+      dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+    }
+
     const activeDiscount = getEffectiveDiscount(profileClient, isContract);
     
     let bazowaCena = 150.00;
@@ -1716,9 +1752,7 @@ export default function KlienciPage() {
     };
 
     if (isContract) {
-      const now = new Date();
-      const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      updatePayload.umowa_oplacona_do = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+      updatePayload.umowa_oplacona_do = dataWygasnieciaStr;
     }
 
     const { error } = await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
@@ -1937,9 +1971,7 @@ export default function KlienciPage() {
                             karnetTarget?.powodBlokady?.toLowerCase().includes('umow') ||
                             profileClient.powodBlokady?.toLowerCase().includes('umowę');
 
-    const now = new Date();
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+    const endOfMonthStr = getContractEndOfMonthDate(todayStr);
 
     const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
     const uaktualnioneKarnety = stareKarnety.map((k: any) => {
@@ -1972,7 +2004,7 @@ export default function KlienciPage() {
     }
   };
 
-  // NOWA METODA 1: BEZPOŚREDNIE ODBLOKOWANIE KONTA BEZ RUSZANIA ZAWIESZEŃ
+  // BEZPOŚREDNIE ODBLOKOWANIE KONTA BEZ NARUSZANIA ZAWIESZEŃ
   const handleDirectUnblockAccount = async (targetClient: any) => {
     if (!targetClient) return;
     if (!confirm(`Czy na pewno chcesz natychmiast odblokować konto klubowicza ${targetClient.firstName} ${targetClient.lastName}? Zaplanowane lub trwające zawieszenia karnetu pozostaną nienaruszone.`)) {
@@ -1981,7 +2013,6 @@ export default function KlienciPage() {
 
     const stareKarnety = safeJsonParse(targetClient.karnetyKlubowicza, []);
     const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      // Zdejmujemy tylko flagi blokady, zachowując zawieszonyOd i zawieszonyDo
       if (k.blokadaDo || k.powodBlokady) {
         return {
           ...k,
@@ -1997,9 +2028,7 @@ export default function KlienciPage() {
                             targetClient.powodBlokady?.toLowerCase().includes('umowę') ||
                             targetClient.powodBlokady?.toLowerCase().includes('wpłat');
 
-    const now = new Date();
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+    const endOfMonthStr = getContractEndOfMonthDate(todayStr);
 
     const updatePayload: any = {
       blokadaDo: null,
@@ -2346,11 +2375,9 @@ export default function KlienciPage() {
                 const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : '';
                 const dataWygasnieciaKarnetu = maKarnet ? client.karnetyKlubowicza[0].waznyDo : '-';
 
-                // WERYFIKACJA 5 DNI DO WYGAŚNIĘCIA
                 const daysUntilExp = getDaysUntilExpiry(dataWygasnieciaKarnetu);
                 const isPassExpiringSoon = maKarnet && daysUntilExp !== null && daysUntilExp <= 5;
 
-                // WERYFIKACJA CENY REGULARNEJ
                 const pasujacyKarnetDef = aktywnyKarnetObj ? dostepneKarnety.find(k => k.nazwa === aktywnyKarnetObj.nazwa) : null;
                 const cenaRegularnaKatalog = pasujacyKarnetDef ? (parseFloat(String(pasujacyKarnetDef.cena).replace(/[^0-9.]/g, '')) || 0) : null;
                 const cenaKlientaNum = parseFloat(String(client.price || '').replace(/[^0-9.]/g, '')) || 0;
@@ -2361,11 +2388,9 @@ export default function KlienciPage() {
                   Math.abs(cenaKlientaNum - cenaRegularnaKatalog) > 0.01
                 );
 
-                // DANE RABATÓW
                 const stalyRabat = parseFloat(client.discount || '0') || 0;
                 const sysRabat = calculateSystemDiscount(client);
 
-                // DANE ZAWIESZENIA
                 const isContract = aktywnyKarnetObj?.isContract12M;
                 const dniZawLeft = aktywnyKarnetObj?.contractSuspensionDaysLeft ?? (isContract ? 30 : null);
 
@@ -2389,7 +2414,6 @@ export default function KlienciPage() {
                 } else if (walletNum < 0) {
                   walletBadgeClass = 'bg-rose-100 text-rose-800 border-rose-300 font-bold';
                 }
-
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
                     <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
@@ -2401,7 +2425,7 @@ export default function KlienciPage() {
                     </td>
                     <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">{client.lastName}</td>
                     
-                    {/* ZMODYFIKOWANA, NIEUCIĘTA KOLUMNA KARNET */}
+                    {/* KOLUMNA KARNET Z UWZGLĘDNIENIEM PRZENIESIONYCH WEJŚĆ */}
                     <td className="py-2.5 px-3">
                       <div className="flex flex-col gap-0.5 min-w-[200px] max-w-[340px]">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -2425,6 +2449,9 @@ export default function KlienciPage() {
                               <span>🎟️ Wejścia:</span>
                               <span className="underline decoration-1">{aktywnyKarnetObj.pozostaloWejsc}</span>
                               <span className="text-slate-400 font-semibold">/{aktywnyKarnetObj.poczatkoweWejsc || aktywnyKarnetObj.pozostaloWejsc}</span>
+                              {aktywnyKarnetObj.transferredEntries > 0 && (
+                                <span className="text-emerald-700 font-black text-[8px]">(+{aktywnyKarnetObj.transferredEntries})</span>
+                              )}
                             </span>
                           </div>
                         )}
@@ -2567,6 +2594,7 @@ export default function KlienciPage() {
           </table>
         </div>
       </div>
+
       {/* PŁYWAJĄCE MENU 3 KROPEK */}
       {actionMenuPos && (
         <>
@@ -2770,19 +2798,10 @@ export default function KlienciPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto overflow-x-hidden">
             
-            {/* Sticky Header profilu */}
+            {/* STICKY HEADER PROFILU - PRZYCISK ODBLOKOWANIA ZOSTAŁ USUNIĘTY Z TEGO MIEJSCA */}
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
               <button onClick={() => setProfileClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
               <div className="flex items-center gap-2">
-                {(profileClient.blokadaDo || (profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
-                  <button 
-                    onClick={() => handleDirectUnblockAccount(profileClient)}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-black shadow-sm transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-                    title="Zdejmij blokadę bez naruszania zaplanowanych zawieszeń"
-                  >
-                    <span>🔓</span> ODBLOKUJ KONTO
-                  </button>
-                )}
                 <button onClick={() => setIsWalletHistoryOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer whitespace-nowrap">🕒 LOGI UŻYTKOWNIKA</button>
               </div>
             </div>
@@ -2859,7 +2878,7 @@ export default function KlienciPage() {
                 </div>
               </div>
 
-              {/* BANER BLOKADY W PROFILU Z PRZYCISKIEM ODBLOKOWANIA */}
+              {/* BANER BLOKADY W PROFILU Z PRZYCISKIEM ODBLOKOWANIA (W OKOLICY KARNETU) */}
               {(profileClient.blokadaDo || (profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
                 <div className="bg-rose-50 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in">
                   <div className="flex items-center gap-3">
@@ -3061,6 +3080,9 @@ export default function KlienciPage() {
                                   <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
                                     <span>🎟️ Wejścia:</span> 
                                     <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
+                                    {karnet.transferredEntries > 0 && (
+                                      <span className="text-emerald-700 text-[9px] font-extrabold">(+{karnet.transferredEntries} przeniesione)</span>
+                                    )}
                                   </span>
                                 )}
                               </div>
@@ -3523,7 +3545,6 @@ export default function KlienciPage() {
                         </table>
                       );
                     })()}
-
                     {/* 3. HISTORIA WSZYSTKICH RUCHÓW */}
                     {activeZapisyTab === 'ruchy' && (() => {
                       const allMovements: any[] = [];
@@ -3829,7 +3850,12 @@ export default function KlienciPage() {
                           const val = e.target.value;
                           setExtendSelectedNewPassName(val);
                           const def = dostepneKarnety.find(k => k.nazwa === val);
-                          setExtendNewDate(getCalendarExpiryDate(extendPassTarget?.waznyDo, def?.limitCzasowy));
+                          const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
+                          if (isContract) {
+                            setExtendNewDate(getContractEndOfMonthDate(extendPassTarget?.waznyDo));
+                          } else {
+                            setExtendNewDate(getCalendarExpiryDate(extendPassTarget?.waznyDo, def?.limitCzasowy));
+                          }
                           if (def && !extendCustomPriceInput) {
                             setExtendCustomPriceInput(def.cena);
                           }
