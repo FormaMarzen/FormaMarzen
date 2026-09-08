@@ -31,6 +31,10 @@ interface KlientInfo {
   "Nazwisko"?: string;
   nazwisko?: string;
   avatarUrl?: string;
+  avatar_url?: string;
+  avatar?: string;
+  zdjecie?: string;
+  foto?: string;
   [key: string]: any;
 }
 
@@ -91,7 +95,13 @@ export default function MojeWynikiPage() {
 
       const session = sessionRes.data.session;
       const email = session?.user?.email || "";
-      const authAvatar = session?.user?.user_metadata?.avatar_url || session?.user?.user_metadata?.picture || null;
+      
+      // Sprawdzanie wszystkich potencjalnych źródeł awatara w metadanych sesji
+      const authAvatar = 
+        session?.user?.user_metadata?.avatar_url || 
+        session?.user?.user_metadata?.picture || 
+        session?.user?.user_metadata?.avatar || 
+        null;
       
       setUserEmail(email);
       setUserAvatarAuth(authAvatar);
@@ -132,14 +142,14 @@ export default function MojeWynikiPage() {
     return map;
   }, [klienciList]);
 
-  // Formatowanie nazwy klubowicza oraz pobieranie awatara
+  // Formatowanie nazwy klubowicza oraz pobieranie awatara ze wszystkich wariantów kolumn
   const pobierzDaneKlubowicza = useCallback((email: string) => {
     const cleanEmail = email.toLowerCase().trim();
     const klient = klienciMap.get(cleanEmail);
     
     let nazwa = email.split('@')[0];
     let pelnaNazwa = email.split('@')[0];
-    let avatar = null;
+    let avatar: string | null = null;
 
     if (klient) {
       const imie = (klient['Imię'] || klient.imie || '').trim();
@@ -154,17 +164,28 @@ export default function MojeWynikiPage() {
         pelnaNazwa = nazwiskoRaw;
       }
 
-      if (klient.avatarUrl) avatar = klient.avatarUrl;
+      // Sprawdzenie każdego możliwego wariantu zapisu nazwy kolumny ze zdjęciem
+      avatar = klient.avatarUrl || klient.avatar_url || klient.avatar || klient.zdjecie || klient.foto || null;
     }
 
-    // Specjalna obsługa dla administratora, jeśli nie ma go w bazie klienci
+    // Dedykowana obsługa dla administratora systemu
     if (cleanEmail === "maciejklaput@gmail.com") {
       if (!klient || !klient['Imię']) {
         nazwa = "Maciej K.";
         pelnaNazwa = "Maciej Kłaput";
       }
+
+      // Jeśli w tabeli klienci brak zdjęcia, sprawdzamy sesję Auth, a potem localStorage lub nagłówek
       if (!avatar) {
         avatar = userAvatarAuth;
+      }
+      
+      if (!avatar && typeof window !== "undefined") {
+        avatar = 
+          localStorage.getItem("forma_avatar_url") || 
+          localStorage.getItem("admin_avatar") || 
+          localStorage.getItem("user_avatar") || 
+          null;
       }
     }
 
@@ -911,7 +932,6 @@ export default function MojeWynikiPage() {
                             )}
                           </div>
                           <div>
-                            {/* Pełne imię i nazwisko widoczne dla administratora */}
                             <div className="font-black text-sky-950 text-sm">{pelnaNazwa}</div>
                             <div className="text-xs text-slate-500">{email}</div>
                           </div>
