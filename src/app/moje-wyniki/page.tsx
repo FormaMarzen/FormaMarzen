@@ -130,6 +130,16 @@ export default function MojeWynikiPage() {
   // Formatowanie nazwy klubowicza oraz pobieranie awatara
   const pobierzDaneKlubowicza = useCallback((email: string) => {
     const cleanEmail = email.toLowerCase().trim();
+    
+    // Obsługa specjalna dla administratora / twórcy aplikacji
+    if (cleanEmail === "maciejklaput@gmail.com") {
+      return {
+        nazwa: "Maciej K.",
+        pelnaNazwa: "Maciej Kłaput",
+        avatar: null
+      };
+    }
+
     const klient = klienciMap.get(cleanEmail);
     let nazwa = email.split('@')[0];
     let pelnaNazwa = email.split('@')[0];
