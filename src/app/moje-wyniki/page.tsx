@@ -37,6 +37,7 @@ interface KlientInfo {
 export default function MojeWynikiPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [userAvatarAuth, setUserAvatarAuth] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -88,8 +89,12 @@ export default function MojeWynikiPage() {
         supabase.from('wyniki_klubowiczow').select('*')
       ]);
 
-      const email = sessionRes.data.session?.user?.email || "";
+      const session = sessionRes.data.session;
+      const email = session?.user?.email || "";
+      const authAvatar = session?.user?.user_metadata?.avatar_url || session?.user?.user_metadata?.picture || null;
+      
       setUserEmail(email);
+      setUserAvatarAuth(authAvatar);
       
       if (email === "maciejklaput@gmail.com") {
         setIsAdmin(true);
@@ -130,17 +135,8 @@ export default function MojeWynikiPage() {
   // Formatowanie nazwy klubowicza oraz pobieranie awatara
   const pobierzDaneKlubowicza = useCallback((email: string) => {
     const cleanEmail = email.toLowerCase().trim();
-    
-    // Obsługa specjalna dla administratora / twórcy aplikacji
-    if (cleanEmail === "maciejklaput@gmail.com") {
-      return {
-        nazwa: "Maciej K.",
-        pelnaNazwa: "Maciej Kłaput",
-        avatar: null
-      };
-    }
-
     const klient = klienciMap.get(cleanEmail);
+    
     let nazwa = email.split('@')[0];
     let pelnaNazwa = email.split('@')[0];
     let avatar = null;
@@ -161,8 +157,19 @@ export default function MojeWynikiPage() {
       if (klient.avatarUrl) avatar = klient.avatarUrl;
     }
 
+    // Specjalna obsługa dla administratora, jeśli nie ma go w bazie klienci
+    if (cleanEmail === "maciejklaput@gmail.com") {
+      if (!klient || !klient['Imię']) {
+        nazwa = "Maciej K.";
+        pelnaNazwa = "Maciej Kłaput";
+      }
+      if (!avatar) {
+        avatar = userAvatarAuth;
+      }
+    }
+
     return { nazwa, pelnaNazwa, avatar };
-  }, [klienciMap]);
+  }, [klienciMap, userAvatarAuth]);
 
   const wynikiUzytkownika = useMemo(() => {
     if (!userEmail) return [];
