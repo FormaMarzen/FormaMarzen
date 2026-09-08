@@ -31,10 +31,6 @@ interface KlientInfo {
   "Nazwisko"?: string;
   nazwisko?: string;
   avatarUrl?: string;
-  avatar_url?: string;
-  avatar?: string;
-  zdjecie?: string;
-  foto?: string;
   [key: string]: any;
 }
 
@@ -95,18 +91,12 @@ export default function MojeWynikiPage() {
 
       const session = sessionRes.data.session;
       const email = session?.user?.email || "";
-      
-      // Sprawdzanie wszystkich potencjalnych źródeł awatara w metadanych sesji
-      const authAvatar = 
-        session?.user?.user_metadata?.avatar_url || 
-        session?.user?.user_metadata?.picture || 
-        session?.user?.user_metadata?.avatar || 
-        null;
+      const authAvatar = session?.user?.user_metadata?.avatar_url || session?.user?.user_metadata?.picture || null;
       
       setUserEmail(email);
       setUserAvatarAuth(authAvatar);
       
-      if (email === "maciejklaput@gmail.com") {
+      if (email === "maciejklaput@gmail.com" || email === "maciejklaput@icloud.com") {
         setIsAdmin(true);
       }
 
@@ -142,11 +132,26 @@ export default function MojeWynikiPage() {
     return map;
   }, [klienciList]);
 
-  // Formatowanie nazwy klubowicza oraz pobieranie awatara ze wszystkich wariantów kolumn
+  // Rekord administratora znaleziony po nazwisku (zgodnie z logiką z layout.tsx)
+  const adminClientRecord = useMemo(() => {
+    return klienciList.find(c => {
+      const nazwisko = (c['Nazwisko'] || c.nazwisko || '').toLowerCase();
+      return nazwisko.includes('kłaput');
+    }) || null;
+  }, [klienciList]);
+
+  // Formatowanie nazwy klubowicza oraz pobieranie awatara
   const pobierzDaneKlubowicza = useCallback((email: string) => {
     const cleanEmail = email.toLowerCase().trim();
-    const klient = klienciMap.get(cleanEmail);
+    let klient = klienciMap.get(cleanEmail);
     
+    const isAdminEmail = cleanEmail === "maciejklaput@gmail.com" || cleanEmail === "maciejklaput@icloud.com";
+
+    // Jeżeli to administrator i nie ma dopasowania po mailu, używamy rekordu adminClientRecord (po nazwisku Kłaput)
+    if (isAdminEmail && !klient && adminClientRecord) {
+      klient = adminClientRecord;
+    }
+
     let nazwa = email.split('@')[0];
     let pelnaNazwa = email.split('@')[0];
     let avatar: string | null = null;
@@ -164,33 +169,25 @@ export default function MojeWynikiPage() {
         pelnaNazwa = nazwiskoRaw;
       }
 
-      // Sprawdzenie każdego możliwego wariantu zapisu nazwy kolumny ze zdjęciem
-      avatar = klient.avatarUrl || klient.avatar_url || klient.avatar || klient.zdjecie || klient.foto || null;
+      if (klient.avatarUrl) avatar = klient.avatarUrl;
     }
 
-    // Dedykowana obsługa dla administratora systemu
-    if (cleanEmail === "maciejklaput@gmail.com") {
+    // Dodatkowe zabezpieczenie dla konta administratora
+    if (isAdminEmail) {
       if (!klient || !klient['Imię']) {
         nazwa = "Maciej K.";
         pelnaNazwa = "Maciej Kłaput";
       }
-
-      // Jeśli w tabeli klienci brak zdjęcia, sprawdzamy sesję Auth, a potem localStorage lub nagłówek
+      if (!avatar && adminClientRecord?.avatarUrl) {
+        avatar = adminClientRecord.avatarUrl;
+      }
       if (!avatar) {
         avatar = userAvatarAuth;
-      }
-      
-      if (!avatar && typeof window !== "undefined") {
-        avatar = 
-          localStorage.getItem("forma_avatar_url") || 
-          localStorage.getItem("admin_avatar") || 
-          localStorage.getItem("user_avatar") || 
-          null;
       }
     }
 
     return { nazwa, pelnaNazwa, avatar };
-  }, [klienciMap, userAvatarAuth]);
+  }, [klienciMap, adminClientRecord, userAvatarAuth]);
 
   const wynikiUzytkownika = useMemo(() => {
     if (!userEmail) return [];
