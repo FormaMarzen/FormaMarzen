@@ -53,6 +53,24 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
+// KALKULATOR PRZEDŁUŻENIA DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (DLA UMÓW 12M)
+const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
+  const today = new Date();
+  let base = today;
+  if (baseDateStr && baseDateStr !== '-') {
+    const [y, m, d] = baseDateStr.split('-').map(Number);
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+      const parsed = new Date(y, m - 1, d);
+      if (parsed > today) base = parsed;
+    }
+  }
+  const targetYear = base.getFullYear();
+  const targetMonth = base.getMonth() + 1; // kolejny miesiąc kalendarzowy (1-indexed)
+  const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const resMonth = String(targetMonth + 1).padStart(2, '0');
+  return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
+};
+
 export default function DashboardPage() {
   const nowLocal = new Date();
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
@@ -465,6 +483,7 @@ export default function DashboardPage() {
     min_participants_per_class: {},
     auto_cancel_deadline_per_class: {},
   });
+
   // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
@@ -661,7 +680,6 @@ export default function DashboardPage() {
       workout: list[workoutIndex]
     };
   };
-
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -730,11 +748,11 @@ export default function DashboardPage() {
 
               const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
               if (passIndex !== -1) {
-                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
                 parsedKarnety[passIndex] = {
                   ...parsedKarnety[passIndex],
-                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                  pozostaloWejsc: currentRemaining + 1,
+                  zeroEntriesGraceUntil: null
                 };
                 await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', wMember.id);
               }
@@ -860,11 +878,11 @@ export default function DashboardPage() {
 
                   const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
                   if (passIndex !== -1) {
-                    const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-                    const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                    const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
                     parsedKarnety[passIndex] = {
                       ...parsedKarnety[passIndex],
-                      pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                      pozostaloWejsc: currentRemaining + 1,
+                      zeroEntriesGraceUntil: null
                     };
                     await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
                   }
@@ -905,7 +923,6 @@ export default function DashboardPage() {
     return hasChanges;
   };
 
-  // SILNIK NATYCHMIASTOWEGO ODWOŁYWANIA PO WYPISANIU UCZESTNIKA
   const checkAndTriggerImmediateAutoCancel = async (
     classItem: any,
     displayDate: string,
@@ -973,11 +990,11 @@ export default function DashboardPage() {
 
               const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
               if (passIndex !== -1) {
-                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
                 parsedKarnety[passIndex] = {
                   ...parsedKarnety[passIndex],
-                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                  pozostaloWejsc: currentRemaining + 1,
+                  zeroEntriesGraceUntil: null
                 };
                 await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
               }
@@ -1137,6 +1154,7 @@ export default function DashboardPage() {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const todayIsoDate = today.toISOString().split('T')[0];
 
     let isContinuous = false;
     for (const k of karnety) {
@@ -1147,7 +1165,11 @@ export default function DashboardPage() {
         
         if (diffDays <= 1) {
           if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
-            if (diffDays <= 1) isContinuous = true;
+            if (k.zeroEntriesGraceUntil && todayIsoDate <= k.zeroEntriesGraceUntil) {
+              isContinuous = true;
+            } else if (diffDays <= 1) {
+              isContinuous = true;
+            }
           } else {
             isContinuous = true;
           }
@@ -1255,18 +1277,15 @@ export default function DashboardPage() {
 
   const monthNames = ["Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"];
 
-  // REF DLA OCHRONY PRZED PĘTLĄ ZAPYTANIA
   const isFetchingRef = useRef(false);
 
-  // AUTOMATYCZNA WERYFIKACJA PŁATNOŚCI UMÓW (4. I 7. DZIEŃ MIESIĄCA)
   const checkContractPaymentEnforcement = async (allClients: any[]) => {
     const today = new Date();
     const dayOfMonth = today.getDate();
     const currentYear = today.getFullYear();
     const currentMonthNum = today.getMonth() + 1;
     const firstDayOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-01`;
-    const endOfCurrentMonth = new Date(currentYear, currentMonthNum, 0);
-    const endOfCurrentMonthStr = `${currentYear}-${String(currentMonthNum).padStart(2, '0')}-${String(endOfCurrentMonth.getDate()).padStart(2, '0')}`;
+    const endOfCurrentMonthStr = getContractEndOfMonthDate(todayStr);
 
     if (dayOfMonth < 4) return;
 
@@ -1310,7 +1329,6 @@ export default function DashboardPage() {
     }
   };
 
-  // RÓWNOLEGŁE POBIERANIE DANYCH
   const loadData = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -1414,7 +1432,8 @@ export default function DashboardPage() {
             cena: k.cena_brutto || k.cena || '0.00',
             ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null,
             zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
-            dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć'
+            dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć',
+            isContract12M: k.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true
           };
         });
         setDostepneKarnety(ustrukturyzowaneKarnetyDef);
@@ -1422,6 +1441,7 @@ export default function DashboardPage() {
 
       let matchedCurrentClient: any = null;
       if (klienciData) {
+        const todayDateOnly = new Date().toISOString().split('T')[0];
         const enriched = klienciData.map((c: any) => {
           let parsedKarnety = [];
           if (Array.isArray(c.karnetyKlubowicza)) {
@@ -1430,11 +1450,17 @@ export default function DashboardPage() {
             try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
           }
 
+          let karnetyZmienione = false;
           parsedKarnety = parsedKarnety.map((k: any) => {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
+            const isContract = isContractPass(k) || (pasujacyDef && isContractPass(pasujacyDef));
             const isTime = isTimePass(k) || (pasujacyDef && isTimePass(pasujacyDef));
 
-            if (isTime) {
+            if (isContract) {
+              k.isContract12M = true;
+              k.pozostaloWejsc = null;
+              k.poczatkoweWejsc = null;
+            } else if (isTime) {
               k.pozostaloWejsc = null;
               k.poczatkoweWejsc = null;
             } else if (k.pozostaloWejsc === undefined || k.pozostaloWejsc === null) {
@@ -1445,11 +1471,38 @@ export default function DashboardPage() {
               }
             }
 
+            // AKTYWACJA 1-DNIOWEGO BUFORA CIĄGŁOŚCI PO WYKORZYSTANIU OSTATNIEGO WEJŚCIA
+            if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+              const tomorrowDate = new Date();
+              tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+              const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+
+              if (!k.zeroEntriesGraceUntil) {
+                karnetyZmienione = true;
+                k.zeroEntriesGraceUntil = tomorrowStr;
+                if (!k.waznyDo || k.waznyDo < tomorrowStr) {
+                  k.waznyDo = tomorrowStr;
+                }
+                k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`;
+              }
+            }
+
             k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
             k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || pasujacyDef?.zaznaczoneZajecia || [];
 
             return k;
+          }).filter((k: any) => {
+            if (isContractPass(k)) return true;
+            if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly) {
+              karnetyZmienione = true;
+              return false;
+            }
+            return true;
           });
+
+          if (karnetyZmienione) {
+            supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', c.id).then();
+          }
 
           const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
           const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
@@ -1502,7 +1555,7 @@ export default function DashboardPage() {
           }
         }
       }
-      // Ogłoszenia
+
       if (ogloszeniaData) {
         const activeUserId = matchedCurrentClient ? String(matchedCurrentClient.id) : null;
         const activeUserEmail = (userEmail || '').toLowerCase().trim();
@@ -1565,7 +1618,6 @@ export default function DashboardPage() {
         setOgloszeniaList(parsedOgloszenia);
       }
 
-      // Grafik stały
       let mappedSzablony: any[] = [];
       if (szablonyData) {
         mappedSzablony = szablonyData.map((s: any) => ({
@@ -1582,7 +1634,6 @@ export default function DashboardPage() {
         setZapisaneZajecia(mappedSzablony);
       }
 
-      // Zajęcia jednorazowe
       let mappedJednorazowe: any[] = [];
       const rawJednorazowe = rawJednorazoweRes.data;
       if (rawJednorazowe && rawJednorazowe.length > 0) {
@@ -1623,7 +1674,6 @@ export default function DashboardPage() {
       }
       setJednorazoweZajecia(mappedJednorazowe);
 
-      // Nadpisania zajęć
       const nadpisaniaMap: { [key: string]: any } = {};
       if (nadpisaniaData) {
         nadpisaniaData.forEach((n: any) => {
@@ -1645,7 +1695,6 @@ export default function DashboardPage() {
         setNadpisaneZajeciaDni(nadpisaniaMap);
       }
 
-      // Zapisy na zajęcia (główna lista + krzesełko)
       const groupedZapisy: { [key: string]: any[] } = {};
       if (zapisyData) {
         const sortedZapisy = [...zapisyData].sort((a: any, b: any) => {
@@ -1681,7 +1730,6 @@ export default function DashboardPage() {
         setZapisyNaZajecia(groupedZapisy);
       }
 
-      // Bieżący tydzień grafiku i weryfikacja automatyzacji
       const currentMon = getMonday(selectedWeekDate);
       const activeDashboardDays = Array.from({ length: 5 }).map((_, index) => {
         const dayDate = new Date(currentMon);
@@ -1715,7 +1763,6 @@ export default function DashboardPage() {
         activeDashboardDays
       );
 
-      // Rodzaje zajęć
       if (rodzajeData) {
         const parsedRodzaje = rodzajeData.map((item: any) => {
           let parsedUstawienia: any = {};
@@ -1734,7 +1781,6 @@ export default function DashboardPage() {
         setRodzajeZajec(parsedRodzaje);
       }
       
-      // Wydarzenia jedno- i kilkudniowe
       const rawWydarzenia = rawWydarzeniaRes.data;
       if (rawWydarzenia && rawWydarzenia.length > 0) {
         setWydarzeniaKilkudniowe(rawWydarzenia.map((w: any) => ({ 
@@ -1781,8 +1827,7 @@ export default function DashboardPage() {
       window.removeEventListener('storage', loadData);
     };
   }, [selectedWeekDate]);
-  
-  // OBSŁUGA HISTORII ZAJĘĆ (MODAL HISTORII)
+
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
     setModalHistoryData([]); 
@@ -1799,7 +1844,6 @@ export default function DashboardPage() {
     }
   };
 
-  // OBSŁUGA WYDARZEŃ JEDNODNIOWYCH I KILKUDNIOWYCH (OBOZY, DNI SPECJALNE ITP.)
   const handleSaveMultiDayEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!multiDayTitle.trim()) {
@@ -1874,11 +1918,11 @@ export default function DashboardPage() {
 
               const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
               if (passIndex !== -1) {
-                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-                const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
                 parsedKarnety[passIndex] = {
                   ...parsedKarnety[passIndex],
-                  pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+                  pozostaloWejsc: currentRemaining + 1,
+                  zeroEntriesGraceUntil: null
                 };
                 await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
               }
@@ -1919,7 +1963,6 @@ export default function DashboardPage() {
     }
   };
 
-  // EDYCJA GODZIN / TRENERA / LIMITU ZAJĘĆ
   const handleSaveClassEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editClassModalData) return;
@@ -1955,7 +1998,6 @@ export default function DashboardPage() {
     showToast("Zajęcia w tym dniu zostały zaktualizowane!");
   };
 
-  // DUPLIKOWANIE ZAJĘĆ DO JEDNORAZOWYCH
   const handleSaveDuplicateClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dupPlan) {
@@ -1993,7 +2035,6 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // ODWOŁYWANIE I PRZYWRACANIE ZAJĘĆ
   const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const allVariantKeys = getKeysVariants(item.id, displayDate);
@@ -2037,11 +2078,11 @@ export default function DashboardPage() {
 
           const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
           if (passIndex !== -1) {
-            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
             parsedKarnety[passIndex] = {
               ...parsedKarnety[passIndex],
-              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+              pozostaloWejsc: currentRemaining + 1,
+              zeroEntriesGraceUntil: null
             };
             await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.klient_id);
           }
@@ -2112,7 +2153,6 @@ export default function DashboardPage() {
     showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
   };
 
-  // USUWANIE I PRZYWRACANIE ZAJĘĆ
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
     const keysToDelete = getKeysVariants(item.id, displayDate);
@@ -2136,11 +2176,11 @@ export default function DashboardPage() {
 
           const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
           if (passIndex !== -1) {
-            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10);
-            const poczatkowe = parseInt(parsedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
+            const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
             parsedKarnety[passIndex] = {
               ...parsedKarnety[passIndex],
-              pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
+              pozostaloWejsc: currentRemaining + 1,
+              zeroEntriesGraceUntil: null
             };
             await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', u.id);
           }
@@ -2233,6 +2273,7 @@ export default function DashboardPage() {
     loadData();
     return true;
   };
+
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -2286,10 +2327,10 @@ export default function DashboardPage() {
       
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
         updatedKarnety[passIndex] = {
           ...updatedKarnety[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+          pozostaloWejsc: currentRemaining + cancelledCount,
+          zeroEntriesGraceUntil: null
         };
         await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
       }
@@ -2358,10 +2399,10 @@ export default function DashboardPage() {
         
         if (passIndex !== -1) {
           const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-          const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + cancelledCount, 10);
           updatedKarnety[passIndex] = {
             ...updatedKarnety[passIndex],
-            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + cancelledCount)
+            pozostaloWejsc: currentRemaining + cancelledCount,
+            zeroEntriesGraceUntil: null
           };
           await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
         }
@@ -2378,14 +2419,17 @@ export default function DashboardPage() {
   const handleConfirmExtendPass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !extendPassTarget) return;
-    if (!confirm(`Czy na pewno chcesz przedłużyć ten karnet do dnia ${extendNewDate}?`)) return;
     
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
+    const isContract = isContractPass(extendPassTarget) || isContractPass(defKarnetu);
+    const targetDateStr = isContract ? getContractEndOfMonthDate(extendPassTarget.waznyDo) : extendNewDate;
+
+    if (!confirm(`Czy na pewno chcesz przedłużyć ten karnet do dnia ${targetDateStr}?`)) return;
+    
     let bazowaCenaNum = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget.cena.replace(/[^0-9.]/g, '')) || 0;
     const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
     const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
-    const isContract = isContractPass(extendPassTarget) || isContractPass(defKarnetu);
     const effectiveDiscount = getEffectiveDiscount(profileClient);
     const finalPriceNum = (effectiveDiscount.percent > 0 && !isContract)
       ? bazowaCenaNum * (1 - effectiveDiscount.percent / 100) 
@@ -2405,13 +2449,14 @@ export default function DashboardPage() {
         return { 
           ...k, 
           nazwa: extendSelectedNewPassName || k.nazwa, 
-          waznyDo: extendNewDate, 
+          waznyDo: targetDateStr, 
           cena: nowaCena, 
           rata: isContract ? updatedRata : k.rata,
           zaznaczoneZajecia: extendSelectedNewPassName ? allowedClasses : k.zaznaczoneZajecia,
           dostepDo: extendSelectedNewPassName ? dostepDo : k.dostepDo,
           znizkaProcentowa: isContract ? '' : effectiveDiscount.label,
-          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata || '0/12'} • Ważny do: ${extendNewDate})` : `Ważny do: ${extendNewDate}`,
+          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata || '0/12'} • Ważny do: ${targetDateStr})` : `Ważny do: ${targetDateStr}`,
+          zeroEntriesGraceUntil: null,
           blokadaDo: isContract ? null : k.blokadaDo,
           powodBlokady: isContract ? null : k.powodBlokady
         };
@@ -2424,13 +2469,13 @@ export default function DashboardPage() {
       karnetyKlubowicza: uaktualnioneKarnety, 
       pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', '), 
       price: nowaCena, 
-      expiresDate: extendNewDate,
-      ...(isContract ? { umowa_oplacona_do: extendNewDate, blokadaDo: null, powodBlokady: null } : {})
+      expiresDate: targetDateStr,
+      ...(isContract ? { umowa_oplacona_do: targetDateStr, blokadaDo: null, powodBlokady: null } : {})
     };
 
-    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety, expiresDate: extendNewDate };
+    const dbPayload: any = { karnetyKlubowicza: uaktualnioneKarnety, expiresDate: targetDateStr };
     if (isContract) {
-      dbPayload.umowa_oplacona_do = extendNewDate;
+      dbPayload.umowa_oplacona_do = targetDateStr;
       dbPayload.blokadaDo = null;
       dbPayload.powodBlokady = null;
     }
@@ -2439,7 +2484,7 @@ export default function DashboardPage() {
 
     const success = await updateSupabaseClient(updatedClient, dbPayload);
     if (success) { 
-      showToast(`Karnet przedłużony do ${extendNewDate}! Cena: ${nowaCena}`); 
+      showToast(`Karnet przedłużony do ${targetDateStr}! Cena: ${nowaCena}`); 
       setIsExtendPassModalOpen(false); 
     }
   };
@@ -2476,13 +2521,71 @@ export default function DashboardPage() {
     const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
     const isTimePassBuy = isTimePass(defKarnetu) || isTimePass({ nazwa: selectedBuyPass });
+    const isQuantityPassBuy = isQuantityPass(defKarnetu) || isQuantityPass({ nazwa: selectedBuyPass });
     const limitWejscBaza = (!isTimePassBuy && defKarnetu) ? (defKarnetu.ilosc_wejsc || null) : null;
-    const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
+    const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 10;
 
     let updatedKarnety = [];
     let nowaDataWygasnieciaStr = '';
 
-    if (karnetyList.length > 0 && activationMode === 'after') {
+    if (isContract) {
+      nowaDataWygasnieciaStr = getContractEndOfMonthDate(todayStr);
+      const nowyKarnetObj = {
+        id: Date.now(), 
+        nazwa: selectedBuyPass, 
+        waznyDo: nowaDataWygasnieciaStr, 
+        pozostaloWejsc: null,
+        poczatkoweWejsc: null,
+        cena: cenaStr, 
+        zaznaczoneZajecia: allowedClasses,
+        dostepDo: dostepDo,
+        znizkaProcentowa: '', 
+        rata: '0 / 12', 
+        statusTekst: `Umowa 12M (Rata 0 / 12 • Ważny do: ${nowaDataWygasnieciaStr})`, 
+        isContract12M: true,
+        contractSuspensionDaysLeft: 30,
+        blokadaDo: null, 
+        powodBlokady: null,
+        zawieszonyOd: null, 
+        zawieszonyDo: null, 
+        historiaZawieszen: []
+      };
+      updatedKarnety = [...karnetyList, nowyKarnetObj];
+    } else if (isQuantityPassBuy) {
+      // PRZENIESIENIE NIEWYKORZYSTANYCH WEJŚĆ ZE STAREGO KARNETU ILOŚCIOWEGO
+      const existingQuantityPass = karnetyList.find(k => isQuantityPass(k));
+      let leftover = 0;
+      if (existingQuantityPass) {
+        leftover = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
+        karnetyList = karnetyList.filter(k => k.id !== existingQuantityPass.id);
+      }
+
+      const totalPool = parsedLimitWejsc + leftover;
+      const dataWygasniecia = new Date();
+      dataWygasniecia.setDate(dataWygasniecia.getDate() + dniWażności);
+      nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
+
+      const nowyKarnetObj = {
+        id: Date.now(),
+        nazwa: selectedBuyPass,
+        waznyDo: nowaDataWygasnieciaStr,
+        pozostaloWejsc: totalPool,
+        poczatkoweWejsc: parsedLimitWejsc,
+        transferredEntries: leftover,
+        cena: cenaStr,
+        zaznaczoneZajecia: allowedClasses,
+        dostepDo: dostepDo,
+        znizkaProcentowa: effectiveDiscount.label,
+        rata: '1 / 1',
+        statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
+        blokadaDo: null,
+        powodBlokady: null,
+        zawieszonyOd: null,
+        zawieszonyDo: null,
+        historiaZawieszen: []
+      };
+      updatedKarnety = [...karnetyList, nowyKarnetObj];
+    } else if (karnetyList.length > 0 && activationMode === 'after') {
       updatedKarnety = karnetyList.map((k: any, index: number) => {
         if (index === karnetyList.length - 1) {
           let baseDate = new Date();
@@ -2492,19 +2595,17 @@ export default function DashboardPage() {
           }
           baseDate.setDate(baseDate.getDate() + dniWażności);
           nowaDataWygasnieciaStr = baseDate.toISOString().split('T')[0];
-          const addedEntries = parsedLimitWejsc !== null ? parsedLimitWejsc : 0;
-          const currentEntries = k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined ? k.pozostaloWejsc : 0;
           return {
             ...k, 
             nazwa: selectedBuyPass, 
             waznyDo: nowaDataWygasnieciaStr, 
-            pozostaloWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? currentEntries + addedEntries : null),
-            poczatkoweWejsc: isTimePassBuy ? null : (parsedLimitWejsc !== null ? (k.poczatkoweWejsc || currentEntries) + addedEntries : null),
+            pozostaloWejsc: null,
+            poczatkoweWejsc: null,
             cena: cenaStr, 
             zaznaczoneZajecia: allowedClasses,
             dostepDo: dostepDo,
-            znizkaProcentowa: isContract ? '' : effectiveDiscount.label,
-            statusTekst: isContract ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${nowaDataWygasnieciaStr})` : `Ważny do: ${nowaDataWygasnieciaStr}`
+            znizkaProcentowa: effectiveDiscount.label,
+            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
         return k;
@@ -2517,16 +2618,14 @@ export default function DashboardPage() {
         id: Date.now(), 
         nazwa: selectedBuyPass, 
         waznyDo: nowaDataWygasnieciaStr, 
-        pozostaloWejsc: isTimePassBuy ? null : parsedLimitWejsc,
-        poczatkoweWejsc: isTimePassBuy ? null : parsedLimitWejsc,
+        pozostaloWejsc: null,
+        poczatkoweWejsc: null,
         cena: cenaStr, 
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
-        znizkaProcentowa: isContract ? '' : effectiveDiscount.label, 
-        rata: isContract ? '0 / 12' : '1 / 1', 
-        statusTekst: isContract ? `Umowa 12M (Rata 0 / 12 • Ważny do: ${nowaDataWygasnieciaStr})` : `Ważny do: ${nowaDataWygasnieciaStr}`, 
-        isContract12M: isContract,
-        contractSuspensionDaysLeft: isContract ? 30 : undefined,
+        znizkaProcentowa: effectiveDiscount.label, 
+        rata: '1 / 1', 
+        statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
         blokadaDo: null, 
         powodBlokady: null,
         zawieszonyOd: null, 
@@ -2549,9 +2648,6 @@ export default function DashboardPage() {
 
     const updatedWalletHistory = [nowaHistoriaEntry, ...(currentUser.walletHistory || [])];
     const ostatecznaDataWygasniecia = updatedKarnety[updatedKarnety.length - 1]?.waznyDo || '';
-    
-    const endOfMonth = new Date(nowLocal.getFullYear(), nowLocal.getMonth() + 1, 0);
-    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
 
     const updatedClient = { 
       ...currentUser, 
@@ -2561,12 +2657,14 @@ export default function DashboardPage() {
       expiresDate: ostatecznaDataWygasniecia, 
       wallet: nowyStanPortfelaStr, 
       walletHistory: updatedWalletHistory,
-      ...(isContract ? { umowa_oplacona_do: endOfMonthStr } : {})
+      ...(isContract ? { umowa_oplacona_do: nowaDataWygasnieciaStr, blokadaDo: null, powodBlokady: null } : {})
     };
 
     const dbPayload: any = { karnetyKlubowicza: updatedKarnety };
     if (isContract) {
-      dbPayload.umowa_oplacona_do = endOfMonthStr;
+      dbPayload.umowa_oplacona_do = nowaDataWygasnieciaStr;
+      dbPayload.blokadaDo = null;
+      dbPayload.powodBlokady = null;
     }
     if (currentUser.Cena !== undefined) dbPayload.Cena = cenaStr; 
     else if (currentUser.cena !== undefined) dbPayload.cena = cenaStr;
@@ -2930,15 +3028,15 @@ export default function DashboardPage() {
         let newPozostalo = k.pozostaloWejsc;
         if (isQuantityPass(k) && newPozostalo !== null && newPozostalo !== undefined && cancelledCount > 0) {
           const currentRemaining = parseInt(newPozostalo, 10) || 0;
-          const poczatkowe = parseInt(k.poczatkoweWejsc || currentRemaining + cancelledCount, 10);
-          newPozostalo = Math.min(poczatkowe, currentRemaining + cancelledCount);
+          newPozostalo = currentRemaining + cancelledCount;
         }
         return { 
           ...k, 
           blokadaOd: bOd, 
           blokadaDo: bDo, 
           powodBlokady: powod,
-          pozostaloWejsc: newPozostalo
+          pozostaloWejsc: newPozostalo,
+          zeroEntriesGraceUntil: null
         };
       }
       return k;
@@ -2966,8 +3064,7 @@ export default function DashboardPage() {
     if (!profileClient || !karnetTarget) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu?")) return;
     const isContract = isContractPass(karnetTarget);
-    const endOfMonth = new Date(nowLocal.getFullYear(), nowLocal.getMonth() + 1, 0);
-    const endOfMonthStr = `${endOfMonth.getFullYear()}-${String(endOfMonth.getMonth() + 1).padStart(2, '0')}-${String(endOfMonth.getDate()).padStart(2, '0')}`;
+    const endOfMonthStr = getContractEndOfMonthDate(todayStr);
 
     const uaktualnioneKarnety = (profileClient.karnetyKlubowicza || []).map((k: any) => {
       if (k.id === karnetTarget.id) { 
@@ -2992,7 +3089,6 @@ export default function DashboardPage() {
     showToast("Blokada została odwołana.");
     setIsSuspendModalOpen(false);
   };
-
   const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !walletAmountInput) return;
@@ -3056,7 +3152,7 @@ export default function DashboardPage() {
     return count;
   };
 
-  // OPTYMISTYCZNA OBSŁUGA OBECNOŚCI (0 MS OPÓŹNIENIA)
+  // OPTYMISTYCZNA OBSŁUGA OBECNOŚCI
   const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
@@ -3065,7 +3161,6 @@ export default function DashboardPage() {
     if (!szukany) return;
     const nowyStanObecny = !szukany.obecny;
 
-    // Natychmiastowa zmiana w stanie komponentu (Optimistic UI)
     setZapisyNaZajecia(prev => {
       const updated = { ...prev };
       keys.forEach(k => {
@@ -3078,7 +3173,6 @@ export default function DashboardPage() {
       return updated;
     });
 
-    // W tle: synchronizacja z Supabase
     await supabase
       .from('zapisy_zajec')
       .update({ obecny: nowyStanObecny, nieobecny: false })
@@ -3086,12 +3180,11 @@ export default function DashboardPage() {
       .eq('klient_id', klientId);
   };
 
-  // OBSŁUGA NIEOBECNOŚCI: TRENER (AUTO BLOKADA 3 DNI, BRAK PYTANIA O ZWROT) VS ADMIN
+  // OBSŁUGA NIEOBECNOŚCI: TRENER VS ADMIN
   const toggleNieobecnyAction = async (osobaZapisana: any, klient: any) => {
     if (!selectedClass) return;
 
     if (osobaZapisana.nieobecny) {
-      // Odznaczenie nieobecności - Optimistic UI
       const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
       setZapisyNaZajecia(prev => {
         const updated = { ...prev };
@@ -3108,10 +3201,8 @@ export default function DashboardPage() {
       loadData();
     } else {
       if (appRole === 'trener') {
-        // ROLA TRENERA: Natychmiastowe odebranie wejścia bez pytania, auto blokada 3 dni i wypisanie z kolejnych zajęć
         await wykonajNieobecnoscDlaTrenera(osobaZapisana, klient);
       } else {
-        // ROLA ADMINISTRATORA: Bez zmian, dialog z potwierdzeniem
         setBlokadaZapisow(true);
         setDlugoscBlokady(String(bookingRules.absence_ban_days || 3));
         setClientToMarkAbsent(klient);
@@ -3119,13 +3210,11 @@ export default function DashboardPage() {
     }
   };
 
-  // DEDYKOWANA LOGIKA DLA TRENERA (BŁYSKAWICZNA DYSKRYMINACJA NIEOBECNOŚCI)
   const wykonajNieobecnoscDlaTrenera = async (osobaZapisana: any, klient: any) => {
     if (!selectedClass) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
 
-    // Optimistic UI - natychmiastowe oznaczenie na czerwono
     setZapisyNaZajecia(prev => {
       const updated = { ...prev };
       keys.forEach(k => {
@@ -3140,7 +3229,6 @@ export default function DashboardPage() {
 
     await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', klient.id);
 
-    // Automatyczna 3-dniowa blokada zapisów
     const dni = 3;
     const dataWygaśnięcia = new Date();
     dataWygaśnięcia.setDate(dataWygaśnięcia.getDate() + dni);
@@ -3159,12 +3247,10 @@ export default function DashboardPage() {
       karnetyKlubowicza: updatedClientKarnety
     }).eq('id', klient.id);
 
-    // Rejestracja w transakcjach
     let d = 1, m = 1;
     if (selectedClass.displayDate.includes('/')) {
       [d, m] = selectedClass.displayDate.split('/').map(Number);
     }
-    const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
     const durationText = calculateDuration(selectedClass.start, selectedClass.end);
 
     await supabase.from('transakcje').insert([{
@@ -3182,7 +3268,6 @@ export default function DashboardPage() {
       payload: { klient_id: klient.id, class_key: classKey, ban_until: dataStr }
     }]);
 
-    // Automatyczne wypisanie klubowicza ze wszystkich przyszłych zajęć w okresie trwania blokady
     await handleAutoWypiszPoZablokowaniu(klient.id, klient, powod, classKey);
 
     showToast(`Oznaczono nieobecność. Nałożono 3 dni blokady zapisów na ${klient.firstName} ${klient.lastName}.`);
@@ -3192,7 +3277,6 @@ export default function DashboardPage() {
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
-    // Zabezpieczenie przed wielokrotnym kliknięciem
     if (isSubmittingRef.current || isSubmittingBooking) return;
     isSubmittingRef.current = true;
     setIsSubmittingBooking(true);
@@ -3204,7 +3288,6 @@ export default function DashboardPage() {
 
       const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
-        // Umowa 12M nigdy nie znika i jest traktowana jako ważna umowa
         if (isContractPass(k)) return true;
         if (k.waznyDo) {
           const expDate = new Date(k.waznyDo);
@@ -3322,7 +3405,6 @@ export default function DashboardPage() {
       const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
       const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
 
-      // DODATKOWA WALIDACJA W BAZIE W CZASIE RZECZYWISTYM DLA PEWNOŚCI
       const { data: liveSignupsDb } = await supabase
         .from('zapisy_zajec')
         .select('id, status, klient_id')
@@ -3334,7 +3416,6 @@ export default function DashboardPage() {
         return; 
       }
 
-      // SPRAWDZENIE NADRZĘDNEGO INDYWIDUALNEGO LIMITU ZAPISU W PRZÓD DLA KLUBOWICZA
       const userFullName = `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase();
       const userIndividualLimit = indywidualneLimity.find((l: any) => 
         (l.klubowicz_id && String(l.klubowicz_id) === String(currentUser.id)) ||
@@ -3512,7 +3593,6 @@ export default function DashboardPage() {
       
       if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
-      // Optimistic UI - natychmiastowe zaktualizowanie zapisu na kafelku
       const newEntry = {
         id: currentUser.id,
         klient_id: currentUser.id,
@@ -3550,9 +3630,22 @@ export default function DashboardPage() {
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
+          const nextRemaining = currentRemaining - 1;
+          let graceDate = null;
+          let statusText = updatedKarnety[passIndex].statusTekst;
+
+          if (nextRemaining === 0) {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            graceDate = tomorrow.toISOString().split('T')[0];
+            statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+          }
+
           updatedKarnety[passIndex] = {
             ...updatedKarnety[passIndex],
-            pozostaloWejsc: currentRemaining - 1
+            pozostaloWejsc: nextRemaining,
+            zeroEntriesGraceUntil: graceDate,
+            statusTekst: statusText
           };
           await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
         }
@@ -3591,7 +3684,6 @@ export default function DashboardPage() {
   const handleConfirmWaitlistSignup = async (cutoffMinutes: number) => {
     if (!currentUser || !selectedClass) return;
     
-    // Zabezpieczenie przed podwójnym kliknięciem
     if (isSubmittingRef.current || isSubmittingBooking) return;
     isSubmittingRef.current = true;
     setIsSubmittingBooking(true);
@@ -3600,7 +3692,6 @@ export default function DashboardPage() {
       const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
       const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
       
-      // Podwójne sprawdzenie w bazie, czy już nie zapisano ułamki sekundy temu
       const { data: liveDbCheck } = await supabase
         .from('zapisy_zajec')
         .select('id')
@@ -3613,10 +3704,8 @@ export default function DashboardPage() {
         return;
       }
 
-      const limitZajec = selectedClass.limit || 12;
       const aktualni = zapisyNaZajecia[classKey] || [];
 
-      // Optimistic UI - dodanie na krzesełko natychmiast
       const waitlistEntry = {
         id: currentUser.id,
         klient_id: currentUser.id,
@@ -3654,9 +3743,22 @@ export default function DashboardPage() {
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
+          const nextRemaining = currentRemaining - 1;
+          let graceDate = null;
+          let statusText = updatedKarnety[passIndex].statusTekst;
+
+          if (nextRemaining === 0) {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            graceDate = tomorrow.toISOString().split('T')[0];
+            statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+          }
+
           updatedKarnety[passIndex] = {
             ...updatedKarnety[passIndex],
-            pozostaloWejsc: currentRemaining - 1
+            pozostaloWejsc: nextRemaining,
+            zeroEntriesGraceUntil: graceDate,
+            statusTekst: statusText
           };
           await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', currentUser.id);
         }
@@ -3703,6 +3805,7 @@ export default function DashboardPage() {
       setIsSubmittingBooking(false);
     }
   };
+
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
@@ -3724,22 +3827,32 @@ export default function DashboardPage() {
     await loadData();
   };
 
+  // SAMODZIELNY WYPIS KLUBOWICZA: OSOBY NA LIŚCIE REZERWOWEJ MOGĄ SIĘ WYPISAĆ W DOWOLNYM MOMENCIE
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
-    const deadlineInfo = getCancelDeadlineInfo(selectedClass, selectedClass.displayDate);
-    if (deadlineInfo && !deadlineInfo.canCancel) {
-      showToast(deadlineInfo.label, 'error');
-      return;
-    }
-
-    if (!confirm("Czy na pewno chcesz wypisać się z tych zajęć?")) return;
-
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[classKey] || [];
+    const myEntry = aktualni.find((u: any) => String(u.id) === String(currentUser.id));
+    const isOnWaitlist = myEntry?.status === 'krzesełko';
 
-    // Optimistic UI - natychmiastowe usunięcie z widoku
+    // Jeśli klubowicz NIE jest na liście rezerwowej, sprawdzamy blokadę czasową
+    if (!isOnWaitlist) {
+      const deadlineInfo = getCancelDeadlineInfo(selectedClass, selectedClass.displayDate);
+      if (deadlineInfo && !deadlineInfo.canCancel) {
+        showToast(deadlineInfo.label, 'error');
+        return;
+      }
+    }
+
+    // Pytanie z potwierdzeniem
+    const confirmPrompt = isOnWaitlist 
+      ? "Czy na pewno chcesz wypisać się z listy rezerwowej (krzesełka) tych zajęć?"
+      : "Czy na pewno chcesz wypisać się z tych zajęć?";
+
+    if (!confirm(confirmPrompt)) return;
+
     setZapisyNaZajecia(prev => {
       const updated = { ...prev };
       keysToDelete.forEach(vk => {
@@ -3775,14 +3888,13 @@ export default function DashboardPage() {
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
-      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-      const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
-      if (!isNaN(currentRemaining)) {
-        updatedKarnety[passIndex] = {
-          ...updatedKarnety[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
-        };
-      }
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+      // Zwracamy wejście bez sztucznego ograniczania limitem początkowym
+      updatedKarnety[passIndex] = {
+        ...updatedKarnety[passIndex],
+        pozostaloWejsc: currentRemaining + 1,
+        zeroEntriesGraceUntil: null
+      };
     }
 
     await supabase.from('klienci').update({ 
@@ -3801,7 +3913,7 @@ export default function DashboardPage() {
         klient_id: currentUser.id, 
         typ_operacji: 'zajecia_wypis', 
         class_key: classKey, 
-        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Samodzielne wypisanie z zajęć: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Zwrócono 1 wejście.` 
+        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Samodzielne wypisanie z ${isOnWaitlist ? 'listy rezerwowej (krzesełka)' : 'zajęć'}: ${selectedClass.title} (${formattedFullDate} ${selectedClass.start}-${selectedClass.end || ''}, ${durationText}). Zwrócono 1 wejście.` 
       },
       { 
         klient_id: currentUser.id, 
@@ -3812,28 +3924,26 @@ export default function DashboardPage() {
     ]);
 
     await supabase.from('booking_logs').insert([{
-      action_type: 'CANCEL_SUCCESS',
+      action_type: isOnWaitlist ? 'WAITLIST_CANCEL_SUCCESS' : 'CANCEL_SUCCESS',
       status: 'SUCCESS',
-      reason: `${currentUser.firstName || 'Klubowicz'} wypisał się z ${classKey}`,
+      reason: `${currentUser.firstName || 'Klubowicz'} wypisał się z ${isOnWaitlist ? 'krzesełka' : 'zajęć'} w ${classKey}`,
       rule_applied: 'USER_CANCEL',
-      payload: { klient_id: currentUser.id, class_key: classKey }
+      payload: { klient_id: currentUser.id, class_key: classKey, was_waitlist: isOnWaitlist }
     }]);
 
     const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.id) !== String(currentUser.id));
     
-    // Auto-odwołanie zajęć jeśli jest pusto
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       selectedClass,
       selectedClass.displayDate,
       pozostaliUczestnicy
     );
 
-    // Awans z listy rezerwowej (jeśli nie odwołano automatycznie całych zajęć)
-    if (!autoCancelled) {
+    if (!autoCancelled && !isOnWaitlist) {
       await promoteWaitlistMember(selectedClass, selectedClass.displayDate, aktualni, currentUser.id);
     }
 
-    showToast("Zostałeś pomyślnie wypisany z zajęć.");
+    showToast(isOnWaitlist ? "Wypisano z listy rezerwowej. Wejście zostało zwrócone." : "Zostałeś pomyślnie wypisany z zajęć.");
     setSelectedClass(null);
     loadData();
   };
@@ -3850,17 +3960,26 @@ export default function DashboardPage() {
     }
     if (!currentUser) return;
     
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    const myEntry = aktualni.find((u: any) => String(u.id) === String(currentUser.id));
+    const isOnWaitlist = myEntry?.status === 'krzesełko';
+
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] !== undefined
       ? Number(bookingRules.cancel_deadline_per_class[title])
       : Number(bookingRules.cancel_deadline_minutes ?? 90);
     const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-    if (diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
+    // Lista rezerwowa może wypisać się ZAWSZE bez ograniczeń czasowych
+    if (!isOnWaitlist && diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
       showToast(`Nie możesz się wypisać! Minimalny czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
       return;
     }
 
-    if (!confirm(`Czy na pewno chcesz wypisać się z zajęć: ${title}?`)) return;
+    const confirmText = isOnWaitlist 
+      ? `Czy na pewno chcesz wypisać się z listy rezerwowej zajęć: ${title}?`
+      : `Czy na pewno chcesz wypisać się z zajęć: ${title}?`;
+
+    if (!confirm(confirmText)) return;
 
     const parts = classKey.split('_');
     const classId = parts[0];
@@ -3893,14 +4012,12 @@ export default function DashboardPage() {
     let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
     const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
-      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-      const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
-      if (!isNaN(currentRemaining)) {
-        updatedKarnety[passIndex] = {
-          ...updatedKarnety[passIndex],
-          pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
-        };
-      }
+      const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+      updatedKarnety[passIndex] = {
+        ...updatedKarnety[passIndex],
+        pozostaloWejsc: currentRemaining + 1,
+        zeroEntriesGraceUntil: null
+      };
     }
 
     await supabase.from('klienci').update({ 
@@ -3917,7 +4034,7 @@ export default function DashboardPage() {
         klient_id: currentUser.id, 
         typ_operacji: 'zajecia_wypis', 
         class_key: classKey, 
-        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Samodzielne wypisanie z zajęć: ${title} (${formattedFullDate} ${startStr}). Zwrócono 1 wejście.` 
+        opis: `${currentUser.firstName || 'Klubowicz'} ${currentUser.lastName || ''} - Samodzielne wypisanie z ${isOnWaitlist ? 'listy rezerwowej' : 'zajęć'}: ${title} (${formattedFullDate} ${startStr}). Zwrócono 1 wejście.` 
       },
       { 
         klient_id: currentUser.id, 
@@ -3930,7 +4047,6 @@ export default function DashboardPage() {
     const classInfo = findClassDetails(classId, dateStr);
     const limitZajec = classInfo?.limit || 12;
 
-    const aktualni = zapisyNaZajecia[classKey] || [];
     const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.id) !== String(currentUser.id));
 
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
@@ -3939,8 +4055,7 @@ export default function DashboardPage() {
       pozostaliUczestnicy
     );
 
-    // Awans z krzesełka połączony z powiadomieniami PUSH
-    if (!autoCancelled) {
+    if (!autoCancelled && !isOnWaitlist) {
       await promoteWaitlistMember(
         classInfo || { id: classId, title, start: startStr, limit: limitZajec },
         dateStr,
@@ -3951,6 +4066,8 @@ export default function DashboardPage() {
 
     showToast(autoCancelled 
       ? "Wypisano z zajęć. Trening został automatycznie odwołany z powodu zbyt małej liczby osób (zwrócono wejścia)." 
+      : isOnWaitlist
+      ? "Wypisano z listy rezerwowej. Wejście zostało zwrócone."
       : "Zostałeś pomyślnie wypisany z zajęć i odzyskałeś wejście."
     );
     await loadData();
@@ -4100,9 +4217,22 @@ export default function DashboardPage() {
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
+          const nextRemaining = currentRemaining - 1;
+          let graceDate = null;
+          let statusText = updatedKarnety[passIndex].statusTekst;
+
+          if (nextRemaining === 0) {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            graceDate = tomorrow.toISOString().split('T')[0];
+            statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+          }
+
           updatedKarnety[passIndex] = {
             ...updatedKarnety[passIndex],
-            pozostaloWejsc: currentRemaining - 1
+            pozostaloWejsc: nextRemaining,
+            zeroEntriesGraceUntil: graceDate,
+            statusTekst: statusText
           };
           await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klient.id);
         }
@@ -4138,14 +4268,13 @@ export default function DashboardPage() {
     }
   };
 
-  // OBSŁUGA WYPISYWANIA: TRENER (ZAWSZE ODEJMUJE WEJŚCIE, PYTA O BLOKADĘ) VS ADMIN (PYTA O ZWROT)
+  // OBSŁUGA WYPISYWANIA PRZEZ TRENERA/ADMINA
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[classKey] || [];
 
-    // Optimistic UI - natychmiastowe usunięcie klienta z listy
     setZapisyNaZajecia(prev => {
       const updated = { ...prev };
       keysToDelete.forEach(k => {
@@ -4179,14 +4308,12 @@ export default function DashboardPage() {
     if (zwrocicWejscie) {
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
-        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
-        const poczatkowe = parseInt(updatedKarnety[passIndex].poczatkoweWejsc || currentRemaining + 1, 10);
-        if (!isNaN(currentRemaining)) {
-          updatedKarnety[passIndex] = {
-            ...updatedKarnety[passIndex],
-            pozostaloWejsc: Math.min(poczatkowe, currentRemaining + 1)
-          };
-        }
+        const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+        updatedKarnety[passIndex] = {
+          ...updatedKarnety[passIndex],
+          pozostaloWejsc: currentRemaining + 1,
+          zeroEntriesGraceUntil: null
+        };
       }
     }
 
@@ -4427,7 +4554,7 @@ export default function DashboardPage() {
 
           if (classInfo) {
             if (appRole === 'klubowicz' && classInfo.isUsunięte) {
-              // pomijamy usunięte dla klubowicza
+              // pomijamy
             } else {
               const [sh = '00', sm = '00'] = (classInfo.start || '00:00').split(':');
               const classStartDateTime = new Date(
@@ -4473,7 +4600,6 @@ export default function DashboardPage() {
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
   const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
 
-  // FILTROWANIE OPERACJI / TRANSAKCJI DLA TABELI OPERACJI W PANELU ZARZĄDZANIA
   const filteredOperationsList = wszystkieTransakcje.filter(t => {
     if (!t) return false;
     const tDate = t.created_at ? t.created_at.split('T')[0] : '';
@@ -4493,7 +4619,6 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
-      
       {/* SYSTEM POWIADOMIEŃ TOAST */}
       {toastMessage && (
         <div
@@ -4771,7 +4896,11 @@ export default function DashboardPage() {
                         <div className="shrink-0 flex items-center justify-end gap-2.5 pl-1">
                           {cancelInfo && (
                             <div className="text-right hidden sm:block">
-                              {cancelInfo.status === 'countdown' ? (
+                              {cls.isKrzeselko ? (
+                                <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 font-bold px-2 py-1 rounded-lg text-[10px] border border-blue-200">
+                                  🪑 Wypis bez limitu
+                                </span>
+                              ) : cancelInfo.status === 'countdown' ? (
                                 <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-950 font-bold px-2 py-1 rounded-lg text-[10px] border border-amber-300 animate-pulse">
                                   {cancelInfo.label}
                                 </span>
@@ -4785,13 +4914,13 @@ export default function DashboardPage() {
 
                           <button 
                             onClick={() => handleWypiszZListyAktywnych(cls.classKey, cls.title, cls.start, cls.fullDateObj)}
-                            disabled={cancelInfo && !cancelInfo.canCancel}
+                            disabled={!cls.isKrzeselko && cancelInfo && !cancelInfo.canCancel}
                             className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center shadow-md transition-transform shrink-0 ${
-                              cancelInfo && !cancelInfo.canCancel
+                              !cls.isKrzeselko && cancelInfo && !cancelInfo.canCancel
                                 ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
                                 : 'bg-[#ff2a43] hover:bg-rose-600 text-white hover:scale-105 cursor-pointer'
                             }`}
-                            title={cancelInfo && !cancelInfo.canCancel ? cancelInfo.label : "Wypisz się z zajęć"}
+                            title={!cls.isKrzeselko && cancelInfo && !cancelInfo.canCancel ? cancelInfo.label : "Wypisz się z zajęć"}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -4843,6 +4972,9 @@ export default function DashboardPage() {
                       <span className="bg-sky-100 text-sky-900 px-4 py-1.5 rounded-full text-xs font-black border border-sky-200 flex items-center gap-1">
                         <span>🎟️ Wejścia:</span> 
                         <span className="text-amber-700">{currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span> / <span>{currentUser.karnetyKlubowicza[0].poczatkoweWejsc || currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span>
+                        {currentUser.karnetyKlubowicza[0].transferredEntries > 0 && (
+                          <span className="text-emerald-700 text-[9px] font-extrabold">(+{currentUser.karnetyKlubowicza[0].transferredEntries} przeniesione)</span>
+                        )}
                       </span>
                     )}
                     {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && currentUser.karnetyKlubowicza[0].waznyDo && (
@@ -4882,7 +5014,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* PANEL GŁÓWNY: PRZEŁĄCZNIK WIDOKÓW TYLKO DLA ADMINA (UKRYTE U TRENERA ZGODNIE Z PKT 3) */}
+      {/* PANEL GŁÓWNY: PRZEŁĄCZNIK WIDOKÓW DLA ADMINA */}
       {appRole === 'admin' && (
         <div className="flex items-center justify-between bg-white border border-sky-200 p-3 rounded-2xl shadow-sm">
           <div className="flex items-center gap-2">
@@ -4923,10 +5055,9 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ZAKŁADKA 1: TABELA OPERACJI I ZAPISÓW (TYLKO ADMIN, MAX 1000 REKORDÓW) */}
+      {/* ZAKŁADKA 1: TABELA OPERACJI I ZAPISÓW (TYLKO ADMIN) */}
       {appRole === 'admin' && adminViewTab === 'operacje' && (
         <section className="space-y-4 animate-in fade-in">
-          {/* Pasek wyszukiwania i filtrów */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-sky-200 p-4 rounded-2xl shadow-sm">
             <div className="relative flex-1">
               <input
@@ -4959,7 +5090,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Tabela operacji */}
           <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -5266,7 +5396,6 @@ export default function DashboardPage() {
                                   </span>
                                 )}
 
-                                {/* MENU ADMINISTRACYJNE ⚙️ */}
                                 {appRole === 'admin' && (
                                   <div className="relative" onClick={(e) => e.stopPropagation()}>
                                     <button 
@@ -5342,7 +5471,11 @@ export default function DashboardPage() {
 
                             {(isUserInMainGroup || isUserInWaitlist) && !isClassCancelled && !item.isUsunięte && cancelDeadlineInfo && (
                               <div className="pt-0.5">
-                                {cancelDeadlineInfo.status === 'countdown' ? (
+                                {isUserInWaitlist ? (
+                                  <div className="bg-blue-100 text-blue-900 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 border border-blue-200">
+                                    🪑 Wypis bez limitu czasu
+                                  </div>
+                                ) : cancelDeadlineInfo.status === 'countdown' ? (
                                   <div className="bg-amber-100/90 border border-amber-300 text-amber-950 font-bold text-[9px] px-2 py-0.5 rounded-md inline-flex items-center gap-1 animate-pulse">
                                     {cancelDeadlineInfo.label}
                                   </div>
@@ -5402,7 +5535,8 @@ export default function DashboardPage() {
                             </div>
                           </div>
                         );
-                      }))}
+                      })
+                    )}
                   </div>
                 </>
               );
@@ -5458,7 +5592,7 @@ export default function DashboardPage() {
         </section>
       )}
 
-      {/* SEKCJA DLA ADMINA: KLIENCI (ROZCIĄGNIĘTA NA PEŁNĄ SZEROKOŚĆ PO USUNIĘCIU BŁĘDNEJ TABELI SPRZEDAŻY) */}
+      {/* SEKCJA DLA ADMINA: KLIENCI */}
       {appRole === 'admin' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pt-4">
           <section className="lg:col-span-12 space-y-3">
@@ -5570,6 +5704,9 @@ export default function DashboardPage() {
                               <span className="bg-sky-100 text-sky-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-sky-200 flex items-center gap-1">
                                 <span>🎟️ Wejścia:</span> 
                                 <span className="text-amber-700">{firstPass.pozostaloWejsc}</span> / <span>{firstPass.poczatkoweWejsc || firstPass.pozostaloWejsc}</span>
+                                {firstPass.transferredEntries > 0 && (
+                                  <span className="text-emerald-700 text-[9px] font-extrabold">(+{firstPass.transferredEntries})</span>
+                                )}
                               </span>
                             )}
                           </div>
@@ -5734,8 +5871,17 @@ export default function DashboardPage() {
           return nameA.localeCompare(nameB);
         };
 
+        // WYMÓG 2: OSOBY OZNACZONE OBECNE/NIEOBECNE SCHODZĄ NA DÓŁ LISTY
+        const sortAttendanceAndAlfabet = (a: any, b: any) => {
+          const aOznaczony = !!(a.obecny || a.nieobecny);
+          const bOznaczony = !!(b.obecny || b.nieobecny);
+          if (!aOznaczony && bOznaczony) return -1;
+          if (aOznaczony && !bOznaczony) return 1;
+          return sortAlfabet(a, b);
+        };
+
         const glownaNieposortowana = zapisaniWszyscy.filter(u => u.status === 'zapisany');
-        const listaGlowna = [...glownaNieposortowana].sort(sortAlfabet);
+        const listaGlowna = [...glownaNieposortowana].sort(sortAttendanceAndAlfabet);
         const listaKrzesełko = zapisaniWszyscy.filter(u => u.status === 'krzesełko');
         
         const isFull = glownaNieposortowana.length >= limitZajec;
@@ -5848,12 +5994,16 @@ export default function DashboardPage() {
                     const isMedicover = (osoba.pass || '').toUpperCase().includes('MEDICOVER') ||
                       (osoba.karnetyKlubowicza || []).some((k: any) => (k.nazwa || '').toUpperCase().includes('MEDICOVER'));
 
+                    const isAttendanceMarked = !!(osobaZapisana.obecny || osobaZapisana.nieobecny);
+
                     return (
                       <div 
                         key={osoba.id} 
                         className={`rounded-2xl p-4 shadow-sm relative flex flex-col justify-between space-y-3 transition-all ${
                           canManageClass && isMedicover
                             ? 'bg-gradient-to-br from-emerald-50 via-white to-sky-50 border-2 border-emerald-500 ring-2 ring-emerald-300/60 shadow-md'
+                            : isAttendanceMarked
+                            ? 'bg-slate-50/70 border border-slate-200 opacity-90'
                             : 'bg-white border border-sky-200'
                         }`}
                       >
@@ -6096,7 +6246,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-
               {/* Dolny pasek zapisu */}
               {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
@@ -6427,11 +6576,18 @@ export default function DashboardPage() {
                 <button onClick={() => { 
                   openProfile(tableActionClient); 
                   if(tableActionClient.karnetyKlubowicza?.length > 0) {
-                    setExtendPassTarget(tableActionClient.karnetyKlubowicza[0]);
-                    setExtendSelectedNewPassName(tableActionClient.karnetyKlubowicza[0].nazwa);
-                    const curDate = new Date(tableActionClient.karnetyKlubowicza[0].waznyDo || Date.now());
-                    curDate.setMonth(curDate.getMonth() + 1);
-                    setExtendNewDate(curDate.toISOString().split('T')[0]);
+                    const pass = tableActionClient.karnetyKlubowicza[0];
+                    setExtendPassTarget(pass);
+                    setExtendSelectedNewPassName(pass.nazwa);
+                    const defK = dostepneKarnety.find(k => k.nazwa === pass.nazwa);
+                    const isContract = isContractPass(pass) || isContractPass(defK);
+                    if (isContract) {
+                      setExtendNewDate(getContractEndOfMonthDate(pass.waznyDo));
+                    } else {
+                      const curDate = new Date(pass.waznyDo || Date.now());
+                      curDate.setMonth(curDate.getMonth() + 1);
+                      setExtendNewDate(curDate.toISOString().split('T')[0]);
+                    }
                   }
                   setIsExtendPassModalOpen(true); 
                   setTableActionClient(null); 
@@ -6541,11 +6697,18 @@ export default function DashboardPage() {
                         <div className="absolute right-0 mt-2 w-60 bg-white border border-slate-200 rounded-2xl shadow-2xl py-2 z-[70] text-xs">
                           <button onClick={() => {
                             if(profileClient.karnetyKlubowicza?.length > 0) {
-                              setExtendPassTarget(profileClient.karnetyKlubowicza[0]);
-                              setExtendSelectedNewPassName(profileClient.karnetyKlubowicza[0].nazwa);
-                              const curDate = new Date(profileClient.karnetyKlubowicza[0].waznyDo || Date.now());
-                              curDate.setMonth(curDate.getMonth() + 1);
-                              setExtendNewDate(curDate.toISOString().split('T')[0]);
+                              const pass = profileClient.karnetyKlubowicza[0];
+                              setExtendPassTarget(pass);
+                              setExtendSelectedNewPassName(pass.nazwa);
+                              const defK = dostepneKarnety.find(k => k.nazwa === pass.nazwa);
+                              const isContract = isContractPass(pass) || isContractPass(defK);
+                              if (isContract) {
+                                setExtendNewDate(getContractEndOfMonthDate(pass.waznyDo));
+                              } else {
+                                const curDate = new Date(pass.waznyDo || Date.now());
+                                curDate.setMonth(curDate.getMonth() + 1);
+                                setExtendNewDate(curDate.toISOString().split('T')[0]);
+                              }
                               setIsExtendPassModalOpen(true);
                             } else {
                               showToast("Brak aktywnego karnetu do przedłużenia.", 'info');
@@ -6649,6 +6812,9 @@ export default function DashboardPage() {
                                     <span className="bg-sky-100 text-sky-900 text-[11px] font-black px-2 py-0.5 rounded-full border border-sky-200 flex items-center gap-1">
                                       <span>🎟️ Wejścia:</span> 
                                       <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
+                                      {karnet.transferredEntries > 0 && (
+                                        <span className="text-emerald-700 text-[9px] font-extrabold">(+{karnet.transferredEntries} przeniesione)</span>
+                                      )}
                                     </span>
                                   )}
                                 </div>
@@ -6683,9 +6849,15 @@ export default function DashboardPage() {
                                   onClick={() => {
                                     setExtendPassTarget(karnet);
                                     setExtendSelectedNewPassName(karnet.nazwa);
-                                    const curDate = new Date(karnet.waznyDo || Date.now());
-                                    curDate.setMonth(curDate.getMonth() + 1);
-                                    setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                    const defK = dostepneKarnety.find(k => k.nazwa === karnet.nazwa);
+                                    const isContract = isContractPass(karnet) || isContractPass(defK);
+                                    if (isContract) {
+                                      setExtendNewDate(getContractEndOfMonthDate(karnet.waznyDo));
+                                    } else {
+                                      const curDate = new Date(karnet.waznyDo || Date.now());
+                                      curDate.setMonth(curDate.getMonth() + 1);
+                                      setExtendNewDate(curDate.toISOString().split('T')[0]);
+                                    }
                                     setIsExtendPassModalOpen(true);
                                   }}
                                   className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
@@ -6754,9 +6926,11 @@ export default function DashboardPage() {
                   onChange={(e) => {
                     const wybranyNazwa = e.target.value;
                     const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
+                    const isContract = isContractPass(def) || isContractPass({ nazwa: wybranyNazwa });
                     setEditingPassModal({
                       ...editingPassModal,
                       nazwa: wybranyNazwa,
+                      isContract12M: isContract,
                       cena: def ? `${def.cena} PLN` : editingPassModal.cena
                     });
                   }}
@@ -6764,7 +6938,7 @@ export default function DashboardPage() {
                 >
                   <option value="">-- Wybierz karnet z bazy --</option>
                   {dostepneKarnety.map(k => (
-                    <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN)</option>
+                    <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN){isContractPass(k) ? ' • Umowa 12M' : ''}</option>
                   ))}
                 </select>
               </div>
