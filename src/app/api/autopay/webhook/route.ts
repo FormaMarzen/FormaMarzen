@@ -20,7 +20,26 @@ function isContractPass(k: any): boolean {
   return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m');
 }
 
-async function sendPushToAdmins(title: string, body: string, url: string = '/klienci') {
+// OBLICZANIE OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
+function calculateEndOfMonthDate(currentPaidUntil?: string | null): string {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1 - 12
+
+  let targetYear = currentYear;
+  let targetMonth = currentMonth;
+
+  if (currentPaidUntil && String(currentPaidUntil) >= `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`) {
+    const nextMonthDate = new Date(currentYear, currentMonth, 1);
+    targetYear = nextMonthDate.getFullYear();
+    targetMonth = nextMonthDate.getMonth() + 1;
+  }
+
+  const lastDay = new Date(targetYear, targetMonth, 0).getDate();
+  return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+}
+
+async function sendPushToAdmins(title: string, body: string, url: string = '/raporty/klienci') {
   try {
     const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
     const privateKey = process.env.VAPID_PRIVATE_KEY || '';
@@ -198,7 +217,6 @@ export async function POST(req: Request) {
           }
         }
 
-        // Zapis rzeczywistego wpływu finansowego do rejestru transakcji
         await supabase.from('transakcje').insert([{
           klient_id: transakcja.user_id,
           typ_operacji: 'odziez_autopay',
@@ -286,16 +304,10 @@ export async function POST(req: Request) {
           );
         }
 
-      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M PRZEZ AUTOPAY
+      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M PRZEZ AUTOPAY (DO KOŃCA MIESIĄCA KALENDARZOWEGO)
       } else if (transakcja.type === 'contract_installment') {
         if (klient) {
-          const now = new Date();
-          const year = now.getFullYear();
-          const month = now.getMonth() + 1;
-          const lastDayOfMonth = new Date(year, month, 0).getDate();
-          const defaultEndOfMonth = `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
-
-          const targetPaidUntil = metadata.targetPaidUntil || defaultEndOfMonth;
+          const targetPaidUntil = metadata.targetPaidUntil || calculateEndOfMonthDate(klient.umowa_oplacona_do);
 
           let parsedKarnety: any[] = [];
           if (Array.isArray(klient.karnetyKlubowicza)) {
@@ -339,7 +351,6 @@ export async function POST(req: Request) {
             karnetyKlubowicza: updatedKarnety
           };
 
-          // Zdejmujemy blokadę jeśli była spowodowana brakiem wpłaty za umowę
           const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat');
           if (isBlockedForContract || klient.blokadaDo) {
             clientUpdatePayload.blokadaDo = null;
@@ -369,7 +380,7 @@ export async function POST(req: Request) {
           await sendPushToAdmins(
             'Opłacono ratę umowy 12M! 💳',
             `${clientName} opłacił(a) ratę umowy online Autopay (${transactionAmount.toFixed(2)} PLN, ważność do ${targetPaidUntil})`,
-            '/klienci'
+            '/raporty/klienci'
           );
         }
 
@@ -397,7 +408,7 @@ export async function POST(req: Request) {
             clientUpdatePayload.Cena = metadata.cenaStr;
           }
 
-          // Weryfikacja czy zakup/przedłużenie dotyczyło umowy 12M
+          // Weryfikacja czy zakup/przedłużenie dotyczyło umowy 12M (zawsze do końca miesiąca)
           let isContractOperation = false;
           if (metadata.umowa_oplacona_do) {
             clientUpdatePayload.umowa_oplacona_do = metadata.umowa_oplacona_do;
@@ -406,11 +417,7 @@ export async function POST(req: Request) {
             const contractItem = metadata.updatedKarnetyList.find((k: any) => isContractPass(k));
             if (contractItem) {
               isContractOperation = true;
-              const now = new Date();
-              const year = now.getFullYear();
-              const month = now.getMonth() + 1;
-              const lastDayOfMonth = new Date(year, month, 0).getDate();
-              clientUpdatePayload.umowa_oplacona_do = contractItem.waznyDo || `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+              clientUpdatePayload.umowa_oplacona_do = contractItem.waznyDo || calculateEndOfMonthDate(klient.umowa_oplacona_do);
             }
           }
 
@@ -433,7 +440,12 @@ export async function POST(req: Request) {
               .eq('id', klient.id);
           }
 
-          const opDescription = transakcja.gateway_response?.opis || (transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu');
+          // Odnotowanie informacji o przeniesionych wejściach (jeśli dotyczyło karnetu ilościowego)
+          let opDescription = transakcja.gateway_response?.opis || (transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu');
+          if (metadata.transferredEntries && metadata.transferredEntries > 0) {
+            opDescription += ` (Przeniesiono +${metadata.transferredEntries} niewykorzystanych wejść)`;
+          }
+
           const typOp = isContractOperation
             ? (transakcja.type === 'pass_extend' ? 'oplata_raty_12m_autopay' : 'zakup_umowy_autopay')
             : (transakcja.type === 'pass_extend' ? 'przedluzenie_karnetu_autopay' : 'zakup_karnetu_autopay');
@@ -477,7 +489,7 @@ export async function POST(req: Request) {
           await sendPushToAdmins(
             transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
             `${clientName} opłacił(a) karnet: ${opDescription} (${transactionAmount.toFixed(2)} PLN)`,
-            '/klienci'
+            '/raporty/klienci'
           );
         }
 
@@ -494,19 +506,16 @@ export async function POST(req: Request) {
 
           const clientWalletUpdate: Record<string, any> = { Portfel: formattedNewWallet };
 
-          // Jeśli spłacono zadłużenie i blokada wynikała z portfela, odblokowujemy konto
           if (newWalletNum >= 0 && (klient.powodBlokady?.toLowerCase().includes('portfel') || klient.powodBlokady?.toLowerCase().includes('zadłużen'))) {
             clientWalletUpdate.blokadaDo = null;
             clientWalletUpdate.powodBlokady = null;
           }
 
-          // 1. Aktualizacja salda portfela klubowicza
           await supabase
             .from('klienci')
             .update(clientWalletUpdate)
             .eq('id', klient.id);
 
-          // 2. Rejestracja transakcji finansowej (przychód klubu)
           await supabase.from('transakcje').insert([{
             klient_id: klient.id,
             typ_operacji: transakcja.type === 'wallet_settlement' ? 'splata_zadluzenia_autopay' : 'doladowanie_portfela_autopay',
@@ -519,7 +528,7 @@ export async function POST(req: Request) {
           await sendPushToAdmins(
             transakcja.type === 'wallet_settlement' ? 'Spłata zadłużenia portfela 💰' : 'Doładowanie portfela 💰',
             `${clientName} dokonał(a) wpłaty na portfel w kwocie ${transactionAmount.toFixed(2)} PLN (Nowy stan: ${formattedNewWallet})`,
-            '/klienci'
+            '/raporty/klienci'
           );
         }
       }
