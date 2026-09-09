@@ -88,7 +88,7 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
-// Funkcja usuwająca polskie znaki, myślniki, ukośniki i spacje dla 100% precyzji dopasowań
+// Normalizacja tekstu do bezbłędnego porównywania nazw
 const normalizeText = (text: string) => {
   return (text || "")
     .toLowerCase()
@@ -96,6 +96,55 @@ const normalizeText = (text: string) => {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[-_/\s]/g, "")
     .trim();
+};
+
+// Funkcja dopasowująca wartość metryki do odznaki, niezależnie od formatu typ_reguly w bazie
+export const getMetricValueForRule = (badgeDef: any, metrics: Record<string, number>): number => {
+  if (!badgeDef || !metrics) return 0;
+  const rule = String(badgeDef.typ_reguly || "").toUpperCase().trim();
+  const param = String(badgeDef.parametr_dodatkowy || "").toLowerCase().trim();
+  const warunek = String(badgeDef.warunek || badgeDef.nazwa || badgeDef.opis || "").toLowerCase();
+
+  if (metrics[rule] !== undefined) return metrics[rule];
+
+  if (rule.includes("HYROX") || param.includes("hyrox") || warunek.includes("hyrox") || warunek.includes("hy-rox")) {
+    return metrics["TRENINGI_HYROX"] ?? 0;
+  }
+  if (rule.includes("TABATA") || rule.includes("HIIT") || param.includes("hiit") || param.includes("tabata") || warunek.includes("hiit") || warunek.includes("tabata")) {
+    return metrics["TRENINGI_HIIT_TABATA"] ?? 0;
+  }
+  if (rule.includes("SILOW") || param.includes("silow") || warunek.includes("siłow") || warunek.includes("silow")) {
+    return metrics["TRENINGI_SILOWE"] ?? 0;
+  }
+  if (rule.includes("BRZUCH") || param.includes("brzuch") || warunek.includes("brzuch") || warunek.includes("core") || warunek.includes("abs")) {
+    return metrics["TRENINGI_BRZUCH"] ?? 0;
+  }
+  if (rule.includes("NOG") || rule.includes("POSLAD") || param.includes("nog") || param.includes("poslad") || warunek.includes("nogi") || warunek.includes("poślad")) {
+    return metrics["TRENINGI_NOGI_POSLADKI"] ?? 0;
+  }
+  if (rule.includes("ROZCIAG") || rule.includes("MOBILIZACJ") || param.includes("rozciag") || warunek.includes("rozciąg") || warunek.includes("mobilizacj") || warunek.includes("mobility")) {
+    return metrics["TRENINGI_ROZCIAGANIE"] ?? 0;
+  }
+  if (rule.includes("OGOLNOROZWOJ") || param.includes("ogolnorozwoj") || warunek.includes("ogólnorozwoj") || warunek.includes("funkcjonal")) {
+    return metrics["TRENINGI_OGOLNOROZWOJOWE"] ?? 0;
+  }
+  if (rule.includes("TRENINGI_OGOLNE") || rule === "TRENING" || rule === "TRENINGI") {
+    return metrics["TRENINGI_OGOLNE"] ?? 0;
+  }
+  if (rule.includes("STAZ") || warunek.includes("staż") || warunek.includes("staz")) {
+    return metrics["STAZ_DNI"] ?? 0;
+  }
+  if (rule.includes("REJESTRACJA") || warunek.includes("rejestracj")) {
+    return metrics["REJESTRACJA"] ?? 1;
+  }
+  if (rule.includes("POJEDYNKI_WYGRANE") || (rule.includes("POJEDYNKI") && warunek.includes("wygran"))) {
+    return metrics["POJEDYNKI_WYGRANE"] ?? 0;
+  }
+  if (rule.includes("POJEDYNKI_UDZIAL") || rule.includes("POJEDYNKI")) {
+    return metrics["POJEDYNKI_UDZIAL"] ?? 0;
+  }
+
+  return metrics[rule] ?? 0;
 };
 
 export default function WyzwaniaPage() {
@@ -276,7 +325,7 @@ export default function WyzwaniaPage() {
   const getBadgeProgress = (badgeDef: any, metrics: Record<string, number>) => {
     const ruleType = badgeDef.typ_reguly || "RECZNA";
     const threshold = Number(badgeDef.wartosc_progowa) || 1;
-    const current = metrics[ruleType] ?? 0;
+    const current = getMetricValueForRule(badgeDef, metrics);
     const diff = Math.max(0, threshold - current);
 
     if (ruleType === "RECZNA") {
@@ -293,8 +342,9 @@ export default function WyzwaniaPage() {
     }
 
     let unit = "jednostek";
-    if (ruleType.startsWith("TRENINGI")) unit = "obecności na treningu";
-    else if (ruleType === "STAZ_DNI") unit = "dni stażu w klubie";
+    const warunek = String(badgeDef.warunek || badgeDef.nazwa || "").toLowerCase();
+    if (ruleType.startsWith("TRENINGI") || warunek.includes("trening")) unit = "obecności na treningu";
+    else if (ruleType === "STAZ_DNI" || warunek.includes("staż") || warunek.includes("dni")) unit = "dni stażu w klubie";
     else if (ruleType.includes("WYGRANE") || ruleType.includes("SERIA")) unit = "wygranych wyzwań";
     else if (ruleType.includes("UDZIAL")) unit = "ukończonych pojedynków";
     else if (ruleType === "REDUKCJA_WYGRANA") unit = "wygranych edycji redukcji";
@@ -580,7 +630,7 @@ export default function WyzwaniaPage() {
   };
 
   // SILNIK AUTOMATYCZNEJ WERYFIKACJI I NADAWANIA 21 REGUŁ ODZNAK
-  const checkAndAwardAutomatedBadges = async (userId: number | string, allBadgeDefs: any[]) => {
+  const checkAndAwardAutomatedBadges = async (userId: number | string, allBadgeDefs: any[], isUserLoggedIn = true) => {
     if (!userId || Number(userId) === SYSTEM_ID || !allBadgeDefs || allBadgeDefs.length === 0) return;
 
     try {
@@ -595,7 +645,7 @@ export default function WyzwaniaPage() {
         def.typ_reguly && def.typ_reguly !== 'RECZNA' && !ownedBadgeIds.has(Number(def.id))
       );
 
-      // BEZPIECZNE POBRANIE WSZYSTKICH ZAPISÓW UŻYTKOWNIKA BEZ RYZYKA BŁĘDU SQL
+      // Pobieramy wszystkie rekordy obecności
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
         .select("*")
@@ -603,7 +653,7 @@ export default function WyzwaniaPage() {
 
       const attendances = attendancesRaw || [];
 
-      // POBRANIE WSZYSTKICH TABEL GRAFIKU
+      // Pobieramy grafik i nadpisania
       const [grafikList, jednorazoweList, nadpisaniaList] = await Promise.all([
         fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 5),
         fetchAllFromSupabase('zajecia_jednorazowe', '*', 'id', false, 5),
@@ -631,7 +681,7 @@ export default function WyzwaniaPage() {
       });
 
       const now = new Date();
-      const userConfirmedClassTitles: { title: string; rawKey: string; date: Date; dateStr: string }[] = [];
+      const userConfirmedClassTitles: { title: string; rawTitle: string; rawKey: string; date: Date; dateStr: string }[] = [];
 
       attendances.forEach((att: any) => {
         const isPresent = att.obecny === true || 
@@ -674,7 +724,7 @@ export default function WyzwaniaPage() {
         if (fullStartDateTime.getTime() > now.getTime()) return;
 
         const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-        userConfirmedClassTitles.push({ title, rawKey: rawKeyNorm, date: dateObj, dateStr });
+        userConfirmedClassTitles.push({ title, rawTitle: rawTitle.toLowerCase(), rawKey: rawKeyNorm, date: dateObj, dateStr });
       });
 
       const { data: userChallengesRaw } = await supabase
@@ -707,9 +757,9 @@ export default function WyzwaniaPage() {
 
       metricValues["TRENINGI_OGOLNE"] = userConfirmedClassTitles.length;
       
-      // Precyzyjne rozpoznawanie typów treningów (w tym HY-ROX z myślnikiem i ukośnikami)
+      // Dopasowanie z uwzględnieniem myślników (np. HY-ROX)
       metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("hyrox") || c.rawKey.includes("hyrox")
+        c.title.includes("hyrox") || c.rawTitle.includes("hy-rox") || c.rawTitle.includes("hyrox") || c.rawKey.includes("hyrox")
       ).length;
 
       metricValues["TRENINGI_OGOLNOROZWOJOWE"] = userConfirmedClassTitles.filter(c => 
@@ -806,15 +856,15 @@ export default function WyzwaniaPage() {
       metricValues["STAZ_DNI"] = tenureDays;
       metricValues["REDUKCJA_WYGRANA"] = reductionWinsCount;
 
-      if (String(userId) === String(currentUserId)) {
+      // Zapisujemy metryki w stanie
+      if (isUserLoggedIn) {
         setCurrentUserMetrics(metricValues);
       }
 
-      // NADAWANIE ZASŁUŻONYCH ODZNAK
+      // Ewaluacja i przyznawanie odznak
       for (const badgeDef of badgesToEvaluate) {
-        const ruleType = badgeDef.typ_reguly;
         const threshold = Number(badgeDef.wartosc_progowa) || 1;
-        const currentMetric = metricValues[ruleType] ?? 0;
+        const currentMetric = getMetricValueForRule(badgeDef, metricValues);
 
         if (currentMetric >= threshold) {
           const { error: assignErr } = await supabase.from("klub_odznaki_klubowicze").insert([{
@@ -863,7 +913,7 @@ export default function WyzwaniaPage() {
         let count = 0;
         for (const client of allClients) {
           if (Number(client.id) === SYSTEM_ID) continue;
-          await checkAndAwardAutomatedBadges(client.id, allDefs);
+          await checkAndAwardAutomatedBadges(client.id, allDefs, String(client.id) === String(currentUserId));
           count++;
         }
         alert(`Pomyślnie przeliczono odznaki dla ${count} klubowiczów!`);
@@ -973,7 +1023,7 @@ export default function WyzwaniaPage() {
           await fetchRankings(enriched, assignedBadgesData);
 
           if (allDefs && allDefs.length > 0) {
-            await checkAndAwardAutomatedBadges(myId, allDefs);
+            await checkAndAwardAutomatedBadges(myId, allDefs, true);
           }
         }
       } catch (error) {
@@ -1225,7 +1275,7 @@ export default function WyzwaniaPage() {
       setNewBadgeParametrDodatkowy("");
       const updatedDefs = await fetchAllOdznakiDef();
       if (currentUserId && updatedDefs) {
-        checkAndAwardAutomatedBadges(currentUserId, updatedDefs);
+        checkAndAwardAutomatedBadges(currentUserId, updatedDefs, true);
       }
     } else {
       alert("Błąd tworzenia odznaki: " + error.message);
@@ -1266,7 +1316,7 @@ export default function WyzwaniaPage() {
       const updatedDefs = await fetchAllOdznakiDef();
       if (currentUserId) {
         fetchOdznaki(currentUserId);
-        if (updatedDefs) checkAndAwardAutomatedBadges(currentUserId, updatedDefs);
+        if (updatedDefs) checkAndAwardAutomatedBadges(currentUserId, updatedDefs, true);
       }
       const updated = await fetchWszystkiePrzydzieloneOdznakiDirect();
       fetchRankings(klienci, updated);
@@ -1370,7 +1420,7 @@ export default function WyzwaniaPage() {
 
       if (currentUserId) {
         const defs = await fetchAllOdznakiDef();
-        if (defs) checkAndAwardAutomatedBadges(currentUserId, defs);
+        if (defs) checkAndAwardAutomatedBadges(currentUserId, defs, true);
       }
     } else {
       alert("Błąd: " + error.message);
@@ -1705,7 +1755,6 @@ export default function WyzwaniaPage() {
 
             return (
               <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4 relative">
-                {/* Migający wykrzyknik w rogu kafelka dla akcji oczekujących */}
                 {((w.status === 'oczekujace' && isOpponent) || canAcceptProposedDate) && (
                   <div className="absolute -top-2 -right-2 flex items-center justify-center">
                     <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-rose-400 opacity-75"></span>
@@ -1939,7 +1988,7 @@ export default function WyzwaniaPage() {
             setActiveTab('odznaki'); 
             setSelectedMemberForComparison(null); 
             if (currentUserId && wszystkieOdznaki.length > 0) {
-              checkAndAwardAutomatedBadges(currentUserId, wszystkieOdznaki);
+              checkAndAwardAutomatedBadges(currentUserId, wszystkieOdznaki, true);
             }
           }}
           className={`flex-1 min-w-[110px] py-3 rounded-xl transition-all cursor-pointer ${activeTab === 'odznaki' ? 'bg-amber-500 text-slate-950 font-black shadow-md' : 'text-slate-600 hover:text-slate-900'}`}
