@@ -107,7 +107,7 @@ export const getMetricValueForRule = (badgeDef: any, metrics: Record<string, num
 
   if (metrics[rule] !== undefined) return metrics[rule];
 
-  if (rule.includes("HYROX") || param.includes("hyrox") || warunek.includes("hyrox") || warunek.includes("hy-rox")) {
+  if (rule.includes("HYROX") || param.includes("hyrox") || warunek.includes("hyrox") || warunek.includes("hy-rox") || warunek.includes("hy rox")) {
     return metrics["TRENINGI_HYROX"] ?? 0;
   }
   if (rule.includes("TABATA") || rule.includes("HIIT") || param.includes("hiit") || param.includes("tabata") || warunek.includes("hiit") || warunek.includes("tabata")) {
@@ -122,7 +122,7 @@ export const getMetricValueForRule = (badgeDef: any, metrics: Record<string, num
   if (rule.includes("NOG") || rule.includes("POSLAD") || param.includes("nog") || param.includes("poslad") || warunek.includes("nogi") || warunek.includes("poślad")) {
     return metrics["TRENINGI_NOGI_POSLADKI"] ?? 0;
   }
-  if (rule.includes("ROZCIAG") || rule.includes("MOBILIZACJ") || param.includes("rozciag") || warunek.includes("rozciąg") || warunek.includes("mobilizacj") || warunek.includes("mobility")) {
+  if (rule.includes("ROZCIAG") || rule.includes("MOBILIZACJ") || param.includes("rozciag") || param.includes("mobil") || warunek.includes("rozciąg") || warunek.includes("mobilizacj") || warunek.includes("rozciag") || warunek.includes("mobility") || warunek.includes("stretching")) {
     return metrics["TRENINGI_ROZCIAGANIE"] ?? 0;
   }
   if (rule.includes("OGOLNOROZWOJ") || param.includes("ogolnorozwoj") || warunek.includes("ogólnorozwoj") || warunek.includes("funkcjonal")) {
@@ -165,6 +165,9 @@ export default function WyzwaniaPage() {
   
   // Wskaźniki postępu użytkownika dla każdej reguły
   const [currentUserMetrics, setCurrentUserMetrics] = useState<Record<string, number>>({});
+
+  // Stan zwijania odznak z osiągniętym progiem 100%
+  const [isCompletedBadgesExpanded, setIsCompletedBadgesExpanded] = useState<boolean>(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
@@ -653,25 +656,29 @@ export default function WyzwaniaPage() {
 
       const attendances = attendancesRaw || [];
 
-      // Pobieramy grafik i nadpisania
+      // Rozdzielone pobieranie grafiku i zajęć jednorazowych, by wyeliminować nadpisywanie ID
       const [grafikList, jednorazoweList, nadpisaniaList] = await Promise.all([
         fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 5),
         fetchAllFromSupabase('zajecia_jednorazowe', '*', 'id', false, 5),
         fetchAllFromSupabase('nadpisania_zajec', '*', 'id', false, 5),
       ]);
 
-      const classNamesById = new Map<string, string>();
-      const classStartTimesById = new Map<string, string>();
+      const grafikTitles = new Map<string, string>();
+      const grafikStarts = new Map<string, string>();
       grafikList.forEach((g: any) => {
         const titleVal = g.title || g.nazwa || g.name || g.zajecia || '';
-        classNamesById.set(String(g.id), titleVal);
-        classStartTimesById.set(String(g.id), g.start || g.start_time || '00:00');
+        grafikTitles.set(String(g.id), titleVal);
+        grafikStarts.set(String(g.id), g.start || g.start_time || '00:00');
       });
+
+      const jednorazoweTitles = new Map<string, string>();
+      const jednorazoweStarts = new Map<string, string>();
       jednorazoweList.forEach((j: any) => {
         const titleVal = j.title || j.nazwa || j.name || j.zajecia || '';
-        classNamesById.set(String(j.id), titleVal);
-        classStartTimesById.set(String(j.id), j.start_time || j.start || '00:00');
+        jednorazoweTitles.set(String(j.id), titleVal);
+        jednorazoweStarts.set(String(j.id), j.start_time || j.start || '00:00');
       });
+
       const nadpisaniaMap = new Map<string, string>();
       const nadpisaniaStartsMap = new Map<string, string>();
       nadpisaniaList.forEach((n: any) => {
@@ -703,19 +710,21 @@ export default function WyzwaniaPage() {
         const cKey = String(att.class_key || '');
         const parts = cKey.split('_');
         const cId = parts[0];
-        
+        const isJednorazowe = cKey.startsWith('j_') || cKey.startsWith('jednorazowe_');
+
+        // Priorytetowe, bezkolizyjne wyciągnięcie nazwy zajęć
         let rawTitle = att.tytul || 
                        att.title || 
                        att.zajecia || 
                        att.nazwa || 
                        att.nazwa_zajec || 
                        nadpisaniaMap.get(cKey) || 
-                       classNamesById.get(cId) || 
+                       (isJednorazowe ? jednorazoweTitles.get(cId) : (grafikTitles.get(cId) || jednorazoweTitles.get(cId))) || 
                        '';
 
         let title = normalizeText(rawTitle);
         let rawKeyNorm = normalizeText(cKey);
-        let startTime = nadpisaniaStartsMap.get(cKey) || classStartTimesById.get(cId) || '00:00';
+        let startTime = nadpisaniaStartsMap.get(cKey) || (isJednorazowe ? jednorazoweStarts.get(cId) : (grafikStarts.get(cId) || jednorazoweStarts.get(cId))) || '00:00';
 
         const dateObj = parseDateFromClassKey(cKey, att.data || att.created_at);
         const [sh = '00', sm = '00'] = startTime.split(':');
@@ -757,7 +766,7 @@ export default function WyzwaniaPage() {
 
       metricValues["TRENINGI_OGOLNE"] = userConfirmedClassTitles.length;
       
-      // Dopasowanie z uwzględnieniem myślników (np. HY-ROX)
+      // Dopasowanie z uwzględnieniem myślników i synonimów
       metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => 
         c.title.includes("hyrox") || c.rawTitle.includes("hy-rox") || c.rawTitle.includes("hyrox") || c.rawKey.includes("hyrox")
       ).length;
@@ -783,7 +792,16 @@ export default function WyzwaniaPage() {
       ).length;
 
       metricValues["TRENINGI_ROZCIAGANIE"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("rozciag") || c.title.includes("mobilizacj") || c.title.includes("stretching") || c.title.includes("mobility") || c.title.includes("joga") || c.rawKey.includes("rozciag") || c.rawKey.includes("mobil")
+        c.title.includes("rozciag") || 
+        c.title.includes("mobil") || 
+        c.title.includes("stretch") || 
+        c.title.includes("joga") || 
+        c.rawTitle.includes("rozciąg") || 
+        c.rawTitle.includes("mobilizacj") || 
+        c.rawTitle.includes("mobility") || 
+        c.rawTitle.includes("stretching") || 
+        c.rawKey.includes("rozciag") || 
+        c.rawKey.includes("mobil")
       ).length;
 
       const sportChallenges = verifiedChallenges.filter((c: any) => (c.kategoria_wyzwania || 'sport') === 'sport');
@@ -856,7 +874,7 @@ export default function WyzwaniaPage() {
       metricValues["STAZ_DNI"] = tenureDays;
       metricValues["REDUKCJA_WYGRANA"] = reductionWinsCount;
 
-      // Zapisujemy metryki w stanie
+      // Zapisujemy przeliczone metryki
       if (isUserLoggedIn) {
         setCurrentUserMetrics(metricValues);
       }
@@ -1755,6 +1773,7 @@ export default function WyzwaniaPage() {
 
             return (
               <div key={w.id} className="bg-white rounded-3xl p-6 border border-sky-100 shadow-sm flex flex-col justify-between space-y-4 relative">
+                {/* Migający wykrzyknik w rogu kafelka dla akcji oczekujących */}
                 {((w.status === 'oczekujace' && isOpponent) || canAcceptProposedDate) && (
                   <div className="absolute -top-2 -right-2 flex items-center justify-center">
                     <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-rose-400 opacity-75"></span>
@@ -1933,6 +1952,30 @@ export default function WyzwaniaPage() {
       </div>
     );
   };
+
+  // Obliczenie odznak do zdobycia i podział na spełnione (100%) oraz w trakcie realizacji
+  const unearnedBadgesEvaluated = useMemo(() => {
+    return wszystkieOdznaki
+      .filter(def => !odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id))
+      .map(def => ({
+        def,
+        progress: getBadgeProgress(def, currentUserMetrics)
+      }))
+      .sort((a, b) => {
+        if (b.progress.percent !== a.progress.percent) {
+          return b.progress.percent - a.progress.percent;
+        }
+        return a.progress.diff - b.progress.diff;
+      });
+  }, [wszystkieOdznaki, odznaki, currentUserMetrics]);
+
+  const badges100Percent = useMemo(() => {
+    return unearnedBadgesEvaluated.filter(b => b.progress.percent >= 100);
+  }, [unearnedBadgesEvaluated]);
+
+  const badgesInProgress = useMemo(() => {
+    return unearnedBadgesEvaluated.filter(b => b.progress.percent < 100);
+  }, [unearnedBadgesEvaluated]);
 
   if (isLoading) return <div className="p-8 text-center text-sky-900 font-bold animate-pulse">Ładowanie modułu wyzwań...</div>;
 
@@ -2231,7 +2274,7 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* SEKCJA: ODZNAKI DO ZDOBYCIA - SORTOWANIE OD NAJBLIŻSZYCH NA SAMEJ GÓRZE */}
+              {/* SEKCJA: ODZNAKI DO ZDOBYCIA WRAZ ZE ZWIJANĄ LISTĄ SPEŁNIONYCH 100% */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <div>
                   <h3 className="font-black text-xs uppercase text-slate-800 tracking-wider flex items-center gap-2">
@@ -2240,54 +2283,109 @@ export default function WyzwaniaPage() {
                   <p className="text-[11px] text-slate-500 mt-0.5">Ułożone od tych, które masz najbliżej do odblokowania.</p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {wszystkieOdznaki
-                    .filter(def => !odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id))
-                    .map(def => ({
-                      def,
-                      progress: getBadgeProgress(def, currentUserMetrics)
-                    }))
-                    .sort((a, b) => {
-                      if (b.progress.percent !== a.progress.percent) {
-                        return b.progress.percent - a.progress.percent;
-                      }
-                      return a.progress.diff - b.progress.diff;
-                    })
-                    .map(({ def, progress }) => (
-                      <div key={def.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between space-y-3">
-                        <div className="flex items-start gap-3.5">
-                          <div 
-                            onClick={() => setSelectedBadgeForZoom(def)}
-                            className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shrink-0 cursor-pointer grayscale opacity-85 hover:grayscale-0 transition-all"
-                          >
-                            {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
+                {/* ZWIJANA SEKCJA: ODZNAKI 100% (SPEŁNIONE WARUNKI) */}
+                {badges100Percent.length > 0 && (
+                  <div className="bg-emerald-50/70 border border-emerald-200 rounded-3xl p-4 sm:p-5 shadow-xs transition-all">
+                    <div 
+                      className="flex items-center justify-between cursor-pointer select-none"
+                      onClick={() => setIsCompletedBadgesExpanded(!isCompletedBadgesExpanded)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">🎉</span>
+                        <div>
+                          <div className="text-xs font-black text-emerald-950 uppercase tracking-wider flex items-center gap-2">
+                            <span>Spełnione warunki ({badges100Percent.length})</span>
+                            <span className="bg-emerald-200 text-emerald-900 text-[9px] font-black px-2 py-0.5 rounded-full">100%</span>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                              <h4 className="font-black text-xs uppercase text-slate-900 truncate">{def.nazwa}</h4>
-                              <span className="text-[9px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
-                            </div>
-                            <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{def.opis}</p>
-                            {def.warunek && (
-                              <p className="text-[9px] text-amber-800 font-mono mt-1">🎯 {def.warunek}</p>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
-                          <div className="flex justify-between items-center text-[10px] font-bold">
-                            <span className="text-slate-800">{progress.text}</span>
-                            <span className="text-sky-700 font-black">{progress.percent}%</span>
-                          </div>
-                          <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                            <div 
-                              className="bg-sky-600 h-2 rounded-full transition-all duration-500" 
-                              style={{ width: `${progress.percent}%` }}
-                            ></div>
+                          <div className="text-[10px] text-emerald-700 mt-0.5">
+                            Warunki zostały osiągnięte! Kliknij, aby zobaczyć odznaki oczekujące na zatwierdzenie.
                           </div>
                         </div>
                       </div>
-                    ))}
+                      <button 
+                        type="button" 
+                        className="text-xs font-bold text-emerald-800 bg-white hover:bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-300 transition-colors shadow-2xs"
+                      >
+                        {isCompletedBadgesExpanded ? "Zwiń ▲" : `Pokaż (${badges100Percent.length}) ▼`}
+                      </button>
+                    </div>
+
+                    {isCompletedBadgesExpanded && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 pt-4 border-t border-emerald-200/80 animate-in fade-in duration-200">
+                        {badges100Percent.map(({ def, progress }) => (
+                          <div key={def.id} className="bg-white rounded-2xl p-4 border border-emerald-200 shadow-xs flex flex-col justify-between space-y-3">
+                            <div className="flex items-start gap-3.5">
+                              <div 
+                                onClick={() => setSelectedBadgeForZoom(def)}
+                                className="w-12 h-12 rounded-xl bg-emerald-100/70 border border-emerald-300 flex items-center justify-center text-2xl shrink-0 cursor-pointer hover:scale-105 transition-transform"
+                              >
+                                {renderBadgeGraphic(def.ikona, "w-12 h-12", "text-2xl")}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <h4 className="font-black text-xs uppercase text-emerald-950 truncate">{def.nazwa}</h4>
+                                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
+                                </div>
+                                <p className="text-[10px] text-slate-600 mt-0.5 line-clamp-2">{def.opis}</p>
+                                {def.warunek && (
+                                  <p className="text-[9px] text-emerald-800 font-mono mt-1">🎯 {def.warunek}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-100 text-[10px] font-bold text-emerald-900 flex justify-between items-center">
+                              <span>✓ {progress.text}</span>
+                              <span className="text-emerald-700 font-black">100%</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* GŁÓWNA LISTA: ODZNAKI W TRAKCIE REALIZACJI (<100%), POSORTOWANE OD NAJBLIŻSZYCH */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {badgesInProgress.map(({ def, progress }) => (
+                    <div key={def.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between space-y-3">
+                      <div className="flex items-start gap-3.5">
+                        <div 
+                          onClick={() => setSelectedBadgeForZoom(def)}
+                          className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shrink-0 cursor-pointer grayscale opacity-85 hover:grayscale-0 transition-all"
+                        >
+                          {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="font-black text-xs uppercase text-slate-900 truncate">{def.nazwa}</h4>
+                            <span className="text-[9px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{def.opis}</p>
+                          {def.warunek && (
+                            <p className="text-[9px] text-amber-800 font-mono mt-1">🎯 {def.warunek}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* DYNAMICZNY WSKAŹNIK BRAKUJĄCYCH OBECNOŚCI / DNI */}
+                      <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
+                        <div className="flex justify-between items-center text-[10px] font-bold">
+                          <span className="text-slate-800">{progress.text}</span>
+                          <span className="text-sky-700 font-black">{progress.percent}%</span>
+                        </div>
+                        <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div 
+                            className="bg-sky-600 h-2 rounded-full transition-all duration-500" 
+                            style={{ width: `${progress.percent}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {badgesInProgress.length === 0 && badges100Percent.length === 0 && (
+                    <div className="col-span-full bg-white rounded-3xl p-8 text-center border border-sky-100 text-slate-400 text-xs italic">
+                      Wszystkie dostępne odznaki zostały już odblokowane!
+                    </div>
+                  )}
                 </div>
               </div>
 
