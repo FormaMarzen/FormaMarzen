@@ -81,7 +81,7 @@ export default function RootLayout({
     );
   })();
 
-  // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego
+  // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego oraz wysyłająca komunikaty na czacie
   const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
     if (typeof window === "undefined") return;
 
@@ -104,15 +104,71 @@ export default function RootLayout({
       }
       setHasUnreadInterpretation(bloodUnread);
 
-      // 2. Wyzwania Redukcji
+      // 2. Wyzwania Redukcji + Globalne alerty systemowe na czacie na 10 i 5 dni przed finałem
       const { data: redukcjeData } = await supabase
         .from('klub_redukcja_edycje')
-        .select('id, status')
+        .select('id, status, nazwa, data_koniec')
         .in('status', ['zapisy', 'aktywne']);
 
       if (redukcjeData && redukcjeData.length > 0) {
         const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
         setHasUnreadRedukcja(hasUnseenRedukcja);
+
+        // GLOBALNY SYSTEM ALERTIW REDUKCJI NA CZACIE
+        const dzisiaj = new Date();
+        dzisiaj.setHours(0, 0, 0, 0);
+
+        for (const ed of redukcjeData) {
+          if (ed.status === 'aktywne' && ed.data_koniec) {
+            const endDate = new Date(ed.data_koniec);
+            endDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.round((endDate.getTime() - dzisiaj.getTime()) / (1000 * 60 * 60 * 24));
+
+            if (diffDays === 10 || diffDays === 5) {
+              const alertKey = `redukcja_alert_${ed.id}_${diffDays}d_sent`;
+              if (!localStorage.getItem(alertKey)) {
+                const chatAlertMsg = `📢 [KOMUNIKAT SYSTEMOWY] Przypomnienie dla uczestników wyzwania "${ed.nazwa}": Do wielkiego finału pozostało już tylko ${diffDays} dni! Pamiętajcie o wcześniejszym umówieniu się z trenerem na finałową analizę składu ciała na maszynie. Powodzenia w walce o podium i nagrody! 🔥💪`;
+
+                // Wysłanie wiadomości na czat
+                try {
+                  await supabase.from('czat_wiadomosci').insert([{
+                    autor: 'System Forma Marzeń',
+                    tresc: chatAlertMsg,
+                    is_system: true,
+                    created_at: new Date().toISOString()
+                  }]);
+                } catch (e) {}
+
+                try {
+                  await supabase.from('czat').insert([{
+                    autor: 'System Forma Marzeń',
+                    tresc: chatAlertMsg,
+                    is_system: true,
+                    created_at: new Date().toISOString()
+                  }]);
+                } catch (e) {}
+
+                // Wysłanie powiadomień prywatnych (dzwoneczek)
+                const { data: partData } = await supabase
+                  .from('klub_redukcja_uczestnicy')
+                  .select('klient_id')
+                  .eq('edycja_id', ed.id);
+
+                if (partData && partData.length > 0) {
+                  const notifications = partData.map((p: any) => ({
+                    klient_id: p.klient_id,
+                    tytul: `Wyzwanie Redukcji: Zostało ${diffDays} dni!`,
+                    tresc: `Przypomnienie: Do finału wyzwania "${ed.nazwa}" pozostało już tylko ${diffDays} dni! Umów się z trenerem na finałową analizę składu ciała.`,
+                    przeczytane: false
+                  }));
+                  await supabase.from('powiadomienia').insert(notifications);
+                }
+
+                localStorage.setItem(alertKey, 'true');
+              }
+            }
+          }
+        }
       } else {
         setHasUnreadRedukcja(false);
       }
