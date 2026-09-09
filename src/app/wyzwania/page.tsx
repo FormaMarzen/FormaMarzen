@@ -88,12 +88,13 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
-// Funkcja normalizująca tekst do porównań bez polskich znaków
+// Funkcja usuwająca polskie znaki, myślniki, ukośniki i spacje dla 100% precyzji dopasowań
 const normalizeText = (text: string) => {
   return (text || "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[-_/\s]/g, "")
     .trim();
 };
 
@@ -183,38 +184,31 @@ export default function WyzwaniaPage() {
 
   const autoCheckProcessedRef = useRef(false);
 
-  const parseDateFromClassKey = (classKey: string): Date => {
-    const parts = classKey ? String(classKey).split('_') : [];
-    const datePart = parts[1] || '';
+  const parseDateFromClassKey = (classKey: string, fallbackDateStr?: string): Date => {
+    if (!classKey && fallbackDateStr) return new Date(fallbackDateStr);
+    const keyStr = String(classKey || '');
     const currentYear = new Date().getFullYear();
 
-    if (!datePart) return new Date();
-
-    if (datePart.includes('/')) {
-      const segments = datePart.split('/');
-      if (segments.length === 2) {
-        const [d, m] = segments;
-        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
-      } else if (segments.length === 3) {
-        const [d, m, y] = segments;
-        const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
-        return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
-      }
-    } else if (datePart.includes('-')) {
-      const segments = datePart.split('-');
-      if (segments.length === 3) {
-        if (segments[0].length === 4) {
-          const [y, m, d] = segments;
-          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
-        } else {
-          const [d, m, y] = segments;
-          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
-        }
-      } else if (segments.length === 2) {
-        const [d, m] = segments;
-        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
-      }
+    const matchIso = keyStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (matchIso) {
+      return new Date(parseInt(matchIso[1], 10), parseInt(matchIso[2], 10) - 1, parseInt(matchIso[3], 10));
     }
+
+    const matchFull = keyStr.match(/(\d{2})[-/](\d{2})[-/](\d{4})/);
+    if (matchFull) {
+      return new Date(parseInt(matchFull[3], 10), parseInt(matchFull[2], 10) - 1, parseInt(matchFull[1], 10));
+    }
+
+    const matchShort = keyStr.match(/(\d{1,2})[-/](\d{1,2})/);
+    if (matchShort) {
+      return new Date(currentYear, parseInt(matchShort[2], 10) - 1, parseInt(matchShort[1], 10));
+    }
+
+    if (fallbackDateStr) {
+      const d = new Date(fallbackDateStr);
+      if (!isNaN(d.getTime())) return d;
+    }
+
     return new Date();
   };
 
@@ -331,7 +325,7 @@ export default function WyzwaniaPage() {
         const tworcaNazwa = tworcaClient ? tworcaClient.name : "Klubowicz";
         const przeciwnikNazwa = przeciwnikClient ? przeciwnikClient.name : "Klubowicz";
 
-        // 1. ZASADA 30 DNI: Po przyjęciu wyzwania brak rozstrzygnięcia -> wyzwany oddaje walkower
+        // 1. ZASADA 30 DNI PO AKCEPTACJI
         if (ch.status === 'aktywne' && (ch.accepted_at || ch.data_przyjecia || ch.updated_at)) {
           const acceptedMs = new Date(ch.accepted_at || ch.data_przyjecia || ch.updated_at).getTime();
           if (nowMs - acceptedMs >= thirtyDaysMs) {
@@ -375,12 +369,11 @@ export default function WyzwaniaPage() {
           }
         }
 
-        // 2. ZASADY DLA WYKONAŃ OCZEKUJĄCYCH (PRZED AKCEPTACJĄ)
+        // 2. ZASADY DLA WYKONAŃ OCZEKUJĄCYCH
         if (ch.status === 'oczekujace' && ch.created_at) {
           const createdMs = new Date(ch.created_at).getTime();
           const diff = nowMs - createdMs;
 
-          // 10 DNI -> AUTOMATYCZNY WALKOWER ZA BRAK REAKCJI
           if (diff >= tenDaysMs) {
             shouldRefresh = true;
             await supabase
@@ -420,7 +413,6 @@ export default function WyzwaniaPage() {
               url: "/wyzwania"
             });
           }
-          // 5 DNI -> AUTOMATYCZNE SYSTEMOWE PRZYPOMNIENIE
           else if (diff >= fiveDaysMs && !ch.reminder_5d_sent) {
             shouldRefresh = true;
             await supabase
@@ -462,7 +454,7 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // OBSŁUGA NEGOCJACJI TERMINU WYZWANIA
+  // OBSŁUGA NEGOCJACJI TERMINU
   const handleOpenDateModal = (challenge: any) => {
     setSelectedChallengeForDate(challenge);
     setProposedDateInput(challenge.proponowana_data || "");
@@ -555,7 +547,6 @@ export default function WyzwaniaPage() {
     }
   };
 
-  // MANUALNE WYSŁANIE PRZYPOMNIENIA PRZEZ RZUCAJĄCEGO
   const handleSendManualReminder = async (challenge: any) => {
     if (!currentUserId || !challenge) return;
     setRemindingId(challenge.id);
@@ -604,43 +595,57 @@ export default function WyzwaniaPage() {
         def.typ_reguly && def.typ_reguly !== 'RECZNA' && !ownedBadgeIds.has(Number(def.id))
       );
 
-      // POBRANIE WSZYSTKICH ZAPISÓW ZAJĘĆ Z MOŻLIWYMI POLAMI TYTUŁÓW
+      // BEZPIECZNE POBRANIE WSZYSTKICH ZAPISÓW UŻYTKOWNIKA BEZ RYZYKA BŁĘDU SQL
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
-        .select("id, class_key, obecny, nieobecny, status, created_at, tytul, zajecia, nazwa_zajec")
+        .select("*")
         .eq("klient_id", userId);
 
       const attendances = attendancesRaw || [];
 
+      // POBRANIE WSZYSTKICH TABEL GRAFIKU
       const [grafikList, jednorazoweList, nadpisaniaList] = await Promise.all([
-        fetchAllFromSupabase('grafik_zajec', 'id, title, nazwa, start, start_time', 'id', true, 5),
-        fetchAllFromSupabase('zajecia_jednorazowe', 'id, title, nazwa, start, start_time, display_date', 'id', false, 5),
-        fetchAllFromSupabase('nadpisania_zajec', 'class_key, title, nazwa, start', 'id', false, 5),
+        fetchAllFromSupabase('grafik_zajec', '*', 'id', true, 5),
+        fetchAllFromSupabase('zajecia_jednorazowe', '*', 'id', false, 5),
+        fetchAllFromSupabase('nadpisania_zajec', '*', 'id', false, 5),
       ]);
 
       const classNamesById = new Map<string, string>();
       const classStartTimesById = new Map<string, string>();
       grafikList.forEach((g: any) => {
-        classNamesById.set(String(g.id), (g.title || g.nazwa || ''));
+        const titleVal = g.title || g.nazwa || g.name || g.zajecia || '';
+        classNamesById.set(String(g.id), titleVal);
         classStartTimesById.set(String(g.id), g.start || g.start_time || '00:00');
       });
       jednorazoweList.forEach((j: any) => {
-        classNamesById.set(String(j.id), (j.title || j.nazwa || ''));
+        const titleVal = j.title || j.nazwa || j.name || j.zajecia || '';
+        classNamesById.set(String(j.id), titleVal);
         classStartTimesById.set(String(j.id), j.start_time || j.start || '00:00');
       });
       const nadpisaniaMap = new Map<string, string>();
       const nadpisaniaStartsMap = new Map<string, string>();
       nadpisaniaList.forEach((n: any) => {
-        nadpisaniaMap.set(n.class_key, (n.title || n.nazwa || ''));
+        const titleVal = n.title || n.nazwa || n.name || n.zajecia || '';
+        nadpisaniaMap.set(n.class_key, titleVal);
         if (n.start) nadpisaniaStartsMap.set(n.class_key, n.start);
       });
 
       const now = new Date();
-      const userConfirmedClassTitles: { title: string; date: Date; dateStr: string }[] = [];
+      const userConfirmedClassTitles: { title: string; rawKey: string; date: Date; dateStr: string }[] = [];
 
       attendances.forEach((att: any) => {
-        const isPresent = att.obecny === true || att.obecny === 1 || String(att.obecny).toLowerCase() === 'true';
-        const isAbsent = att.nieobecny === true || att.nieobecny === 1 || String(att.nieobecny).toLowerCase() === 'true';
+        const isPresent = att.obecny === true || 
+                          att.obecny === 1 || 
+                          String(att.obecny).toLowerCase() === 'true' ||
+                          String(att.status).toLowerCase() === 'obecny' ||
+                          String(att.obecnosc).toLowerCase() === 'obecny';
+
+        const isAbsent = att.nieobecny === true || 
+                         att.nieobecny === 1 || 
+                         String(att.nieobecny).toLowerCase() === 'true' ||
+                         String(att.status).toLowerCase() === 'nieobecny' ||
+                         String(att.obecnosc).toLowerCase() === 'nieobecny';
+
         const isWaitlist = att.status === 'krzesełko';
 
         if (!isPresent || isAbsent || isWaitlist) return;
@@ -649,20 +654,27 @@ export default function WyzwaniaPage() {
         const parts = cKey.split('_');
         const cId = parts[0];
         
-        // Elastyczne wyciągnięcie nazwy zajęć ze wszystkich możliwych źródeł
-        let rawTitle = att.tytul || att.zajecia || att.nazwa_zajec || nadpisaniaMap.get(cKey) || classNamesById.get(cId) || '';
+        let rawTitle = att.tytul || 
+                       att.title || 
+                       att.zajecia || 
+                       att.nazwa || 
+                       att.nazwa_zajec || 
+                       nadpisaniaMap.get(cKey) || 
+                       classNamesById.get(cId) || 
+                       '';
+
         let title = normalizeText(rawTitle);
+        let rawKeyNorm = normalizeText(cKey);
         let startTime = nadpisaniaStartsMap.get(cKey) || classStartTimesById.get(cId) || '00:00';
 
-        const dateObj = parseDateFromClassKey(cKey);
+        const dateObj = parseDateFromClassKey(cKey, att.data || att.created_at);
         const [sh = '00', sm = '00'] = startTime.split(':');
         const fullStartDateTime = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
 
-        // Trening musiał już się odbyć
         if (fullStartDateTime.getTime() > now.getTime()) return;
 
         const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-        userConfirmedClassTitles.push({ title, date: dateObj, dateStr });
+        userConfirmedClassTitles.push({ title, rawKey: rawKeyNorm, date: dateObj, dateStr });
       });
 
       const { data: userChallengesRaw } = await supabase
@@ -695,33 +707,33 @@ export default function WyzwaniaPage() {
 
       metricValues["TRENINGI_OGOLNE"] = userConfirmedClassTitles.length;
       
-      // Dopasowanie rodzajów treningów z użyciem synonimów
+      // Precyzyjne rozpoznawanie typów treningów (w tym HY-ROX z myślnikiem i ukośnikami)
       metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("hyrox")
+        c.title.includes("hyrox") || c.rawKey.includes("hyrox")
       ).length;
 
       metricValues["TRENINGI_OGOLNOROZWOJOWE"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("ogolnorozwoj") || c.title.includes("funkcjonal") || c.title.includes("cross")
+        c.title.includes("ogolnorozwoj") || c.title.includes("funkcjonal") || c.title.includes("cross") || c.rawKey.includes("ogolnorozwoj")
       ).length;
 
       metricValues["TRENINGI_NOGI_POSLADKI"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("nog") || c.title.includes("poslad") || c.title.includes("legs")
+        c.title.includes("nog") || c.title.includes("poslad") || c.title.includes("legs") || c.rawKey.includes("nog") || c.rawKey.includes("poslad")
       ).length;
 
       metricValues["TRENINGI_BRZUCH"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("brzuch") || c.title.includes("core") || c.title.includes("abs")
+        c.title.includes("brzuch") || c.title.includes("core") || c.title.includes("abs") || c.rawKey.includes("brzuch")
       ).length;
 
       metricValues["TRENINGI_HIIT_TABATA"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("hiit") || c.title.includes("tabata") || c.title.includes("interwal")
+        c.title.includes("hiit") || c.title.includes("tabata") || c.title.includes("interwal") || c.rawKey.includes("hiit") || c.rawKey.includes("tabata")
       ).length;
 
       metricValues["TRENINGI_SILOWE"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("silow") || c.title.includes("strength") || c.title.includes("power") || c.title.includes("bary")
+        c.title.includes("silow") || c.title.includes("strength") || c.title.includes("power") || c.title.includes("bary") || c.rawKey.includes("silow")
       ).length;
 
       metricValues["TRENINGI_ROZCIAGANIE"] = userConfirmedClassTitles.filter(c => 
-        c.title.includes("rozciag") || c.title.includes("mobilizacj") || c.title.includes("stretching") || c.title.includes("mobility") || c.title.includes("joga")
+        c.title.includes("rozciag") || c.title.includes("mobilizacj") || c.title.includes("stretching") || c.title.includes("mobility") || c.title.includes("joga") || c.rawKey.includes("rozciag") || c.rawKey.includes("mobil")
       ).length;
 
       const sportChallenges = verifiedChallenges.filter((c: any) => (c.kategoria_wyzwania || 'sport') === 'sport');
@@ -908,11 +920,20 @@ export default function WyzwaniaPage() {
 
         setKlienci(enriched);
 
-        const myProfile = enriched.find((c: any) => c.email === userEmail);
+        let myProfile = enriched.find((c: any) => c.email === userEmail);
         let myId: any = null;
 
         if (ADMIN_EMAILS.includes(userEmail)) {
           setUserRole('admin');
+          if (!myProfile) {
+            myProfile = enriched.find((c: any) => 
+              (c.lastName && c.lastName.toLowerCase().includes('kłaput')) ||
+              (c.name && c.name.toLowerCase().includes('kłaput')) ||
+              (c.lastName && c.lastName.toLowerCase().includes('klaput')) ||
+              (c.name && c.name.toLowerCase().includes('klaput'))
+            );
+          }
+
           if (myProfile) {
             myId = myProfile.id;
             setCurrentUserName(`${myProfile.name} (Admin)`);
@@ -943,6 +964,7 @@ export default function WyzwaniaPage() {
           const [assignedBadgesData, allDefs] = await Promise.all([
             fetchWszystkiePrzydzieloneOdznakiDirect(),
             fetchAllOdznakiDef(),
+            fetchWyzwania(),
             fetchOdznaki(myId),
             fetchHistoriaOdznak(),
             fetchDyscypliny(),
@@ -1468,7 +1490,7 @@ export default function WyzwaniaPage() {
     return found ? found.name : "Klubowicz";
   };
 
-  // SPRAWDZENIE CZY ISTNIEJĄ OCZEKUJĄCE AKCJE (DO CZERWONEGO WYKRZYKNIKA W MENU)
+  // SPRAWDZENIE CZY ISTNIEJĄ OCZEKUJĄCE AKCJE
   const hasPendingActionIndicator = useMemo(() => {
     if (!currentUserId) return false;
     if (userRole === 'admin') {
@@ -2042,7 +2064,7 @@ export default function WyzwaniaPage() {
                 )}
               </div>
 
-              {/* PORÓWNANIE ZE WSZYSTKIMI ODZNAKAMI W KLUBIE WRAZ ZE WSKAŹNIKAMI POSTĘPU */}
+              {/* PORÓWNANIE ZE WSZYSTKIMI ODZNAKAMI W KLUBIE */}
               <div className="space-y-4 pt-6 border-t border-slate-800">
                 <h3 className="text-xs font-black uppercase tracking-wider text-slate-400 px-2">
                   Porównanie wszystkich odznak w klubie (Zdobyte na górze)
@@ -2073,7 +2095,6 @@ export default function WyzwaniaPage() {
                               <p className="text-[9px] text-amber-200/70 mt-1 font-mono">🎯 Warunek: {def.warunek}</p>
                             )}
                             
-                            {/* LICZNIK POSTĘPU DO TEJ ODZNAKI */}
                             {!userHasIt && def.typ_reguly !== 'RECZNA' && (
                               <div className="mt-2 bg-slate-900 p-2 rounded-xl border border-slate-800 max-w-sm">
                                 <div className="flex justify-between text-[10px] text-amber-300 font-bold mb-1">
@@ -2161,7 +2182,7 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* SEKCJA: ODZNAKI DO ZDOBYCIA WRAZ Z PRECYZYJNYM SORTOWANIEM (NAJBLIŻSZE NA GÓRZE) */}
+              {/* SEKCJA: ODZNAKI DO ZDOBYCIA - SORTOWANIE OD NAJBLIŻSZYCH NA SAMEJ GÓRZE */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <div>
                   <h3 className="font-black text-xs uppercase text-slate-800 tracking-wider flex items-center gap-2">
@@ -2177,7 +2198,6 @@ export default function WyzwaniaPage() {
                       def,
                       progress: getBadgeProgress(def, currentUserMetrics)
                     }))
-                    // Sortowanie: najwyższy procent ukończenia na samej górze; przy równości najmniejsza brakująca liczba jednostek
                     .sort((a, b) => {
                       if (b.progress.percent !== a.progress.percent) {
                         return b.progress.percent - a.progress.percent;
@@ -2205,7 +2225,6 @@ export default function WyzwaniaPage() {
                           </div>
                         </div>
 
-                        {/* DYNAMICZNY WSKAŹNIK BRAKUJĄCYCH OBECNOŚCI / DNI */}
                         <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
                           <div className="flex justify-between items-center text-[10px] font-bold">
                             <span className="text-slate-800">{progress.text}</span>
@@ -2664,7 +2683,7 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* TABELA 2: ZAKOŃCZONE I PRZESZŁE WYZWANIA (NA DOLE STRONY) */}
+              {/* TABELA 2: ZAKOŃCZONE I PRZESZŁE WYZWANIA */}
               <div className="space-y-3 pt-4 border-t border-slate-200">
                 <div className="flex items-center justify-between">
                   <h3 className="font-black text-xs text-slate-600 uppercase tracking-wider flex items-center gap-2">
