@@ -217,7 +217,7 @@ export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> =>
     return rawUrlOrPath;
   }
 
-  // W ostateczności pobierz z publicznego bucketa Supabase
+  // W ostateczności pobierz z bucketa Supabase
   const { data: fallbackPub } = supabase.storage.from('badania').getPublicUrl(rawUrlOrPath);
   return fallbackPub?.publicUrl || rawUrlOrPath;
 };
@@ -496,6 +496,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // POWIADOMIENIA NA CZACIE KLUBOWYM ORAZ W DZWONECZKU NA 10 I 5 DNI PRZED FINAŁEM
   const checkAndSendRedukcjaAlerts = async (edycje: RedukcjaEdycja[]) => {
     try {
       const activeEdycje = edycje.filter(e => e.status === 'aktywne');
@@ -521,6 +522,28 @@ export default function AnalizaFormyPage() {
             .select('klient_id')
             .eq('edycja_id', ed.id);
 
+          const chatAlertMsg = `📢 [KOMUNIKAT SYSTEMOWY] Przypomnienie dla uczestników wyzwania "${ed.nazwa}": Do wielkiego finału pozostało już tylko ${diffDays} dni! Pamiętajcie o wcześniejszym umówieniu się z trenerem na finałową analizę składu ciała na maszynie. Powodzenia w walce o podium i nagrody! 🔥💪`;
+
+          // 1. Wysyłka wiadomości systemowej na czat klubowy
+          try {
+            await supabase.from('czat_wiadomosci').insert([{
+              autor: 'System Forma Marzeń',
+              tresc: chatAlertMsg,
+              is_system: true,
+              created_at: new Date().toISOString()
+            }]);
+          } catch (e) {}
+
+          try {
+            await supabase.from('czat').insert([{
+              autor: 'System Forma Marzeń',
+              tresc: chatAlertMsg,
+              is_system: true,
+              created_at: new Date().toISOString()
+            }]);
+          } catch (e) {}
+
+          // 2. Dodatkowo powiadomienia prywatne w bazie (dzwoneczek)
           if (partData && partData.length > 0) {
             const notifications = partData.map(p => ({
               klient_id: p.klient_id,
@@ -640,6 +663,7 @@ export default function AnalizaFormyPage() {
       setBadaniaList([]);
     }
   };
+
   const markInterpretationAsRead = async (badanieId?: number) => {
     try {
       if (badanieId) {
@@ -769,7 +793,6 @@ export default function AnalizaFormyPage() {
       console.error("Błąd ładowania wyzwań redukcji:", err);
     }
   };
-
   const loadEdycjaDetails = async (edycjaId: number, optionalEdycjeList?: RedukcjaEdycja[]) => {
     try {
       const [uczestnicyRes, pomiaryRes, nagrodyRes] = await Promise.all([
@@ -1612,6 +1635,7 @@ export default function AnalizaFormyPage() {
       setIsProcessingPayment(false);
     }
   };
+
   const handleConfirmJoinWithPayment = async () => {
     const kId = selectedKlient?.id || currentUserId;
     if (!kId || !selectedEdycjaId) {
@@ -2218,7 +2242,6 @@ export default function AnalizaFormyPage() {
       </tr>
     );
   };
-
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 font-sans antialiased">
       
@@ -2250,7 +2273,8 @@ export default function AnalizaFormyPage() {
               <span>✓</span> Oznacz redukcję jako przeczytaną
             </button>
           )}
-{activeTab === 'pomiary' && ((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
+
+          {activeTab === 'pomiary' && ((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
             <button
               onClick={() => {
                 setEditingMeasurementId(null);
@@ -2541,7 +2565,7 @@ export default function AnalizaFormyPage() {
           )}
         </div>
       ) : (
-        appRole === 'admin' && (
+        appRole === 'admin' && activeTab !== 'badania' && (
           <div className="bg-sky-50 border border-sky-200 rounded-2xl p-8 text-center text-slate-500 text-xs font-bold space-y-1">
             <span className="text-2xl block mb-2">👤</span>
             Użyj powyższego pola wyszukiwania, aby wybrać klubowicza i załadować jego historię pomiarów oraz badań krwi.
@@ -2549,7 +2573,7 @@ export default function AnalizaFormyPage() {
         )
       )}
       
-    {/* ZAKŁADKA 1: POMIARY */}
+      {/* ZAKŁADKA 1: POMIARY */}
       {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
           {latestMeasurement ? (
@@ -3663,7 +3687,7 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* ARCHIWUM */}
+          {/* ARCHIWUM EDYCJI */}
           {edycjeRedukcji.filter(e => e.status === 'zakonczone' || e.status === 'anulowane').length > 0 && (
             <div className="pt-6 border-t border-sky-200 space-y-4">
               <div className="flex items-center gap-2">
@@ -3712,13 +3736,13 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* ZAKŁADKA 4: BADANIA KRWI (POD-KARTY: DOKUMENTY ORAZ WŁASNE TABELE) */}
-      {activeTab === 'badania' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
+      {/* ZAKŁADKA 4: BADANIA KRWI (DOKUMENTY ORAZ WŁASNE TABELE) */}
+      {activeTab === 'badania' && (
         <div className="space-y-6">
 
-          {/* LISTA OCZEKUJĄCYCH BADAŃ KRWI DLA TRENERA / ADMINA */}
+          {/* LISTA OCZEKUJĄCYCH BADAŃ KRWI DLA TRENERA / ADMINA - WIDOCZNA ZAWSZE PO WEJŚCIU W ZAKŁADKĘ */}
           {(appRole === 'admin' || appRole === 'trener') && wszystkieOczekujaceBadania.length > 0 && (
-            <div className="bg-rose-50 border-2 border-rose-300 p-5 rounded-3xl shadow-sm space-y-3 animate-in fade-in duration-150">
+            <div className="bg-rose-50 border-2 border-rose-300 p-3.5 sm:p-5 rounded-3xl shadow-sm space-y-3 animate-in fade-in duration-150">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="relative flex h-3 w-3">
@@ -3729,20 +3753,21 @@ export default function AnalizaFormyPage() {
                     Oczekujące badania krwi do analizy ({wszystkieOczekujaceBadania.length})
                   </h3>
                 </div>
-                <span className="text-[10px] font-bold text-rose-700 bg-white px-2.5 py-1 rounded-full border border-rose-200">
+                <span className="text-[9px] sm:text-[10px] font-bold text-rose-700 bg-white px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full border border-rose-200">
                   Wymagają Twojej interpretacji
                 </span>
               </div>
 
+              {/* ZOPTYMALIZOWANA, RESPONSYWNA I ZMNIEJSZONA TABELA DLA TELEFONÓW */}
               <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left border-collapse bg-white rounded-2xl overflow-hidden border border-rose-200">
+                <table className="w-full text-[11px] sm:text-xs text-left border-collapse bg-white rounded-2xl overflow-hidden border border-rose-200">
                   <thead>
-                    <tr className="bg-rose-900 text-white font-black uppercase text-[10px] tracking-wider">
-                      <th className="p-3">Klubowicz (Imię i Nazwisko)</th>
-                      <th className="p-3">Adres E-mail</th>
-                      <th className="p-3 text-center">Data badania</th>
-                      <th className="p-3 text-center">Pliki PDF</th>
-                      <th className="p-3 text-right">Akcja</th>
+                    <tr className="bg-rose-900 text-white font-black uppercase text-[9px] sm:text-[10px] tracking-wider">
+                      <th className="p-2 sm:p-3">Klubowicz</th>
+                      <th className="p-2 sm:p-3 hidden sm:table-cell">E-mail</th>
+                      <th className="p-2 sm:p-3 text-center">Data</th>
+                      <th className="p-2 sm:p-3 text-center">PDF</th>
+                      <th className="p-2 sm:p-3 text-right">Akcja</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-rose-100">
@@ -3756,16 +3781,20 @@ export default function AnalizaFormyPage() {
 
                       return (
                         <tr key={item.id} className="hover:bg-rose-50/50 transition-colors">
-                          <td className="p-3 font-black text-slate-900">
-                            <span className="text-rose-600 mr-1.5">●</span>
+                          <td className="p-2 sm:p-3 font-black text-slate-900 whitespace-nowrap">
+                            <span className="text-rose-600 mr-1">●</span>
                             {clientName}
                           </td>
-                          <td className="p-3 text-slate-600 font-medium">{item.email_klienta}</td>
-                          <td className="p-3 text-center font-bold text-slate-800">{item.data_badania}</td>
-                          <td className="p-3 text-center font-black text-amber-600">
-                            {pdfCount} {pdfCount === 1 ? 'plik PDF' : 'pliki PDF'}
+                          <td className="p-2 sm:p-3 text-slate-600 font-medium hidden sm:table-cell truncate max-w-[150px]">
+                            {item.email_klienta}
                           </td>
-                          <td className="p-3 text-right">
+                          <td className="p-2 sm:p-3 text-center font-bold text-slate-800 whitespace-nowrap text-[10px] sm:text-xs">
+                            {item.data_badania}
+                          </td>
+                          <td className="p-2 sm:p-3 text-center font-black text-amber-600 whitespace-nowrap">
+                            {pdfCount} PDF
+                          </td>
+                          <td className="p-2 sm:p-3 text-right whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() => {
@@ -3783,9 +3812,9 @@ export default function AnalizaFormyPage() {
                                 }
                                 setActiveBadaniaSubTab('dokumenty');
                               }}
-                              className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] px-3.5 py-1.5 rounded-xl uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                              className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[9px] sm:text-[10px] px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg sm:rounded-xl uppercase tracking-wider transition-all shadow-xs cursor-pointer inline-flex items-center gap-1"
                             >
-                              Przejdź do analizy ➔
+                              <span>Analiza</span> <span>➔</span>
                             </button>
                           </td>
                         </tr>
@@ -3797,370 +3826,379 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* PRZEŁĄCZNIK DWÓCH KART W BADANIACH KRWI */}
-          <div className="flex rounded-2xl bg-sky-100/70 p-1.5 border border-sky-200 text-xs font-black shadow-inner max-w-lg">
-            <button
-              onClick={() => setActiveBadaniaSubTab('dokumenty')}
-              className={`flex-1 py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                activeBadaniaSubTab === 'dokumenty'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-slate-600 hover:text-sky-950'
-              }`}
-            >
-              <span>📄</span> 1. Pliki Badań i Analiza
-            </button>
-            <button
-              onClick={() => setActiveBadaniaSubTab('wlasne_tabele')}
-              className={`flex-1 py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                activeBadaniaSubTab === 'wlasne_tabele'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-slate-600 hover:text-sky-950'
-              }`}
-            >
-              <span>📊</span> 2. Własne Tabele i Wykresy (max 15)
-            </button>
-          </div>
+          {/* KOMUNIKAT DLA ADMINA GDY NIE WYBRAŁ KLIENTA I NIE MA NOWYCH BADAŃ */}
+          {appRole === 'admin' && !selectedKlient && wszystkieOczekujaceBadania.length === 0 && (
+            <div className="bg-sky-50 border border-sky-200 rounded-2xl p-6 text-center text-xs text-slate-500 font-bold space-y-1">
+              <span className="text-2xl block mb-1">🩸</span>
+              Brak nowych oczekujących badań krwi. Użyj wyszukiwarki powyżej, aby wybrać klubowicza i przejrzeć jego historię badań oraz własne tabele wskaźników.
+            </div>
+          )}
 
-          {/* POD-KARTA 1: DOKUMENTY I INTERPRETACJE TRENERA */}
-          {activeBadaniaSubTab === 'dokumenty' && (
+          {/* DALSZA CZĘŚĆ ZAKŁADKI BADAŃ KRWI GDY WYBRANO PROFIL LUB JESTEŚ KLUBOWICZEM/TRENEREM */}
+          {(selectedKlient || appRole === 'klubowicz' || (appRole === 'trener' && selectedKlient)) && (
             <div className="space-y-6">
-              {/* DISCLAIMER */}
-              <div className="bg-gradient-to-r from-amber-50 via-rose-50/40 to-sky-50 p-5 rounded-3xl border border-amber-200/80 shadow-sm space-y-2">
-                <div className="flex items-center gap-2.5 text-amber-950 font-black text-xs uppercase tracking-wider">
-                  <span className="text-xl">🩺</span>
-                  <span>Ważna Informacja i Zastrzeżenie Prawne</span>
-                </div>
-                <p className="text-xs text-slate-700 leading-relaxed font-medium">
-                  Przedstawione analizy, interpretacje parametrów krwi oraz propozycje suplementacyjne mają charakter wyłącznie edukacyjno-informacyjny, profilaktyczny i sportowy. <b>Nie jestem lekarzem</b>, a zawarte tu wskazówki <b>nie stanowią porady lekarskiej, diagnozy medycznej ani leczenia</b>. Wszelkie niepokojące objawy, nieprawidłowe wartości wskaźników lub wątpliwości dotyczące Twojego stanu zdrowia należy bezwzględnie skonsultować z lekarzem medycyny.
-                </p>
-              </div>
 
-              {/* KAFEL INFORMACYJNY */}
-              <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                    <span>💬</span> Instrukcja dla Klubowicza
-                  </div>
-                  <p className="text-xs text-sky-200 font-medium">
-                    Po dodaniu plików PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
-                  </p>
-                </div>
+              {/* PRZEŁĄCZNIK DWÓCH KART W BADANIACH KRWI */}
+              <div className="flex rounded-2xl bg-sky-100/70 p-1.5 border border-sky-200 text-xs font-black shadow-inner max-w-lg">
                 <button
-                  onClick={handleOpenNewBadanieModal}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer"
+                  onClick={() => setActiveBadaniaSubTab('dokumenty')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    activeBadaniaSubTab === 'dokumenty'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm'
+                      : 'text-slate-600 hover:text-sky-950'
+                  }`}
                 >
-                  + {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wpis Badań'}
+                  <span>📄</span> 1. Pliki Badań i Analiza
+                </button>
+                <button
+                  onClick={() => setActiveBadaniaSubTab('wlasne_tabele')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    activeBadaniaSubTab === 'wlasne_tabele'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm'
+                      : 'text-slate-600 hover:text-sky-950'
+                  }`}
+                >
+                  <span>📊</span> 2. Własne Tabele i Wykresy (max 15)
                 </button>
               </div>
 
-              {/* TABELA LISTY BADAŃ */}
-              <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
-                <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
-                  <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                    <span>📋</span> Historia Badań Krwi i Interpretacji Trenera
-                  </h3>
-                  <span className="text-[10px] font-bold text-slate-500">
-                    Liczba wpisów: {badaniaList.length}
-                  </span>
-                </div>
+              {/* POD-KARTA 1: DOKUMENTY I INTERPRETACJE TRENERA */}
+              {activeBadaniaSubTab === 'dokumenty' && (
+                <div className="space-y-6">
+                  {/* DISCLAIMER */}
+                  <div className="bg-gradient-to-r from-amber-50 via-rose-50/40 to-sky-50 p-5 rounded-3xl border border-amber-200/80 shadow-sm space-y-2">
+                    <div className="flex items-center gap-2.5 text-amber-950 font-black text-xs uppercase tracking-wider">
+                      <span className="text-xl">🩺</span>
+                      <span>Ważna Informacja i Zastrzeżenie Prawne</span>
+                    </div>
+                    <p className="text-xs text-slate-700 leading-relaxed font-medium">
+                      Przedstawione analizy, interpretacje parametrów krwi oraz propozycje suplementacyjne mają charakter wyłącznie edukacyjno-informacyjny, profilaktyczny i sportowy. <b>Nie jestem lekarzem</b>, a zawarte tu wskazówki <b>nie stanowią porady lekarskiej, diagnozy medycznej ani leczenia</b>. Wszelkie niepokojące objawy, nieprawidłowe wartości wskaźników lub wątpliwości dotyczące Twojego stanu zdrowia należy bezwzględnie skonsultować z lekarzem medycyny.
+                    </p>
+                  </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left border-collapse min-w-[800px]">
-                    <thead>
-                      <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
-                        <th className="p-3 w-28">Data Badania</th>
-                        <th className="p-3 w-48">Dokumenty PDF</th>
-                        <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
-                        <th className="p-3">Główne Wnioski / Interpretacja</th>
-                        <th className="p-3 w-36 text-center">Suplementacja</th>
-                        <th className="p-3 text-center w-36">Akcje</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-sky-100">
-                      {badaniaList.length > 0 ? (
-                        badaniaList.map((b) => {
-                          const pdfList = extractPdfFiles(b);
+                  {/* KAFEL INFORMACYJNY */}
+                  <div className="bg-gradient-to-br from-sky-950 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                        <span>💬</span> Instrukcja dla Klubowicza
+                      </div>
+                      <p className="text-xs text-sky-200 font-medium">
+                        Po dodaniu plików PDF z wynikami badań krwi, <b>wyślij do mnie wiadomość</b> na czacie lub SMS, że pliki zostały wgrane i prosisz o przygotowanie analizy.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleOpenNewBadanieModal}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer"
+                    >
+                      + {appRole === 'klubowicz' ? 'Dodaj Wyniki Krwi (PDF)' : 'Dodaj Wpis Badań'}
+                    </button>
+                  </div>
 
-                          return (
-                            <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
-                              <td className="p-3 font-black text-sky-950 whitespace-nowrap">
-                                <div className="flex items-center gap-1.5">
-                                  {b.nowa_interpretacja && (
-                                    <span className="relative flex h-2.5 w-2.5">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
-                                    </span>
-                                  )}
-                                  <span>{b.data_badania}</span>
-                                </div>
-                              </td>
-                              <td className="p-3">
-                                {pdfList.length > 0 ? (
-                                  <div className="space-y-1.5 max-w-[220px]">
-                                    {pdfList.map((pdf, pIdx) => (
+                  {/* TABELA LISTY BADAŃ */}
+                  <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
+                    <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
+                      <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                        <span>📋</span> Historia Badań Krwi i Interpretacji Trenera
+                      </h3>
+                      <span className="text-[10px] font-bold text-slate-500">
+                        Liczba wpisów: {badaniaList.length}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left border-collapse min-w-[800px]">
+                        <thead>
+                          <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
+                            <th className="p-3 w-28">Data Badania</th>
+                            <th className="p-3 w-48">Dokumenty PDF</th>
+                            <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
+                            <th className="p-3">Główne Wnioski / Interpretacja</th>
+                            <th className="p-3 w-36 text-center">Suplementacja</th>
+                            <th className="p-3 text-center w-36">Akcje</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-sky-100">
+                          {badaniaList.length > 0 ? (
+                            badaniaList.map((b) => {
+                              const pdfList = extractPdfFiles(b);
+
+                              return (
+                                <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
+                                  <td className="p-3 font-black text-sky-950 whitespace-nowrap">
+                                    <div className="flex items-center gap-1.5">
+                                      {b.nowa_interpretacja && (
+                                        <span className="relative flex h-2.5 w-2.5">
+                                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                                        </span>
+                                      )}
+                                      <span>{b.data_badania}</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3">
+                                    {pdfList.length > 0 ? (
+                                      <div className="space-y-1.5 max-w-[220px]">
+                                        {pdfList.map((pdf, pIdx) => (
+                                          <button
+                                            key={pIdx}
+                                            type="button"
+                                            onClick={() => handleOpenSecureFile(pdf.url)}
+                                            className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors cursor-pointer text-left w-full"
+                                            title={pdf.nazwa}
+                                          >
+                                            <span className="shrink-0">📄</span>
+                                            <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-400 italic">Brak pliku PDF</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-center font-bold text-slate-700">
+                                    {(b.zdjecia || []).length > 0 ? (
+                                      <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
+                                        📷 {b.zdjecia?.length} szt.
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-400">-</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
+                                    {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <div className="space-y-0.5 text-[10px]">
+                                      <span className="block font-bold text-emerald-700">
+                                        Trener: {(b.suplementacja_trener || []).length} poz.
+                                      </span>
+                                      <span className="block font-bold text-sky-700">
+                                        Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <div className="flex items-center justify-center gap-1.5">
                                       <button
-                                        key={pIdx}
-                                        type="button"
-                                        onClick={() => handleOpenSecureFile(pdf.url)}
-                                        className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors cursor-pointer text-left w-full"
-                                        title={pdf.nazwa}
+                                        onClick={() => {
+                                          setSelectedBadanieDetail(b);
+                                          setIsDetailViewOpen(true);
+                                          markInterpretationAsRead(b.id);
+                                        }}
+                                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
+                                        title="Otwórz szczegóły"
                                       >
-                                        <span className="shrink-0">📄</span>
-                                        <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
+                                        🔍 Podgląd
                                       </button>
-                                    ))}
+
+                                      <button
+                                        onClick={() => handleEditBadanie(b)}
+                                        className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
+                                        title="Edytuj wpis"
+                                      >
+                                        ✏️
+                                      </button>
+
+                                      <button
+                                        onClick={() => handleDeleteBadanie(b.id)}
+                                        className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
+                                        title="Usuń wpis"
+                                      >
+                                        🗑️
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            <tr>
+                              <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
+                                Brak zarejestrowanych badań krwi dla wybranego profilu.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* POD-KARTA 2: WŁASNE TABELE KLUBOWICZA */}
+              {activeBadaniaSubTab === 'wlasne_tabele' && (
+                <div className="space-y-6">
+                  <div className="bg-gradient-to-r from-sky-900 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="font-black text-sm uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                        <span>📊</span> Własne Karty Wskaźników Krwi i Wykresy (5 Lat)
+                      </h3>
+                      <p className="text-xs text-sky-200 mt-1">
+                        Możesz dodać do 15 tabel dla konkretnych parametrów (np. Witamina D3, Ferrytyna, Morfologia, TSH). Możesz zmieniać kolejność tabel strzałkami.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setIsAddTabelaModalOpen(true)}
+                      disabled={wlasneTabeleBadan.length >= 15}
+                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer disabled:opacity-40"
+                    >
+                      + Nowa Tabela ({wlasneTabeleBadan.length}/15)
+                    </button>
+                  </div>
+
+                  {wlasneTabeleBadan.length > 0 ? (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {wlasneTabeleBadan.map((tab, tIdx) => {
+                        const isExpanded = !!expandedTableHistory[tab.id];
+                        const displayedWpisy = isExpanded ? tab.wpisy : tab.wpisy.slice(0, 3);
+                        const hasMore = tab.wpisy.length > 3;
+
+                        return (
+                          <div key={tab.id} className="bg-white rounded-3xl border border-sky-200 shadow-sm p-5 space-y-4 flex flex-col justify-between">
+                            <div>
+                              <div className="flex items-center justify-between border-b border-sky-100 pb-3 gap-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="flex flex-col gap-0.5">
+                                    <button
+                                      type="button"
+                                      disabled={tIdx === 0}
+                                      onClick={() => handleMoveTableUp(tIdx)}
+                                      className="w-5 h-5 rounded bg-sky-50 hover:bg-sky-100 text-sky-900 font-black text-[10px] flex items-center justify-center border border-sky-200 disabled:opacity-20 cursor-pointer"
+                                      title="Przesuń tabelę wyżej"
+                                    >
+                                      ▲
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={tIdx === wlasneTabeleBadan.length - 1}
+                                      onClick={() => handleMoveTableDown(tIdx)}
+                                      className="w-5 h-5 rounded bg-sky-50 hover:bg-sky-100 text-sky-900 font-black text-[10px] flex items-center justify-center border border-sky-200 disabled:opacity-20 cursor-pointer"
+                                      title="Przesuń tabelę niżej"
+                                    >
+                                      ▼
+                                    </button>
                                   </div>
-                                ) : (
-                                  <span className="text-slate-400 italic">Brak pliku PDF</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-center font-bold text-slate-700">
-                                {(b.zdjecia || []).length > 0 ? (
-                                  <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
-                                    📷 {b.zdjecia?.length} szt.
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400">-</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
-                                {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
-                              </td>
-                              <td className="p-3 text-center">
-                                <div className="space-y-0.5 text-[10px]">
-                                  <span className="block font-bold text-emerald-700">
-                                    Trener: {(b.suplementacja_trener || []).length} poz.
-                                  </span>
-                                  <span className="block font-bold text-sky-700">
-                                    Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
-                                  </span>
+
+                                  <span className="text-xl">🩸</span>
+                                  <div>
+                                    <h4 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                                      {tab.nazwa}
+                                    </h4>
+                                    <span className="text-[10px] text-slate-400 font-bold">
+                                      Jednostka: {tab.jednostka_domyslna || 'nieokreślona'} • Wpisów: {tab.wpisy.length}
+                                    </span>
+                                  </div>
                                 </div>
-                              </td>
-                              <td className="p-3 text-center">
-                                <div className="flex items-center justify-center gap-1.5">
+
+                                <div className="flex items-center gap-2">
                                   <button
                                     onClick={() => {
-                                      setSelectedBadanieDetail(b);
-                                      setIsDetailViewOpen(true);
-                                      markInterpretationAsRead(b.id);
+                                      setTabelaDoWpisuModal(tab.id);
+                                      setWpisBadaniaForm({
+                                        data_badania: new Date().toISOString().split('T')[0],
+                                        wynik: '',
+                                        jednostka: tab.jednostka_domyslna || ''
+                                      });
                                     }}
-                                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
-                                    title="Otwórz szczegóły"
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-xs"
+                                    title="Dodaj nowy pomiar do tej tabeli"
                                   >
-                                    🔍 Podgląd
+                                    + Wynik
                                   </button>
-
                                   <button
-                                    onClick={() => handleEditBadanie(b)}
-                                    className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
-                                    title="Edytuj wpis"
-                                  >
-                                    ✏️
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleDeleteBadanie(b.id)}
-                                    className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
-                                    title="Usuń wpis"
+                                    onClick={() => handleDeleteCustomTable(tab.id)}
+                                    className="text-rose-500 hover:text-rose-700 text-xs font-bold p-1 cursor-pointer"
+                                    title="Usuń tabelę"
                                   >
                                     🗑️
                                   </button>
                                 </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      ) : (
-                        <tr>
-                          <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
-                            Brak zarejestrowanych badań krwi dla wybranego profilu.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* POD-KARTA 2: WŁASNE TABELE KLUBOWICZA (MAX 15 TABEL, ZMIANA KOLEJNOŚCI, WYKRES 5 LAT, ZWIJANIE POWYŻEJ 3 WPISÓW) */}
-          {activeBadaniaSubTab === 'wlasne_tabele' && (
-            <div className="space-y-6">
-              <div className="bg-gradient-to-r from-sky-900 to-slate-900 text-white p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div>
-                  <h3 className="font-black text-sm uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                    <span>📊</span> Własne Karty Wskaźników Krwi i Wykresy (5 Lat)
-                  </h3>
-                  <p className="text-xs text-sky-200 mt-1">
-                    Możesz dodać do 15 tabel dla konkretnych parametrów (np. Witamina D3, Ferrytyna, Morfologia, TSH). Możesz zmieniać kolejność tabel strzałkami.
-                  </p>
-                </div>
-                <button
-                  onClick={() => setIsAddTabelaModalOpen(true)}
-                  disabled={wlasneTabeleBadan.length >= 15}
-                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-all shrink-0 cursor-pointer disabled:opacity-40"
-                >
-                  + Nowa Tabela ({wlasneTabeleBadan.length}/15)
-                </button>
-              </div>
-
-              {wlasneTabeleBadan.length > 0 ? (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {wlasneTabeleBadan.map((tab, tIdx) => {
-                    const isExpanded = !!expandedTableHistory[tab.id];
-                    const displayedWpisy = isExpanded ? tab.wpisy : tab.wpisy.slice(0, 3);
-                    const hasMore = tab.wpisy.length > 3;
-
-                    return (
-                      <div key={tab.id} className="bg-white rounded-3xl border border-sky-200 shadow-sm p-5 space-y-4 flex flex-col justify-between">
-                        <div>
-                          {/* GŁÓWKA POJEDYNCZEJ TABELI ZE ZMIANĄ KOLEJNOŚCI */}
-                          <div className="flex items-center justify-between border-b border-sky-100 pb-3 gap-2">
-                            <div className="flex items-center gap-2">
-                              {/* PRZYCISKI ZMIANY KOLEJNOŚCI GÓRA / DÓŁ */}
-                              <div className="flex flex-col gap-0.5">
-                                <button
-                                  type="button"
-                                  disabled={tIdx === 0}
-                                  onClick={() => handleMoveTableUp(tIdx)}
-                                  className="w-5 h-5 rounded bg-sky-50 hover:bg-sky-100 text-sky-900 font-black text-[10px] flex items-center justify-center border border-sky-200 disabled:opacity-20 cursor-pointer"
-                                  title="Przesuń tabelę wyżej"
-                                >
-                                  ▲
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={tIdx === wlasneTabeleBadan.length - 1}
-                                  onClick={() => handleMoveTableDown(tIdx)}
-                                  className="w-5 h-5 rounded bg-sky-50 hover:bg-sky-100 text-sky-900 font-black text-[10px] flex items-center justify-center border border-sky-200 disabled:opacity-20 cursor-pointer"
-                                  title="Przesuń tabelę niżej"
-                                >
-                                  ▼
-                                </button>
                               </div>
 
-                              <span className="text-xl">🩸</span>
-                              <div>
-                                <h4 className="font-black text-sm uppercase tracking-wider text-sky-950">
-                                  {tab.nazwa}
-                                </h4>
-                                <span className="text-[10px] text-slate-400 font-bold">
-                                  Jednostka: {tab.jednostka_domyslna || 'nieokreślona'} • Wpisów: {tab.wpisy.length}
-                                </span>
+                              <div className="pt-3">
+                                {renderBloodParamChart(tab.wpisy, tab.nazwa, tab.jednostka_domyslna || '')}
+                              </div>
+
+                              <div className="pt-3">
+                                <table className="w-full text-xs text-left border-collapse">
+                                  <thead>
+                                    <tr className="text-[10px] font-black uppercase text-slate-400 border-b border-sky-100">
+                                      <th className="pb-1.5">Nazwa badania</th>
+                                      <th className="pb-1.5">Data</th>
+                                      <th className="pb-1.5 text-center">Wynik badania</th>
+                                      <th className="pb-1.5 text-right">Akcja</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-sky-50">
+                                    {displayedWpisy.map((w) => (
+                                      <tr key={w.id} className="hover:bg-sky-50/40 transition-colors">
+                                        <td className="py-2.5 font-black text-sky-950">{tab.nazwa}</td>
+                                        <td className="py-2.5 text-slate-600">{w.data_badania}</td>
+                                        <td className="py-2.5 text-center font-black text-amber-600">
+                                          {w.wynik} {w.jednostka || tab.jednostka_domyslna || ''}
+                                        </td>
+                                        <td className="py-2.5 text-right">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteMeasurementFromTable(tab.id, w.id)}
+                                            className="text-rose-500 hover:text-rose-700 font-bold text-xs p-1 cursor-pointer"
+                                            title="Usuń ten wynik (wymaga potwierdzenia)"
+                                          >
+                                            ✕
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    {tab.wpisy.length === 0 && (
+                                      <tr>
+                                        <td colSpan={4} className="py-4 text-center text-slate-400 italic text-xs">
+                                          Brak zarejestrowanych wyników. Kliknij "+ Wynik", aby dodać pierwszy wpis.
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => {
-                                  setTabelaDoWpisuModal(tab.id);
-                                  setWpisBadaniaForm({
-                                    data_badania: new Date().toISOString().split('T')[0],
-                                    wynik: '',
-                                    jednostka: tab.jednostka_domyslna || ''
-                                  });
-                                }}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-3 py-1.5 rounded-xl transition-all cursor-pointer shadow-xs"
-                                title="Dodaj nowy pomiar do tej tabeli"
-                              >
-                                + Wynik
-                              </button>
-                              <button
-                                onClick={() => handleDeleteCustomTable(tab.id)}
-                                className="text-rose-500 hover:text-rose-700 text-xs font-bold p-1 cursor-pointer"
-                                title="Usuń tabelę"
-                              >
-                                🗑️
-                              </button>
-                            </div>
+                            {hasMore && (
+                              <div className="pt-2 border-t border-sky-100">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleTableHistory(tab.id)}
+                                  className="w-full py-2 bg-sky-50 hover:bg-sky-100 text-sky-950 font-bold text-[11px] rounded-xl transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                                >
+                                  <span>{isExpanded ? '▲ Zwiń do 3 ostatnich' : `▼ Rozwiń całą historię (jeszcze ${tab.wpisy.length - 3})`}</span>
+                                </button>
+                              </div>
+                            )}
                           </div>
-
-                          {/* WYKRES 5-LETNI TEGO BADANIA */}
-                          <div className="pt-3">
-                            {renderBloodParamChart(tab.wpisy, tab.nazwa, tab.jednostka_domyslna || '')}
-                          </div>
-
-                          {/* TABELKA Z WYNIKAMI */}
-                          <div className="pt-3">
-                            <table className="w-full text-xs text-left border-collapse">
-                              <thead>
-                                <tr className="text-[10px] font-black uppercase text-slate-400 border-b border-sky-100">
-                                  <th className="pb-1.5">Nazwa badania</th>
-                                  <th className="pb-1.5">Data</th>
-                                  <th className="pb-1.5 text-center">Wynik badania</th>
-                                  <th className="pb-1.5 text-right">Akcja</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-sky-50">
-                                {displayedWpisy.map((w) => (
-                                  <tr key={w.id} className="hover:bg-sky-50/40 transition-colors">
-                                    <td className="py-2.5 font-black text-sky-950">{tab.nazwa}</td>
-                                    <td className="py-2.5 text-slate-600">{w.data_badania}</td>
-                                    <td className="py-2.5 text-center font-black text-amber-600">
-                                      {w.wynik} {w.jednostka || tab.jednostka_domyslna || ''}
-                                    </td>
-                                    <td className="py-2.5 text-right">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteMeasurementFromTable(tab.id, w.id)}
-                                        className="text-rose-500 hover:text-rose-700 font-bold text-xs p-1 cursor-pointer"
-                                        title="Usuń ten wynik (wymaga potwierdzenia)"
-                                      >
-                                        ✕
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                                {tab.wpisy.length === 0 && (
-                                  <tr>
-                                    <td colSpan={4} className="py-4 text-center text-slate-400 italic text-xs">
-                                      Brak zarejestrowanych wyników. Kliknij "+ Wynik", aby dodać pierwszy wpis.
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-
-                        {/* ROZWIJANA LISTA GDY POWYŻEJ 3 WPISÓW */}
-                        {hasMore && (
-                          <div className="pt-2 border-t border-sky-100">
-                            <button
-                              type="button"
-                              onClick={() => toggleTableHistory(tab.id)}
-                              className="w-full py-2 bg-sky-50 hover:bg-sky-100 text-sky-950 font-bold text-[11px] rounded-xl transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                            >
-                              <span>{isExpanded ? '▲ Zwiń do 3 ostatnich' : `▼ Rozwiń całą historię (jeszcze ${tab.wpisy.length - 3})`}</span>
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="bg-white p-12 rounded-3xl border border-sky-200 text-center space-y-3">
-                  <span className="text-4xl block">📊</span>
-                  <h4 className="font-black text-base text-sky-950 uppercase">Brak stworzonych tabel badań krwi</h4>
-                  <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    Klubowicz może utworzyć do 15 tabel dla wybranych badań krwi i samodzielnie śledzić swoje postępy na 5-letnich wykresach trendu.
-                  </p>
-                  <button
-                    onClick={() => setIsAddTabelaModalOpen(true)}
-                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-2.5 rounded-xl uppercase tracking-wider shadow cursor-pointer transition-all"
-                  >
-                    + Utwórz pierwszą tabelę
-                  </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="bg-white p-12 rounded-3xl border border-sky-200 text-center space-y-3">
+                      <span className="text-4xl block">📊</span>
+                      <h4 className="font-black text-base text-sky-950 uppercase">Brak stworzonych tabel badań krwi</h4>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        Klubowicz może utworzyć do 15 tabel dla wybranych badań krwi i samodzielnie śledzić swoje postępy na 5-letnich wykresach trendu.
+                      </p>
+                      <button
+                        onClick={() => setIsAddTabelaModalOpen(true)}
+                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-6 py-2.5 rounded-xl uppercase tracking-wider shadow cursor-pointer transition-all"
+                      >
+                        + Utwórz pierwszą tabelę
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
+
             </div>
           )}
 
         </div>
       )}
-
       {/* MODAL: UTWÓRZ NOWĄ TABELĘ WŁASNYCH BADAŃ (MAX 15) */}
       {isAddTabelaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -4512,7 +4550,7 @@ export default function AnalizaFormyPage() {
                   </div>
                 )}
 
-                {/* 2. SUPLEMENTACJA KLUBOWICZA (DOSTĘPNA DLA KAŻDEGO) */}
+                {/* 2. SUPLEMENTACJA KLUBOWICZA */}
                 <div className="bg-sky-50/50 p-4 rounded-2xl border border-sky-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-black text-sky-950 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
@@ -5019,7 +5057,7 @@ export default function AnalizaFormyPage() {
                 </button>
                 <button 
                   type="submit" 
-                  disabled={!manualAddKlientId}
+                  disabled={!manualAddKlientId} 
                   className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl uppercase tracking-wider cursor-pointer shadow disabled:opacity-40"
                 >
                   Dodaj do Gry
