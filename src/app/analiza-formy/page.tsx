@@ -15,6 +15,8 @@ interface Klient {
   Urodziny?: string;
   urodziny?: string;
   wzrost?: number | null;
+  Wzrost?: number | null;
+  "Wzrost (cm)"?: number | null;
   avatarUrl?: string;
   AvatarUrl?: string;
   portfel?: number | null;
@@ -169,7 +171,7 @@ export const extractPdfFiles = (b?: BadaniaKrwiWpis | null): BadaniaKrwiPlik[] =
   return [];
 };
 
-// Bezpieczne pobieranie podpisanych adresów URL (Signed URLs) z prywatnego folderu Supabase Storage
+// Bezpieczne pobieranie adresu URL (Signed URL lub Public URL) eliminujące błąd 404 w Vercel
 export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> => {
   if (!rawUrlOrPath) return '';
   if (rawUrlOrPath.startsWith('blob:') || rawUrlOrPath.startsWith('data:')) return rawUrlOrPath;
@@ -178,27 +180,56 @@ export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> =>
     let filePath = rawUrlOrPath;
     if (filePath.includes('/badania/')) {
       filePath = filePath.split('/badania/')[1].split('?')[0];
-    } else if (filePath.startsWith('http')) {
+    } else if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
       const urlObj = new URL(filePath);
       const parts = urlObj.pathname.split('/');
       const bIndex = parts.indexOf('badania');
       if (bIndex !== -1 && bIndex < parts.length - 1) {
         filePath = parts.slice(bIndex + 1).join('/');
+      } else {
+        filePath = parts[parts.length - 1] || '';
       }
     }
-    filePath = decodeURIComponent(filePath);
+    filePath = decodeURIComponent(filePath).trim();
 
-    const { data, error } = await supabase.storage
+    // 1. Próba Signed URL z Supabase Storage (ważny 2 godziny)
+    const { data: signedData, error: signedErr } = await supabase.storage
       .from('badania')
-      .createSignedUrl(filePath, 3600);
+      .createSignedUrl(filePath, 7200);
 
-    if (data?.signedUrl) {
-      return data.signedUrl;
+    if (!signedErr && signedData?.signedUrl) {
+      return signedData.signedUrl;
+    }
+
+    // 2. Fallback: Publiczny adres URL z Supabase Storage
+    const { data: pubData } = supabase.storage
+      .from('badania')
+      .getPublicUrl(filePath);
+
+    if (pubData?.publicUrl) {
+      return pubData.publicUrl;
     }
   } catch (err) {
     console.error("Błąd generowania bezpiecznego URL:", err);
   }
-  return rawUrlOrPath;
+
+  if (rawUrlOrPath.startsWith('http://') || rawUrlOrPath.startsWith('https://')) {
+    return rawUrlOrPath;
+  }
+
+  // W ostateczności pobierz z publicznego bucketa Supabase
+  const { data: fallbackPub } = supabase.storage.from('badania').getPublicUrl(rawUrlOrPath);
+  return fallbackPub?.publicUrl || rawUrlOrPath;
+};
+
+// Pomocnicza funkcja pobierająca poprawny wzrost z profilu klubowicza
+export const getClientHeight = (client?: Klient | null): string => {
+  if (!client) return 'Brak';
+  const val = client.wzrost ?? client.Wzrost ?? client["Wzrost (cm)"];
+  if (val !== undefined && val !== null && String(val).trim() !== '') {
+    return `${val} cm`;
+  }
+  return 'Brak';
 };
 
 const calculateAge = (birthDateString?: string | null): number | null => {
@@ -265,10 +296,8 @@ export default function AnalizaFormyPage() {
   const [editingMeasurementId, setEditingMeasurementId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Stan zwijania lat w tabeli pomiarów
   const [expandedMeasurementYears, setExpandedMeasurementYears] = useState<Record<string, boolean>>({});
 
-  // Stany Wyzwania Redukcji
   const [edycjeRedukcji, setEdycjeRedukcji] = useState<RedukcjaEdycja[]>([]);
   const [selectedEdycjaId, setSelectedEdycjaId] = useState<number | null>(null);
   const [uczestnicyRedukcji, setUczestnicyRedukcji] = useState<RedukcjaUczestnik[]>([]);
@@ -277,7 +306,6 @@ export default function AnalizaFormyPage() {
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
   const [hasUnreadChallenge, setHasUnreadChallenge] = useState<boolean>(false);
   
-  // Modale Redukcji
   const [isNewEdycjaModalOpen, setIsNewEdycjaModalOpen] = useState<boolean>(false);
   const [isRedukcjaPomiarModalOpen, setIsRedukcjaPomiarModalOpen] = useState<boolean>(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState<boolean>(false);
@@ -288,7 +316,6 @@ export default function AnalizaFormyPage() {
   const [targetPomiarEtap, setTargetPomiarEtap] = useState<'start' | 'koniec'>('start');
   const [targetPomiarKlientId, setTargetPomiarKlientId] = useState<number | string | null>(null);
 
-  // Formularze
   const [manualAddKlientId, setManualAddKlientId] = useState<string>('');
   const [manualAddSearchQuery, setManualAddSearchQuery] = useState<string>('');
   const [isManualSearchFocused, setIsManualSearchFocused] = useState<boolean>(false);
@@ -296,15 +323,13 @@ export default function AnalizaFormyPage() {
   const [manualAddMetoda, setManualAddMetoda] = useState<'gotowka' | 'autopay' | 'inna'>('gotowka');
   const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
 
-  // Stany Badania Krwi
   const [badaniaList, setBadaniaList] = useState<BadaniaKrwiWpis[]>([]);
-  const [allPendingBloodTestsCount, setAllPendingBloodTestsCount] = useState<number>(0);
+  const [wszystkieOczekujaceBadania, setWszystkieOczekujaceBadania] = useState<BadaniaKrwiWpis[]>([]);
   const [selectedBadanieDetail, setSelectedBadanieDetail] = useState<BadaniaKrwiWpis | null>(null);
   const [isBadaniaModalOpen, setIsBadaniaModalOpen] = useState<boolean>(false);
   const [isDetailViewOpen, setIsDetailViewOpen] = useState<boolean>(false);
   const [editingBadanieId, setEditingBadanieId] = useState<number | null>(null);
 
-  // Stan własnych tabel badań krwi klubowicza (max 15 tabel z możliwością zmiany kolejności)
   const [wlasneTabeleBadan, setWlasneTabeleBadan] = useState<WlasnaTabelaBadan[]>([]);
   const [isAddTabelaModalOpen, setIsAddTabelaModalOpen] = useState<boolean>(false);
   const [newTabelaNazwa, setNewTabelaNazwa] = useState<string>('');
@@ -322,7 +347,6 @@ export default function AnalizaFormyPage() {
   const [isSavingBadanie, setIsSavingBadanie] = useState<boolean>(false);
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
 
-  // Formularz Badania Krwi z obsługą wielu plików PDF
   const [badanieFormData, setBadanieFormData] = useState({
     data_badania: new Date().toISOString().split('T')[0],
     plik_pdf_url: '' as string,
@@ -386,7 +410,6 @@ export default function AnalizaFormyPage() {
     notatki_klubowicza: ''
   });
 
-  // Stany kalkulatora dietetycznego
   const [calcWeight, setCalcWeight] = useState<string>('');
   const [calcFat, setCalcFat] = useState<string>('');
   const [calcHeight, setCalcHeight] = useState<string>('');
@@ -415,11 +438,27 @@ export default function AnalizaFormyPage() {
     return badaniaList.some(b => b.nowa_interpretacja === true);
   }, [badaniaList]);
 
-  // Wskaźnik dla administratora: czerwona migająca kropka, gdy klubowicz dodał badania oczekujące na analizę
+  // Licznik i alert dla administratora o badaniach krwi oczekujących na analizę
   const hasPendingBloodTestsForAdmin = useMemo(() => {
     if (appRole !== 'admin' && appRole !== 'trener') return false;
-    return allPendingBloodTestsCount > 0;
-  }, [appRole, allPendingBloodTestsCount]);
+    return wszystkieOczekujaceBadania.length > 0;
+  }, [appRole, wszystkieOczekujaceBadania]);
+
+  // Wskaźnik dla administratora: zakończone wyzwanie oczekujące na podliczenie i rozdanie nagród
+  const hasFinishedChallengeAwaitingTally = useMemo(() => {
+    if (appRole !== 'admin') return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return edycjeRedukcji.some(e => {
+      if (e.status === 'aktywne' && e.data_koniec) {
+        const end = new Date(e.data_koniec);
+        end.setHours(0, 0, 0, 0);
+        return today > end;
+      }
+      return false;
+    });
+  }, [edycjeRedukcji, appRole]);
 
   const markChallengeAsRead = (edycjaId?: number | null) => {
     if (typeof window === 'undefined') return;
@@ -457,7 +496,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Automatyczne sprawdzanie i wysyłanie wiadomości powiadomień na 10 i 5 dni przed końcem wyzwania
   const checkAndSendRedukcjaAlerts = async (edycje: RedukcjaEdycja[]) => {
     try {
       const activeEdycje = edycje.filter(e => e.status === 'aktywne');
@@ -487,7 +525,7 @@ export default function AnalizaFormyPage() {
             const notifications = partData.map(p => ({
               klient_id: p.klient_id,
               tytul: `Wyzwanie Redukcji: Zostało ${diffDays} dni!`,
-              tresc: `Przypomnienie: Do wielkiego finału wyzwania "${ed.nazwa}" pozostało już tylko ${diffDays} dni! Umów się z trenerem na wykonanie finałowego pomiaru na analizatorze.`,
+              tresc: `Przypomnienie: Do finału wyzwania "${ed.nazwa}" pozostało już tylko ${diffDays} dni! Umów się z trenerem na finałową analizę składu ciała.`,
               przeczytane: false
             }));
 
@@ -504,23 +542,23 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Ładowanie liczby oczekujących badań krwi dla administratora
+  // Ładowanie listy wszystkich badań krwi bez interpretacji trenera dla Admina
   const checkAdminPendingBloodTests = async () => {
     try {
-      const { count, error } = await supabase
+      const { data, error } = await supabase
         .from('klub_badania_krwi')
-        .select('*', { count: 'exact', head: true })
-        .or('interpretacja.is.null,interpretacja.eq.""');
+        .select('*')
+        .or('interpretacja.is.null,interpretacja.eq.""')
+        .order('data_badania', { ascending: false });
 
-      if (!error && count !== null) {
-        setAllPendingBloodTestsCount(count);
+      if (!error && data) {
+        setWszystkieOczekujaceBadania(data as BadaniaKrwiWpis[]);
       }
     } catch (err) {
-      console.warn("Nie udało się pobrać licznika oczekujących badań:", err);
+      console.warn("Nie udało się pobrać oczekujących badań:", err);
     }
   };
 
-  // Ładowanie i synchronizacja własnych tabel badań krwi z bazy
   const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
     try {
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
@@ -547,7 +585,7 @@ export default function AnalizaFormyPage() {
         }
       }
     } catch (err) {
-      console.warn("Własne tabele badań: tryb fallback:", err);
+      console.warn("Własne tabele badań: fallback local storage:", err);
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
       if (typeof window !== 'undefined') {
         const cached = localStorage.getItem(tKey);
@@ -597,7 +635,6 @@ export default function AnalizaFormyPage() {
         setBadaniaList([]);
       }
       await fetchWlasneTabele(klientId, email);
-      await checkAdminPendingBloodTests();
     } catch (err) {
       console.error("Błąd pobierania badań krwi:", err);
       setBadaniaList([]);
@@ -621,22 +658,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Wskaźnik dla administratora: zakończone wyzwanie oczekujące na oficjalne podliczenie i rozdanie nagród
-  const hasFinishedChallengeAwaitingTally = useMemo(() => {
-    if (appRole !== 'admin') return false;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    return edycjeRedukcji.some(e => {
-      if (e.status === 'aktywne' && e.data_koniec) {
-        const end = new Date(e.data_koniec);
-        end.setHours(0, 0, 0, 0);
-        return today > end;
-      }
-      return false;
-    });
-  }, [edycjeRedukcji, appRole]);
-
   useEffect(() => {
     const initAuth = async () => {
       setIsLoading(true);
@@ -659,6 +680,7 @@ export default function AnalizaFormyPage() {
 
           if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
             setAppRole('admin');
+            await checkAdminPendingBloodTests();
           } else {
             const { data: trenerData } = await supabase
               .from('trenerzy')
@@ -668,13 +690,15 @@ export default function AnalizaFormyPage() {
 
             if (trenerData) {
               setAppRole('trener');
+              await checkAdminPendingBloodTests();
               if (myClientProfile) {
                 setSelectedKlient(myClientProfile);
                 const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
                 if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
                 else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
                 
-                if (myClientProfile.wzrost) setCalcHeight(String(myClientProfile.wzrost));
+                const hVal = myClientProfile.wzrost ?? myClientProfile.Wzrost ?? myClientProfile["Wzrost (cm)"];
+                if (hVal) setCalcHeight(String(hVal));
                 const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
                 if (age) setCalcAge(String(age));
 
@@ -689,7 +713,8 @@ export default function AnalizaFormyPage() {
                 if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
                 else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
                 
-                if (myClientProfile.wzrost) setCalcHeight(String(myClientProfile.wzrost));
+                const hVal = myClientProfile.wzrost ?? myClientProfile.Wzrost ?? myClientProfile["Wzrost (cm)"];
+                if (hVal) setCalcHeight(String(hVal));
                 const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
                 if (age) setCalcAge(String(age));
 
@@ -813,7 +838,8 @@ export default function AnalizaFormyPage() {
     if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
     else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
 
-    if (klient.wzrost) setCalcHeight(String(klient.wzrost));
+    const hVal = klient.wzrost ?? klient.Wzrost ?? klient["Wzrost (cm)"];
+    if (hVal) setCalcHeight(String(hVal));
     const age = calculateAge(klient.Urodziny || klient.urodziny);
     if (age) setCalcAge(String(age));
 
@@ -922,11 +948,19 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // Bezpieczne otwieranie plików prywatnych (PDF/zdjęcia)
+  // Bezpieczne otwieranie plików PDF i zdjęć z chmury Supabase – likwiduje błąd 404
   const handleOpenSecureFile = async (rawUrl: string) => {
     if (!rawUrl) return;
-    const secureUrl = await getSecureFileUrl(rawUrl);
-    window.open(secureUrl, '_blank', 'noopener,noreferrer');
+    try {
+      const secureUrl = await getSecureFileUrl(rawUrl);
+      if (secureUrl) {
+        window.open(secureUrl, '_blank', 'noopener,noreferrer');
+      } else {
+        alert("Nie można wygenerować bezpiecznego linku do pliku.");
+      }
+    } catch (e: any) {
+      alert("Błąd otwierania pliku: " + e.message);
+    }
   };
 
   // --- OBSŁUGA BADAŃ KRWI ---
@@ -1008,7 +1042,7 @@ export default function AnalizaFormyPage() {
         const cleanBaseName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
         const fileName = `badania_${tKlientId}_${Date.now()}_${i}_${cleanBaseName}.pdf`;
 
-        const { data: uploadData, error: uploadErr } = await supabase.storage
+        const { error: uploadErr } = await supabase.storage
           .from('badania')
           .upload(fileName, file, { upsert: true, contentType: 'application/pdf' });
 
@@ -1016,11 +1050,8 @@ export default function AnalizaFormyPage() {
           console.error("Błąd zapisu pliku PDF w storage:", uploadErr);
         }
 
-        // Zapisujemy stałą ścieżkę do bucketa – podpisany URL generowany jest dynamicznie w locie
-        const storedPath = fileName;
-
         uploadedPdfs.push({
-          url: storedPath,
+          url: fileName,
           nazwa: file.name
         });
       }
@@ -1194,6 +1225,7 @@ export default function AnalizaFormyPage() {
         setIsBadaniaModalOpen(false);
         setEditingBadanieId(null);
         await fetchBadaniaKrwi(tKlientId, tEmail);
+        await checkAdminPendingBloodTests();
       } else {
         alert("Błąd zapisu badania: " + res.error.message);
       }
@@ -1293,7 +1325,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // Usunięcie wyniku z tabeli z obowiązkowym potwierdzeniem
+  // Usunięcie wyniku z tabeli z potwierdzeniem
   const handleDeleteMeasurementFromTable = async (tableId: string, wpisId: string) => {
     const isConfirmed = confirm("Czy na pewno chcesz usunąć ten wynik z tabeli?");
     if (!isConfirmed) return;
@@ -1857,7 +1889,7 @@ export default function AnalizaFormyPage() {
   const calculateKatchMcArdle = () => {
     const w = parseFloat(calcWeight || (latestMeasurement ? String(latestMeasurement.waga) : '0'));
     const bf = parseFloat(calcFat || (latestMeasurement?.tkanka_tluszczowa ? String(latestMeasurement.tkanka_tluszczowa) : '0'));
-    const h = parseFloat(calcHeight || (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : (latestMeasurement?.wzrost ? String(latestMeasurement.wzrost) : '0')));
+    const h = parseFloat(calcHeight || String(selectedKlient?.wzrost ?? selectedKlient?.Wzrost ?? selectedKlient?.["Wzrost (cm)"] ?? (latestMeasurement?.wzrost ? String(latestMeasurement.wzrost) : '0')));
     const a = parseFloat(calcAge || (calculateAge(selectedKlient?.Urodziny || selectedKlient?.urodziny)?.toString() || '0'));
     const pal = parseFloat(calcPal);
     const goalModifier = parseFloat(calcGoal);
@@ -2070,7 +2102,7 @@ export default function AnalizaFormyPage() {
   };
 
   const clientGenderDisplay = selectedKlient ? (selectedKlient.gender || selectedKlient.Płeć || selectedKlient.plec || 'Nie podano') : '';
-  const clientHeightDisplay = selectedKlient?.wzrost ? `${selectedKlient.wzrost} cm` : (latestMeasurement?.wzrost ? `${latestMeasurement.wzrost} cm` : 'Brak');
+  const clientHeightDisplay = getClientHeight(selectedKlient);
   const clientCalculatedAge = selectedKlient ? calculateAge(selectedKlient.Urodziny || selectedKlient.urodziny) : null;
 
   const niezapisaniKlienci = useMemo(() => {
@@ -2145,7 +2177,7 @@ export default function AnalizaFormyPage() {
                   data_pomiaru: m.data_pomiaru || new Date().toISOString().split('T')[0],
                   miejsce_typ: isMStudio ? 'STUDIO' : 'INNE',
                   miejsce_inne_opis: isMStudio ? '' : (m.miejsce_pomiaru || ''),
-                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient?.wzrost ? String(selectedKlient.wzrost) : ''),
+                  wzrost: m.wzrost !== null && m.wzrost !== undefined ? String(m.wzrost) : (selectedKlient ? String(selectedKlient.wzrost ?? selectedKlient.Wzrost ?? selectedKlient["Wzrost (cm)"] ?? '') : ''),
                   waga: m.waga !== null && m.waga !== undefined ? String(m.waga) : '',
                   obwod_pasa: m.obwod_pasa !== null && m.obwod_pasa !== undefined ? String(m.obwod_pasa) : '',
                   klatka: m.klatka !== null && m.klatka !== undefined ? String(m.klatka) : '',
@@ -2218,8 +2250,7 @@ export default function AnalizaFormyPage() {
               <span>✓</span> Oznacz redukcję jako przeczytaną
             </button>
           )}
-
-          {activeTab === 'pomiary' && ((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
+{activeTab === 'pomiary' && ((appRole === 'admin' || (appRole === 'trener' && selectedKlient)) || appRole === 'klubowicz') && (
             <button
               onClick={() => {
                 setEditingMeasurementId(null);
@@ -2227,7 +2258,7 @@ export default function AnalizaFormyPage() {
                   data_pomiaru: new Date().toISOString().split('T')[0],
                   miejsce_typ: 'STUDIO',
                   miejsce_inne_opis: '',
-                  wzrost: selectedKlient?.wzrost ? String(selectedKlient.wzrost) : (measurements[0]?.wzrost ? String(measurements[0].wzrost) : ''),
+                  wzrost: selectedKlient ? String(selectedKlient.wzrost ?? selectedKlient.Wzrost ?? selectedKlient["Wzrost (cm)"] ?? '') : (measurements[0]?.wzrost ? String(measurements[0].wzrost) : ''),
                   waga: '',
                   obwod_pasa: '',
                   klatka: '',
@@ -2287,7 +2318,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK GŁÓWNYCH Z KROPKAMI ALARMOWYMI */}
+      {/* PASEK ZAKŁADEK GŁÓWNYCH Z KROPKAMI I WYKRZYKNIKAMI */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -2325,7 +2356,7 @@ export default function AnalizaFormyPage() {
 
           {/* Czerwona kropka z wykrzyknikiem dla administratora po zakończeniu wyzwania */}
           {appRole === 'admin' && hasFinishedChallengeAwaitingTally ? (
-            <span className="relative flex h-4 w-4 ml-1" title="Termin wyzwania upłynął! Podlicz wyniki i przydziel nagrody.">
+            <span className="relative flex h-4 w-4 ml-1" title="Termin wyzwania minął! Podlicz punkty i rozdaj nagrody.">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
                 !
@@ -2354,12 +2385,12 @@ export default function AnalizaFormyPage() {
           <span>🩸</span> 
           <span>4. Badania Krwi</span>
 
-          {/* Czerwona migająca kropka dla administratora o nowych badaniach do analizy */}
+          {/* Czerwona migająca kropka z wykrzyknikiem stale widoczna dla administratora */}
           {(appRole === 'admin' || appRole === 'trener') && hasPendingBloodTestsForAdmin ? (
-            <span className="relative flex h-4 w-4 ml-1" title={`Nowe badania oczekujące na analizę: ${allPendingBloodTestsCount}`}>
+            <span className="relative flex h-4 w-4 ml-1" title={`Nowe badania oczekujące na analizę: ${wszystkieOczekujaceBadania.length}`}>
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
-                {allPendingBloodTestsCount}
+                !
               </span>
             </span>
           ) : hasUnreadInterpretation && (
@@ -2422,7 +2453,7 @@ export default function AnalizaFormyPage() {
                 {searchResults.map((klient) => {
                   const avatar = klient.avatarUrl || klient.AvatarUrl;
                   const plecTxt = klient.gender || klient.Płeć || klient.plec || 'Nie podano';
-                  const wTxt = klient.wzrost ? `${klient.wzrost} cm` : 'Brak wzrostu';
+                  const wTxt = getClientHeight(klient);
                   const kAge = calculateAge(klient.Urodziny || klient.urodziny);
                   return (
                     <div
@@ -2517,8 +2548,8 @@ export default function AnalizaFormyPage() {
           </div>
         )
       )}
-
-      {/* ZAKŁADKA 1: POMIARY */}
+      
+    {/* ZAKŁADKA 1: POMIARY */}
       {activeTab === 'pomiary' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
           {latestMeasurement ? (
@@ -2687,7 +2718,7 @@ export default function AnalizaFormyPage() {
             )}
           </div>
 
-          {/* WYKRESY PROGRESU ZMIENIONE NA 8 LAT */}
+          {/* WYKRESY PROGRESU NA 8 LAT */}
           <div className="space-y-4 pt-4">
             <div className="flex items-center justify-between border-b border-sky-200 pb-2">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -3680,9 +3711,91 @@ export default function AnalizaFormyPage() {
 
         </div>
       )}
+
       {/* ZAKŁADKA 4: BADANIA KRWI (POD-KARTY: DOKUMENTY ORAZ WŁASNE TABELE) */}
       {activeTab === 'badania' && (selectedKlient || appRole === 'klubowicz' || appRole === 'trener') && (
         <div className="space-y-6">
+
+          {/* LISTA OCZEKUJĄCYCH BADAŃ KRWI DLA TRENERA / ADMINA */}
+          {(appRole === 'admin' || appRole === 'trener') && wszystkieOczekujaceBadania.length > 0 && (
+            <div className="bg-rose-50 border-2 border-rose-300 p-5 rounded-3xl shadow-sm space-y-3 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-600"></span>
+                  </span>
+                  <h3 className="font-black text-xs uppercase tracking-wider text-rose-950">
+                    Oczekujące badania krwi do analizy ({wszystkieOczekujaceBadania.length})
+                  </h3>
+                </div>
+                <span className="text-[10px] font-bold text-rose-700 bg-white px-2.5 py-1 rounded-full border border-rose-200">
+                  Wymagają Twojej interpretacji
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left border-collapse bg-white rounded-2xl overflow-hidden border border-rose-200">
+                  <thead>
+                    <tr className="bg-rose-900 text-white font-black uppercase text-[10px] tracking-wider">
+                      <th className="p-3">Klubowicz (Imię i Nazwisko)</th>
+                      <th className="p-3">Adres E-mail</th>
+                      <th className="p-3 text-center">Data badania</th>
+                      <th className="p-3 text-center">Pliki PDF</th>
+                      <th className="p-3 text-right">Akcja</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-rose-100">
+                    {wszystkieOczekujaceBadania.map((item) => {
+                      const clientObj = (klienci || []).find(k => 
+                        String(k.id) === String(item.klient_id) || 
+                        (k['E-mail'] && item.email_klienta && k['E-mail'].toLowerCase().trim() === item.email_klienta.toLowerCase().trim())
+                      );
+                      const clientName = clientObj ? `${clientObj.Imię || ''} ${clientObj.Nazwisko || ''}`.trim() : 'Klubowicz';
+                      const pdfCount = extractPdfFiles(item).length;
+
+                      return (
+                        <tr key={item.id} className="hover:bg-rose-50/50 transition-colors">
+                          <td className="p-3 font-black text-slate-900">
+                            <span className="text-rose-600 mr-1.5">●</span>
+                            {clientName}
+                          </td>
+                          <td className="p-3 text-slate-600 font-medium">{item.email_klienta}</td>
+                          <td className="p-3 text-center font-bold text-slate-800">{item.data_badania}</td>
+                          <td className="p-3 text-center font-black text-amber-600">
+                            {pdfCount} {pdfCount === 1 ? 'plik PDF' : 'pliki PDF'}
+                          </td>
+                          <td className="p-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (clientObj) {
+                                  handleSelectClient(clientObj);
+                                } else {
+                                  setSelectedKlient({
+                                    id: item.klient_id,
+                                    Imię: clientName.split(' ')[0] || 'Klubowicz',
+                                    Nazwisko: clientName.split(' ')[1] || '',
+                                    "E-mail": item.email_klienta
+                                  });
+                                  fetchMeasurements(item.klient_id, item.email_klienta);
+                                  fetchBadaniaKrwi(item.klient_id, item.email_klienta);
+                                }
+                                setActiveBadaniaSubTab('dokumenty');
+                              }}
+                              className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] px-3.5 py-1.5 rounded-xl uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                            >
+                              Przejdź do analizy ➔
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* PRZEŁĄCZNIK DWÓCH KART W BADANIACH KRWI */}
           <div className="flex rounded-2xl bg-sky-100/70 p-1.5 border border-sky-200 text-xs font-black shadow-inner max-w-lg">
@@ -5170,11 +5283,11 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: POMIAR REDUKCJI */}
+      {/* MODAL: POMIAR REDUKCJI (POBIERA POPRAWNY WZROST Z PROFILU KLUBOWICZA) */}
       {isRedukcjaPomiarModalOpen && (() => {
         const targetClient = (klienci || []).find(k => String(k.id) === String(targetPomiarKlientId));
         const targetAge = targetClient ? calculateAge(targetClient.Urodziny || targetClient.urodziny) : null;
-        const targetHeight = targetClient?.wzrost ? `${targetClient.wzrost} cm` : 'Brak';
+        const targetHeight = getClientHeight(targetClient);
         const targetGender = targetClient?.gender || targetClient?.Płeć || targetClient?.plec || 'Nie podano';
 
         return (
