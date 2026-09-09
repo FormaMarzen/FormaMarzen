@@ -88,6 +88,15 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
+// Funkcja normalizująca tekst do porównań bez polskich znaków
+const normalizeText = (text: string) => {
+  return (text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+};
+
 export default function WyzwaniaPage() {
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
   const [currentUserName, setCurrentUserName] = useState<string>("");
@@ -331,7 +340,7 @@ export default function WyzwaniaPage() {
               .from("klub_wyzwania")
               .update({ 
                 status: 'walkower', 
-                zwyciezca_id: ch.tworca_id, // Rzucający wygrywa walkowerem
+                zwyciezca_id: ch.tworca_id,
                 updated_at: new Date().toISOString() 
               })
               .eq("id", ch.id);
@@ -595,10 +604,10 @@ export default function WyzwaniaPage() {
         def.typ_reguly && def.typ_reguly !== 'RECZNA' && !ownedBadgeIds.has(Number(def.id))
       );
 
-      // POBRANIE POTWIERDZONYCH OBECNOŚCI ZAJĘĆ
+      // POBRANIE WSZYSTKICH ZAPISÓW ZAJĘĆ Z MOŻLIWYMI POLAMI TYTUŁÓW
       const { data: attendancesRaw } = await supabase
         .from("zapisy_zajec")
-        .select("id, class_key, obecny, nieobecny, status, created_at")
+        .select("id, class_key, obecny, nieobecny, status, created_at, tytul, zajecia, nazwa_zajec")
         .eq("klient_id", userId);
 
       const attendances = attendancesRaw || [];
@@ -612,17 +621,17 @@ export default function WyzwaniaPage() {
       const classNamesById = new Map<string, string>();
       const classStartTimesById = new Map<string, string>();
       grafikList.forEach((g: any) => {
-        classNamesById.set(String(g.id), (g.title || g.nazwa || '').toLowerCase());
+        classNamesById.set(String(g.id), (g.title || g.nazwa || ''));
         classStartTimesById.set(String(g.id), g.start || g.start_time || '00:00');
       });
       jednorazoweList.forEach((j: any) => {
-        classNamesById.set(String(j.id), (j.title || j.nazwa || '').toLowerCase());
+        classNamesById.set(String(j.id), (j.title || j.nazwa || ''));
         classStartTimesById.set(String(j.id), j.start_time || j.start || '00:00');
       });
       const nadpisaniaMap = new Map<string, string>();
       const nadpisaniaStartsMap = new Map<string, string>();
       nadpisaniaList.forEach((n: any) => {
-        nadpisaniaMap.set(n.class_key, (n.title || n.nazwa || '').toLowerCase());
+        nadpisaniaMap.set(n.class_key, (n.title || n.nazwa || ''));
         if (n.start) nadpisaniaStartsMap.set(n.class_key, n.start);
       });
 
@@ -640,7 +649,9 @@ export default function WyzwaniaPage() {
         const parts = cKey.split('_');
         const cId = parts[0];
         
-        let title = nadpisaniaMap.get(cKey) || classNamesById.get(cId) || '';
+        // Elastyczne wyciągnięcie nazwy zajęć ze wszystkich możliwych źródeł
+        let rawTitle = att.tytul || att.zajecia || att.nazwa_zajec || nadpisaniaMap.get(cKey) || classNamesById.get(cId) || '';
+        let title = normalizeText(rawTitle);
         let startTime = nadpisaniaStartsMap.get(cKey) || classStartTimesById.get(cId) || '00:00';
 
         const dateObj = parseDateFromClassKey(cKey);
@@ -683,13 +694,35 @@ export default function WyzwaniaPage() {
       const metricValues: Record<string, number> = {};
 
       metricValues["TRENINGI_OGOLNE"] = userConfirmedClassTitles.length;
-      metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => c.title.includes("hyrox")).length;
-      metricValues["TRENINGI_OGOLNOROZWOJOWE"] = userConfirmedClassTitles.filter(c => c.title.includes("ogólnorozwoj")).length;
-      metricValues["TRENINGI_NOGI_POSLADKI"] = userConfirmedClassTitles.filter(c => c.title.includes("nogi") || c.title.includes("pośladk")).length;
-      metricValues["TRENINGI_BRZUCH"] = userConfirmedClassTitles.filter(c => c.title.includes("brzuch")).length;
-      metricValues["TRENINGI_HIIT_TABATA"] = userConfirmedClassTitles.filter(c => c.title.includes("hiit") || c.title.includes("tabata")).length;
-      metricValues["TRENINGI_SILOWE"] = userConfirmedClassTitles.filter(c => c.title.includes("siłow")).length;
-      metricValues["TRENINGI_ROZCIAGANIE"] = userConfirmedClassTitles.filter(c => c.title.includes("rozciąg") || c.title.includes("mobilizacj")).length;
+      
+      // Dopasowanie rodzajów treningów z użyciem synonimów
+      metricValues["TRENINGI_HYROX"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("hyrox")
+      ).length;
+
+      metricValues["TRENINGI_OGOLNOROZWOJOWE"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("ogolnorozwoj") || c.title.includes("funkcjonal") || c.title.includes("cross")
+      ).length;
+
+      metricValues["TRENINGI_NOGI_POSLADKI"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("nog") || c.title.includes("poslad") || c.title.includes("legs")
+      ).length;
+
+      metricValues["TRENINGI_BRZUCH"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("brzuch") || c.title.includes("core") || c.title.includes("abs")
+      ).length;
+
+      metricValues["TRENINGI_HIIT_TABATA"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("hiit") || c.title.includes("tabata") || c.title.includes("interwal")
+      ).length;
+
+      metricValues["TRENINGI_SILOWE"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("silow") || c.title.includes("strength") || c.title.includes("power") || c.title.includes("bary")
+      ).length;
+
+      metricValues["TRENINGI_ROZCIAGANIE"] = userConfirmedClassTitles.filter(c => 
+        c.title.includes("rozciag") || c.title.includes("mobilizacj") || c.title.includes("stretching") || c.title.includes("mobility") || c.title.includes("joga")
+      ).length;
 
       const sportChallenges = verifiedChallenges.filter((c: any) => (c.kategoria_wyzwania || 'sport') === 'sport');
       metricValues["POJEDYNKI_UDZIAL"] = sportChallenges.length;
@@ -2128,57 +2161,65 @@ export default function WyzwaniaPage() {
                 </div>
               </div>
 
-              {/* SEKCJA: ODZNAKI DO ZDOBYCIA WRAZ Z LICZNIKIEM I PASKIEM POSTĘPU */}
+              {/* SEKCJA: ODZNAKI DO ZDOBYCIA WRAZ Z PRECYZYJNYM SORTOWANIEM (NAJBLIŻSZE NA GÓRZE) */}
               <div className="space-y-4 pt-6 border-t border-sky-100">
                 <div>
                   <h3 className="font-black text-xs uppercase text-slate-800 tracking-wider flex items-center gap-2">
                     <span>🎯</span> Odznaki do zdobycia - Zobacz ile Ci brakuje!
                   </h3>
-                  <p className="text-[11px] text-slate-500 mt-0.5">Sprawdź ile treningów, wygranych pojedynków lub dni stażu dzieli Cię od kolejnych trofeów.</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Ułożone od tych, które masz najbliżej do odblokowania.</p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {wszystkieOdznaki
                     .filter(def => !odznaki.some((o: any) => o.klub_odznaki_definicje?.id === def.id || o.odznaka_id === def.id))
-                    .map(def => {
-                      const progress = getBadgeProgress(def, currentUserMetrics);
-                      return (
-                        <div key={def.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between space-y-3">
-                          <div className="flex items-start gap-3.5">
-                            <div 
-                              onClick={() => setSelectedBadgeForZoom(def)}
-                              className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shrink-0 cursor-pointer grayscale opacity-85 hover:grayscale-0 transition-all"
-                            >
-                              {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between gap-2">
-                                <h4 className="font-black text-xs uppercase text-slate-900 truncate">{def.nazwa}</h4>
-                                <span className="text-[9px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
-                              </div>
-                              <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{def.opis}</p>
-                              {def.warunek && (
-                                <p className="text-[9px] text-amber-800 font-mono mt-1">🎯 {def.warunek}</p>
-                              )}
-                            </div>
+                    .map(def => ({
+                      def,
+                      progress: getBadgeProgress(def, currentUserMetrics)
+                    }))
+                    // Sortowanie: najwyższy procent ukończenia na samej górze; przy równości najmniejsza brakująca liczba jednostek
+                    .sort((a, b) => {
+                      if (b.progress.percent !== a.progress.percent) {
+                        return b.progress.percent - a.progress.percent;
+                      }
+                      return a.progress.diff - b.progress.diff;
+                    })
+                    .map(({ def, progress }) => (
+                      <div key={def.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between space-y-3">
+                        <div className="flex items-start gap-3.5">
+                          <div 
+                            onClick={() => setSelectedBadgeForZoom(def)}
+                            className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shrink-0 cursor-pointer grayscale opacity-85 hover:grayscale-0 transition-all"
+                          >
+                            {renderBadgeGraphic(def.ikona, "w-14 h-14", "text-2xl")}
                           </div>
-
-                          {/* DYNAMICZNY WSKAŹNIK BRAKUJĄCYCH OBECNOŚCI / DNI */}
-                          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
-                            <div className="flex justify-between items-center text-[10px] font-bold">
-                              <span className="text-slate-800">{progress.text}</span>
-                              <span className="text-sky-700 font-black">{progress.percent}%</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <h4 className="font-black text-xs uppercase text-slate-900 truncate">{def.nazwa}</h4>
+                              <span className="text-[9px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full">{def.punkty || 1} pkt</span>
                             </div>
-                            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                              <div 
-                                className="bg-sky-600 h-2 rounded-full transition-all duration-500" 
-                                style={{ width: `${progress.percent}%` }}
-                              ></div>
-                            </div>
+                            <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-2">{def.opis}</p>
+                            {def.warunek && (
+                              <p className="text-[9px] text-amber-800 font-mono mt-1">🎯 {def.warunek}</p>
+                            )}
                           </div>
                         </div>
-                      );
-                    })}
+
+                        {/* DYNAMICZNY WSKAŹNIK BRAKUJĄCYCH OBECNOŚCI / DNI */}
+                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
+                          <div className="flex justify-between items-center text-[10px] font-bold">
+                            <span className="text-slate-800">{progress.text}</span>
+                            <span className="text-sky-700 font-black">{progress.percent}%</span>
+                          </div>
+                          <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <div 
+                              className="bg-sky-600 h-2 rounded-full transition-all duration-500" 
+                              style={{ width: `${progress.percent}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                 </div>
               </div>
 
