@@ -86,9 +86,15 @@ export default function RootLayout({
     if (typeof window === "undefined") return;
 
     try {
-      // 1. Badania Krwi (Interpretacje)
+      // 1. Badania Krwi (Interpretacje dla klubowicza lub oczekujące dla admina/trenera)
       let bloodUnread = false;
-      if (email || cId) {
+      if (role === 'admin' || role === 'trener') {
+        const { count } = await supabase
+          .from('klub_badania_krwi')
+          .select('*', { count: 'exact', head: true })
+          .or('interpretacja.is.null,interpretacja.eq.""');
+        if (count && count > 0) bloodUnread = true;
+      } else if (email || cId) {
         let query = supabase.from('klub_badania_krwi').select('id, nowa_interpretacja').eq('nowa_interpretacja', true);
         if (cId) query = query.or(`klient_id.eq.${cId},email_klienta.ilike.${email.trim()}`);
         else query = query.ilike('email_klienta', email.trim());
@@ -890,7 +896,8 @@ export default function RootLayout({
                             
                             let showBadge = false;
                             if (item.href === '/analiza-formy') {
-                              showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja;
+                              const hasPendingForAdmin = (appRole === 'admin' || appRole === 'trener') && hasUnreadInterpretation;
+                              showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja || hasPendingForAdmin;
                             } else if (item.href === '/wydarzenia') {
                               showBadge = hasUnreadWydarzenia;
                             } else if (item.href === '/baza-wiedzy') {
