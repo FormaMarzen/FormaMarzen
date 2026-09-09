@@ -641,14 +641,12 @@ export default function BazaWiedzyPage() {
 
     setIsSendingSugestia(true);
     const zglaszajacyEmail = userEmail || "anonim@klubowicz.pl";
-    const zglaszajacyNazwa = userImieNazwisko !== "Klubowicz" ? userImieNazwisko : "";
 
     try {
       const { error } = await supabase.from("sugestie_suplementow").insert([
         {
           nazwa: nazwaWpisu,
           klient_email: zglaszajacyEmail,
-          klient_nazwa: zglaszajacyNazwa || null,
           status: "oczekujace",
         },
       ]);
@@ -1061,7 +1059,6 @@ export default function BazaWiedzyPage() {
   if (isLoading) {
     return <div className="flex justify-center items-center h-64 text-sky-900 font-bold">Ładowanie Bazy Wiedzy...</div>;
   }
-
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500 pb-16 px-3 sm:px-0 font-sans antialiased">
       {/* NAGŁÓWEK GŁÓWNY */}
@@ -1657,7 +1654,7 @@ export default function BazaWiedzyPage() {
                           <span className="text-slate-500 font-normal">({r.count} opinii)</span>
                         </div>
                       ) : (
-                        <div className="text-[11px] text-slate-400">Ten przepis nie ma jeszcze ocen – bądź pierwszy!</div>
+                        <div className="text-[11px] text-slate-400 ten-przepis">Ten przepis nie ma jeszcze ocen – bądź pierwszy!</div>
                       );
                     })()}
                   </div>
