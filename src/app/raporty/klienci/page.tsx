@@ -574,6 +574,7 @@ export default function KlienciPage() {
     return latest?.cena || '0.00 PLN';
   };
 
+  // NALICZANIE CIĄGŁOŚCI: WYKLUCZAMY KARNETY <= 150 ZŁ (POJEDYNCZE WEJŚCIA)
   const calculateStandardSystemDiscount = (client: any) => {
     if (!client) return 0;
     const utraty = (client.transakcje || []).filter((t: any) => t.typ_operacji === 'utrata_ciaglosci');
@@ -583,12 +584,20 @@ export default function KlienciPage() {
       lastResetDate = utraty[0].created_at;
     }
 
-    const transakcjeKarnetow = (client.transakcje || []).filter(
-      (t: any) =>
-        new Date(t.created_at) > new Date(lastResetDate) &&
-        (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) &&
-        (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))
-    );
+    const transakcjeKarnetow = (client.transakcje || []).filter((t: any) => {
+      if (new Date(t.created_at) <= new Date(lastResetDate)) return false;
+      const isPassPurchase = t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || 
+        (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')));
+      if (!isPassPurchase) return false;
+      if (t.opis && t.opis.toLowerCase().includes('usunięcie')) return false;
+
+      // Wykluczamy transakcje o wartości <= 150 zł z budowania poziomu rabatowego ciągłości
+      const kwotaTransakcji = Math.abs(parseFloat(String(t.kwota || '0').replace(/[^0-9.-]/g, '')) || 0);
+      if (kwotaTransakcji > 0 && kwotaTransakcji <= 150) return false;
+      if (t.opis && (t.opis.toLowerCase().includes('1 wejście') || t.opis.toLowerCase().includes('pojedyncz'))) return false;
+
+      return true;
+    });
 
     const count = transakcjeKarnetow.length;
     if (count <= 0) return 0;
@@ -612,8 +621,9 @@ export default function KlienciPage() {
     return Math.max(0, Math.min(25, std + offset));
   };
 
-  const getEffectiveDiscount = (client: any, isContract: boolean = false) => {
+  const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number) => {
     if (!client) return 0;
+    if (basePriceToCheck !== undefined && basePriceToCheck <= 150) return 0;
     const staly = parseFloat(client.discount || '0');
     if (staly > 0) return staly;
     if (isContract) return 0;
@@ -707,7 +717,6 @@ export default function KlienciPage() {
 
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-        // Zwiększenie puli bez sztucznego obcinania limitem początkowym
         updatedKarnety[passIndex] = {
           ...updatedKarnety[passIndex],
           pozostaloWejsc: currentRemaining + cancelledCount
@@ -785,13 +794,15 @@ export default function KlienciPage() {
 
     let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
     if (zwrocicWejscie) {
-      // Zwracamy wejście na aktualny aktywny karnet ilościowy (zwiększając pulę)
+      // Zwracamy wejście na aktualny aktywny karnet ilościowy (zwiększając pulę bez limitu, np. 2/1)
       const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
         const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
         karnetyZaktualizowane[passIndex] = {
           ...karnetyZaktualizowane[passIndex],
-          pozostaloWejsc: currentRemaining + 1
+          pozostaloWejsc: currentRemaining + 1,
+          zeroEntriesGraceUntil: null,
+          statusTekst: karnetyZaktualizowane[passIndex].waznyDo ? `Ważny do: ${karnetyZaktualizowane[passIndex].waznyDo}` : 'Aktywny'
         };
       }
     }
@@ -868,7 +879,9 @@ export default function KlienciPage() {
         const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
         karnetyZaktualizowane[passIndex] = {
           ...karnetyZaktualizowane[passIndex],
-          pozostaloWejsc: currentRemaining + upcomingItems.length
+          pozostaloWejsc: currentRemaining + upcomingItems.length,
+          zeroEntriesGraceUntil: null,
+          statusTekst: karnetyZaktualizowane[passIndex].waznyDo ? `Ważny do: ${karnetyZaktualizowane[passIndex].waznyDo}` : 'Aktywny'
         };
       }
     }
@@ -982,14 +995,29 @@ export default function KlienciPage() {
 
     if (klienciData) {
       const todayDate = new Date();
+      const todayBeginning = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
       const todayDateOnly = todayDate.toISOString().split('T')[0];
       const yesterday = new Date(todayDate);
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
+      // Zmapowanie liczby przyszłych rezerwacji dla każdego klienta
+      const clientFutureBookingsMap = new Map<number, number>();
+      if (zapisyData && zapisyData.length > 0) {
+        zapisyData.forEach((s: any) => {
+          if (!s.klient_id) return;
+          const classDate = parseDateFromClassKey(s.class_key);
+          if (classDate >= todayBeginning) {
+            const currentCount = clientFutureBookingsMap.get(Number(s.klient_id)) || 0;
+            clientFutureBookingsMap.set(Number(s.klient_id), currentCount + 1);
+          }
+        });
+      }
+
       const enrichedPromises = klienciData.map(async (c: any) => {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => String(t.klient_id) === String(c.id)) : [];
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
+        const hasFutureBookings = (clientFutureBookingsMap.get(Number(c.id)) || 0) > 0;
         
         let parsedKarnety = safeJsonParse(c.karnetyKlubowicza || c.karnetyklubowicza, []);
 
@@ -1023,19 +1051,36 @@ export default function KlienciPage() {
             }
           }
 
-          // AUTOMATYCZNE SPRAWDZANIE WEJŚĆ: 1 DZIEŃ ZAPASU DLA CIĄGŁOŚCI PO WYKORZYSTANIU OSTATNIEGO WEJŚCIA
+          // OBSŁUGA WYCZERPANIA WEJŚĆ
           if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
-            const tomorrowDate = new Date();
-            tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-            const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+            const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+            const isLowPrice = passPriceNum <= 150;
 
-            if (!k.zeroEntriesGraceUntil) {
-              karnetyZmienione = true;
-              k.zeroEntriesGraceUntil = tomorrowStr;
-              if (!k.waznyDo || k.waznyDo < tomorrowStr) {
-                k.waznyDo = tomorrowStr;
+            if (isLowPrice) {
+              // Karnety <= 150 zł bez bufora ciągłości
+              const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncz'))
+                ? 'Wykorzystano wejście'
+                : 'Wykorzystano wejścia';
+
+              if (k.zeroEntriesGraceUntil !== null || k.statusTekst !== labelWejsc) {
+                karnetyZmienione = true;
+                k.zeroEntriesGraceUntil = null;
+                k.statusTekst = labelWejsc;
               }
-              k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+            } else {
+              // Dla karnetów powyżej 150 zł nadajemy bufor ciągłości
+              const tomorrowDate = new Date();
+              tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+              const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+
+              if (!k.zeroEntriesGraceUntil) {
+                karnetyZmienione = true;
+                k.zeroEntriesGraceUntil = tomorrowStr;
+                if (!k.waznyDo || k.waznyDo < tomorrowStr) {
+                  k.waznyDo = tomorrowStr;
+                }
+                k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+              }
             }
           }
 
@@ -1047,8 +1092,22 @@ export default function KlienciPage() {
         let finalKarnety = [];
 
         for (const k of parsedKarnety) {
+          if (k.isContract12M) {
+            finalKarnety.push(k);
+            continue;
+          }
+
+          // BLOKADA KASOWANIA: Jeśli klubowicz ma przyszłe rezerwacje w grafiku, karnet nie jest usuwany
+          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
+            finalKarnety.push(k);
+            continue;
+          }
+
           const isZeroGraceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly;
-          if ((k.waznyDo && k.waznyDo < yesterdayStr && !k.isContract12M) || isZeroGraceExpired) {
+          const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+          const isLowPriceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && passPriceNum <= 150 && k.waznyDo && k.waznyDo < todayDateOnly;
+
+          if ((k.waznyDo && k.waznyDo < yesterdayStr) || isZeroGraceExpired || isLowPriceExpired) {
             hasChanges = true;
           } else {
             finalKarnety.push(k);
@@ -1520,7 +1579,6 @@ export default function KlienciPage() {
     };
     reader.readAsDataURL(file);
   };
-
   // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget) return;
@@ -1529,8 +1587,6 @@ export default function KlienciPage() {
     const isContract = extendPassTarget.isContract12M || defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
     const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
 
-    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-    
     let bazowaCena = 0;
     if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
       bazowaCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
@@ -1538,7 +1594,10 @@ export default function KlienciPage() {
       bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
     }
 
-    const cenaPoRabacie = isContract ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
+    // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
+    const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
+    
+    const cenaPoRabacie = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
     const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
     const kwotaKarnetu = cenaPoRabacie;
 
@@ -1564,7 +1623,7 @@ export default function KlienciPage() {
     }
 
     let znizkaTekst = '';
-    if (activeDiscount > 0 && !isContract) {
+    if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
@@ -1685,8 +1744,6 @@ export default function KlienciPage() {
       dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
     }
 
-    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-    
     let bazowaCena = 150.00;
     if (isContract && newPassCustomPrice && newPassCustomPrice.trim() !== '') {
       bazowaCena = parseFloat(newPassCustomPrice.replace(/[^0-9.]/g, '')) || 0;
@@ -1694,11 +1751,13 @@ export default function KlienciPage() {
       bazowaCena = parseFloat(defKarnetu.cena) || 0;
     }
 
-    const kwotaKarnetu = isContract ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
+    // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
+    const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
+    const kwotaKarnetu = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
     const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
 
     let znizkaTekst = '';
-    if (activeDiscount > 0 && !isContract) {
+    if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
       znizkaTekst = `(-${activeDiscount}%)`;
     }
 
@@ -2025,7 +2084,7 @@ export default function KlienciPage() {
     });
 
     const isContractBlock = targetClient.powodBlokady?.toLowerCase().includes('umow') || 
-                            targetClient.powodBlokady?.toLowerCase().includes('umowę') ||
+                            targetClient.powodBlokady?.toLowerCase().includes('umowę') || 
                             targetClient.powodBlokady?.toLowerCase().includes('wpłat');
 
     const endOfMonthStr = getContractEndOfMonthDate(todayStr);
@@ -2077,12 +2136,12 @@ export default function KlienciPage() {
     const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
     const isContract = editingPassModal.isContract12M || bazowyKarnet?.isContract12M || bazowyKarnet?.typ_karnetu === 'Umowa 12 miesięcy';
     const isTimeBased = bazowyKarnet?.typ_karnetu === 'Na czas';
-    const activeRabat = getEffectiveDiscount(profileClient, isContract);
-    const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
     const nowaCenaWartosc = parseFloat(String(editingPassModal.cena).replace(/[^0-9.]/g, '')) || 0;
+    const activeRabat = getEffectiveDiscount(profileClient, isContract, nowaCenaWartosc);
+    const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
 
     let znizkaTekst = profileClient.discount ? `(-${profileClient.discount}%)` : '';
-    if (!isContract && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
+    if (!isContract && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna && nowaCenaWartosc > 150) {
       const roznica = cenaRegularna - nowaCenaWartosc;
       const procent = Math.round((roznica / cenaRegularna) * 100);
       znizkaTekst = `(-${procent}%)`;
@@ -2275,7 +2334,6 @@ export default function KlienciPage() {
   });
 
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
@@ -2414,6 +2472,7 @@ export default function KlienciPage() {
                 } else if (walletNum < 0) {
                   walletBadgeClass = 'bg-rose-100 text-rose-800 border-rose-300 font-bold';
                 }
+
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
                     <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
@@ -2425,7 +2484,7 @@ export default function KlienciPage() {
                     </td>
                     <td onClick={() => openProfile(client)} className="py-3.5 px-3 font-bold text-slate-900 whitespace-nowrap cursor-pointer hover:text-sky-700">{client.lastName}</td>
                     
-                    {/* KOLUMNA KARNET Z UWZGLĘDNIENIEM PRZENIESIONYCH WEJŚĆ */}
+                    {/* KOLUMNA KARNET */}
                     <td className="py-2.5 px-3">
                       <div className="flex flex-col gap-0.5 min-w-[200px] max-w-[340px]">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -2798,7 +2857,7 @@ export default function KlienciPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
           <div className="bg-white w-full max-w-4xl h-full shadow-2xl flex flex-col overflow-y-auto overflow-x-hidden">
             
-            {/* STICKY HEADER PROFILU - PRZYCISK ODBLOKOWANIA ZOSTAŁ USUNIĘTY Z TEGO MIEJSCA */}
+            {/* STICKY HEADER PROFILU */}
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
               <button onClick={() => setProfileClient(null)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700 cursor-pointer">✕</button>
               <div className="flex items-center gap-2">
@@ -2878,7 +2937,7 @@ export default function KlienciPage() {
                 </div>
               </div>
 
-              {/* BANER BLOKADY W PROFILU Z PRZYCISKIEM ODBLOKOWANIA (W OKOLICY KARNETU) */}
+              {/* BANER BLOKADY W PROFILU Z PRZYCISKIEM ODBLOKOWANIA */}
               {(profileClient.blokadaDo || (profileClient.karnetyKlubowicza && profileClient.karnetyKlubowicza.some((k: any) => k.blokadaDo))) && (
                 <div className="bg-rose-50 border border-rose-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in">
                   <div className="flex items-center gap-3">
@@ -2935,8 +2994,8 @@ export default function KlienciPage() {
                        )}
                     </div>
 
-                    {/* RABAT SYSTEMOWY */}
-                    <div className="flex items-center gap-2 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200" title="Rabat za ciągłość zakupów">
+                    {/* RABAT SYSTEMOWY (CIĄGŁOŚĆ) */}
+                    <div className="flex items-center gap-2 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200" title="Rabat za ciągłość zakupów (> 150 zł)">
                        <span className="text-[10px] font-bold text-sky-800 uppercase whitespace-nowrap">Rabat za ciągłość:</span>
                        {isEditingSystemDiscount ? (
                          <div className="flex items-center gap-1">
@@ -3174,8 +3233,8 @@ export default function KlienciPage() {
                     </div>
                   )}
                 </div>
-
               </div>
+
               {/* Sekcja Portfel */}
               <div className="space-y-3">
                 <h3 className="font-black text-xs text-slate-500 uppercase tracking-wider whitespace-nowrap">Portfel</h3>
@@ -3545,6 +3604,7 @@ export default function KlienciPage() {
                         </table>
                       );
                     })()}
+
                     {/* 3. HISTORIA WSZYSTKICH RUCHÓW */}
                     {activeZapisyTab === 'ruchy' && (() => {
                       const allMovements: any[] = [];
@@ -3867,9 +3927,9 @@ export default function KlienciPage() {
                           const baseCena = parseFloat(k.cena) || 0;
                           let finalCena = baseCena;
                           let hasDiscount = false;
-                          const activeDiscount = getEffectiveDiscount(profileClient, isContract);
+                          const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
                           
-                          if (activeDiscount > 0 && !isContract) {
+                          if (activeDiscount > 0 && !isContract && baseCena > 150) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
@@ -3894,8 +3954,8 @@ export default function KlienciPage() {
                           }
                           let finalCena = baseCena;
                           let hasDiscount = false;
-                          const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-                          if (activeDiscount > 0 && !isContract) {
+                          const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
+                          if (activeDiscount > 0 && !isContract && baseCena > 150) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
@@ -4174,9 +4234,9 @@ export default function KlienciPage() {
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
-                    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
+                    const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
                     
-                    if (activeDiscount > 0 && !isContract) {
+                    if (activeDiscount > 0 && !isContract && baseCena > 150) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
@@ -4269,9 +4329,9 @@ export default function KlienciPage() {
                     const wybranyNazwa = e.target.value;
                     const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
                     const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
-                    const actRab = getEffectiveDiscount(profileClient, isContract);
                     const baseCena = def ? parseFloat(def.cena) : 0;
-                    const finalCena = (actRab > 0 && !isContract) ? baseCena * (1 - actRab / 100) : baseCena;
+                    const actRab = getEffectiveDiscount(profileClient, isContract, baseCena);
+                    const finalCena = (actRab > 0 && !isContract && baseCena > 150) ? baseCena * (1 - actRab / 100) : baseCena;
                     
                     setEditingPassModal({
                       ...editingPassModal, 
@@ -4290,8 +4350,8 @@ export default function KlienciPage() {
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
-                    const activeDiscount = getEffectiveDiscount(profileClient, isContract);
-                    if (activeDiscount > 0 && !isContract) {
+                    const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
+                    if (activeDiscount > 0 && !isContract && baseCena > 150) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
