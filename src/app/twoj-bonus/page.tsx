@@ -15,7 +15,7 @@ export default function TwojBonusPage() {
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
   const [karnetyCennik, setKarnetyCennik] = useState<any[]>([]);
 
-  // Stan dla panelu administracyjnego zarządzania progami
+  // Stan dla panelu administracyjnego i podglądu tabeli progów
   const [selectedAdminKarnetId, setSelectedAdminKarnetId] = useState<string | number>('');
   const [editTiers, setEditTiers] = useState<any[]>([]);
   const [newTierThreshold, setNewTierThreshold] = useState('');
@@ -23,7 +23,6 @@ export default function TwojBonusPage() {
   const [newTierType, setNewTierType] = useState<'miesiecy' | 'wejsc' | 'cykl'>('miesiecy');
   const [isSavingTier, setIsSavingTier] = useState(false);
 
-  // Domyślne progi awaryjne
   const defaultProgiUmowa = [
     { id: 1, threshold: 3, type: 'miesiecy', reward: '10% zniżki na suplementy w barze + darmowy shake' },
     { id: 2, threshold: 6, type: 'miesiecy', reward: '2 tygodnie zamrożenia ekstra w puli + ręcznik klubowy' },
@@ -160,7 +159,7 @@ export default function TwojBonusPage() {
         return k;
       }));
 
-      alert("Progi i nagrody zostały pomyślnie zapisane w bazie Supabase dla wybranego karnetu!");
+      alert("Tabela progów i nagród została pomyślnie zaktualizowana w bazie Supabase!");
     } catch (err: any) {
       console.error("Błąd zapisu progów:", err);
       alert("Nie udało się zapisać w bazie: " + (err.message || ''));
@@ -180,6 +179,7 @@ export default function TwojBonusPage() {
 
   const matchedCennikKarnet = karnetyCennik.find((k: any) => k.nazwa?.trim().toLowerCase() === aktywnyKarnet?.nazwa?.trim().toLowerCase());
   const activeUserTiers = matchedCennikKarnet?.customTiers || defaultProgiUmowa;
+  const selectedPassName = karnetyCennik.find((k: any) => String(k.id) === String(selectedAdminKarnetId))?.nazwa || 'Wybrany karnet';
 
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
@@ -191,12 +191,12 @@ export default function TwojBonusPage() {
             🎁 TWÓJ BONUS I PROGRAM LOJALNOŚCIOWY
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            System ciągłości karnetów, tabele progów oraz nagrody w klubie Forma Marzeń.
+            System ciągłości karnetów, podgląd tabel progów oraz nagrody w klubie Forma Marzeń.
           </p>
         </div>
         {appRole === 'admin' && (
           <div className="bg-amber-100 text-amber-900 px-4 py-2 rounded-2xl text-xs font-black uppercase border border-amber-300">
-            👑 Tryb Administratora (Edycja i Baza Supabase)
+            👑 Tryb Administratora (Podgląd i Edycja Tabel)
           </div>
         )}
       </div>
@@ -255,17 +255,17 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* WIDOK DLA ADMINISTRATORA / TRENERA - EDYTOR BAZY SUPABASE */}
+      {/* WIDOK DLA ADMINISTRATORA / TRENERA - PODGLĄD I EDYTOR TABEL PROGÓW */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-6">
           <div className="bg-white border border-sky-200 rounded-3xl p-6 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-100 pb-4">
               <div>
                 <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
-                  ⚙️ Zarządzanie tabelami progów i nagród (Supabase)
+                  ⚙️ Podgląd i zarządzanie tabelą progów nagród
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Wybierz karnet z cennika, dodaj lub usuń progi i zapisz zmiany bezpośrednio w bazie danych.
+                  Przeglądaj w formie tabeli oraz edytuj progi przypisane do wybranego karnetu.
                 </p>
               </div>
 
@@ -283,97 +283,117 @@ export default function TwojBonusPage() {
               </div>
             </div>
 
-            <div className="space-y-4">
-              <h4 className="font-extrabold text-xs text-sky-900 uppercase tracking-wider">
-                Aktualne progi dla wybranego karnetu:
+            {/* PODGLĄD TABELI PROGÓW DLA WYBRANEGO KARNETU */}
+            <div className="space-y-3">
+              <h4 className="font-extrabold text-xs text-sky-900 uppercase tracking-wider flex items-center justify-between">
+                <span>Tabela progów dla: <strong className="text-slate-900">{selectedPassName}</strong></span>
+                <span className="text-[10px] text-slate-400 font-normal">Zapisane w Supabase (katalog_karnetow)</span>
               </h4>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {editTiers.map((t: any) => (
-                  <div key={t.id} className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-sm">
-                    <div className="flex justify-between items-start">
-                      <span className="bg-sky-200 text-sky-950 text-[10px] font-black px-2.5 py-0.5 rounded-lg uppercase">
-                        Próg: {t.threshold} {t.type}
-                      </span>
-                      <button
-                        onClick={() => handleDeleteTier(t.id)}
-                        className="text-rose-600 hover:text-rose-800 font-bold text-xs cursor-pointer p-1"
-                        title="Usuń próg"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <p className="text-xs font-semibold text-slate-800">{t.reward}</p>
-                  </div>
-                ))}
-                {editTiers.length === 0 && (
-                  <div className="col-span-3 text-center py-6 text-slate-400 text-xs italic">
-                    Brak zdefiniowanych progów. Dodaj nowy próg poniżej.
-                  </div>
-                )}
+              <div className="bg-white border border-sky-200 rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-sky-50/80 border-b border-sky-200 text-[11px] font-black text-sky-950 uppercase tracking-wider">
+                      <th className="py-3 px-4 w-20 text-center">Lp.</th>
+                      <th className="py-3 px-4 w-40">Próg (Wartość)</th>
+                      <th className="py-3 px-4">Nagroda / Bonus klubowy</th>
+                      <th className="py-3 px-4 w-24 text-right">Akcje</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-sky-100 text-xs font-medium">
+                    {editTiers.map((t: any, index: number) => (
+                      <tr key={t.id || index} className="hover:bg-sky-50/40 transition-colors">
+                        <td className="py-3.5 px-4 text-center font-bold text-slate-500">{index + 1}</td>
+                        <td className="py-3.5 px-4">
+                          <span className="bg-sky-100 text-sky-950 font-black px-2.5 py-1 rounded-lg border border-sky-200 text-[11px] uppercase">
+                            {t.threshold} {t.type}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-800 font-semibold">{t.reward}</td>
+                        <td className="py-3.5 px-4 text-right">
+                          <button
+                            onClick={() => handleDeleteTier(t.id)}
+                            className="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                            title="Usuń próg z tabeli"
+                          >
+                            Usuń
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {editTiers.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-8 text-center text-slate-400 text-xs italic">
+                          Tabela progów dla tego karnetu jest pusta. Dodaj pierwszy próg poniżej.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
+            </div>
 
-              <form onSubmit={handleAddTier} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 mt-4">
-                <h5 className="font-black text-xs text-slate-900 uppercase">Dodaj nowy próg i nagrodę</h5>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Wartość progu (np. 3, 6, 12)</label>
+            {/* FORMULARZ DODAWANIA NOWEGO PROGU */}
+            <form onSubmit={handleAddTier} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 mt-4">
+              <h5 className="font-black text-xs text-slate-900 uppercase">Dodaj nowy wiersz do tabeli progów</h5>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-700">Wartość progu (np. 3, 6, 12)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    placeholder="np. 6"
+                    value={newTierThreshold}
+                    onChange={(e) => setNewTierThreshold(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-700">Typ jednostki</label>
+                  <select
+                    value={newTierType}
+                    onChange={(e: any) => setNewTierType(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 cursor-pointer"
+                  >
+                    <option value="miesiecy">Miesiące</option>
+                    <option value="cykl">Cykle</option>
+                    <option value="wejsc">Wejścia</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1 sm:col-span-3">
+                  <label className="text-[11px] font-bold text-slate-700">Opis nagrody / bonusu w tabeli</label>
+                  <div className="flex gap-2">
                     <input
-                      type="number"
-                      min="1"
+                      type="text"
                       required
-                      placeholder="np. 6"
-                      value={newTierThreshold}
-                      onChange={(e) => setNewTierThreshold(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                      placeholder="np. Darmowy shake białkowy + ręcznik klubowy"
+                      value={newTierReward}
+                      onChange={(e) => setNewTierReward(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-medium text-slate-800"
                     />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Typ jednostki</label>
-                    <select
-                      value={newTierType}
-                      onChange={(e: any) => setNewTierType(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 cursor-pointer"
+                    <button
+                      type="submit"
+                      className="bg-slate-900 hover:bg-slate-800 text-white font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider cursor-pointer shrink-0 shadow-sm"
                     >
-                      <option value="miesiecy">Miesiące</option>
-                      <option value="cykl">Cykle</option>
-                      <option value="wejsc">Wejścia</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-1 sm:col-span-3">
-                    <label className="text-[11px] font-bold text-slate-700">Opis nagrody / bonusu</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        required
-                        placeholder="np. Darmowy shake białkowy + ręcznik klubowy"
-                        value={newTierReward}
-                        onChange={(e) => setNewTierReward(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-medium text-slate-800"
-                      />
-                      <button
-                        type="submit"
-                        className="bg-slate-900 hover:bg-slate-800 text-white font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider cursor-pointer shrink-0 shadow-sm"
-                      >
-                        + Dodaj próg
-                      </button>
-                    </div>
+                      + Dodaj do tabeli
+                    </button>
                   </div>
                 </div>
-              </form>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  disabled={isSavingTier}
-                  onClick={handleSaveTiersToDatabase}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-md transition-colors"
-                >
-                  {isSavingTier ? 'Zapisywanie w Supabase...' : '💾 Zapisz zmiany w bazie Supabase'}
-                </button>
               </div>
+            </form>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                disabled={isSavingTier}
+                onClick={handleSaveTiersToDatabase}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-md transition-colors"
+              >
+                {isSavingTier ? 'Zapisywanie tabeli w Supabase...' : '💾 Zapisz całą tabelę w bazie Supabase'}
+              </button>
             </div>
           </div>
         </div>
