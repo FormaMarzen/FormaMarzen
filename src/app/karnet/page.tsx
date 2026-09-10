@@ -436,6 +436,7 @@ export default function KarnetyPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          sendToAdmins: true,
           title,
           body: message,
           url: '/raporty/klienci'
@@ -554,11 +555,12 @@ export default function KarnetyPage() {
     }]);
   };
 
+  // WYKLUCZENIE Z CIĄGŁOŚCI KARNETÓW O CENIE RÓWNEJ LUB NIŻSZEJ NIŻ 150 ZŁ
   const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
 
-    if (basePriceToCheck !== undefined && basePriceToCheck < 150) {
-      return { hasContinuity: false, percent: 0, label: '0% (Karnet < 150 zł - brak rabatu ciągłości)' };
+    if (basePriceToCheck !== undefined && basePriceToCheck <= 150) {
+      return { hasContinuity: false, percent: 0, label: '0% (Karnet ≤ 150 zł - brak rabatu ciągłości)' };
     }
     
     if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
@@ -643,6 +645,7 @@ export default function KarnetyPage() {
     const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
+    // Przekazanie basePriceToCheck do sprawdzenia progu 150 zł
     const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client, basePriceToCheck) : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
@@ -813,6 +816,29 @@ export default function KarnetyPage() {
           yesterdayDate.setDate(yesterdayDate.getDate() - 1);
           const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
+          // POBRANIE PRZYSZŁYCH ZAPISÓW NA ZAJĘCIA DLA OCHRONY WYZEROWANYCH KARNETÓW
+          const now = new Date();
+          const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          const { data: allSignups } = await supabase
+            .from('zapisy_zajec')
+            .select('id, class_key, klient_id');
+
+          const clientFutureBookingsMap = new Map<number, number>();
+          if (allSignups && allSignups.length > 0) {
+            allSignups.forEach((s: any) => {
+              const parts = (s.class_key || '').split('_');
+              const dateStr = parts[1];
+              if (dateStr && s.klient_id) {
+                const [d, m] = dateStr.split('/').map(Number);
+                const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
+                if (classDate >= todayBeginning) {
+                  const prev = clientFutureBookingsMap.get(Number(s.klient_id)) || 0;
+                  clientFutureBookingsMap.set(Number(s.klient_id), prev + 1);
+                }
+              }
+            });
+          }
+
           let ambassadorTiersList: any[] = [];
           try {
             const { data: aTiers } = await supabase
@@ -838,7 +864,9 @@ export default function KarnetyPage() {
               try { parsedGlobalHistory = JSON.parse(c.historiaZawieszenGlobalna); } catch(e) {}
             }
 
+            const hasFutureBookings = (clientFutureBookingsMap.get(Number(c.id)) || 0) > 0;
             let karnetyChanged = false;
+
             const verifiedKarnety = parsedKarnety.map((k: any) => {
               if (isContractPassCheck(k)) {
                 return {
@@ -846,35 +874,76 @@ export default function KarnetyPage() {
                   isContract12M: true
                 };
               }
-              // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ Z 1-DNIOWYM BUFOREM CIĄGŁOŚCI
+
+              // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ
               if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
                 if (k.pozostaloWejsc <= 0) {
-                  const tomorrowDate = new Date();
-                  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-                  const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
-                  
-                  if (!k.zeroEntriesGraceUntil) {
-                    karnetyChanged = true;
-                    return {
-                      ...k,
-                      zeroEntriesGraceUntil: tomorrowStr,
-                      waznyDo: k.waznyDo && k.waznyDo < tomorrowStr ? k.waznyDo : tomorrowStr,
-                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`
-                    };
+                  const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+                  const isLowPrice = passPriceNum <= 150;
+
+                  // WYMÓG 1: KARNETY <= 150 ZŁ BEZ BUFORA CIĄGŁOŚCI
+                  if (isLowPrice) {
+                    const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncze'))
+                      ? 'Wykorzystano wejście'
+                      : 'Wykorzystano wejścia';
+
+                    if (k.zeroEntriesGraceUntil !== null || k.statusTekst !== labelWejsc) {
+                      karnetyChanged = true;
+                      return {
+                        ...k,
+                        zeroEntriesGraceUntil: null,
+                        statusTekst: labelWejsc
+                      };
+                    }
+                  } else {
+                    // DLA KARNETÓW > 150 ZŁ NADAJEMY 1-DNIOWY BUFOR CIĄGŁOŚCI
+                    const tomorrowDate = new Date();
+                    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+                    const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+                    
+                    if (!k.zeroEntriesGraceUntil) {
+                      karnetyChanged = true;
+                      return {
+                        ...k,
+                        zeroEntriesGraceUntil: tomorrowStr,
+                        waznyDo: k.waznyDo && k.waznyDo < tomorrowStr ? k.waznyDo : tomorrowStr,
+                        statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`
+                      };
+                    }
                   }
                 }
               }
               return k;
             }).filter((k: any) => {
               if (isContractPassCheck(k)) return true;
+              
+              // Standardowe wygaśnięcie daty (jeśli nie jest to karnet chroniony zapiskami)
               if (k.waznyDo && k.waznyDo < yesterdayStr) {
+                if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
+                  return true; // Chronimy karnet dopóki klubowicz ma aktywne zapisy
+                }
                 karnetyChanged = true;
                 return false;
               }
-              // Usunięcie po upływie 1-dniowego bufora od wyzerowania wejść
-              if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly) {
-                karnetyChanged = true;
-                return false;
+
+              // WYMÓG 2: BLOKADA KASOWANIA WYZEROWANEGO KARNETU PRZY PRZYSZŁYCH ZAPISACH
+              if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) {
+                if (hasFutureBookings) {
+                  return true; // Blokada usunięcia: klubowicz ma aktywny zapis w grafiku
+                }
+
+                const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+                if (passPriceNum <= 150) {
+                  if (k.waznyDo && k.waznyDo < todayDateOnly) {
+                    karnetyChanged = true;
+                    return false;
+                  }
+                } else {
+                  if (k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly) {
+                    karnetyChanged = true;
+                    return false;
+                  }
+                }
               }
               return true;
             });
@@ -1302,8 +1371,6 @@ export default function KarnetyPage() {
       } else {
         const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
         nextRataStr = `${nextRataNum} / 12`;
-
-        // WYMÓG 1: PRZEDŁUŻENIE DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
         nowaDataWygasnieciaStr = getContractEndOfMonthDate(passToExtend.waznyDo);
       }
     } else {
@@ -1372,7 +1439,8 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    if (!isContract && !appliedDiscountCode && basePriceNum >= 150) {
+    // WYMÓG 1: TYLKO KARNETY POWYŻEJ 150 ZŁ PODNOSZĄ CYKL I RABAT ZA CIĄGŁOŚĆ
+    if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
       
@@ -1421,7 +1489,7 @@ export default function KarnetyPage() {
       dbPayload.urodziny_rabat_rok = currentYear;
     }
 
-    if (!isContract && !appliedDiscountCode && basePriceNum >= 150) {
+    if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
       dbPayload.rabat = finalRabatInt;
       dbPayload.cyklCiaglosci = finalCyklInt;
       dbPayload.hasLostContinuity = false;
@@ -1546,7 +1614,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1555,13 +1622,14 @@ export default function KarnetyPage() {
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
     const isNewQuantityPass = isQuantityPassCheck(defKarnetu);
     
+    // Pobieramy aktualne karnety usuwając te, które wygasły i nie mają już racji bytu
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) 
       ? [...currentUser.karnetyKlubowicza].filter(isPassActive) 
       : [];
     
     const existingQuantityPass = updatedKarnetyList.find(k => isQuantityPassCheck(k));
 
-    // WYMÓG 2: OSTRZEŻENIE I AKCEPTACJA PRZENIESIENIA WEJŚĆ
+    // OSTRZEŻENIE I AKCEPTACJA PRZENIESIENIA WEJŚĆ PRZY KARNECIE ILOŚCIOWYM
     if (isNewQuantityPass && existingQuantityPass && !pendingQuantityPassData?.confirmed) {
       const leftover = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
       setPendingQuantityPassData({
@@ -1584,6 +1652,7 @@ export default function KarnetyPage() {
       calculatedFirstPayment = contractInfo.proRataFirstMonth;
     }
     
+    // Przekazanie kwoty bazowej do weryfikacji progu > 150 zł dla rabatu ciągłości
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
@@ -1605,6 +1674,14 @@ export default function KarnetyPage() {
 
     let nextCykl = isContract ? 1 : (appliedDiscountCode ? baseCykl : (updatedKarnetyList.length === 0 ? 1 : baseCykl + 1));
     let statusTekst = '';
+
+    // PRZY ZAKUPIE NOWEGO KARNETU USUŃ STARY WYZEROWANY KARNET (KTÓRY BYŁ CHRONIONY PRZEZ ZAPISY)
+    updatedKarnetyList = updatedKarnetyList.filter((k: any) => {
+      if (isContractPassCheck(k)) return true;
+      if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) return false;
+      if (k.waznyDo && k.waznyDo < todayStr) return false;
+      return true;
+    });
 
     if (isContract) {
       nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
@@ -1635,18 +1712,17 @@ export default function KarnetyPage() {
       updatedKarnetyList.push(nowyKarnetObj);
 
     } else if (isNewQuantityPass) {
-      // WYMÓG 2: NOWY KARNET ILOŚCIOWY LICZONY OD DNIA ZAKUPU, STARY ZNIKA, WEJŚCIA SIĘ DOLICZAJĄ
       let leftoverTransferred = 0;
       if (existingQuantityPass) {
         leftoverTransferred = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
-        // Stary karnet znika z listy
+        // Usunięcie poprzedniego karnetu ilościowego
         updatedKarnetyList = updatedKarnetyList.filter(k => k.id !== existingQuantityPass.id);
       }
 
       const parsedLimit = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 10;
       const totalPoolEntries = parsedLimit + leftoverTransferred;
 
-      // Liczony bezwzględnie od dnia zakupu
+      // Ważność nowego karnetu ilościowego liczona bezwzględnie od dnia zakupu
       nowaDataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
       statusTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
 
@@ -1706,7 +1782,8 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    if (!isContract && !appliedDiscountCode && calculatedFirstPayment >= 150) {
+    // WYKLUCZENIE Z CIĄGŁOŚCI DLA KWOT <= 150 PLN
+    if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
       
@@ -1755,7 +1832,7 @@ export default function KarnetyPage() {
       dbPayload.urodziny_rabat_rok = currentYear;
     }
 
-    if (!isContract && !appliedDiscountCode && calculatedFirstPayment >= 150) {
+    if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
       dbPayload.rabat = finalRabatInt;
       dbPayload.cyklCiaglosci = finalCyklInt;
       dbPayload.hasLostContinuity = false;
@@ -1929,7 +2006,7 @@ export default function KarnetyPage() {
         });
       }
 
-      // Zwrócenie wejścia na aktualny aktywny karnet ilościowy (nawet jeśli to nowy karnet z powiększoną pulą)
+      // Zwrot wejść do aktywnego karnetu ilościowego (również po zakupie nowego karnetu, np. 2/1)
       if (cancelledCount > 0) {
         const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
         if (passIndex !== -1) {
@@ -1956,7 +2033,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA Z BLOKADĄ DLA ZABLOKOWANYCH KONT
+  // ZATWIERDZENIE ZAWIESZENIA
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -2353,7 +2430,6 @@ export default function KarnetyPage() {
     setIsUnsuspendModalOpen(false);
   };
 
-  // LISTA KARNETÓW DO ZAWIESZENIA Z UWZGLĘDNIENIEM BLOKAD
   const activePassesForSuspend = karnetyList.filter((k: any) => {
     const isGloballyBlocked = currentUser?.blokadaDo && currentUser?.blokadaDo >= todayStr;
     const isLocallyBlocked = k.blokadaDo && k.blokadaDo >= todayStr;
@@ -2675,6 +2751,9 @@ export default function KarnetyPage() {
                               <span>
                                 <strong className="text-slate-950">{karnet.pozostaloWejsc}</strong>
                                 <span className="text-slate-400">/{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
+                                {karnet.transferredEntries > 0 && (
+                                  <span className="text-emerald-700 text-[10px] font-black ml-1">(+{karnet.transferredEntries})</span>
+                                )}
                               </span>
                             ) : 'Bez limitu'}
                           </span>
@@ -2744,7 +2823,7 @@ export default function KarnetyPage() {
                           </button>
                         ) : null
                       ) : isQuantity ? (
-                        /* WYMÓG 2: DLA KARNETÓW ILOŚCIOWYCH TYLKO KUPNO NOWEGO Z PRZENIESIENIEM */
+                        /* DLA KARNETÓW ILOŚCIOWYCH TYLKO KUPNO NOWEGO Z PRZENIESIENIEM */
                         <button 
                           onClick={() => {
                             resetDiscountState();
@@ -2892,7 +2971,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
-
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3098,7 +3176,7 @@ export default function KarnetyPage() {
                     Kupując karnet <strong>{pendingQuantityPassData.selectedBuyPass}</strong>, Twój poprzedni karnet zostanie zastąpiony nowym, a ważność nowego karnetu będzie liczona <strong>od dzisiaj</strong>.
                   </p>
                   <div className="bg-white p-3 rounded-xl border border-amber-300 font-black text-emerald-800 text-center shadow-xs">
-                    ✨ Twoje niewykorzystane wejścia ({pendingQuantityPassData.leftover}) zostaną doliczone do nowej puli (np. {10 + pendingQuantityPassData.leftover}/10)!
+                    ✨ Twoje niewykorzystane wejścia ({pendingQuantityPassData.leftover}) zostaną doliczone do nowej puli!
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-500 italic">
@@ -3389,6 +3467,7 @@ export default function KarnetyPage() {
                           kDisplayPrice = kProRata.proRataFirstMonth;
                         }
 
+                        // Karnety <= 150 PLN nie otrzymują zniżki ciągłości
                         const kEffectiveDisc = getEffectiveDiscount(currentUser, kIsContract, kDisplayPrice, k.nazwa);
                         
                         const kFinalPrice = kEffectiveDisc.percent > 0 
