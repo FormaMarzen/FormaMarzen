@@ -15,23 +15,20 @@ export default function TwojBonusPage() {
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
   const [karnetyCennik, setKarnetyCennik] = useState<any[]>([]);
 
-  // Progi bonusowe (konfigurowalne lub domyślne dla klubu)
-  const [progiUmowa] = useState([
-    { miesiecy: 3, bonus: '10% zniżki na suplementy w barze + darmowy shake' },
-    { miesiecy: 6, bonus: '2 tygodnie zamrożenia ekstra w puli + ręcznik klubowy' },
-    { miesiecy: 12, bonus: '1 miesiąc darmowego okresu bonusowego (0 PLN) + koszulka Forma Marzeń' },
-  ]);
+  // Stan dla panelu administracyjnego zarządzania progami
+  const [selectedAdminKarnetId, setSelectedAdminKarnetId] = useState<string | number>('');
+  const [editTiers, setEditTiers] = useState<any[]>([]);
+  const [newTierThreshold, setNewTierThreshold] = useState('');
+  const [newTierReward, setNewTierReward] = useState('');
+  const [newTierType, setNewTierType] = useState<'miesiecy' | 'wejsc' | 'cykl'>('miesiecy');
+  const [isSavingTier, setIsSavingTier] = useState(false);
 
-  const [progiOpen] = useState([
-    { cykl: 2, bonus: 'Jednorazowe wejście dla znajomego gratis' },
-    { cykl: 4, bonus: '15 PLN w portfelu klubowym do wykorzystania na dowolne usługi' },
-    { cykl: 6, bonus: 'Darmowa konsultacja treningowa lub fizjoterapeutyczna' },
-  ]);
-
-  const [progiOgolnorozwojowe] = useState([
-    { wejsc: 10, bonus: '1 darmowe wejście do puli karnetu' },
-    { wejsc: 25, bonus: 'Energetyczny shake białkowy w prezencie' },
-  ]);
+  // Domyślne progi awaryjne, gdy karnet nie ma jeszcze zapisanych własnych
+  const defaultProgiUmowa = [
+    { id: 1, threshold: 3, type: 'miesiecy', reward: '10% zniżki na suplementy w barze + darmowy shake' },
+    { id: 2, threshold: 6, type: 'miesiecy', reward: '2 tygodnie zamrożenia ekstra w puli + ręcznik klubowy' },
+    { id: 3, threshold: 12, type: 'miesiecy', reward: '1 miesiąc darmowego okresu bonusowego (0 PLN) + koszulka Forma Marzeń' },
+  ];
 
   const loadData = async () => {
     setIsLoading(true);
@@ -53,7 +50,21 @@ export default function TwojBonusPage() {
 
       // Pobieranie katalogu karnetów
       const { data: karnetyData } = await supabase.from('karnety').select('*');
-      if (karnetyData) setKarnetyCennik(karnetyData);
+      if (karnetyData && karnetyData.length > 0) {
+        const parsedKarnety = karnetyData.map((k: any) => {
+          let meta: any = {};
+          try {
+            meta = JSON.parse(k.inne_ustawienia || '{}');
+          } catch (e) {}
+          return {
+            ...k,
+            customTiers: meta.customTiers || defaultProgiUmowa
+          };
+        });
+        setKarnetyCennik(parsedKarnety);
+        setSelectedAdminKarnetId(parsedKarnety[0].id);
+        setEditTiers(parsedKarnety[0].customTiers);
+      }
 
       // Pobieranie klientów
       const { data: klienciData } = await supabase.from('klienci').select('*');
@@ -92,6 +103,78 @@ export default function TwojBonusPage() {
     loadData();
   }, []);
 
+  // Obsługa zmiany wybranego karnetu w panelu admina
+  const handleSelectAdminKarnet = (karnetId: string | number) => {
+    setSelectedAdminKarnetId(karnetId);
+    const found = karnetyCennik.find((k: any) => String(k.id) === String(karnetId));
+    if (found) {
+      setEditTiers(found.customTiers || defaultProgiUmowa);
+    }
+  };
+
+  // Dodawanie nowego progu przez administratora
+  const handleAddTier = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTierThreshold || !newTierReward.trim()) return;
+
+    const newTier = {
+      id: Date.now(),
+      threshold: Number(newTierThreshold),
+      type: newTierType,
+      reward: newTierReward.trim()
+    };
+
+    const updatedTiers = [...editTiers, newTier].sort((a, b) => a.threshold - b.threshold);
+    setEditTiers(updatedTiers);
+    setNewTierThreshold('');
+    setNewTierReward('');
+  };
+
+  // Usuwanie progu przez administratora
+  const handleDeleteTier = (tierId: number) => {
+    const updatedTiers = editTiers.filter((t: any) => t.id !== tierId);
+    setEditTiers(updatedTiers);
+  };
+
+  // Zapisywanie progów dla karnetu w bazie Supabase
+  const handleSaveTiersToDatabase = async () => {
+    if (!selectedAdminKarnetId) return;
+    setIsSavingTier(true);
+    try {
+      const karnetObj = karnetyCennik.find((k: any) => String(k.id) === String(selectedAdminKarnetId));
+      if (!karnetObj) return;
+
+      let meta: any = {};
+      try {
+        meta = JSON.parse(karnetObj.inne_ustawienia || '{}');
+      } catch (e) {}
+
+      meta.customTiers = editTiers;
+
+      const { error } = await supabase
+        .from('karnety')
+        .update({ inne_ustawienia: JSON.stringify(meta) })
+        .eq('id', selectedAdminKarnetId);
+
+      if (error) throw error;
+
+      // Aktualizacja stanu lokalnego
+      setKarnetyCennik(karnetyCennik.map((k: any) => {
+        if (String(k.id) === String(selectedAdminKarnetId)) {
+          return { ...k, customTiers: editTiers };
+        }
+        return k;
+      }));
+
+      alert("Progi i nagrody dla wybranego karnetu zostały pomyślnie zaktualizowane w bazie!");
+    } catch (err: any) {
+      console.error("Błąd zapisu progów:", err);
+      alert("Nie udało się zapisać progów: " + (err.message || ''));
+    } finally {
+      setIsSavingTier(false);
+    }
+  };
+
   if (!isMounted || isLoading) {
     return <div className="p-12 text-center text-slate-500 font-bold uppercase text-xs">Ładowanie programu bonusowego...</div>;
   }
@@ -100,26 +183,28 @@ export default function TwojBonusPage() {
   const aktywnyKarnet = currentUser && currentUser.karnetyKlubowicza?.length > 0 ? currentUser.karnetyKlubowicza[0] : null;
   const typAktualnegoKarnetu = aktywnyKarnet?.typKarnetu || 'Na czas';
   const cyklCiągłościKlienta = currentUser?.cyklCiaglosci || 1;
-
-  // Obliczanie postępu dla umowy (np. rata lub miesiące trwania)
   const umowaMiesiaceZaliczone = aktywnyKarnet?.rata ? parseInt(String(aktywnyKarnet.rata).match(/(\d+)/)?.[1] || '1', 10) : 1;
+
+  // Znalezienie progów dla aktywnego karnetu użytkownika w cenniku
+  const matchedCennikKarnet = karnetyCennik.find((k: any) => k.nazwa?.trim().toLowerCase() === aktywnyKarnet?.nazwa?.trim().toLowerCase());
+  const activeUserTiers = matchedCennikKarnet?.customTiers || defaultProgiUmowa;
 
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
       
       {/* NAGŁÓWEK STRONY */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-6 rounded-2xl shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-sky-200 p-6 rounded-3xl shadow-sm">
         <div>
           <h1 className="text-xl font-black uppercase tracking-wider text-sky-950 flex items-center gap-2">
             🎁 TWÓJ BONUS I PROGRAM LOJALNOŚCIOWY
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Sprawdź swoje progi ciągłości, aktywne bonusy i nagrody za regularność w klubie Forma Marzeń.
+            System przeliczeń ciągłości karnetów, indywidualne tabele progów oraz nagrody w klubie Forma Marzeń.
           </p>
         </div>
         {appRole === 'admin' && (
-          <div className="bg-amber-100 text-amber-900 px-4 py-2 rounded-xl text-xs font-black uppercase border border-amber-300">
-            👑 Tryb Administratora (Podgląd globalny)
+          <div className="bg-amber-100 text-amber-900 px-4 py-2 rounded-2xl text-xs font-black uppercase border border-amber-300">
+            👑 Tryb Administratora (Edycja i Zarządzanie)
           </div>
         )}
       </div>
@@ -127,7 +212,6 @@ export default function TwojBonusPage() {
       {/* SEKCJA DLA KLUBOWICZA */}
       {appRole === 'klubowicz' && currentUser && (
         <div className="space-y-6">
-          {/* Kafel podsumowania użytkownika */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white border border-sky-200 p-6 rounded-3xl shadow-sm space-y-2">
               <div className="text-xs font-bold text-slate-400 uppercase">Twój aktywny karnet</div>
@@ -143,131 +227,175 @@ export default function TwojBonusPage() {
 
             <div className="bg-white border border-sky-200 p-6 rounded-3xl shadow-sm space-y-2">
               <div className="text-xs font-bold text-slate-400 uppercase">Status bonusów</div>
-              <div className="text-lg font-black text-amber-700">Aktywne progi lojalnościowe</div>
+              <div className="text-lg font-black text-amber-700">Aktywne progi klubowe</div>
               <div className="text-xs text-slate-500">System automatycznie nalicza nagrody</div>
             </div>
           </div>
 
-          {/* WYŚWIETLANIE PROGÓW W ZALEŻNOŚCI OD TYPU KARNETU */}
+          {/* TABELA PROGÓW DLA UŻYTKOWNIKA */}
           <div className="bg-white border border-sky-200 rounded-3xl p-6 shadow-sm space-y-6">
-            <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider border-b border-sky-100 pb-3">
-              📋 Progi i nagrody dla Twojego rodzaju karnetu ({typAktualnegoKarnetu})
-            </h3>
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
+                📋 Tabela progów i nagród dla karnetu: <span className="text-amber-700">{aktywnyKarnet?.nazwa || 'Standard'}</span>
+              </h3>
+            </div>
 
-            {typAktualnegoKarnetu === 'Umowa 12 miesięcy' ? (
-              <div className="space-y-4">
-                <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-amber-900 text-xs">
-                  <strong>Zasady dla Umowy Cyklicznej:</strong> Im dłużej trenujesz bez przerwy, tym cenniejsze bonusy otrzymujesz. Po 12. racie zyskujesz darmowy okres bonusowy za dni zamrożenia.
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {progiUmowa.map((p, idx) => {
-                    const osiagniety = umowaMiesiaceZaliczone >= p.miesiecy;
-                    return (
-                      <div key={idx} className={`border rounded-2xl p-5 space-y-3 ${osiagniety ? 'bg-emerald-50/60 border-emerald-300' : 'bg-slate-50 border-slate-200'}`}>
-                        <div className="flex justify-between items-center">
-                          <span className="font-black text-xs uppercase text-slate-900">Próg {p.miesiecy} miesięcy</span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${osiagniety ? 'bg-emerald-200 text-emerald-900' : 'bg-slate-200 text-slate-700'}`}>
-                            {osiagniety ? 'ODBLOKOWANY ✓' : 'W TRAKCIE'}
-                          </span>
-                        </div>
-                        <p className="text-xs font-medium text-slate-700">{p.bonus}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : typAktualnegoKarnetu === 'Na czas' ? (
-              <div className="space-y-4">
-                <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-sky-900 text-xs">
-                  <strong>Zasady dla karnetów OPEN / Na czas:</strong> Regularne odnawianie karnetu buduje Twój cykl ciągłości miesięcznej.
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {progiOpen.map((p, idx) => {
-                    const osiagniety = cyklCiągłościKlienta >= p.cykl;
-                    return (
-                      <div key={idx} className={`border rounded-2xl p-5 space-y-3 ${osiagniety ? 'bg-emerald-50/60 border-emerald-300' : 'bg-slate-50 border-slate-200'}`}>
-                        <div className="flex justify-between items-center">
-                          <span className="font-black text-xs uppercase text-slate-900">Cykl {p.cykl} miesięcy</span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${osiagniety ? 'bg-emerald-200 text-emerald-900' : 'bg-slate-200 text-slate-700'}`}>
-                            {osiagniety ? 'ODBLOKOWANY ✓' : 'W TRAKCIE'}
-                          </span>
-                        </div>
-                        <p className="text-xs font-medium text-slate-700">{p.bonus}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-sky-50 border border-sky-200 p-4 rounded-2xl text-sky-900 text-xs">
-                  <strong>Zasady dla karnetów Ogólnorozwojowych / Na ilość wejść:</strong> Liczy się liczba wykorzystanych wejść i dynamika treningów.
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {progiOgolnorozwojowe.map((p, idx) => (
-                    <div key={idx} className="border border-slate-200 bg-slate-50 rounded-2xl p-5 space-y-3">
-                      <div className="font-black text-xs uppercase text-slate-900">Próg: {p.wejsc} wejść</div>
-                      <p className="text-xs font-medium text-slate-700">{p.bonus}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {activeUserTiers.map((t: any, idx: number) => {
+                const userVal = typAktualnegoKarnetu === 'Umowa 12 miesięcy' ? umowaMiesiaceZaliczone : cyklCiągłościKlienta;
+                const osiagniety = userVal >= Number(t.threshold);
+
+                return (
+                  <div key={t.id || idx} className={`border rounded-2xl p-5 space-y-3 transition-all ${osiagniety ? 'bg-emerald-50/70 border-emerald-300 shadow-sm' : 'bg-slate-50 border-slate-200 opacity-80'}`}>
+                    <div className="flex justify-between items-center">
+                      <span className="font-black text-xs uppercase text-slate-900">
+                        Próg: {t.threshold} {t.type === 'miesiecy' ? 'miesięcy' : t.type === 'wejsc' ? 'wejść' : 'cykli'}
+                      </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg ${osiagniety ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' : 'bg-slate-200 text-slate-700'}`}>
+                        {osiagniety ? 'ODBLOKOWANY ✓' : 'W TRAKCIE'}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                    <p className="text-xs font-medium text-slate-700 leading-relaxed">{t.reward}</p>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
 
-      {/* WIDOK DLA ADMINISTRATORA / TRENERA */}
+      {/* WIDOK DLA ADMINISTRATORA / TRENERA - ZARZĄDZANIE TABELAMI I PROGAMI */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-6">
-          <div className="bg-white border border-sky-200 rounded-3xl p-6 shadow-sm space-y-4">
-            <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
-              ⚙️ Konfiguracja progów bonusowych w klubie
-            </h3>
-            <p className="text-xs text-slate-500">
-              Poniższe progi są automatycznie weryfikowane przez system na podstawie ciągłości karnetów i historii klientów w bazie Supabase.
-            </p>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
-              <div className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 space-y-3">
-                <h4 className="font-black text-xs text-sky-950 uppercase">Progi: Umowa 12M</h4>
-                <ul className="space-y-2 text-xs text-slate-700">
-                  {progiUmowa.map((p, i) => (
-                    <li key={i} className="bg-white p-2.5 rounded-xl border border-sky-100 flex justify-between">
-                      <span><strong>{p.miesiecy}M:</strong> {p.bonus}</span>
-                    </li>
-                  ))}
-                </ul>
+          <div className="bg-white border border-sky-200 rounded-3xl p-6 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-100 pb-4">
+              <div>
+                <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
+                  ⚙️ Edytor tabel progów i nagród dla karnetów
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Wybierz karnet z cennika, dostosuj jego progi lojalnościowe i dodaj własne nagrody.
+                </p>
               </div>
 
-              <div className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 space-y-3">
-                <h4 className="font-black text-xs text-sky-950 uppercase">Progi: Karnety OPEN</h4>
-                <ul className="space-y-2 text-xs text-slate-700">
-                  {progiOpen.map((p, i) => (
-                    <li key={i} className="bg-white p-2.5 rounded-xl border border-sky-100 flex justify-between">
-                      <span><strong>{p.cykl} Cykle:</strong> {p.bonus}</span>
-                    </li>
+              {/* Wybór karnetu */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-700">Wybierz karnet:</span>
+                <select
+                  value={selectedAdminKarnetId}
+                  onChange={(e) => handleSelectAdminKarnet(e.target.value)}
+                  className="bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 text-xs font-black text-sky-950 focus:outline-none cursor-pointer"
+                >
+                  {karnetyCennik.map((k: any) => (
+                    <option key={k.id} value={k.id}>{k.nazwa} ({k.typ_karnetu})</option>
                   ))}
-                </ul>
+                </select>
+              </div>
+            </div>
+
+            {/* TABELA AKTUALNYCH PROGÓW DLA WYBRANEGO KARNETU */}
+            <div className="space-y-4">
+              <h4 className="font-extrabold text-xs text-sky-900 uppercase tracking-wider">
+                Definiowane progi dla wybranego karnetu:
+              </h4>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {editTiers.map((t: any) => (
+                  <div key={t.id} className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-sm">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="bg-sky-200 text-sky-950 text-[10px] font-black px-2.5 py-0.5 rounded-lg uppercase">
+                          Próg: {t.threshold} {t.type}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteTier(t.id)}
+                        className="text-rose-600 hover:text-rose-800 font-bold text-xs cursor-pointer p-1"
+                        title="Usuń próg"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <p className="text-xs font-semibold text-slate-800">{t.reward}</p>
+                  </div>
+                ))}
+                {editTiers.length === 0 && (
+                  <div className="col-span-3 text-center py-6 text-slate-400 text-xs italic">
+                    Brak zdefiniowanych progów dla tego karnetu. Dodaj pierwszy próg poniżej.
+                  </div>
+                )}
               </div>
 
-              <div className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 space-y-3">
-                <h4 className="font-black text-xs text-sky-950 uppercase">Progi: Ogólnorozwojowe</h4>
-                <ul className="space-y-2 text-xs text-slate-700">
-                  {progiOgolnorozwojowe.map((p, i) => (
-                    <li key={i} className="bg-white p-2.5 rounded-xl border border-sky-100 flex justify-between">
-                      <span><strong>{p.wejsc} Wejść:</strong> {p.bonus}</span>
-                    </li>
-                  ))}
-                </ul>
+              {/* FORMULARZ DODAWANIA NOWEGO PROGU */}
+              <form onSubmit={handleAddTier} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 mt-4">
+                <h5 className="font-black text-xs text-slate-900 uppercase">Dodaj nowy próg i nagrodę</h5>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700">Wartość progi (np. 3, 6, 12)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      placeholder="np. 6"
+                      value={newTierThreshold}
+                      onChange={(e) => setNewTierThreshold(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700">Typ jednostki</label>
+                    <select
+                      value={newTierType}
+                      onChange={(e: any) => setNewTierType(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 cursor-pointer"
+                    >
+                      <option value="miesiecy">Miesiące</option>
+                      <option value="cykl">Cykle</option>
+                      <option value="wejsc">Wejścia</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-3">
+                    <label className="text-[11px] font-bold text-slate-700">Opis nagrody / bonusu</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        required
+                        placeholder="np. Darmowy shake białkowy + ręcznik klubowy"
+                        value={newTierReward}
+                        onChange={(e) => setNewTierReward(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-medium text-slate-800"
+                      />
+                      <button
+                        type="submit"
+                        className="bg-slate-900 hover:bg-slate-800 text-white font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider cursor-pointer shrink-0 shadow-sm"
+                      >
+                        + Dodaj próg
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+
+              {/* PRZYCISK ZAPISU DO BAZY */}
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  disabled={isSavingTier}
+                  onClick={handleSaveTiersToDatabase}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-md transition-colors"
+                >
+                  {isSavingTier ? 'Zapisywanie...' : '💾 Zapisz zmiany w bazie dla tego karnetu'}
+                </button>
               </div>
             </div>
           </div>
 
-          {/* LISTA KLIENTÓW I ICH CYKL CIĄGŁOŚCI */}
-          <div className="bg-white border border-sky-200 rounded-2xl shadow-sm overflow-hidden">
+          {/* LISTA KLUBOWICZÓW I ICH CYKL */}
+          <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden">
             <div className="p-5 border-b border-sky-100 font-black text-sm text-sky-950 uppercase">
-              👥 Status ciągłości klubowiczów w bazie
+              👥 Podgląd ciągłości i statusów klubowiczów
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
