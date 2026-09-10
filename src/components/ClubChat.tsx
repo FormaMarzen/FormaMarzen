@@ -44,6 +44,10 @@ export default function ClubChat() {
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // Regulacja wielkości czcionki w czacie dla osób słabowidzących
+  const [fontSizeScale, setFontSizeScale] = useState<"normal" | "large" | "xlarge">("normal");
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+
   // Główne zakładki widoku listy: Prywatne | Grupy | Treningi
   const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public" | "closed">("my");
@@ -184,6 +188,12 @@ export default function ClubChat() {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
 
+    // Odczyt preferencji wielkości czcionki
+    const savedFontSize = localStorage.getItem(`chat_font_size_scale_${uid}`) || localStorage.getItem("chat_font_size_scale");
+    if (savedFontSize === "normal" || savedFontSize === "large" || savedFontSize === "xlarge") {
+      setFontSizeScale(savedFontSize);
+    }
+
     const savedActiveTab = localStorage.getItem(`chat_last_tab_${uid}`);
     if (savedActiveTab === "direct" || savedActiveTab === "groups" || savedActiveTab === "trainings") {
       setActiveTab(savedActiveTab);
@@ -225,6 +235,35 @@ export default function ClubChat() {
       }
     }
   }, [currentUserId, secondaryUserId]);
+
+  const handleSetFontSize = (scale: "normal" | "large" | "xlarge") => {
+    setFontSizeScale(scale);
+    const uid = secondaryUserId || currentUserId;
+    if (uid) {
+      localStorage.setItem(`chat_font_size_scale_${uid}`, scale);
+    }
+    localStorage.setItem("chat_font_size_scale", scale);
+    setShowSettingsMenu(false);
+  };
+
+  const getChatTextClass = (type: "message" | "meta" | "header" = "message") => {
+    if (type === "message") {
+      if (fontSizeScale === "xlarge") return "text-[15px] sm:text-[16px] leading-relaxed";
+      if (fontSizeScale === "large") return "text-[13.5px] sm:text-[14.5px] leading-relaxed";
+      return "text-xs sm:text-[13px] leading-relaxed";
+    }
+    if (type === "meta") {
+      if (fontSizeScale === "xlarge") return "text-[11px] sm:text-xs";
+      if (fontSizeScale === "large") return "text-[10px] sm:text-[11px]";
+      return "text-[9px] sm:text-[10px]";
+    }
+    if (type === "header") {
+      if (fontSizeScale === "xlarge") return "text-sm sm:text-base font-black";
+      if (fontSizeScale === "large") return "text-xs sm:text-sm font-black";
+      return "text-xs font-bold";
+    }
+    return "text-xs";
+  };
 
   const handleTabChange = (tab: "direct" | "groups" | "trainings") => {
     setActiveTab(tab);
@@ -302,6 +341,7 @@ export default function ClubChat() {
     setChatInsideTab("messages");
     setActiveMessageMenuId(null);
     setShowChatOptionsMenu(false);
+    setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
   };
@@ -320,6 +360,7 @@ export default function ClubChat() {
     setShowInviteModal(false);
     setShowCategoryManagerModal(false);
     setShowChatOptionsMenu(false);
+    setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
   };
@@ -336,7 +377,6 @@ export default function ClubChat() {
     setCategoriesOrder(newOrder);
     localStorage.setItem("group_categories_order", JSON.stringify(newOrder));
   };
-
   const handleRenameCategory = async (oldName: string, newName: string) => {
     if (!newName.trim() || oldName === newName.trim()) {
       setEditingCategoryOldName(null);
@@ -575,7 +615,6 @@ export default function ClubChat() {
 
       const parsedNum = Number(recipientId);
 
-      // Sprawdzenie adresu e-mail odbiorcy w tabeli klienci
       const { data: targetClientData } = (await (supabase.from("klienci") as any)
         .select('id, "E-mail", push_subscription')
         .eq("id", recipientId)
@@ -611,7 +650,6 @@ export default function ClubChat() {
       };
 
       if (isTargetAdmin) {
-        // 1. Wszystkie tokeny admina z push_subscriptions (telefon, tablet, inne urządzenia)
         const { data: adminSubs } = await supabase
           .from("push_subscriptions")
           .select("subscription")
@@ -621,7 +659,6 @@ export default function ClubChat() {
           adminSubs.forEach((s: any) => addSub(s.subscription));
         }
 
-        // 2. Tokeny z profilu klienci dla kont admina
         const { data: adminClients } = await supabase
           .from("klienci")
           .select("push_subscription")
@@ -631,12 +668,10 @@ export default function ClubChat() {
           adminClients.forEach((c: any) => addSub(c.push_subscription));
         }
       } else {
-        // 1. Token z profilu klienta
         if (targetClientData?.push_subscription) {
           addSub(targetClientData.push_subscription);
         }
 
-        // 2. Wszelkie dodatkowe urządzenia klubowicza z push_subscriptions
         const { data: clientSubs } = await supabase
           .from("push_subscriptions")
           .select("subscription")
@@ -647,7 +682,6 @@ export default function ClubChat() {
         }
       }
 
-      // Precyzyjna deduplikacja tokenów po endpointcie urządzenia
       const uniqueSubsMap = new Map();
       subscriptions.forEach((sub) => {
         if (sub && sub.endpoint) {
@@ -1131,7 +1165,7 @@ export default function ClubChat() {
     });
   };
 
-  // NAPRAWIONE OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE (NATYCHMIASTOWE ZNIKANIE JEDYNKI)
+  // NAPRAWIONE OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -1144,7 +1178,6 @@ export default function ClubChat() {
 
         const isSys = Number(selectedUser.id) === SYSTEM_ID;
 
-        // 1. Natychmiastowe usunięcie czerwonej jedynki ze stanu lokalnego
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1168,7 +1201,6 @@ export default function ClubChat() {
           })
         );
 
-        // 2. Trwałe zaktualizowanie bazy Supabase dla wszystkich identyfikatorów
         try {
           if (isSys) {
             await supabase
@@ -1466,6 +1498,7 @@ export default function ClubChat() {
     }
     return null;
   };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -1682,7 +1715,6 @@ export default function ClubChat() {
     }
     setActiveMessageMenuId(null);
   };
-
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
     const myId = secondaryUserId || currentUserId;
     if (!myId) return;
@@ -2252,7 +2284,6 @@ export default function ClubChat() {
   const regularDirectUsers = activeDirectUsers.filter((u) => !pinnedChatIds.includes(`direct_${u.id}`));
   const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
 
-  // PRAWIDŁOWY PORZĄDEK DEKLARACJI ZMIENNYCH GRUP (BEZ BŁĘDÓW SCOPE)
   const allMyGroups = groups.filter((g: any) => {
     const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
     if (isTraining) return false;
@@ -2284,7 +2315,6 @@ export default function ClubChat() {
     activeMyGroups.filter((g) => g.kategoria === "Czaty grupowe").map((g: any) => String(g.id))
   );
 
-  // OCZYSZCZONE ZLICZANIE NIEPRZECZYTANYCH WIADOMOŚCI PRYWATNYCH
   const unreadDirect1on1Count = messages.filter((m: any) => {
     if (m.grupa_id || m.przeczytana) return false;
     const rId = String(m.odbiorca_id ?? SYSTEM_ID);
@@ -2382,13 +2412,14 @@ export default function ClubChat() {
   };
 
   const MessageItem = ({ msg, isMe }: { msg: any; isMe: boolean }) => {
-    const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null;
+    const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null || msg.is_system;
+    const isRedukcjaAlert = isSystemSender && (msg.tresc?.includes("Wyzwanie") || msg.tresc?.includes("redukcji") || msg.tresc?.includes("Redukcji") || msg.tresc?.includes("KOMUNIKAT SYSTEMOWY"));
     const isBirthdayNotification = isSystemSender && (msg.tresc?.includes("🎂") || msg.tresc?.includes("urodzin"));
     const isBadgeNotification = isSystemSender && (msg.tresc?.includes("🎖️") || msg.tresc?.includes("odznakę klubową"));
     const isChallengeNotification = msg.tresc?.includes("⚔️") || msg.tresc?.includes("Rzuciłem Ci wyzwanie");
     const isKnowledgeBaseNotification = isSystemSender && (msg.tresc?.includes("Bazy Wiedzy") || msg.tresc?.includes("Baza Wiedzy") || msg.tresc?.includes("suplemencie"));
 
-    const isSpecial = isSystemSender || isBirthdayNotification || isBadgeNotification || isChallengeNotification || isKnowledgeBaseNotification;
+    const isSpecial = isSystemSender || isBirthdayNotification || isBadgeNotification || isChallengeNotification || isKnowledgeBaseNotification || isRedukcjaAlert;
     const reactionsObj = msg.reakcje || {};
     const myIdStr = String(secondaryUserId || currentUserId);
 
@@ -2422,6 +2453,29 @@ export default function ClubChat() {
       isSwipingMessage.current = false;
     };
 
+    // WYRÓŻNIONE POWIADOMIENIE SYSTEMOWE DLA WYZWANIA REDUKCJI
+    if (isRedukcjaAlert) {
+      return (
+        <div className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900/90 to-rose-950/40 border-2 border-amber-400 rounded-3xl p-4 shadow-lg text-white space-y-2.5">
+          <div className="flex items-center justify-between border-b border-amber-400/40 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl animate-bounce">🔥</span>
+              <span className="font-black text-[11px] uppercase tracking-wider text-amber-400">
+                Komunikat: Wyzwanie Redukcji
+              </span>
+            </div>
+            <span className="text-[9px] bg-rose-600 text-white font-black px-2 py-0.5 rounded-full uppercase shadow-xs">
+              System
+            </span>
+          </div>
+          <p className={`${getChatTextClass("message")} leading-relaxed font-semibold text-slate-100 break-words`}>
+            {msg.tresc}
+          </p>
+          {renderAttachment(msg)}
+        </div>
+      );
+    }
+
     if (isBirthdayNotification) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
@@ -2436,7 +2490,7 @@ export default function ClubChat() {
               FORMA MARZEŃ
             </span>
           </div>
-          <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+          <p className={`${getChatTextClass("message")} leading-relaxed font-semibold text-slate-800 break-words`}>{msg.tresc}</p>
           {renderAttachment(msg)}
         </div>
       );
@@ -2456,13 +2510,13 @@ export default function ClubChat() {
               Administrator
             </span>
           </div>
-          <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+          <p className={`${getChatTextClass("message")} leading-relaxed font-semibold text-slate-800 break-words`}>{msg.tresc}</p>
           {renderAttachment(msg)}
         </div>
       );
     }
 
-    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification && !isChallengeNotification && !isKnowledgeBaseNotification)) {
+    if (isBadgeNotification || (isSystemSender && !isBirthdayNotification && !isChallengeNotification && !isKnowledgeBaseNotification && !isRedukcjaAlert)) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
@@ -2476,7 +2530,7 @@ export default function ClubChat() {
               System
             </span>
           </div>
-          <p className="text-xs leading-relaxed font-semibold text-slate-800">{msg.tresc}</p>
+          <p className={`${getChatTextClass("message")} leading-relaxed font-semibold text-slate-800 break-words`}>{msg.tresc}</p>
           {renderAttachment(msg)}
         </div>
       );
@@ -2496,7 +2550,7 @@ export default function ClubChat() {
               Wyzwanie
             </span>
           </div>
-          <p className="text-xs leading-relaxed text-slate-200">{msg.tresc}</p>
+          <p className={`${getChatTextClass("message")} leading-relaxed text-slate-200 break-words`}>{msg.tresc}</p>
           {renderAttachment(msg)}
         </div>
       );
@@ -2522,7 +2576,7 @@ export default function ClubChat() {
 
         <div
           onClick={() => setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id)}
-          className={`max-w-[85%] min-w-[130px] p-3 rounded-2xl text-xs leading-relaxed shadow-sm cursor-pointer select-none ${
+          className={`max-w-[88%] sm:max-w-[85%] min-w-[110px] p-3 rounded-2xl ${getChatTextClass("message")} shadow-sm cursor-pointer select-none ${
             isMe
               ? "bg-slate-900 text-white rounded-br-none ml-auto"
               : "bg-white text-slate-800 border border-slate-200 rounded-bl-none mr-auto"
@@ -2662,7 +2716,6 @@ export default function ClubChat() {
         <button
           type="button"
           onClick={() => {
-            // Natychmiastowe optymistyczne usunięcie nieprzeczytanej wiadomości dla tego wątku
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.grupa_id || m.przeczytana) return m;
@@ -2681,7 +2734,7 @@ export default function ClubChat() {
             setSelectedUser(user);
             setChatInsideTab("messages");
           }}
-          className="flex items-center gap-3 overflow-hidden flex-1 text-left cursor-pointer"
+          className="flex items-center gap-3 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
         >
           <div
             className={`w-9 h-9 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border relative ${
@@ -2701,10 +2754,10 @@ export default function ClubChat() {
               <span className="absolute bottom-0 right-0 text-[10px] leading-none bg-amber-400 rounded-full p-0.5 shadow">📌</span>
             )}
           </div>
-          <div className="overflow-hidden flex-1">
+          <div className="overflow-hidden flex-1 min-w-0">
             <div className={`font-bold text-xs truncate flex items-center gap-1.5 ${isSys ? "text-amber-950 font-black" : "text-slate-900 group-hover:text-sky-950"}`}>
-              <span>{user.name}</span>
-              {isPinnedItem && <span className="text-[10px]" title="Przypięty czat">📌</span>}
+              <span className="truncate">{user.name}</span>
+              {isPinnedItem && <span className="text-[10px] shrink-0" title="Przypięty czat">📌</span>}
             </div>
             <div className="text-[10px] text-slate-500 truncate mt-0.5">
               {lastMessageText ? (
@@ -2751,7 +2804,7 @@ export default function ClubChat() {
             setSelectedGroup(group);
             setChatInsideTab("messages");
           }}
-          className="flex items-center gap-3 overflow-hidden flex-1 text-left cursor-pointer"
+          className="flex items-center gap-3 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
         >
           <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border overflow-hidden relative ${isPublic ? "bg-amber-100 text-amber-900 border-amber-300" : "bg-slate-100 text-slate-900 border-slate-300"}`}>
             {renderGroupIcon(group.ikona, group.typ)}
@@ -2759,12 +2812,12 @@ export default function ClubChat() {
               <span className="absolute bottom-0 right-0 text-[10px] leading-none bg-amber-400 rounded-full p-0.5 shadow">📌</span>
             )}
           </div>
-          <div className="overflow-hidden">
+          <div className="overflow-hidden min-w-0 flex-1">
             <div className="font-bold text-xs text-slate-900 truncate flex items-center gap-1.5">
-              <span>{group.nazwa}</span>
-              {isPinnedItem && <span className="text-[10px]" title="Przypięta grupa">📌</span>}
+              <span className="truncate">{group.nazwa}</span>
+              {isPinnedItem && <span className="text-[10px] shrink-0" title="Przypięta grupa">📌</span>}
             </div>
-            <div className="text-[10px] text-slate-500 flex items-center gap-1.5">
+            <div className="text-[10px] text-slate-500 flex items-center gap-1.5 truncate">
               <span className={isPublic ? "text-amber-600 font-semibold" : "text-slate-500"}>
                 {isPublic ? "Publiczna" : "Zamknięta"}
               </span>
@@ -2882,7 +2935,8 @@ export default function ClubChat() {
     : selectedUser
     ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
     : false;
-    return (
+
+  return (
     <div
       ref={containerRef}
       style={
@@ -2893,8 +2947,8 @@ export default function ClubChat() {
               touchAction: "none",
             }
           : {
-              right: "24px",
-              bottom: "24px",
+              right: "20px",
+              bottom: "20px",
             }
       }
       className={`fixed z-[120] font-sans antialiased ${!isPositioned ? "hidden" : ""}`}
@@ -2904,14 +2958,14 @@ export default function ClubChat() {
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           className={`fixed sm:absolute bg-white border border-slate-200 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in fade-in
-            inset-x-3 bottom-20 sm:inset-x-auto sm:bottom-auto
-            w-auto sm:w-[410px]
-            h-[calc(100dvh-110px)] sm:h-[560px] max-h-[calc(100vh-100px)]
+            inset-x-1.5 sm:inset-x-auto bottom-[72px] sm:bottom-auto
+            w-auto sm:w-[410px] max-w-[calc(100vw-0.75rem)] sm:max-w-[410px]
+            h-[calc(100dvh-82px)] sm:h-[560px] max-h-[calc(100dvh-75px)]
             ${openToLeft ? "sm:right-0 sm:left-auto" : "sm:left-0 sm:right-auto"}
             ${openDownwards ? "sm:top-full sm:mt-3 sm:bottom-auto sm:slide-in-from-top-4" : "sm:bottom-full sm:mb-3 sm:top-auto sm:slide-in-from-bottom-4"}
           `}
         >
-          {/* NAGŁÓWEK CZATU */}
+          {/* NAGŁÓWEK CZATU Z KOŁEM ZĘBATYM DO ZMIANY CZCIONKI */}
           <div className="bg-slate-900 text-white px-3 py-2.5 flex items-center justify-between shadow-sm select-none relative shrink-0">
             <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0 mr-1">
               {selectedUser || selectedGroup ? (
@@ -2931,7 +2985,7 @@ export default function ClubChat() {
                         {renderGroupIcon(selectedGroup.ikona, selectedGroup.typ)}
                       </div>
                       <div className="overflow-hidden min-w-0 flex-1">
-                        <div className="font-bold text-xs truncate flex items-center gap-1 text-white">
+                        <div className={`font-bold truncate flex items-center gap-1 text-white ${getChatTextClass("header")}`}>
                           <span className="truncate">{selectedGroup.nazwa}</span>
                           {isCurrentChatPinned && <span title="Przypięta grupa" className="text-[10px] shrink-0">📌</span>}
                         </div>
@@ -2953,7 +3007,7 @@ export default function ClubChat() {
                         )}
                       </div>
                       <div className="overflow-hidden min-w-0 flex-1">
-                        <div className="font-bold text-xs truncate flex items-center gap-1 text-white">
+                        <div className={`font-bold truncate flex items-center gap-1 text-white ${getChatTextClass("header")}`}>
                           <span className="truncate">{selectedUser.name}</span>
                           {isCurrentChatPinned && <span title="Przypięty czat" className="text-[10px] shrink-0">📌</span>}
                         </div>
@@ -2982,6 +3036,69 @@ export default function ClubChat() {
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              {/* MENU WIELKOŚCI CZCIONKI (KOŁO ZĘBATE ⚙️) */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowSettingsMenu(!showSettingsMenu);
+                  }}
+                  className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs transition-all cursor-pointer border ${
+                    showSettingsMenu
+                      ? "bg-amber-400 text-slate-950 border-amber-300"
+                      : "bg-slate-800 text-slate-300 border-slate-700 hover:text-white hover:bg-slate-700"
+                  }`}
+                  title="Ustawienia wielkości czcionki"
+                >
+                  ⚙️
+                </button>
+
+                {showSettingsMenu && (
+                  <div className="absolute right-0 top-9 w-44 bg-slate-900 border border-slate-700 shadow-2xl rounded-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2 space-y-1">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-amber-400 px-2 pb-1 border-b border-slate-800">
+                      Wielkość czcionki:
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleSetFontSize("normal")}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                        fontSizeScale === "normal"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs"
+                          : "text-slate-300 hover:bg-slate-800 font-medium"
+                      }`}
+                    >
+                      <span>Standardowa</span>
+                      {fontSizeScale === "normal" && <span>✓</span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetFontSize("large")}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                        fontSizeScale === "large"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs"
+                          : "text-slate-300 hover:bg-slate-800 font-medium"
+                      }`}
+                    >
+                      <span>Duża (+15%)</span>
+                      {fontSizeScale === "large" && <span>✓</span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetFontSize("xlarge")}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                        fontSizeScale === "xlarge"
+                          ? "bg-amber-400 text-slate-950 font-black shadow-xs"
+                          : "text-slate-300 hover:bg-slate-800 font-medium"
+                      }`}
+                    >
+                      <span>Bardzo duża (+30%)</span>
+                      {fontSizeScale === "xlarge" && <span>✓</span>}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {(selectedUser || selectedGroup) && (
                 <div className="relative">
                   <button
@@ -3200,16 +3317,15 @@ export default function ClubChat() {
               </button>
             </div>
           )}
-
           {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP / TRENINGI) */}
           {!selectedUser && !selectedGroup ? (
-            <div className="flex-1 flex flex-col overflow-hidden p-3.5 space-y-2.5 bg-slate-50/50 min-h-0">
+            <div className="flex-1 flex flex-col overflow-hidden p-3 sm:p-3.5 space-y-2.5 bg-slate-50/50 min-h-0">
               <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-2 shrink-0">
                 <div className="flex-1 grid grid-cols-3 gap-1 bg-slate-200/90 p-1 rounded-xl">
                   <button
                     type="button"
                     onClick={() => handleTabChange("direct")}
-                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
                       activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -3224,7 +3340,7 @@ export default function ClubChat() {
                   <button
                     type="button"
                     onClick={() => handleTabChange("groups")}
-                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
                       activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -3239,7 +3355,7 @@ export default function ClubChat() {
                   <button
                     type="button"
                     onClick={() => handleTabChange("trainings")}
-                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 ${
+                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
                       activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -3278,8 +3394,8 @@ export default function ClubChat() {
               {activeTab === "direct" && (
                 <>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <div className="relative flex-1">
-                      <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs">🔍</span>
+                    <div className="relative flex-1 min-w-0">
+                      <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs pointer-events-none">🔍</span>
                       <input
                         type="text"
                         placeholder="Szukaj: imię, nazwisko..."
@@ -3381,12 +3497,12 @@ export default function ClubChat() {
                                     setSelectedUser(user);
                                     setChatInsideTab("messages");
                                   }}
-                                  className="flex items-center gap-2.5 overflow-hidden flex-1 text-left cursor-pointer"
+                                  className="flex items-center gap-2.5 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
                                 >
                                   <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden">
                                     {user.avatar ? <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" /> : <span>👤</span>}
                                   </div>
-                                  <div className="overflow-hidden">
+                                  <div className="overflow-hidden min-w-0 flex-1">
                                     <div className="font-bold text-xs text-slate-700 truncate">{user.name}</div>
                                     <div className="text-[9px] text-slate-400">Zarchiwizowane</div>
                                   </div>
@@ -3394,7 +3510,7 @@ export default function ClubChat() {
                                 <button
                                   type="button"
                                   onClick={(e) => toggleArchiveChat(user.id, "direct", e)}
-                                  className="text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-200 px-2 py-1 rounded-lg border border-slate-200 shadow-xs cursor-pointer shrink-0"
+                                  className="text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-200 px-2 py-1 rounded-lg border border-slate-200 shadow-xs cursor-pointer shrink-0 ml-2"
                                   title="Przywróć do aktywnych"
                                 >
                                   Przywróć ↩
@@ -3412,22 +3528,22 @@ export default function ClubChat() {
               {activeTab === "groups" && (
                 <div className="flex-1 flex flex-col overflow-hidden space-y-2 min-h-0">
                   <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-1.5 text-xs font-bold shrink-0">
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 overflow-x-auto">
                       <button
                         onClick={() => setGroupFilterTab("my")}
-                        className={`pb-1 px-1 transition-colors ${groupFilterTab === "my" ? "border-b-2 border-slate-900 text-slate-900 font-black" : "text-slate-400 hover:text-slate-600"}`}
+                        className={`pb-1 px-1 transition-colors cursor-pointer whitespace-nowrap ${groupFilterTab === "my" ? "border-b-2 border-slate-900 text-slate-900 font-black" : "text-slate-400 hover:text-slate-600"}`}
                       >
                         Moje grupy ({activeMyGroups.length})
                       </button>
                       <button
                         onClick={() => setGroupFilterTab("public")}
-                        className={`pb-1 px-1 transition-colors ${groupFilterTab === "public" ? "border-b-2 border-amber-500 text-amber-700 font-black" : "text-slate-400 hover:text-slate-600"}`}
+                        className={`pb-1 px-1 transition-colors cursor-pointer whitespace-nowrap ${groupFilterTab === "public" ? "border-b-2 border-amber-500 text-amber-700 font-black" : "text-slate-400 hover:text-slate-600"}`}
                       >
                         Otwarte ({publicDiscoverGroups.length})
                       </button>
                       <button
                         onClick={() => setGroupFilterTab("closed")}
-                        className={`pb-1 px-1 transition-colors ${groupFilterTab === "closed" ? "border-b-2 border-slate-700 text-slate-800 font-black" : "text-slate-400 hover:text-slate-600"}`}
+                        className={`pb-1 px-1 transition-colors cursor-pointer whitespace-nowrap ${groupFilterTab === "closed" ? "border-b-2 border-slate-700 text-slate-800 font-black" : "text-slate-400 hover:text-slate-600"}`}
                       >
                         Zamknięte ({closedDiscoverGroups.length})
                       </button>
@@ -3505,12 +3621,12 @@ export default function ClubChat() {
                                         setSelectedGroup(group);
                                         setChatInsideTab("messages");
                                       }}
-                                      className="flex items-center gap-2.5 overflow-hidden flex-1 text-left cursor-pointer"
+                                      className="flex items-center gap-2.5 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
                                     >
                                       <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden">
                                         {renderGroupIcon(group.ikona, group.typ)}
                                       </div>
-                                      <div className="overflow-hidden">
+                                      <div className="overflow-hidden min-w-0 flex-1">
                                         <div className="font-bold text-xs text-slate-700 truncate">{group.nazwa}</div>
                                         <div className="text-[9px] text-slate-400">Zarchiwizowane</div>
                                       </div>
@@ -3518,7 +3634,7 @@ export default function ClubChat() {
                                     <button
                                       type="button"
                                       onClick={(e) => toggleArchiveChat(group.id, "group", e)}
-                                      className="text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-200 px-2 py-1 rounded-lg border border-slate-200 shadow-xs cursor-pointer shrink-0"
+                                      className="text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-200 px-2 py-1 rounded-lg border border-slate-200 shadow-xs cursor-pointer shrink-0 ml-2"
                                       title="Przywróć grupę"
                                     >
                                       Przywróć ↩
@@ -3527,7 +3643,7 @@ export default function ClubChat() {
                                       <button
                                         type="button"
                                         onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
-                                        className="text-slate-400 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg"
+                                        className="text-slate-400 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg ml-1"
                                         title="Usuń grupę na stałe"
                                       >
                                         🗑️
@@ -3685,19 +3801,19 @@ export default function ClubChat() {
                         }}
                         className="w-full p-3 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group"
                       >
-                        <div className="flex items-center gap-3 overflow-hidden">
+                        <div className="flex items-center gap-3 overflow-hidden min-w-0 flex-1">
                           <div className="w-9 h-9 rounded-full bg-amber-400/20 text-amber-950 border border-amber-400 flex items-center justify-center font-bold text-sm shrink-0">
                             🏋️‍♂️
                           </div>
-                          <div className="overflow-hidden">
+                          <div className="overflow-hidden min-w-0 flex-1">
                             <div className="font-bold text-xs text-slate-900 truncate">{training.title || training.nazwa}</div>
-                            <div className="text-[10px] text-slate-500">
+                            <div className="text-[10px] text-slate-500 truncate">
                               Godz: {training.start || training.godzina} {training.trainer ? `• Trener: ${training.trainer}` : ""}
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0 ml-2">
                           {trainingUnread > 0 && (
                             <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0">
                               {trainingUnread}
@@ -3833,7 +3949,7 @@ export default function ClubChat() {
                       key={member.id}
                       className="w-full p-2.5 rounded-2xl border bg-white border-slate-200 flex items-center justify-between shadow-sm"
                     >
-                      <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="flex items-center gap-3 overflow-hidden min-w-0 flex-1">
                         <div className={`w-9 h-9 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border ${isSys ? "bg-amber-400 text-slate-950 border-amber-300" : "bg-sky-100 text-sky-950 border-amber-400"}`}>
                           {member.avatar ? (
                             <img src={member.avatar} alt={member.name} className="w-full h-full object-cover" />
@@ -3843,7 +3959,7 @@ export default function ClubChat() {
                             <span>👤</span>
                           )}
                         </div>
-                        <div className="overflow-hidden">
+                        <div className="overflow-hidden min-w-0 flex-1">
                           <div className="font-bold text-xs text-slate-900 truncate">{member.name}</div>
                           <div className="text-[10px] font-medium text-slate-500 truncate mt-0.5">
                             {isSys ? (
@@ -3858,7 +3974,7 @@ export default function ClubChat() {
                       </div>
 
                       {canManage && (
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1 shrink-0 ml-2">
                           <button
                             type="button"
                             onClick={() => handleRemoveMemberFromGroup(member.id)}
@@ -3907,7 +4023,7 @@ export default function ClubChat() {
             </div>
           ) : (
             /* WIDOK AKTYWNEJ ROZMOWY (WIADOMOŚCI) */
-            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 min-h-0">
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 min-h-0 w-full">
               {isAdmin && isCurrentChatArchived && (
                 <div className="bg-slate-200/90 border-b border-slate-300 px-3 py-1.5 flex items-center justify-between text-[11px] font-medium text-slate-700 shadow-inner shrink-0">
                   <div className="flex items-center gap-1.5 truncate">
@@ -3929,9 +4045,9 @@ export default function ClubChat() {
 
               {pinnedMessage && (
                 <div className="bg-amber-50 border-b border-amber-200 px-3 py-2 flex items-center justify-between text-xs shadow-inner shrink-0">
-                  <div className="flex items-center gap-2 overflow-hidden">
+                  <div className="flex items-center gap-2 overflow-hidden min-w-0 flex-1">
                     <span className="text-amber-600 font-bold text-sm shrink-0">📌</span>
-                    <div className="truncate">
+                    <div className="truncate min-w-0 flex-1">
                       <span className="font-bold text-slate-900 mr-1">Przypięta:</span>
                       <span className="text-slate-700 truncate">{pinnedMessage.tresc || (pinnedMessage.attachment_url ? "📎 Załącznik" : "")}</span>
                     </div>
@@ -3949,10 +4065,10 @@ export default function ClubChat() {
                 </div>
               )}
 
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full">
                 {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
                   const isMe = effectiveIds.includes(String(msg.nadawca_id));
-                  const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂") || msg.tresc?.includes("Bazy Wiedzy");
+                  const isSpecial = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null || msg.is_system || msg.tresc?.includes("🎖️") || msg.tresc?.includes("⚔️") || msg.tresc?.includes("🎂") || msg.tresc?.includes("Bazy Wiedzy");
 
                   const messageDateTime = msg.created_at
                     ? new Date(msg.created_at).toLocaleString("pl-PL", {
@@ -3982,9 +4098,9 @@ export default function ClubChat() {
                       <MessageItem msg={msg} isMe={isMe} />
 
                       <div className="flex items-center gap-2 mt-1 px-1">
-                        <span className="text-[9px] text-slate-400 font-mono">{messageDateTime}</span>
+                        <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
                         {isMe && !selectedGroup && (
-                          <span className="text-[9px] text-slate-400 font-medium">
+                          <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
                             {msg.przeczytana && readTime
                               ? `✓✓ Przeczytano: ${readTime}`
                               : "✓ Wysłano"}
@@ -3995,7 +4111,7 @@ export default function ClubChat() {
                   );
                 })}
 
-                {/* ANIMOWANY WSKAŹNIK PISANIA NA ŻYWO (TYPING INDICATOR) */}
+                {/* ANIMOWANY WSKAŹNIK PISANIA NA ŻYWO */}
                 {Object.keys(typingUsers).length > 0 && (
                   <div className="flex items-center gap-2 text-slate-500 text-xs italic px-1 py-1 animate-in fade-in">
                     <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-2xl shadow-xs">
@@ -4029,10 +4145,10 @@ export default function ClubChat() {
 
               {/* PODGLĄD ODPOWIADANIA NA WIADOMOŚĆ (SWIPE-TO-REPLY) */}
               {replyingToMessage && (
-                <div className="px-3.5 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-xs animate-in slide-in-from-bottom-2 select-none shrink-0">
+                <div className="px-3 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-xs animate-in slide-in-from-bottom-2 select-none shrink-0 w-full">
                   <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0 mr-2">
                     <span className="text-amber-400 text-sm font-bold shrink-0">↩</span>
-                    <div className="overflow-hidden min-w-0">
+                    <div className="overflow-hidden min-w-0 flex-1">
                       <div className="text-[11px] font-bold text-amber-400 truncate">
                         Odpowiadanie: {replyingToMessage.nadawca_nazwa || "Klubowicz"}
                       </div>
@@ -4054,8 +4170,8 @@ export default function ClubChat() {
 
               {/* PODGLĄD ZAŁĄCZNIKA */}
               {selectedFile && (
-                <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs shrink-0">
-                  <div className="flex items-center gap-2 truncate max-w-[260px]">
+                <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs shrink-0 w-full">
+                  <div className="flex items-center gap-2 truncate max-w-[240px] sm:max-w-[280px]">
                     {filePreview ? (
                       <img src={filePreview} alt="Podgląd" className="w-8 h-8 rounded object-cover border" />
                     ) : (
@@ -4076,9 +4192,10 @@ export default function ClubChat() {
                 </div>
               )}
 
+              {/* RESPONSYWNY FORMULARZ WYSYŁANIA (BEZ UCINANIA PRZYCISKU NA ANDROIDZIE) */}
               <form
                 onSubmit={handleSendMessage}
-                className="p-3 bg-white border-t border-slate-200 flex items-center gap-2 shrink-0"
+                className="p-2 sm:p-3 bg-white border-t border-slate-200 flex items-center gap-1.5 sm:gap-2 shrink-0 w-full min-w-0"
               >
                 <input
                   type="file"
@@ -4091,7 +4208,7 @@ export default function ClubChat() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-lg transition-colors cursor-pointer shrink-0"
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-base sm:text-lg transition-colors cursor-pointer shrink-0"
                   title="Dodaj załącznik"
                 >
                   📎
@@ -4101,7 +4218,7 @@ export default function ClubChat() {
                   type="text"
                   placeholder={
                     replyingToMessage
-                      ? `Napisz odpowiedź do: ${replyingToMessage.nadawca_nazwa}...`
+                      ? `Odpowiedź do: ${replyingToMessage.nadawca_nazwa}...`
                       : selectedGroup
                       ? "Napisz na czacie grupowym..."
                       : Number(selectedUser?.id) === SYSTEM_ID
@@ -4113,13 +4230,13 @@ export default function ClubChat() {
                     setNewMessage(e.target.value);
                     handleTypingBroadcast();
                   }}
-                  className="flex-1 bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500"
+                  className={`flex-1 min-w-0 bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 sm:px-3.5 sm:py-2.5 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 ${getChatTextClass("message")}`}
                 />
 
                 <button
                   type="submit"
                   disabled={isUploading || (!newMessage.trim() && !selectedFile)}
-                  className="bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl font-bold text-xs transition-colors shadow-sm cursor-pointer shrink-0 flex items-center gap-1"
+                  className="bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors shadow-sm cursor-pointer shrink-0 flex items-center justify-center whitespace-nowrap"
                 >
                   {isUploading ? "..." : "Wyślij"}
                 </button>
@@ -4180,13 +4297,13 @@ export default function ClubChat() {
                     placeholder="Nowa nazwa kategorii..."
                     value={newCategoryInput}
                     onChange={(e) => setNewCategoryInput(e.target.value)}
-                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
+                    className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
                   />
                   <button
                     type="button"
                     onClick={handleAddNewCategory}
                     disabled={!newCategoryInput.trim()}
-                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all cursor-pointer"
+                    className="bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all cursor-pointer shrink-0"
                   >
                     + Dodaj
                   </button>
@@ -4202,18 +4319,18 @@ export default function ClubChat() {
                         className="flex items-center justify-between bg-white p-2 rounded-xl border border-slate-200 text-xs shadow-2xs gap-1.5"
                       >
                         {isEditing ? (
-                          <div className="flex items-center gap-1 flex-1">
+                          <div className="flex items-center gap-1 flex-1 min-w-0">
                             <input
                               type="text"
                               value={editingCategoryNewName}
                               onChange={(e) => setEditingCategoryNewName(e.target.value)}
-                              className="flex-1 bg-slate-50 border border-amber-400 rounded-lg px-2 py-0.5 text-xs text-slate-900 font-bold focus:outline-none"
+                              className="flex-1 min-w-0 bg-slate-50 border border-amber-400 rounded-lg px-2 py-0.5 text-xs text-slate-900 font-bold focus:outline-none"
                               autoFocus
                             />
                             <button
                               type="button"
                               onClick={() => handleRenameCategory(catName, editingCategoryNewName)}
-                              className="text-emerald-600 hover:text-emerald-700 font-black p-1 text-xs cursor-pointer"
+                              className="text-emerald-600 hover:text-emerald-700 font-black p-1 text-xs cursor-pointer shrink-0"
                               title="Zapisz"
                             >
                               ✓
@@ -4221,7 +4338,7 @@ export default function ClubChat() {
                             <button
                               type="button"
                               onClick={() => setEditingCategoryOldName(null)}
-                              className="text-slate-400 hover:text-slate-600 font-bold p-1 text-xs cursor-pointer"
+                              className="text-slate-400 hover:text-slate-600 font-bold p-1 text-xs cursor-pointer shrink-0"
                               title="Anuluj"
                             >
                               ✕
@@ -4342,7 +4459,7 @@ export default function ClubChat() {
                                   isSelected ? prev.filter((id) => id !== user.id) : [...prev, user.id]
                                 );
                               }}
-                              className="rounded text-amber-500 focus:ring-0"
+                              className="rounded text-amber-500 focus:ring-0 cursor-pointer"
                             />
                             <span className="font-medium text-slate-800">{user.name}</span>
                           </label>
@@ -4709,7 +4826,7 @@ export default function ClubChat() {
                     )}
 
                     <div className="relative mb-1.5">
-                      <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400 text-xs">🔍</span>
+                      <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400 text-xs pointer-events-none">🔍</span>
                       <input
                         type="text"
                         placeholder="Szukaj klubowicza: imię, nazwisko, email..."
@@ -4745,7 +4862,7 @@ export default function ClubChat() {
                                 isSelected ? "bg-amber-100/70 text-amber-950 font-bold" : "hover:bg-white text-slate-800"
                               }`}
                             >
-                              <div className="flex items-center gap-2 overflow-hidden">
+                              <div className="flex items-center gap-2 overflow-hidden min-w-0">
                                 <input
                                   type="checkbox"
                                   checked={isSelected}
