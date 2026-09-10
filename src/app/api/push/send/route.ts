@@ -89,12 +89,13 @@ export async function POST(request: Request) {
       }
     };
 
-    // 1. Wysyłka do Administratorów (np. nowe opłacone zamówienie odzieży)
+    // 1. Wysyłka do Administratorów (zakupy karnetów, nowe zamówienia, ważne alerty)
     if (sendToAdmins || targetRole === 'admin') {
+      // A. Wyszukiwanie w push_subscriptions po roli admin lub Twoim mailu
       const { data: adminSubs } = await supabase
         .from('push_subscriptions')
         .select('*')
-        .eq('role', 'admin');
+        .or('role.eq.admin,user_id.eq.maciejklaput@gmail.com');
 
       if (adminSubs && adminSubs.length > 0) {
         for (const row of adminSubs) {
@@ -102,24 +103,38 @@ export async function POST(request: Request) {
         }
       }
 
+      // B. Wyszukiwanie w tabeli klienci – bezpośrednio sprawdzamy Twój e-mail i imię
       const { data: adminClients } = await supabase
         .from('klienci')
         .select('id, push_subscription, "Imię", "Nazwisko", "E-mail", rola')
-        .or('rola.eq.admin,"E-mail".ilike.%admin%,"Imię".eq.Maciej');
+        .or('rola.eq.admin,"E-mail".ilike.%admin%,"Imię".eq.Maciej,"E-mail".ilike.%maciejklaput%');
 
       if (adminClients && adminClients.length > 0) {
         for (const c of adminClients) {
+          const adminName = `${c.Imię || 'Admin'} ${c.Nazwisko || ''}`.trim();
           if (c.push_subscription) {
             try {
               const parsed = typeof c.push_subscription === 'string' ? JSON.parse(c.push_subscription) : c.push_subscription;
-              addTargetDevice(parsed, `${c.Imię || 'Admin'} ${c.Nazwisko || ''}`.trim(), c.id, c.id);
+              addTargetDevice(parsed, adminName, c.id, c.id);
             } catch (e) {}
+          }
+
+          // Sprawdzenie czy w push_subscriptions są zapisane inne urządzenia pod ID tego admina
+          const { data: extraAdminSubs } = await supabase
+            .from('push_subscriptions')
+            .select('*')
+            .eq('user_id', String(c.id));
+
+          if (extraAdminSubs && extraAdminSubs.length > 0) {
+            for (const row of extraAdminSubs) {
+              addTargetDevice(row.subscription || row, adminName, c.id, c.id);
+            }
           }
         }
       }
     }
 
-    // 2. Wysyłka do Wszystkich Klubowiczów (np. powiadomienie o nowym dropie koszulek)
+    // 2. Wysyłka do Wszystkich Klubowiczów
     if (sendToAll || targetRole === 'all') {
       const { data: allClients } = await supabase
         .from('klienci')
