@@ -217,9 +217,84 @@ export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> =>
     return rawUrlOrPath;
   }
 
-  // W ostateczności pobierz z bucketa Supabase
   const { data: fallbackPub } = supabase.storage.from('badania').getPublicUrl(rawUrlOrPath);
   return fallbackPub?.publicUrl || rawUrlOrPath;
+};
+
+// Komponent bezpiecznej miniaturki zdjęcia likwidujący problem niebieskiego znaku zapytania [?]
+export const SecureImageThumbnail = ({
+  src,
+  alt = "Skan",
+  className = "w-full h-full object-cover"
+}: {
+  src: string;
+  alt?: string;
+  className?: string;
+}) => {
+  const [resolvedUrl, setResolvedUrl] = useState<string>('');
+  const [hasError, setHasError] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!src) {
+      setLoading(false);
+      return;
+    }
+    if (src.startsWith('blob:') || src.startsWith('data:')) {
+      setResolvedUrl(src);
+      setLoading(false);
+      return;
+    }
+
+    getSecureFileUrl(src)
+      .then((url) => {
+        if (isMounted) {
+          if (url) {
+            setResolvedUrl(url);
+          } else {
+            setHasError(true);
+          }
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setHasError(true);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [src]);
+
+  if (loading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-slate-100 text-slate-400">
+        <span className="animate-spin text-xs">🔄</span>
+      </div>
+    );
+  }
+
+  if (hasError || !resolvedUrl) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-1 text-center">
+        <span className="text-base">🖼️</span>
+        <span className="text-[9px] font-bold">Brak podglądu</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={resolvedUrl}
+      alt={alt}
+      className={className}
+      onError={() => setHasError(true)}
+    />
+  );
 };
 
 // Pomocnicza funkcja pobierająca poprawny wzrost z profilu klubowicza
@@ -434,6 +509,7 @@ export default function AnalizaFormyPage() {
     return () => window.removeEventListener("click", handleClickOutside);
   }, []);
 
+  // Czerwona kropka dla klubowicza: czy jest jakiekolwiek badanie z nieodczytaną interpretacją
   const hasUnreadInterpretation = useMemo(() => {
     return badaniaList.some(b => b.nowa_interpretacja === true);
   }, [badaniaList]);
@@ -496,7 +572,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // POWIADOMIENIA NA CZACIE KLUBOWYM ORAZ W DZWONECZKU NA 10 I 5 DNI PRZED FINAŁEM
   const checkAndSendRedukcjaAlerts = async (edycje: RedukcjaEdycja[]) => {
     try {
       const activeEdycje = edycje.filter(e => e.status === 'aktywne');
@@ -524,7 +599,6 @@ export default function AnalizaFormyPage() {
 
           const chatAlertMsg = `📢 [KOMUNIKAT SYSTEMOWY] Przypomnienie dla uczestników wyzwania "${ed.nazwa}": Do wielkiego finału pozostało już tylko ${diffDays} dni! Pamiętajcie o wcześniejszym umówieniu się z trenerem na finałową analizę składu ciała na maszynie. Powodzenia w walce o podium i nagrody! 🔥💪`;
 
-          // 1. Wysyłka wiadomości systemowej na czat klubowy
           try {
             await supabase.from('czat_wiadomosci').insert([{
               autor: 'System Forma Marzeń',
@@ -543,7 +617,6 @@ export default function AnalizaFormyPage() {
             }]);
           } catch (e) {}
 
-          // 2. Dodatkowo powiadomienia prywatne w bazie (dzwoneczek)
           if (partData && partData.length > 0) {
             const notifications = partData.map(p => ({
               klient_id: p.klient_id,
@@ -565,7 +638,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Ładowanie listy wszystkich badań krwi bez interpretacji trenera dla Admina
   const checkAdminPendingBloodTests = async () => {
     try {
       const { data, error } = await supabase
@@ -664,6 +736,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // Precyzyjne oznaczanie jako odczytane (nie kasuje flagi natychmiast przy wejściu w zakładkę)
   const markInterpretationAsRead = async (badanieId?: number) => {
     try {
       if (badanieId) {
@@ -971,7 +1044,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // Bezpieczne otwieranie plików PDF i zdjęć z chmury Supabase – likwiduje błąd 404
+  // Bezpieczne otwieranie plików PDF i zdjęć z chmury Supabase
   const handleOpenSecureFile = async (rawUrl: string) => {
     if (!rawUrl) return;
     try {
@@ -1044,7 +1117,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF JEDNOCZEŚNIE DO PRYWATNEGO STORAGE
+  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF DO STORAGE
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -1108,7 +1181,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // OBSŁUGA ZDJĘĆ / SKANÓW (Trwały zapis w prywatnym buckecie)
+  // OBSŁUGA ZDJĘĆ / SKANÓW
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -1289,7 +1362,6 @@ export default function AnalizaFormyPage() {
     await saveWlasneTabeleDoBazy(updated);
   };
 
-  // Zmiana kolejności tabel w górę
   const handleMoveTableUp = async (index: number) => {
     if (index <= 0) return;
     const updated = [...wlasneTabeleBadan];
@@ -1299,7 +1371,6 @@ export default function AnalizaFormyPage() {
     await saveWlasneTabeleDoBazy(updated);
   };
 
-  // Zmiana kolejności tabel w dół
   const handleMoveTableDown = async (index: number) => {
     if (index >= wlasneTabeleBadan.length - 1) return;
     const updated = [...wlasneTabeleBadan];
@@ -1348,7 +1419,6 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // Usunięcie wyniku z tabeli z potwierdzeniem
   const handleDeleteMeasurementFromTable = async (tableId: string, wpisId: string) => {
     const isConfirmed = confirm("Czy na pewno chcesz usunąć ten wynik z tabeli?");
     if (!isConfirmed) return;
@@ -1763,7 +1833,6 @@ export default function AnalizaFormyPage() {
       alert("Błąd zapisu pomiaru: " + error.message);
     }
   };
-
   const activeEdycjaObj = edycjeRedukcji.find(e => e.id === selectedEdycjaId) || null;
   const activeUserKlientId = selectedKlient?.id || currentUserId;
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
@@ -2342,7 +2411,7 @@ export default function AnalizaFormyPage() {
         </div>
       </div>
 
-      {/* PASEK ZAKŁADEK GŁÓWNYCH Z KROPKAMI I WYKRZYKNIKAMI */}
+      {/* PASEK ZAKŁADEK GŁÓWNYCH */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl bg-sky-100/60 p-1.5 border border-sky-200 text-[11px] sm:text-xs font-bold shadow-inner">
         <button
           onClick={() => setActiveTab('pomiary')}
@@ -2398,7 +2467,6 @@ export default function AnalizaFormyPage() {
         <button
           onClick={() => {
             setActiveTab('badania');
-            markInterpretationAsRead();
           }}
           className={`py-2.5 px-2 sm:py-3 sm:px-4 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 text-center cursor-pointer relative ${
             activeTab === 'badania'
@@ -2409,8 +2477,8 @@ export default function AnalizaFormyPage() {
           <span>🩸</span> 
           <span>4. Badania Krwi</span>
 
-          {/* Czerwona migająca kropka z wykrzyknikiem stale widoczna dla administratora */}
-          {(appRole === 'admin' || appRole === 'trener') && hasPendingBloodTestsForAdmin ? (
+          {/* Czerwona migająca kropka z wykrzyknikiem dla trenera lub dla klubowicza, gdy jest nowa analiza */}
+          {((appRole === 'admin' || appRole === 'trener') && hasPendingBloodTestsForAdmin) ? (
             <span className="relative flex h-4 w-4 ml-1" title={`Nowe badania oczekujące na analizę: ${wszystkieOczekujaceBadania.length}`}>
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
@@ -2418,7 +2486,7 @@ export default function AnalizaFormyPage() {
               </span>
             </span>
           ) : hasUnreadInterpretation && (
-            <span className="relative flex h-4 w-4 ml-1">
+            <span className="relative flex h-4 w-4 ml-1" title="Trener dodał nową interpretację Twoich badań krwi!">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
                 !
@@ -3736,11 +3804,11 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* ZAKŁADKA 4: BADANIA KRWI (DOKUMENTY ORAZ WŁASNE TABELE) */}
+      {/* ZAKŁADKA 4: BADANIA KRWI */}
       {activeTab === 'badania' && (
         <div className="space-y-6">
 
-          {/* LISTA OCZEKUJĄCYCH BADAŃ KRWI DLA TRENERA / ADMINA - WIDOCZNA ZAWSZE PO WEJŚCIU W ZAKŁADKĘ */}
+          {/* LISTA OCZEKUJĄCYCH BADAŃ KRWI DLA TRENERA / ADMINA */}
           {(appRole === 'admin' || appRole === 'trener') && wszystkieOczekujaceBadania.length > 0 && (
             <div className="bg-rose-50 border-2 border-rose-300 p-3.5 sm:p-5 rounded-3xl shadow-sm space-y-3 animate-in fade-in duration-150">
               <div className="flex items-center justify-between">
@@ -3758,7 +3826,6 @@ export default function AnalizaFormyPage() {
                 </span>
               </div>
 
-              {/* ZOPTYMALIZOWANA, RESPONSYWNA I ZMNIEJSZONA TABELA DLA TELEFONÓW */}
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] sm:text-xs text-left border-collapse bg-white rounded-2xl overflow-hidden border border-rose-200">
                   <thead>
@@ -3826,7 +3893,6 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* KOMUNIKAT DLA ADMINA GDY NIE WYBRAŁ KLIENTA I NIE MA NOWYCH BADAŃ */}
           {appRole === 'admin' && !selectedKlient && wszystkieOczekujaceBadania.length === 0 && (
             <div className="bg-sky-50 border border-sky-200 rounded-2xl p-6 text-center text-xs text-slate-500 font-bold space-y-1">
               <span className="text-2xl block mb-1">🩸</span>
@@ -3834,7 +3900,6 @@ export default function AnalizaFormyPage() {
             </div>
           )}
 
-          {/* DALSZA CZĘŚĆ ZAKŁADKI BADAŃ KRWI GDY WYBRANO PROFIL LUB JESTEŚ KLUBOWICZEM/TRENEREM */}
           {(selectedKlient || appRole === 'klubowicz' || (appRole === 'trener' && selectedKlient)) && (
             <div className="space-y-6">
 
@@ -3894,7 +3959,7 @@ export default function AnalizaFormyPage() {
                     </button>
                   </div>
 
-                  {/* TABELA LISTY BADAŃ */}
+                  {/* NOWA KOMPAKTOWA TABELA HISTORII BADAŃ - IDEALNIE MIEŚCI SIĘ NA TELEFONACH BEZ PRZEWIJANIA */}
                   <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
                     <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
                       <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -3905,107 +3970,97 @@ export default function AnalizaFormyPage() {
                       </span>
                     </div>
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs text-left border-collapse min-w-[800px]">
+                    <div className="w-full overflow-hidden">
+                      <table className="w-full text-[11px] sm:text-xs text-left border-collapse">
                         <thead>
-                          <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[10px] tracking-wider">
-                            <th className="p-3 w-28">Data Badania</th>
-                            <th className="p-3 w-48">Dokumenty PDF</th>
-                            <th className="p-3 w-28 text-center">Skany / Zdjęcia</th>
-                            <th className="p-3">Główne Wnioski / Interpretacja</th>
-                            <th className="p-3 w-36 text-center">Suplementacja</th>
-                            <th className="p-3 text-center w-36">Akcje</th>
+                          <tr className="bg-sky-950 text-amber-400 font-black uppercase text-[9px] sm:text-[10px] tracking-wider">
+                            <th className="p-2.5 sm:p-3">Data</th>
+                            <th className="p-2.5 sm:p-3 text-center">Materiały</th>
+                            <th className="p-2.5 sm:p-3 hidden sm:table-cell">Wnioski Trenera</th>
+                            <th className="p-2.5 sm:p-3 text-right">Akcja</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-sky-100">
                           {badaniaList.length > 0 ? (
                             badaniaList.map((b) => {
                               const pdfList = extractPdfFiles(b);
+                              const photoCount = (b.zdjecia || []).length;
 
                               return (
                                 <tr key={b.id} className="hover:bg-sky-50/50 transition-colors">
-                                  <td className="p-3 font-black text-sky-950 whitespace-nowrap">
+                                  <td className="p-2.5 sm:p-3 font-black text-sky-950 whitespace-nowrap">
                                     <div className="flex items-center gap-1.5">
                                       {b.nowa_interpretacja && (
-                                        <span className="relative flex h-2.5 w-2.5">
+                                        <span className="relative flex h-2.5 w-2.5 shrink-0" title="Nowa interpretacja trenera!">
                                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
                                           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
                                         </span>
                                       )}
                                       <span>{b.data_badania}</span>
                                     </div>
-                                  </td>
-                                  <td className="p-3">
-                                    {pdfList.length > 0 ? (
-                                      <div className="space-y-1.5 max-w-[220px]">
-                                        {pdfList.map((pdf, pIdx) => (
-                                          <button
-                                            key={pIdx}
-                                            type="button"
-                                            onClick={() => handleOpenSecureFile(pdf.url)}
-                                            className="text-sky-700 hover:text-sky-900 font-bold underline flex items-center gap-1.5 truncate text-[11px] bg-sky-50/80 hover:bg-sky-100 p-1 rounded border border-sky-100 transition-colors cursor-pointer text-left w-full"
-                                            title={pdf.nazwa}
-                                          >
-                                            <span className="shrink-0">📄</span>
-                                            <span className="truncate">{pdf.nazwa || `Dokument ${pIdx + 1}.pdf`}</span>
-                                          </button>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <span className="text-slate-400 italic">Brak pliku PDF</span>
-                                    )}
-                                  </td>
-                                  <td className="p-3 text-center font-bold text-slate-700">
-                                    {(b.zdjecia || []).length > 0 ? (
-                                      <span className="bg-sky-100 text-sky-900 px-2 py-0.5 rounded-full text-[10px]">
-                                        📷 {b.zdjecia?.length} szt.
-                                      </span>
-                                    ) : (
-                                      <span className="text-slate-400">-</span>
-                                    )}
-                                  </td>
-                                  <td className="p-3 text-slate-700 font-medium max-w-xs truncate">
-                                    {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
-                                  </td>
-                                  <td className="p-3 text-center">
-                                    <div className="space-y-0.5 text-[10px]">
-                                      <span className="block font-bold text-emerald-700">
-                                        Trener: {(b.suplementacja_trener || []).length} poz.
-                                      </span>
-                                      <span className="block font-bold text-sky-700">
-                                        Klubowicz: {(b.suplementacja_klubowicz || []).length} poz.
-                                      </span>
+                                    <div className="text-[9px] text-slate-400 font-normal sm:hidden mt-0.5">
+                                      {b.interpretacja ? "✓ Zinterpretowane" : "Oczekuje"}
                                     </div>
                                   </td>
-                                  <td className="p-3 text-center">
-                                    <div className="flex items-center justify-center gap-1.5">
+
+                                  <td className="p-2.5 sm:p-3 text-center">
+                                    <div className="inline-flex items-center justify-center gap-1.5 flex-wrap">
+                                      {pdfList.length > 0 && (
+                                        <span className="bg-sky-100 text-sky-900 font-black px-2 py-0.5 rounded-lg text-[10px]">
+                                          📄 {pdfList.length} PDF
+                                        </span>
+                                      )}
+                                      {photoCount > 0 && (
+                                        <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-lg text-[10px]">
+                                          📷 {photoCount} zdj.
+                                        </span>
+                                      )}
+                                      {pdfList.length === 0 && photoCount === 0 && (
+                                        <span className="text-slate-400 text-[10px] italic">-</span>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  <td className="p-2.5 sm:p-3 text-slate-700 font-medium hidden sm:table-cell max-w-xs truncate">
+                                    {b.interpretacja || <span className="text-slate-400 italic">Oczekuje na interpretację trenera...</span>}
+                                  </td>
+
+                                  <td className="p-2.5 sm:p-3 text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-1 sm:gap-1.5">
                                       <button
+                                        type="button"
                                         onClick={() => {
                                           setSelectedBadanieDetail(b);
                                           setIsDetailViewOpen(true);
                                           markInterpretationAsRead(b.id);
                                         }}
-                                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2.5 py-1.5 rounded-xl transition-all shadow-xs text-xs cursor-pointer"
+                                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[10px] sm:text-xs px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg sm:rounded-xl transition-all shadow-xs cursor-pointer inline-flex items-center gap-1"
                                         title="Otwórz szczegóły"
                                       >
-                                        🔍 Podgląd
+                                        <span>Podgląd</span> <span>➔</span>
                                       </button>
 
-                                      <button
-                                        onClick={() => handleEditBadanie(b)}
-                                        className="bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-sky-200"
-                                        title="Edytuj wpis"
-                                      >
-                                        ✏️
-                                      </button>
+                                      {(appRole === 'admin' || appRole === 'trener') && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleEditBadanie(b)}
+                                            className="bg-sky-50 hover:bg-sky-100 text-sky-900 font-bold p-1 sm:p-1.5 rounded-lg border border-sky-200 transition-colors cursor-pointer text-xs"
+                                            title="Edytuj wpis"
+                                          >
+                                            ✏️
+                                          </button>
 
-                                      <button
-                                        onClick={() => handleDeleteBadanie(b.id)}
-                                        className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1.5 rounded-xl transition-colors cursor-pointer border border-rose-200"
-                                        title="Usuń wpis"
-                                      >
-                                        🗑️
-                                      </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteBadanie(b.id)}
+                                            className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold p-1 sm:p-1.5 rounded-lg border border-rose-200 transition-colors cursor-pointer text-xs"
+                                            title="Usuń wpis"
+                                          >
+                                            🗑️
+                                          </button>
+                                        </>
+                                      )}
                                     </div>
                                   </td>
                                 </tr>
@@ -4013,7 +4068,7 @@ export default function AnalizaFormyPage() {
                             })
                           ) : (
                             <tr>
-                              <td colSpan={6} className="p-8 text-center text-slate-400 italic font-bold">
+                              <td colSpan={4} className="p-8 text-center text-slate-400 italic font-bold">
                                 Brak zarejestrowanych badań krwi dla wybranego profilu.
                               </td>
                             </tr>
@@ -4369,7 +4424,7 @@ export default function AnalizaFormyPage() {
                 />
               </div>
 
-              {/* PLIKI PDF (WIELE PLIKÓW PDF JEDNOCZEŚNIE) */}
+              {/* PLIKI PDF */}
               <div className="bg-white p-4 rounded-2xl border border-sky-200 space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="font-black text-sky-950 uppercase tracking-wider block">
@@ -4431,7 +4486,7 @@ export default function AnalizaFormyPage() {
                 </label>
               </div>
 
-              {/* SEKCJE DLA TRENERA / ADMINA (UKRYTE DLA KLUBOWICZA) */}
+              {/* SEKCJE DLA TRENERA / ADMINA */}
               {(appRole === 'admin' || appRole === 'trener') && (
                 <>
                   {/* SKANY / ZDJĘCIA */}
@@ -4450,11 +4505,11 @@ export default function AnalizaFormyPage() {
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                         {badanieFormData.zdjecia.map((imgUrl, idx) => (
                           <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-sky-200 bg-slate-100 group">
-                            <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
+                            <SecureImageThumbnail src={imgUrl} alt={`Skan ${idx + 1}`} />
                             <button
                               type="button"
                               onClick={() => setBadanieFormData(prev => ({ ...prev, zdjecia: prev.zdjecia.filter((_, i) => i !== idx) }))}
-                              className="absolute top-1 right-1 bg-rose-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity"
+                              className="absolute top-1 right-1 bg-rose-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                             >
                               ✕
                             </button>
@@ -4502,7 +4557,7 @@ export default function AnalizaFormyPage() {
               {/* SEKCJA SUPLEMENTACJI */}
               <div className={`grid grid-cols-1 ${appRole === 'klubowicz' ? 'lg:grid-cols-1' : 'lg:grid-cols-2'} gap-4 pt-2 border-t border-sky-100`}>
                 
-                {/* 1. PROTOKÓŁ TRENERA (WIDOCZNY TYLKO DLA TRENERA / ADMINA) */}
+                {/* 1. PROTOKÓŁ TRENERA */}
                 {(appRole === 'admin' || appRole === 'trener') && (
                   <div className="bg-amber-50/40 p-4 rounded-2xl border border-amber-200 space-y-3">
                     <div className="flex items-center justify-between">
@@ -4656,7 +4711,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL 2: PODGLĄD SZCZEGÓŁÓW BADANIA */}
+      {/* MODAL 2: PODGLĄD SZCZEGÓŁÓW BADANIA Z NAPRAWIONYMI MINIATURKAMI ZDJĘĆ */}
       {isDetailViewOpen && selectedBadanieDetail && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 md:p-8 shadow-2xl space-y-6 my-8 border border-sky-100 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
@@ -4744,7 +4799,7 @@ export default function AnalizaFormyPage() {
               </div>
             </div>
 
-            {/* GALERIA ZDJĘĆ */}
+            {/* GALERIA ZDJĘĆ Z AUTOMATYCZNYM POBIERANIEM MINIATUREK Z BUCKETU */}
             {(selectedBadanieDetail.zdjecia || []).length > 0 && (
               <div className="space-y-2">
                 <span className="text-[11px] font-black text-sky-950 uppercase tracking-wider block">
@@ -4760,7 +4815,7 @@ export default function AnalizaFormyPage() {
                       }}
                       className="aspect-square rounded-2xl overflow-hidden border border-sky-200 bg-slate-100 cursor-pointer hover:scale-105 transition-transform relative group shadow-xs"
                     >
-                      <img src={imgUrl} alt="Skan" className="w-full h-full object-cover" />
+                      <SecureImageThumbnail src={imgUrl} alt={`Skan ${idx + 1}`} />
                       <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-bold">
                         🔍 Powiększ
                       </div>
@@ -5067,7 +5122,6 @@ export default function AnalizaFormyPage() {
           </div>
         </div>
       )}
-
       {/* MODAL: DODAWANIE / EDYCJA NAGRODY */}
       {isAddNagrodaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
