@@ -41,32 +41,134 @@ function calculateEndOfMonthDate(currentPaidUntil?: string | null): string {
 
 async function sendPushToAdmins(title: string, body: string, url: string = '/raporty/klienci') {
   try {
-    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
-    const privateKey = process.env.VAPID_PRIVATE_KEY || '';
-    const subject = process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl';
+    const publicKey = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').trim();
+    const privateKey = (process.env.VAPID_PRIVATE_KEY || '').trim();
+    let subject = (process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl').trim();
 
-    if (!publicKey || !privateKey) return;
+    if (!publicKey || !privateKey) {
+      console.error('[WebPush Error - Autopay Webhook] Brak kluczy VAPID w środowisku.');
+      return;
+    }
+
+    if (!subject.startsWith('mailto:') && !subject.startsWith('http://') && !subject.startsWith('https://')) {
+      subject = `mailto:${subject}`;
+    }
 
     webpush.setVapidDetails(subject, publicKey, privateKey);
 
-    const { data: subs, error } = await supabase
+    const targetsToSend: Array<{ subObj: any; name: string; id: number | null }> = [];
+    const seenEndpoints = new Set<string>();
+
+    const addSub = (rawSub: any, name: string, id: number | null) => {
+      if (!rawSub) return;
+      let cleanSub = rawSub;
+      if (typeof cleanSub === 'string') {
+        try { cleanSub = JSON.parse(cleanSub); } catch (e) { return; }
+      }
+      if (cleanSub?.subscription) {
+        cleanSub = typeof cleanSub.subscription === 'string' ? JSON.parse(cleanSub.subscription) : cleanSub.subscription;
+      }
+      if (!cleanSub?.endpoint || !cleanSub?.keys?.p256dh || !cleanSub?.keys?.auth) return;
+
+      if (!seenEndpoints.has(cleanSub.endpoint)) {
+        seenEndpoints.add(cleanSub.endpoint);
+        targetsToSend.push({ subObj: cleanSub, name, id });
+      }
+    };
+
+    // 1. Sprawdzenie dedykowanej tabeli push_subscriptions (rola admin lub Twój e-mail)
+    const { data: adminSubs } = await supabase
       .from('push_subscriptions')
-      .select('subscription')
-      .eq('role', 'admin');
+      .select('*')
+      .or('role.eq.admin,user_id.eq.maciejklaput@gmail.com');
 
-    if (error || !subs || subs.length === 0) return;
+    if (adminSubs && adminSubs.length > 0) {
+      for (const row of adminSubs) {
+        addSub((row as any).subscription || row, 'Administrator', null);
+      }
+    }
 
-    const payload = JSON.stringify({ title, body, url });
+    // 2. Sprawdzenie tabeli klienci dla administratora
+    const { data: adminClients } = await supabase
+      .from('klienci')
+      .select('id, push_subscription, "Imię", "Nazwisko", "E-mail", rola')
+      .or('rola.eq.admin,"E-mail".ilike.%admin%,"Imię".eq.Maciej,"E-mail".ilike.%maciejklaput%');
+
+    if (adminClients && adminClients.length > 0) {
+      for (const rawClient of adminClients) {
+        const c = rawClient as any;
+        const adminName = `${c['Imię'] || c.imie || 'Admin'} ${c['Nazwisko'] || c.nazwisko || ''}`.trim();
+        if (c.push_subscription) {
+          addSub(c.push_subscription, adminName, c.id);
+        }
+
+        const { data: extraSubs } = await supabase
+          .from('push_subscriptions')
+          .select('*')
+          .eq('user_id', String(c.id));
+
+        if (extraSubs && extraSubs.length > 0) {
+          for (const s of extraSubs) {
+            addSub((s as any).subscription || s, adminName, c.id);
+          }
+        }
+      }
+    }
+
+    if (targetsToSend.length === 0) {
+      console.warn('[WebPush Autopay] Nie odnaleziono zarejestrowanych urządzeń administratora.');
+      return;
+    }
+
+    const payload = JSON.stringify({
+      title,
+      body,
+      url,
+      icon: '/icon-192x192.png',
+      badge: '/icon-192x192.png',
+      data: { url, dateOfArrival: Date.now() }
+    });
+
+    const pushOptions = {
+      TTL: 86400,
+      urgency: 'high' as const,
+    };
+
+    const logEntries: any[] = [];
 
     await Promise.allSettled(
-      subs.map(async (entry: any) => {
-        if (entry.subscription) {
-          return webpush.sendNotification(entry.subscription, payload);
+      targetsToSend.map(async (target) => {
+        try {
+          await webpush.sendNotification(target.subObj, payload, pushOptions);
+          logEntries.push({
+            odbiorca: target.name,
+            odbiorca_id: target.id,
+            tytul: title,
+            tresc: body,
+            typ: 'PUSH_AUTOPAY_ADMIN',
+            status: 'Wysłano',
+            created_at: new Date().toISOString()
+          });
+        } catch (err: any) {
+          console.error(`[WebPush Error for ${target.name}]:`, err?.message || err);
+          logEntries.push({
+            odbiorca: target.name,
+            odbiorca_id: target.id,
+            tytul: title,
+            tresc: body,
+            typ: 'PUSH_AUTOPAY_ADMIN',
+            status: `Błąd wysyłki: ${err?.statusCode || err?.message}`,
+            created_at: new Date().toISOString()
+          });
         }
       })
     );
+
+    if (logEntries.length > 0) {
+      await supabase.from('historia_powiadomien').insert(logEntries);
+    }
   } catch (err) {
-    console.error('[WebPush Error - Autopay Webhook]:', err);
+    console.error('[WebPush Fatal Error - Autopay Webhook]:', err);
   }
 }
 
@@ -137,12 +239,13 @@ export async function POST(req: Request) {
       const gatewayResponse = transakcja.gateway_response || {};
 
       // 2. Pobranie danych klienta
-      const { data: klient } = await supabase
+      const { data: rawKlient } = await supabase
         .from('klienci')
         .select('*')
         .eq('id', transakcja.user_id)
         .single();
 
+      const klient = rawKlient as any;
       const clientName = klient
         ? `${klient['Imię'] || klient.imie || ''} ${klient['Nazwisko'] || klient.nazwisko || ''}`.trim()
         : 'Klubowicz';
@@ -304,7 +407,7 @@ export async function POST(req: Request) {
           );
         }
 
-      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M PRZEZ AUTOPAY (DO KOŃCA MIESIĄCA KALENDARZOWEGO)
+      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M PRZEZ AUTOPAY
       } else if (transakcja.type === 'contract_installment') {
         if (klient) {
           const targetPaidUntil = metadata.targetPaidUntil || calculateEndOfMonthDate(klient.umowa_oplacona_do);
@@ -408,7 +511,6 @@ export async function POST(req: Request) {
             clientUpdatePayload.Cena = metadata.cenaStr;
           }
 
-          // Weryfikacja czy zakup/przedłużenie dotyczyło umowy 12M (zawsze do końca miesiąca)
           let isContractOperation = false;
           if (metadata.umowa_oplacona_do) {
             clientUpdatePayload.umowa_oplacona_do = metadata.umowa_oplacona_do;
@@ -440,8 +542,13 @@ export async function POST(req: Request) {
               .eq('id', klient.id);
           }
 
-          // Odnotowanie informacji o przeniesionych wejściach (jeśli dotyczyło karnetu ilościowego)
+          const passTitle = metadata.passName || metadata.nazwaKarnetu || metadata.karnetNazwa || '';
           let opDescription = transakcja.gateway_response?.opis || (transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu');
+          
+          if (passTitle && !opDescription.includes(passTitle)) {
+            opDescription = `${transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu'}: ${passTitle}`;
+          }
+
           if (metadata.transferredEntries && metadata.transferredEntries > 0) {
             opDescription += ` (Przeniesiono +${metadata.transferredEntries} niewykorzystanych wejść)`;
           }
@@ -486,6 +593,7 @@ export async function POST(req: Request) {
               }]);
           }
 
+          // Powiadomienie push dla administratora o zakupie karnetu
           await sendPushToAdmins(
             transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
             `${clientName} opłacił(a) karnet: ${opDescription} (${transactionAmount.toFixed(2)} PLN)`,
