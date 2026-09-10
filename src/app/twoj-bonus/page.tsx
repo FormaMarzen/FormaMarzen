@@ -23,7 +23,7 @@ export default function TwojBonusPage() {
   const [newTierType, setNewTierType] = useState<'miesiecy' | 'wejsc' | 'cykl'>('miesiecy');
   const [isSavingTier, setIsSavingTier] = useState(false);
 
-  // Domyślne progi awaryjne, gdy karnet nie ma jeszcze zapisanych własnych
+  // Domyślne progi awaryjne
   const defaultProgiUmowa = [
     { id: 1, threshold: 3, type: 'miesiecy', reward: '10% zniżki na suplementy w barze + darmowy shake' },
     { id: 2, threshold: 6, type: 'miesiecy', reward: '2 tygodnie zamrożenia ekstra w puli + ręcznik klubowy' },
@@ -48,8 +48,8 @@ export default function TwojBonusPage() {
         }
       }
 
-      // Pobieranie katalogu karnetów
-      const { data: karnetyData } = await supabase.from('karnety').select('*');
+      // Pobieranie katalogu karnetów z tabeli katalog_karnetow
+      const { data: karnetyData } = await supabase.from('katalog_karnetow').select('*');
       if (karnetyData && karnetyData.length > 0) {
         const parsedKarnety = karnetyData.map((k: any) => {
           let meta: any = {};
@@ -103,7 +103,6 @@ export default function TwojBonusPage() {
     loadData();
   }, []);
 
-  // Obsługa zmiany wybranego karnetu w panelu admina
   const handleSelectAdminKarnet = (karnetId: string | number) => {
     setSelectedAdminKarnetId(karnetId);
     const found = karnetyCennik.find((k: any) => String(k.id) === String(karnetId));
@@ -112,7 +111,6 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Dodawanie nowego progu przez administratora
   const handleAddTier = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTierThreshold || !newTierReward.trim()) return;
@@ -130,13 +128,10 @@ export default function TwojBonusPage() {
     setNewTierReward('');
   };
 
-  // Usuwanie progu przez administratora
   const handleDeleteTier = (tierId: number) => {
-    const updatedTiers = editTiers.filter((t: any) => t.id !== tierId);
-    setEditTiers(updatedTiers);
+    setEditTiers(editTiers.filter((t: any) => t.id !== tierId));
   };
 
-  // Zapisywanie progów dla karnetu w bazie Supabase
   const handleSaveTiersToDatabase = async () => {
     if (!selectedAdminKarnetId) return;
     setIsSavingTier(true);
@@ -152,13 +147,12 @@ export default function TwojBonusPage() {
       meta.customTiers = editTiers;
 
       const { error } = await supabase
-        .from('karnety')
+        .from('katalog_karnetow')
         .update({ inne_ustawienia: JSON.stringify(meta) })
         .eq('id', selectedAdminKarnetId);
 
       if (error) throw error;
 
-      // Aktualizacja stanu lokalnego
       setKarnetyCennik(karnetyCennik.map((k: any) => {
         if (String(k.id) === String(selectedAdminKarnetId)) {
           return { ...k, customTiers: editTiers };
@@ -166,10 +160,10 @@ export default function TwojBonusPage() {
         return k;
       }));
 
-      alert("Progi i nagrody dla wybranego karnetu zostały pomyślnie zaktualizowane w bazie!");
+      alert("Progi i nagrody zostały pomyślnie zapisane w bazie Supabase dla wybranego karnetu!");
     } catch (err: any) {
       console.error("Błąd zapisu progów:", err);
-      alert("Nie udało się zapisać progów: " + (err.message || ''));
+      alert("Nie udało się zapisać w bazie: " + (err.message || ''));
     } finally {
       setIsSavingTier(false);
     }
@@ -179,13 +173,11 @@ export default function TwojBonusPage() {
     return <div className="p-12 text-center text-slate-500 font-bold uppercase text-xs">Ładowanie programu bonusowego...</div>;
   }
 
-  // Aktywny karnet użytkownika (jeśli klubowicz)
   const aktywnyKarnet = currentUser && currentUser.karnetyKlubowicza?.length > 0 ? currentUser.karnetyKlubowicza[0] : null;
   const typAktualnegoKarnetu = aktywnyKarnet?.typKarnetu || 'Na czas';
   const cyklCiągłościKlienta = currentUser?.cyklCiaglosci || 1;
   const umowaMiesiaceZaliczone = aktywnyKarnet?.rata ? parseInt(String(aktywnyKarnet.rata).match(/(\d+)/)?.[1] || '1', 10) : 1;
 
-  // Znalezienie progów dla aktywnego karnetu użytkownika w cenniku
   const matchedCennikKarnet = karnetyCennik.find((k: any) => k.nazwa?.trim().toLowerCase() === aktywnyKarnet?.nazwa?.trim().toLowerCase());
   const activeUserTiers = matchedCennikKarnet?.customTiers || defaultProgiUmowa;
 
@@ -199,12 +191,12 @@ export default function TwojBonusPage() {
             🎁 TWÓJ BONUS I PROGRAM LOJALNOŚCIOWY
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            System przeliczeń ciągłości karnetów, indywidualne tabele progów oraz nagrody w klubie Forma Marzeń.
+            System ciągłości karnetów, tabele progów oraz nagrody w klubie Forma Marzeń.
           </p>
         </div>
         {appRole === 'admin' && (
           <div className="bg-amber-100 text-amber-900 px-4 py-2 rounded-2xl text-xs font-black uppercase border border-amber-300">
-            👑 Tryb Administratora (Edycja i Zarządzanie)
+            👑 Tryb Administratora (Edycja i Baza Supabase)
           </div>
         )}
       </div>
@@ -228,11 +220,10 @@ export default function TwojBonusPage() {
             <div className="bg-white border border-sky-200 p-6 rounded-3xl shadow-sm space-y-2">
               <div className="text-xs font-bold text-slate-400 uppercase">Status bonusów</div>
               <div className="text-lg font-black text-amber-700">Aktywne progi klubowe</div>
-              <div className="text-xs text-slate-500">System automatycznie nalicza nagrody</div>
+              <div className="text-xs text-slate-500">Automatyczne naliczanie nagród</div>
             </div>
           </div>
 
-          {/* TABELA PROGÓW DLA UŻYTKOWNIKA */}
           <div className="bg-white border border-sky-200 rounded-3xl p-6 shadow-sm space-y-6">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
               <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
@@ -264,21 +255,20 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* WIDOK DLA ADMINISTRATORA / TRENERA - ZARZĄDZANIE TABELAMI I PROGAMI */}
+      {/* WIDOK DLA ADMINISTRATORA / TRENERA - EDYTOR BAZY SUPABASE */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-6">
           <div className="bg-white border border-sky-200 rounded-3xl p-6 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-100 pb-4">
               <div>
                 <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
-                  ⚙️ Edytor tabel progów i nagród dla karnetów
+                  ⚙️ Zarządzanie tabelami progów i nagród (Supabase)
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Wybierz karnet z cennika, dostosuj jego progi lojalnościowe i dodaj własne nagrody.
+                  Wybierz karnet z cennika, dodaj lub usuń progi i zapisz zmiany bezpośrednio w bazie danych.
                 </p>
               </div>
 
-              {/* Wybór karnetu */}
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-700">Wybierz karnet:</span>
                 <select
@@ -293,21 +283,18 @@ export default function TwojBonusPage() {
               </div>
             </div>
 
-            {/* TABELA AKTUALNYCH PROGÓW DLA WYBRANEGO KARNETU */}
             <div className="space-y-4">
               <h4 className="font-extrabold text-xs text-sky-900 uppercase tracking-wider">
-                Definiowane progi dla wybranego karnetu:
+                Aktualne progi dla wybranego karnetu:
               </h4>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {editTiers.map((t: any) => (
                   <div key={t.id} className="bg-sky-50/50 border border-sky-200 rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-sm">
                     <div className="flex justify-between items-start">
-                      <div>
-                        <span className="bg-sky-200 text-sky-950 text-[10px] font-black px-2.5 py-0.5 rounded-lg uppercase">
-                          Próg: {t.threshold} {t.type}
-                        </span>
-                      </div>
+                      <span className="bg-sky-200 text-sky-950 text-[10px] font-black px-2.5 py-0.5 rounded-lg uppercase">
+                        Próg: {t.threshold} {t.type}
+                      </span>
                       <button
                         onClick={() => handleDeleteTier(t.id)}
                         className="text-rose-600 hover:text-rose-800 font-bold text-xs cursor-pointer p-1"
@@ -321,17 +308,16 @@ export default function TwojBonusPage() {
                 ))}
                 {editTiers.length === 0 && (
                   <div className="col-span-3 text-center py-6 text-slate-400 text-xs italic">
-                    Brak zdefiniowanych progów dla tego karnetu. Dodaj pierwszy próg poniżej.
+                    Brak zdefiniowanych progów. Dodaj nowy próg poniżej.
                   </div>
                 )}
               </div>
 
-              {/* FORMULARZ DODAWANIA NOWEGO PROGU */}
               <form onSubmit={handleAddTier} className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 mt-4">
                 <h5 className="font-black text-xs text-slate-900 uppercase">Dodaj nowy próg i nagrodę</h5>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Wartość progi (np. 3, 6, 12)</label>
+                    <label className="text-[11px] font-bold text-slate-700">Wartość progu (np. 3, 6, 12)</label>
                     <input
                       type="number"
                       min="1"
@@ -378,7 +364,6 @@ export default function TwojBonusPage() {
                 </div>
               </form>
 
-              {/* PRZYCISK ZAPISU DO BAZY */}
               <div className="flex justify-end pt-2">
                 <button
                   type="button"
@@ -386,41 +371,9 @@ export default function TwojBonusPage() {
                   onClick={handleSaveTiersToDatabase}
                   className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-md transition-colors"
                 >
-                  {isSavingTier ? 'Zapisywanie...' : '💾 Zapisz zmiany w bazie dla tego karnetu'}
+                  {isSavingTier ? 'Zapisywanie w Supabase...' : '💾 Zapisz zmiany w bazie Supabase'}
                 </button>
               </div>
-            </div>
-          </div>
-
-          {/* LISTA KLUBOWICZÓW I ICH CYKL */}
-          <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden">
-            <div className="p-5 border-b border-sky-100 font-black text-sm text-sky-950 uppercase">
-              👥 Podgląd ciągłości i statusów klubowiczów
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-sky-50/70 border-b border-sky-200 text-[11px] font-bold text-sky-900 uppercase">
-                    <th className="py-3 px-4">Klubowicz</th>
-                    <th className="py-3 px-4">E-mail</th>
-                    <th className="py-3 px-4">Cykl Ciągłości</th>
-                    <th className="py-3 px-4">Aktywny Karnet</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-sky-100 text-xs">
-                  {allKlienci.slice(0, 15).map((klient) => {
-                    const karnet = klient.karnetyKlubowicza?.[0];
-                    return (
-                      <tr key={klient.id} className="hover:bg-sky-50/40">
-                        <td className="py-3 px-4 font-bold text-slate-900">{klient.firstName} {klient.lastName}</td>
-                        <td className="py-3 px-4 text-slate-600">{klient.email}</td>
-                        <td className="py-3 px-4 font-black text-sky-900">{klient.cyklCiaglosci} mies.</td>
-                        <td className="py-3 px-4 text-slate-700">{karnet ? karnet.nazwa : 'Brak'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
             </div>
           </div>
         </div>
