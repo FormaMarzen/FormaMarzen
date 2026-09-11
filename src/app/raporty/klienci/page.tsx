@@ -42,12 +42,23 @@ const getDaysUntilExpiry = (expiryDateStr: string | null | undefined): number | 
   return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+// KULOODPORNA IDENTYFIKACJA UMOWY 12M (ZGODNA Z ZAPISEM JSON W BAZIE I POLEM RATA)
+const isContractPassCheck = (k: any, defKarnetu?: any): boolean => {
+  if (!k && !defKarnetu) return false;
+  if (k?.isContract12M === true || k?.isContract12M === 'true') return true;
+  if (defKarnetu?.isContract12M === true || defKarnetu?.isContract12M === 'true') return true;
+  if (k?.rata && String(k.rata).includes('/ 12')) return true;
+  const nazwa = (k?.nazwa || k?.pass || defKarnetu?.nazwa || '').toLowerCase();
+  const typ = (k?.typKarnetu || k?.typ_karnetu || defKarnetu?.typ_karnetu || defKarnetu?.typKarnetu || '').toLowerCase();
+  return typ.includes('umowa') || typ.includes('12m') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12 miesięcy');
+};
+
 // KALKULATOR PRZEDŁUŻANIA UMÓW DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
 const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
   const today = new Date();
   let base = today;
   if (baseDateStr && baseDateStr !== '-') {
-    const [y, m, d] = baseDateStr.split('-').map(Number);
+    const [y, m, d] = String(baseDateStr).split('-').map(Number);
     if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
       const parsed = new Date(y, m - 1, d);
       if (parsed > today) base = parsed;
@@ -504,6 +515,7 @@ export default function KlienciPage() {
 
   const [isEditProfileInfoOpen, setIsEditProfileInfoOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isSubmittingRef = useRef(false);
 
   const [activeZapisyTab, setActiveZapisyTab] = useState<'nadchodzace' | 'historia_zajec' | 'ruchy' | 'zawieszenia'>('nadchodzace');
 
@@ -788,151 +800,161 @@ export default function KlienciPage() {
   };
 
   const handleWypiszZajecia = async (zajecieItem: any) => {
-    if (!profileClient) return;
+    if (!profileClient || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
+    try {
+      const zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
 
-    let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    if (zwrocicWejscie) {
-      // Zwracamy wejście na aktualny aktywny karnet ilościowy (zwiększając pulę bez limitu, np. 2/1)
-      const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-      if (passIndex !== -1) {
-        const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
-        karnetyZaktualizowane[passIndex] = {
-          ...karnetyZaktualizowane[passIndex],
-          pozostaloWejsc: currentRemaining + 1,
-          zeroEntriesGraceUntil: null,
-          statusTekst: karnetyZaktualizowane[passIndex].waznyDo ? `Ważny do: ${karnetyZaktualizowane[passIndex].waznyDo}` : 'Aktywny'
-        };
+      let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      if (zwrocicWejscie) {
+        const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
+          karnetyZaktualizowane[passIndex] = {
+            ...karnetyZaktualizowane[passIndex],
+            pozostaloWejsc: currentRemaining + 1,
+            zeroEntriesGraceUntil: null,
+            statusTekst: karnetyZaktualizowane[passIndex].waznyDo ? `Ważny do: ${karnetyZaktualizowane[passIndex].waznyDo}` : 'Aktywny'
+          };
+        }
       }
-    }
 
-    if (String(zajecieItem.classKey || '').startsWith('auto_')) {
-      const grafikId = String(zajecieItem.classKey).replace('auto_', '');
-      await supabase
-        .from('automatyczne_zapisy')
-        .delete()
-        .eq('grafik_id', grafikId)
-        .eq('klient_id', profileClient.id);
-    }
-
-    if (zajecieItem.classKey && !String(zajecieItem.classKey).startsWith('auto_')) {
-      await supabase
-        .from('zapisy_zajec')
-        .delete()
-        .eq('class_key', zajecieItem.classKey)
-        .eq('klient_id', profileClient.id);
-
-      await promoteWaitlistForClass(zajecieItem.classKey);
-    }
-
-    const sigToRemove = normalizeClassSignature(zajecieItem.data, zajecieItem.zajecia);
-    const stareNadchodzace = safeJsonParse(profileClient.zapisyNadchodzace, []);
-    const uaktualnioneNadchodzace = stareNadchodzace.filter((z: any) => {
-      const itemSig = normalizeClassSignature(z.data, z.zajecia);
-      return z.id !== zajecieItem.id && z.classKey !== zajecieItem.classKey && itemSig !== sigToRemove;
-    });
-
-    const nowyWypis = {
-      ...zajecieItem,
-      id: Date.now(),
-      wypisujacy: '🛡️ Trener / Klub (Panel)',
-      data_operacji: new Date().toISOString()
-    };
-    const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
-    const uaktualnioneWypisy = [nowyWypis, ...stareWypisy];
-
-    await supabase.from('klienci').update({
-      karnetyKlubowicza: karnetyZaktualizowane,
-      zapisyNadchodzace: uaktualnioneNadchodzace,
-      zapisyWypisy: uaktualnioneWypisy
-    }).eq('id', profileClient.id);
-
-    const classDetails = findClassDetailsInGrafik(zajecieItem.classKey, zapisaneZajecia, jednorazoweZajecia, nadpisaneZajeciaDni);
-    const sessionName = classDetails ? classDetails.title : zajecieItem.zajecia;
-    const sessionDate = classDetails ? `${classDetails.fullDateFormatted} ${classDetails.timeFormatted}` : zajecieItem.data;
-
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: 'zajecia_wypis',
-      kwota: null,
-      class_key: zajecieItem.classKey || null,
-      opis: `${profileClient.firstName} ${profileClient.lastName} - Wypisanie z treningu przez klub: ${sessionName} (${sessionDate}).${zwrocicWejscie ? ' Zwrócono 1 wejście do puli.' : ''}`
-    }]);
-
-    await loadData(profileClient.id);
-  };
-
-  const handleWypiszWszystkieNadchodzace = async (upcomingItems: any[]) => {
-    if (!profileClient || !upcomingItems || upcomingItems.length === 0) return;
-
-    if (!confirm(`Czy na pewno chcesz wypisać klubowicza ze WSZYSTKICH (${upcomingItems.length}) nadchodzących zajęć?`)) {
-      return;
-    }
-
-    const zwrocicWejscia = confirm(`Czy zwrócić klubowiczowi wejścia na karnet za anulowane rezerwacje (${upcomingItems.length} wejść)?`);
-
-    let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    if (zwrocicWejscia) {
-      const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-      if (passIndex !== -1) {
-        const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
-        karnetyZaktualizowane[passIndex] = {
-          ...karnetyZaktualizowane[passIndex],
-          pozostaloWejsc: currentRemaining + upcomingItems.length,
-          zeroEntriesGraceUntil: null,
-          statusTekst: karnetyZaktualizowane[passIndex].waznyDo ? `Ważny do: ${karnetyZaktualizowane[passIndex].waznyDo}` : 'Aktywny'
-        };
-      }
-    }
-
-    const noweWypisy: any[] = [];
-
-    for (const item of upcomingItems) {
-      if (String(item.classKey || '').startsWith('auto_')) {
-        const grafikId = String(item.classKey).replace('auto_', '');
+      if (String(zajecieItem.classKey || '').startsWith('auto_')) {
+        const grafikId = String(zajecieItem.classKey).replace('auto_', '');
         await supabase
           .from('automatyczne_zapisy')
           .delete()
           .eq('grafik_id', grafikId)
           .eq('klient_id', profileClient.id);
-      } else if (item.classKey) {
+      }
+
+      if (zajecieItem.classKey && !String(zajecieItem.classKey).startsWith('auto_')) {
         await supabase
           .from('zapisy_zajec')
           .delete()
-          .eq('class_key', item.classKey)
+          .eq('class_key', zajecieItem.classKey)
           .eq('klient_id', profileClient.id);
 
-        await promoteWaitlistForClass(item.classKey);
+        await promoteWaitlistForClass(zajecieItem.classKey);
       }
 
-      noweWypisy.push({
-        ...item,
-        id: Date.now() + Math.random(),
-        wypisujacy: '🛡️ Trener / Klub (Wypis masowy)',
-        data_operacji: new Date().toISOString()
+      const sigToRemove = normalizeClassSignature(zajecieItem.data, zajecieItem.zajecia);
+      const stareNadchodzace = safeJsonParse(profileClient.zapisyNadchodzace, []);
+      const uaktualnioneNadchodzace = stareNadchodzace.filter((z: any) => {
+        const itemSig = normalizeClassSignature(z.data, z.zajecia);
+        return z.id !== zajecieItem.id && z.classKey !== zajecieItem.classKey && itemSig !== sigToRemove;
       });
+
+      const nowyWypis = {
+        ...zajecieItem,
+        id: Date.now(),
+        wypisujacy: '🛡️ Trener / Klub (Panel)',
+        data_operacji: new Date().toISOString()
+      };
+      const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
+      const uaktualnioneWypisy = [nowyWypis, ...stareWypisy];
+
+      await supabase.from('klienci').update({
+        karnetyKlubowicza: karnetyZaktualizowane,
+        zapisyNadchodzace: uaktualnioneNadchodzace,
+        zapisyWypisy: uaktualnioneWypisy
+      }).eq('id', profileClient.id);
+
+      const classDetails = findClassDetailsInGrafik(zajecieItem.classKey, zapisaneZajecia, jednorazoweZajecia, nadpisaneZajeciaDni);
+      const sessionName = classDetails ? classDetails.title : zajecieItem.zajecia;
+      const sessionDate = classDetails ? `${classDetails.fullDateFormatted} ${classDetails.timeFormatted}` : zajecieItem.data;
+
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: 'zajecia_wypis',
+        kwota: null,
+        class_key: zajecieItem.classKey || null,
+        opis: `${profileClient.firstName} ${profileClient.lastName} - Wypisanie z treningu przez klub: ${sessionName} (${sessionDate}).${zwrocicWejscie ? ' Zwrócono 1 wejście do puli.' : ''}`
+      }]);
+
+      await loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
+  };
+
+  const handleWypiszWszystkieNadchodzace = async (upcomingItems: any[]) => {
+    if (!profileClient || !upcomingItems || upcomingItems.length === 0 || isSubmittingRef.current) return;
+
+    if (!confirm(`Czy na pewno chcesz wypisać klubowicza ze WSZYSTKICH (${upcomingItems.length}) nadchodzących zajęć?`)) {
+      return;
     }
 
-    const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
-    const uaktualnioneWypisy = [...noweWypisy, ...stareWypisy];
+    isSubmittingRef.current = true;
+    try {
+      const zwrocicWejscia = confirm(`Czy zwrócić klubowiczowi wejścia na karnet za anulowane rezerwacje (${upcomingItems.length} wejść)?`);
 
-    await supabase.from('klienci').update({
-      karnetyKlubowicza: karnetyZaktualizowane,
-      zapisyNadchodzace: [],
-      zapisyWypisy: uaktualnioneWypisy
-    }).eq('id', profileClient.id);
+      let karnetyZaktualizowane = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      if (zwrocicWejscia) {
+        const passIndex = karnetyZaktualizowane.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+        if (passIndex !== -1) {
+          const currentRemaining = parseInt(karnetyZaktualizowane[passIndex].pozostaloWejsc, 10) || 0;
+          karnetyZaktualizowane[passIndex] = {
+            ...karnetyZaktualizowane[passIndex],
+            pozostaloWejsc: currentRemaining + upcomingItems.length,
+            zeroEntriesGraceUntil: null,
+            statusTekst: karnetyZaktualizowane[passIndex].waznyDo ? `Ważny do: ${karnetyZaktualizowane[passIndex].waznyDo}` : 'Aktywny'
+          };
+        }
+      }
 
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: 'zajecia_wypis',
-      kwota: null,
-      opis: `${profileClient.firstName} ${profileClient.lastName} - Masowe wypisanie ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów) przez klub.${zwrocicWejscia ? ` Zwrócono ${upcomingItems.length} wejść do puli.` : ''}`
-    }]);
+      const noweWypisy: any[] = [];
 
-    alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
-    await loadData(profileClient.id);
+      for (const item of upcomingItems) {
+        if (String(item.classKey || '').startsWith('auto_')) {
+          const grafikId = String(item.classKey).replace('auto_', '');
+          await supabase
+            .from('automatyczne_zapisy')
+            .delete()
+            .eq('grafik_id', grafikId)
+            .eq('klient_id', profileClient.id);
+        } else if (item.classKey) {
+          await supabase
+            .from('zapisy_zajec')
+            .delete()
+            .eq('class_key', item.classKey)
+            .eq('klient_id', profileClient.id);
+
+          await promoteWaitlistForClass(item.classKey);
+        }
+
+        noweWypisy.push({
+          ...item,
+          id: Date.now() + Math.random(),
+          wypisujacy: '🛡️ Trener / Klub (Wypis masowy)',
+          data_operacji: new Date().toISOString()
+        });
+      }
+
+      const stareWypisy = safeJsonParse(profileClient.zapisyWypisy, []);
+      const uaktualnioneWypisy = [...noweWypisy, ...stareWypisy];
+
+      await supabase.from('klienci').update({
+        karnetyKlubowicza: karnetyZaktualizowane,
+        zapisyNadchodzace: [],
+        zapisyWypisy: uaktualnioneWypisy
+      }).eq('id', profileClient.id);
+
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: 'zajecia_wypis',
+        kwota: null,
+        opis: `${profileClient.firstName} ${profileClient.lastName} - Masowe wypisanie ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów) przez klub.${zwrocicWejscia ? ` Zwrócono ${upcomingItems.length} wejść do puli.` : ''}`
+      }]);
+
+      alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
+      await loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
   };
+
   const loadData = async (specificClientId?: number) => {
     const [
       klienciData,
@@ -1024,11 +1046,14 @@ export default function KlienciPage() {
         let karnetyZmienione = false;
         parsedKarnety = parsedKarnety.map((k: any) => {
           const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
-          const isContract = k.isContract12M || pasujacyDef?.isContract12M || pasujacyDef?.typ_karnetu === 'Umowa 12 miesięcy';
+          const isContract = isContractPassCheck(k, pasujacyDef);
           const isTimeBased = pasujacyDef?.typ_karnetu === 'Na czas';
 
           if (isContract) {
-            k.isContract12M = true;
+            if (!k.isContract12M) {
+              k.isContract12M = true;
+              karnetyZmienione = true;
+            }
             k.pozostaloWejsc = null;
             k.poczatkoweWejsc = null;
             if (k.contractSuspensionDaysLeft === undefined) {
@@ -1092,7 +1117,7 @@ export default function KlienciPage() {
         let finalKarnety = [];
 
         for (const k of parsedKarnety) {
-          if (k.isContract12M) {
+          if (isContractPassCheck(k)) {
             finalKarnety.push(k);
             continue;
           }
@@ -1313,102 +1338,108 @@ export default function KlienciPage() {
 
   const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     
-    let poczatkoweKarnety: any[] = [];
-    let cenaKarnetu = '0.00 PLN';
-    let cenaWartosc = 0;
-    let dataWygasnieciaStr: string | null = null;
-    let initialUmowaOplaconaDo: string | null = null;
+    try {
+      let poczatkoweKarnety: any[] = [];
+      let cenaKarnetu = '0.00 PLN';
+      let cenaWartosc = 0;
+      let dataWygasnieciaStr: string | null = null;
+      let initialUmowaOplaconaDo: string | null = null;
 
-    if (newClient.selectedPass) {
-      const defKarnetu = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
-      const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
-      const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
-      
-      if (isContract) {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth() + 1;
-        const lastDay = new Date(year, month, 0).getDate();
-        initialUmowaOplaconaDo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-        dataWygasnieciaStr = initialUmowaOplaconaDo;
-      } else {
-        dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+      if (newClient.selectedPass) {
+        const defKarnetu = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
+        const isContract = isContractPassCheck(null, defKarnetu) || newClient.isContractMigration;
+        const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
+        
+        if (isContract) {
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = now.getMonth() + 1;
+          const lastDay = new Date(year, month, 0).getDate();
+          initialUmowaOplaconaDo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+          dataWygasnieciaStr = initialUmowaOplaconaDo;
+        } else {
+          dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+        }
+
+        if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
+          cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
+        } else {
+          cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+        }
+        cenaKarnetu = `${cenaWartosc.toFixed(2)} PLN`;
+
+        let metaDef: Record<string, any> = {};
+        try { metaDef = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+        const initialWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaDef.ilosc_wejsc || metaDef.iloscTreningow || null) : null);
+        const parsedInitialWejscia = initialWejsciaVal !== null ? parseInt(initialWejsciaVal, 10) : null;
+
+        poczatkoweKarnety.push({
+          id: Date.now(),
+          nazwa: newClient.selectedPass,
+          waznyDo: dataWygasnieciaStr,
+          cena: cenaKarnetu,
+          znizkaProcentowa: '',
+          rata: isContract ? (newClient.customRata || '0 / 12') : '1 / 1',
+          statusTekst: isContract ? `Umowa 12M (Rata ${newClient.customRata || '0 / 12'})` : `Ważny do: ${dataWygasnieciaStr}`,
+          isContract12M: isContract,
+          contractSuspensionDaysLeft: isContract ? (parseInt(newClient.customSuspensionDays, 10) || 30) : undefined,
+          blokadaDo: null,
+          powodBlokady: null,
+          zawieszonyOd: null,
+          zawieszonyDo: null,
+          historiaZawieszen: [],
+          pozostaloWejsc: parsedInitialWejscia,
+          poczatkoweWejsc: parsedInitialWejscia
+        });
       }
 
-      if (isContract && newClient.customContractPrice && newClient.customContractPrice.trim() !== '') {
-        cenaWartosc = parseFloat(newClient.customContractPrice.replace(/[^0-9.]/g, '')) || 0;
-      } else {
-        cenaWartosc = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+      const wplataWlasna = parseFloat(newClient.wallet) || 0;
+      const poczatkowyStan = cenaWartosc > 0 ? (wplataWlasna - cenaWartosc) : wplataWlasna;
+      const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
+      const newClientId = Date.now();
+
+      const insertPayload: any = {
+        id: newClientId,
+        Imię: newClient.firstName,
+        Nazwisko: newClient.lastName,
+        "Numer tel.": newClient.phone,
+        "E-mail": newClient.email,
+        Cena: cenaKarnetu,
+        Wygasa: dataWygasnieciaStr,
+        Portfel: poczatkowyStanStr,
+        Zarejestrowany: newClient.registered,
+        karnetyKlubowicza: poczatkoweKarnety,
+        umowa_oplacona_do: initialUmowaOplaconaDo
+      };
+
+      const { error } = await supabase.from('klienci').insert([insertPayload]);
+
+      if (!error && newClient.selectedPass) {
+        await supabase.from('transakcje').insert([{
+          klient_id: newClientId,
+          typ_operacji: 'zakup_karnetu',
+          kwota: cenaWartosc > 0 ? -cenaWartosc : 0,
+          opis: cenaWartosc > 0 
+            ? `Pierwszy karnet: ${newClient.selectedPass} (Zadłużono portfel)` 
+            : `Pierwszy karnet: ${newClient.selectedPass} (Karnet bezpłatny / 0.00 PLN)`
+        }]);
       }
-      cenaKarnetu = `${cenaWartosc.toFixed(2)} PLN`;
 
-      let metaDef: Record<string, any> = {};
-      try { metaDef = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-      const initialWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaDef.ilosc_wejsc || metaDef.iloscTreningow || null) : null);
-      const parsedInitialWejscia = initialWejsciaVal !== null ? parseInt(initialWejsciaVal, 10) : null;
-
-      poczatkoweKarnety.push({
-        id: Date.now(),
-        nazwa: newClient.selectedPass,
-        waznyDo: dataWygasnieciaStr,
-        cena: cenaKarnetu,
-        znizkaProcentowa: '',
-        rata: isContract ? (newClient.customRata || '0 / 12') : '1 / 1',
-        statusTekst: isContract ? `Umowa 12M (Rata ${newClient.customRata || '0 / 12'})` : `Ważny do: ${dataWygasnieciaStr}`,
-        isContract12M: isContract,
-        contractSuspensionDaysLeft: isContract ? (parseInt(newClient.customSuspensionDays, 10) || 30) : undefined,
-        blokadaDo: null,
-        powodBlokady: null,
-        zawieszonyOd: null,
-        zawieszonyDo: null,
-        historiaZawieszen: [],
-        pozostaloWejsc: parsedInitialWejscia,
-        poczatkoweWejsc: parsedInitialWejscia
-      });
-    }
-
-    const wplataWlasna = parseFloat(newClient.wallet) || 0;
-    const poczatkowyStan = cenaWartosc > 0 ? (wplataWlasna - cenaWartosc) : wplataWlasna;
-    const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
-    const newClientId = Date.now();
-
-    const insertPayload: any = {
-      id: newClientId,
-      Imię: newClient.firstName,
-      Nazwisko: newClient.lastName,
-      "Numer tel.": newClient.phone,
-      "E-mail": newClient.email,
-      Cena: cenaKarnetu,
-      Wygasa: dataWygasnieciaStr,
-      Portfel: poczatkowyStanStr,
-      Zarejestrowany: newClient.registered,
-      karnetyKlubowicza: poczatkoweKarnety,
-      umowa_oplacona_do: initialUmowaOplaconaDo
-    };
-
-    const { error } = await supabase.from('klienci').insert([insertPayload]);
-
-    if (!error && newClient.selectedPass) {
-      await supabase.from('transakcje').insert([{
-        klient_id: newClientId,
-        typ_operacji: 'zakup_karnetu',
-        kwota: cenaWartosc > 0 ? -cenaWartosc : 0,
-        opis: cenaWartosc > 0 
-          ? `Pierwszy karnet: ${newClient.selectedPass} (Zadłużono portfel)` 
-          : `Pierwszy karnet: ${newClient.selectedPass} (Karnet bezpłatny / 0.00 PLN)`
-      }]);
-    }
-
-    if (error) {
-      alert("Wystąpił błąd podczas dodawania klienta: " + error.message);
-    } else {
-      setIsAddModalOpen(false);
-      setNewClient({
-        firstName: '', lastName: '', phone: '', email: '', price: '0.00 PLN', wallet: '0.00 PLN',
-        registered: todayStr, selectedPass: '', isContractMigration: false, customRata: '0 / 12', customSuspensionDays: '30', customContractPrice: ''
-      });
-      loadData();
+      if (error) {
+        alert("Wystąpił błąd podczas dodawania klienta: " + error.message);
+      } else {
+        setIsAddModalOpen(false);
+        setNewClient({
+          firstName: '', lastName: '', phone: '', email: '', price: '0.00 PLN', wallet: '0.00 PLN',
+          registered: todayStr, selectedPass: '', isContractMigration: false, customRata: '0 / 12', customSuspensionDays: '30', customContractPrice: ''
+        });
+        loadData();
+      }
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
@@ -1423,99 +1454,114 @@ export default function KlienciPage() {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingClient) return;
+    if (!editingClient || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const rawKeys = editingClient._rawKeys || [];
-    const payload: Record<string, any> = {};
+    try {
+      const rawKeys = editingClient._rawKeys || [];
+      const payload: Record<string, any> = {};
 
-    if (rawKeys.includes('Imię')) payload['Imię'] = editingClient.firstName;
-    else if (rawKeys.includes('firstName')) payload['firstName'] = editingClient.firstName;
-    else payload['Imię'] = editingClient.firstName;
+      if (rawKeys.includes('Imię')) payload['Imię'] = editingClient.firstName;
+      else if (rawKeys.includes('firstName')) payload['firstName'] = editingClient.firstName;
+      else payload['Imię'] = editingClient.firstName;
 
-    if (rawKeys.includes('Nazwisko')) payload['Nazwisko'] = editingClient.lastName;
-    else if (rawKeys.includes('lastName')) payload['lastName'] = editingClient.lastName;
-    else payload['Nazwisko'] = editingClient.lastName;
+      if (rawKeys.includes('Nazwisko')) payload['Nazwisko'] = editingClient.lastName;
+      else if (rawKeys.includes('lastName')) payload['lastName'] = editingClient.lastName;
+      else payload['Nazwisko'] = editingClient.lastName;
 
-    const { error } = await supabase.from('klienci').update(payload).eq('id', editingClient.id);
-    if (error) {
-      alert(`Błąd zapisu edycji: ${error.message}`);
-      return;
+      const { error } = await supabase.from('klienci').update(payload).eq('id', editingClient.id);
+      if (error) {
+        alert(`Błąd zapisu edycji: ${error.message}`);
+        return;
+      }
+      setEditingClient(null);
+      loadData();
+    } finally {
+      isSubmittingRef.current = false;
     }
-    setEditingClient(null);
-    loadData();
   };
 
   const handleSaveProfileInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profileClient) return;
+    if (!profileClient || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const rawKeys = profileClient._rawKeys || [];
-    const payload: Record<string, any> = {};
+    try {
+      const rawKeys = profileClient._rawKeys || [];
+      const payload: Record<string, any> = {};
 
-    if (rawKeys.includes('Imię')) payload['Imię'] = profileClient.firstName;
-    else if (rawKeys.includes('firstName')) payload['firstName'] = profileClient.firstName;
-    else payload['Imię'] = profileClient.firstName;
+      if (rawKeys.includes('Imię')) payload['Imię'] = profileClient.firstName;
+      else if (rawKeys.includes('firstName')) payload['firstName'] = profileClient.firstName;
+      else payload['Imię'] = profileClient.firstName;
 
-    if (rawKeys.includes('Nazwisko')) payload['Nazwisko'] = profileClient.lastName;
-    else if (rawKeys.includes('lastName')) payload['lastName'] = profileClient.lastName;
-    else payload['Nazwisko'] = profileClient.lastName;
+      if (rawKeys.includes('Nazwisko')) payload['Nazwisko'] = profileClient.lastName;
+      else if (rawKeys.includes('lastName')) payload['lastName'] = profileClient.lastName;
+      else payload['Nazwisko'] = profileClient.lastName;
 
-    if (rawKeys.includes('Numer tel.')) payload['Numer tel.'] = profileClient.phone;
-    else if (rawKeys.includes('telefon')) payload['telefon'] = profileClient.phone;
-    else if (rawKeys.includes('phone')) payload['phone'] = profileClient.phone;
-    else payload['Numer tel.'] = profileClient.phone;
+      if (rawKeys.includes('Numer tel.')) payload['Numer tel.'] = profileClient.phone;
+      else if (rawKeys.includes('telefon')) payload['telefon'] = profileClient.phone;
+      else if (rawKeys.includes('phone')) payload['phone'] = profileClient.phone;
+      else payload['Numer tel.'] = profileClient.phone;
 
-    if (rawKeys.includes('E-mail')) payload['E-mail'] = profileClient.email;
-    else if (rawKeys.includes('email')) payload['email'] = profileClient.email;
-    else payload['E-mail'] = profileClient.email;
+      if (rawKeys.includes('E-mail')) payload['E-mail'] = profileClient.email;
+      else if (rawKeys.includes('email')) payload['email'] = profileClient.email;
+      else payload['E-mail'] = profileClient.email;
 
-    if (rawKeys.includes('płeć')) payload['płeć'] = profileClient.gender;
-    else if (rawKeys.includes('plec')) payload['plec'] = profileClient.gender;
-    else if (rawKeys.includes('gender')) payload['gender'] = profileClient.gender;
-    else payload['płeć'] = profileClient.gender;
+      if (rawKeys.includes('płeć')) payload['płeć'] = profileClient.gender;
+      else if (rawKeys.includes('plec')) payload['plec'] = profileClient.gender;
+      else if (rawKeys.includes('gender')) payload['gender'] = profileClient.gender;
+      else payload['płeć'] = profileClient.gender;
 
-    if (rawKeys.includes('Urodziny')) payload['Urodziny'] = profileClient.birthDate;
-    else if (rawKeys.includes('urodziny')) payload['urodziny'] = profileClient.birthDate;
-    else if (rawKeys.includes('birthDate')) payload['birthDate'] = profileClient.birthDate;
-    else payload['Urodziny'] = profileClient.birthDate;
+      if (rawKeys.includes('Urodziny')) payload['Urodziny'] = profileClient.birthDate;
+      else if (rawKeys.includes('urodziny')) payload['urodziny'] = profileClient.birthDate;
+      else if (rawKeys.includes('birthDate')) payload['birthDate'] = profileClient.birthDate;
+      else payload['Urodziny'] = profileClient.birthDate;
 
-    const { error } = await supabase.from('klienci').update(payload).eq('id', profileClient.id);
-    if (error) {
-      alert(`Błąd zapisu danych klubowicza w Supabase: ${error.message}`);
-      return;
-    }
-
-    if (profileClient.isTrainer && profileClient.email) {
-      await supabase.from('trenerzy').update({
-        imie_nazwisko: `${profileClient.firstName} ${profileClient.lastName}`.trim(),
-        telefon: profileClient.phone
-      }).eq('email', profileClient.email);
-    }
-
-    setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, ...profileClient } : c));
-    setIsEditProfileInfoOpen(false);
-    alert("Dane klubowicza zostały pomyślnie zaktualizowane w bazie!");
-    loadData(profileClient.id);
-  };
-
-  const handleDeleteClient = async (id: number) => {
-    if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
-      const { data: userSignups } = await supabase.from('zapisy_zajec').select('class_key').eq('klient_id', id);
-      await supabase.from('zapisy_zajec').delete().eq('klient_id', id);
-      if (userSignups) {
-        for (const s of userSignups) {
-          await promoteWaitlistForClass(s.class_key);
-        }
+      const { error } = await supabase.from('klienci').update(payload).eq('id', profileClient.id);
+      if (error) {
+        alert(`Błąd zapisu danych klubowicza w Supabase: ${error.message}`);
+        return;
       }
-      await supabase.from('transakcje').delete().eq('klient_id', id);
-      await supabase.from('automatyczne_zapisy').delete().eq('klient_id', id);
-      await supabase.from('klienci').delete().eq('id', id);
-      
-      setTableActionClient(null);
-      setOpenDropdownId(null);
-      setActionMenuPos(null);
-      if (profileClient && profileClient.id === id) setProfileClient(null);
-      loadData();
+
+      if (profileClient.isTrainer && profileClient.email) {
+        await supabase.from('trenerzy').update({
+          imie_nazwisko: `${profileClient.firstName} ${profileClient.lastName}`.trim(),
+          telefon: profileClient.phone
+        }).eq('email', profileClient.email);
+      }
+
+      setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, ...profileClient } : c));
+      setIsEditProfileInfoOpen(false);
+      alert("Dane klubowicza zostały pomyślnie zaktualizowane w bazie!");
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
+  };
+  const handleDeleteClient = async (id: number) => {
+    if (isSubmittingRef.current) return;
+    if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
+      isSubmittingRef.current = true;
+      try {
+        const { data: userSignups } = await supabase.from('zapisy_zajec').select('class_key').eq('klient_id', id);
+        await supabase.from('zapisy_zajec').delete().eq('klient_id', id);
+        if (userSignups) {
+          for (const s of userSignups) {
+            await promoteWaitlistForClass(s.class_key);
+          }
+        }
+        await supabase.from('transakcje').delete().eq('klient_id', id);
+        await supabase.from('automatyczne_zapisy').delete().eq('klient_id', id);
+        await supabase.from('klienci').delete().eq('id', id);
+        
+        setTableActionClient(null);
+        setOpenDropdownId(null);
+        setActionMenuPos(null);
+        if (profileClient && profileClient.id === id) setProfileClient(null);
+        loadData();
+      } finally {
+        isSubmittingRef.current = false;
+      }
     }
   };
 
@@ -1572,132 +1618,144 @@ export default function KlienciPage() {
         const { error } = await supabase.from('klienci').update({ avatarUrl: compressedDataUrl }).eq('id', profileClient.id);
         
         if (error) {
-            alert(`Błąd zapisu w bazie Supabase: ${error.message}`);
+          alert(`Błąd zapisu w bazie Supabase: ${error.message}`);
         }
       };
       img.src = event.target?.result as string;
     };
     reader.readAsDataURL(file);
   };
-  // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
+
+  // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ ZAWSZE DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
-    if (!profileClient || !extendPassTarget) return;
+    if (!profileClient || !extendPassTarget || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-    const isContract = extendPassTarget.isContract12M || defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
-    const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
+    try {
+      const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
+      const isContract = isContractPassCheck(extendPassTarget, defKarnetu);
+      const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
 
-    let bazowaCena = 0;
-    if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
-      bazowaCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
-    } else {
-      bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
-    }
-
-    // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
-    const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
-    
-    const cenaPoRabacie = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
-    const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
-    const kwotaKarnetu = cenaPoRabacie;
-
-    // ZAWSZE DO KOŃCA MIESIĄCA KALENDARZOWEGO DLA UMÓW 12M
-    let targetExpiryDate = extendNewDate;
-    if (isContract) {
-      targetExpiryDate = getContractEndOfMonthDate(extendPassTarget.waznyDo);
-    }
-
-    let nowyStanStr = profileClient.wallet;
-    let logKwota = 0;
-    let logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Zapłacono z góry / Gotówka)`;
-
-    if (paymentMethod === 'later' && kwotaKarnetu > 0) {
-      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-      const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
-      nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-      logKwota = -kwotaKarnetu;
-      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Obciążenie portfela - do zapłaty)`;
-    } else if (kwotaKarnetu === 0) {
-      logKwota = 0;
-      logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Karnet 0.00 PLN - portfel bez zmian)`;
-    }
-
-    let znizkaTekst = '';
-    if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
-      znizkaTekst = `(-${activeDiscount}%)`;
-    }
-
-    let updatedRata = extendPassTarget.rata || '1 / 1';
-    if (isContract) {
-      const currentRataMatch = (extendPassTarget.rata || '0 / 12').match(/(\d+)\s*\/\s*(\d+)/);
-      const currentRataNum = currentRataMatch ? parseInt(currentRataMatch[1], 10) : 0;
-      const totalRat = currentRataMatch ? parseInt(currentRataMatch[2], 10) : 12;
-      const nextRataNum = Math.min(totalRat, currentRataNum + 1);
-      updatedRata = `${nextRataNum} / ${totalRat}`;
-    }
-    let metaExt: Record<string, any> = {};
-    try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-    const extWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
-    const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
-
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.id === extendPassTarget.id) {
-        return {
-          ...k,
-          nazwa: extendSelectedNewPassName,
-          waznyDo: targetExpiryDate,
-          cena: nowaCena,
-          znizkaProcentowa: znizkaTekst,
-          rata: isContract ? updatedRata : (k.rata || '1 / 1'),
-          isContract12M: isContract,
-          statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata}) - Ważny do: ${targetExpiryDate}` : `Ważny do: ${targetExpiryDate}`,
-          pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.pozostaloWejsc || 0) + parsedExtWejscia) : k.pozostaloWejsc),
-          poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.poczatkoweWejsc || 0) + parsedExtWejscia) : k.poczatkoweWejsc),
-          zeroEntriesGraceUntil: null,
-          blokadaDo: isContract ? null : k.blokadaDo,
-          powodBlokady: isContract ? null : k.powodBlokady
-        };
+      let bazowaCena = 0;
+      if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
+        bazowaCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
+      } else {
+        bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
       }
-      return k;
-    });
 
-    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+      // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
+      const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
+      
+      const cenaPoRabacie = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
+      const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
+      const kwotaKarnetu = cenaPoRabacie;
 
-    const updatePayload: any = {
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Wygasa: latestExpiry,
-      Cena: nowaCena,
-      Portfel: nowyStanStr
-    };
-
-    if (isContract) {
-      updatePayload.umowa_oplacona_do = targetExpiryDate;
-      const isContractBlock = profileClient.powodBlokady?.toLowerCase().includes('umow') || profileClient.powodBlokady?.toLowerCase().includes('umowę');
-      if (isContractBlock) {
-        updatePayload.blokadaDo = null;
-        updatePayload.powodBlokady = null;
+      // ZAWSZE DO KOŃCA MIESIĄCA KALENDARZOWEGO DLA UMÓW 12M
+      let targetExpiryDate = extendNewDate;
+      if (isContract) {
+        targetExpiryDate = getContractEndOfMonthDate(extendPassTarget.waznyDo);
       }
+
+      let nowyStanStr = profileClient.wallet;
+      let logKwota = 0;
+      let logOpis = isContract
+        ? `Opłata raty umowy 12M: ${extendSelectedNewPassName} (opłacono do ${targetExpiryDate}) - Gotówka / Zapłacono`
+        : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Zapłacono z góry / Gotówka)`;
+
+      if (paymentMethod === 'later' && kwotaKarnetu > 0) {
+        const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+        const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
+        nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+        logKwota = -kwotaKarnetu;
+        logOpis = isContract
+          ? `Opłata raty umowy 12M: ${extendSelectedNewPassName} do ${targetExpiryDate} (Obciążenie portfela - do zapłaty)`
+          : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Obciążenie portfela - do zapłaty)`;
+      } else if (kwotaKarnetu === 0) {
+        logKwota = 0;
+        logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Karnet 0.00 PLN - portfel bez zmian)`;
+      }
+
+      let znizkaTekst = '';
+      if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
+        znizkaTekst = `(-${activeDiscount}%)`;
+      }
+
+      let updatedRata = extendPassTarget.rata || '1 / 1';
+      if (isContract) {
+        const currentRataMatch = (extendPassTarget.rata || '0 / 12').match(/(\d+)\s*\/\s*(\d+)/);
+        const currentRataNum = currentRataMatch ? parseInt(currentRataMatch[1], 10) : 0;
+        const totalRat = currentRataMatch ? parseInt(currentRataMatch[2], 10) : 12;
+        const nextRataNum = Math.min(totalRat, currentRataNum + 1);
+        updatedRata = `${nextRataNum} / ${totalRat}`;
+      }
+      let metaExt: Record<string, any> = {};
+      try { metaExt = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+      const extWejsciaVal = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaExt.ilosc_wejsc || metaExt.iloscTreningow || null) : null);
+      const parsedExtWejscia = extWejsciaVal !== null ? parseInt(extWejsciaVal, 10) : null;
+
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.id === extendPassTarget.id) {
+          return {
+            ...k,
+            nazwa: extendSelectedNewPassName,
+            waznyDo: targetExpiryDate,
+            cena: nowaCena,
+            znizkaProcentowa: znizkaTekst,
+            rata: isContract ? updatedRata : (k.rata || '1 / 1'),
+            isContract12M: isContract,
+            statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata} • Ważny do: ${targetExpiryDate})` : `Ważny do: ${targetExpiryDate}`,
+            pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.pozostaloWejsc || 0) + parsedExtWejscia) : k.pozostaloWejsc),
+            poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.poczatkoweWejsc || 0) + parsedExtWejscia) : k.poczatkoweWejsc),
+            zeroEntriesGraceUntil: null,
+            blokadaDo: isContract ? null : k.blokadaDo,
+            powodBlokady: isContract ? null : k.powodBlokady
+          };
+        }
+        return k;
+      });
+
+      const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
+      const updatePayload: any = {
+        karnetyKlubowicza: uaktualnioneKarnety,
+        Wygasa: latestExpiry,
+        Cena: nowaCena,
+        Portfel: nowyStanStr
+      };
+
+      if (isContract) {
+        updatePayload.umowa_oplacona_do = targetExpiryDate;
+        const isContractBlock = profileClient.powodBlokady?.toLowerCase().includes('umow') || 
+                                profileClient.powodBlokady?.toLowerCase().includes('umowę') ||
+                                profileClient.powodBlokady?.toLowerCase().includes('wpłat');
+        if (isContractBlock) {
+          updatePayload.blokadaDo = null;
+          updatePayload.powodBlokady = null;
+        }
+      }
+
+      await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
+
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
+        kwota: logKwota,
+        opis: `${logOpis} ${znizkaTekst}`.trim()
+      }]);
+
+      alert(paymentMethod === 'later' && kwotaKarnetu > 0 
+        ? `Karnet przedłużony! Doliczono ratę (${updatedRata}), termin ustawiono do ${targetExpiryDate} i dopisano ${kwotaKarnetu.toFixed(2)} PLN do portfela.` 
+        : `Karnet przedłużony! Doliczono ratę (${updatedRata}), termin ustawiono do ${targetExpiryDate}.`);
+      setIsExtendPassModalOpen(false);
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
     }
-
-    await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
-
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
-      kwota: logKwota,
-      opis: `${logOpis} ${znizkaTekst}`.trim()
-    }]);
-
-    alert(paymentMethod === 'later' && kwotaKarnetu > 0 
-      ? `Karnet przedłużony! Doliczono ratę (${updatedRata}) i dopisano ${kwotaKarnetu.toFixed(2)} PLN do portfela.` 
-      : `Karnet przedłużony! Doliczono ratę (${updatedRata}).`);
-    setIsExtendPassModalOpen(false);
-    loadData(profileClient.id);
   };
 
   const handleSplatZadluzenie = async () => {
-    if (!profileClient) return;
+    if (!profileClient || isSubmittingRef.current) return;
     const currentWalletNum = getWalletNumber(profileClient.wallet);
     if (currentWalletNum >= 0) {
       alert("Klubowicz nie posiada zadłużenia w portfelu.");
@@ -1709,136 +1767,151 @@ export default function KlienciPage() {
       return;
     }
 
-    const { error } = await supabase.from('klienci').update({
-      Portfel: '0.00 PLN'
-    }).eq('id', profileClient.id);
+    isSubmittingRef.current = true;
+    try {
+      const { error } = await supabase.from('klienci').update({
+        Portfel: '0.00 PLN',
+        portfel: 0.00
+      }).eq('id', profileClient.id);
 
-    if (error) {
-      alert("Błąd spłaty zadłużenia: " + error.message);
-      return;
+      if (error) {
+        alert("Błąd spłaty zadłużenia: " + error.message);
+        return;
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: 'portfel',
+        kwota: splacanaKwota,
+        opis: `Całkowita spłata zadłużenia (+${splacanaKwota.toFixed(2)} PLN) - wyzerowanie portfela`
+      }]);
+
+      setProfileClient((prev: any) => ({ ...prev, wallet: '0.00 PLN' }));
+      alert("Zadłużenie zostało spłacone. Stan portfela wynosi 0.00 PLN.");
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
     }
-
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: 'portfel',
-      kwota: splacanaKwota,
-      opis: `Całkowita spłata zadłużenia (+${splacanaKwota.toFixed(2)} PLN) - wyzerowanie portfela`
-    }]);
-
-    setProfileClient((prev: any) => ({ ...prev, wallet: '0.00 PLN' }));
-    alert("Zadłużenie zostało spłacone. Stan portfela wynosi 0.00 PLN.");
-    loadData(profileClient.id);
   };
 
   const handleAddSecondPass = async (paymentMethod: 'paid' | 'later') => {
-    if (!profileClient || !selectedPassToAdd) return;
+    if (!profileClient || !selectedPassToAdd || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
-    const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
-    const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
-    
-    let dataWygasnieciaStr = '';
-    if (isContract) {
-      dataWygasnieciaStr = getContractEndOfMonthDate(todayStr);
-    } else {
-      dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+    try {
+      const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
+      const isContract = isContractPassCheck(null, defKarnetu);
+      const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
+      
+      let dataWygasnieciaStr = '';
+      if (isContract) {
+        dataWygasnieciaStr = getContractEndOfMonthDate(todayStr);
+      } else {
+        dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
+      }
+
+      let bazowaCena = 150.00;
+      if (isContract && newPassCustomPrice && newPassCustomPrice.trim() !== '') {
+        bazowaCena = parseFloat(newPassCustomPrice.replace(/[^0-9.]/g, '')) || 0;
+      } else if (defKarnetu) {
+        bazowaCena = parseFloat(defKarnetu.cena) || 0;
+      }
+
+      // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
+      const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
+      const kwotaKarnetu = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
+      const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
+
+      let znizkaTekst = '';
+      if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
+        znizkaTekst = `(-${activeDiscount}%)`;
+      }
+
+      let metaAdd: Record<string, any> = {};
+      try { metaAdd = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
+      const limitWejscBaza = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaAdd.ilosc_wejsc || metaAdd.iloscTreningow || null) : null);
+      const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
+
+      let nowyStanStr = profileClient.wallet;
+      let logKwota = 0;
+      let logOpis = isContract
+        ? `Dodano karnet na umowę: ${selectedPassToAdd} (opłacono do ${dataWygasnieciaStr}) - Zapłacono z góry`
+        : `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Zapłacono z góry)`;
+
+      if (paymentMethod === 'later' && kwotaKarnetu > 0) {
+        const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+        const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
+        nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+        logKwota = -kwotaKarnetu;
+        logOpis = isContract
+          ? `Dodano karnet na umowę: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`
+          : `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Obciążenie portfela - do zapłaty)`;
+      } else if (kwotaKarnetu === 0) {
+        logKwota = 0;
+        logOpis = `Dodano karnet: ${selectedPassToAdd} (Karnet 0.00 PLN - portfel bez zmian)`;
+      }
+
+      const nowyKarnetObj = {
+        id: Date.now(),
+        nazwa: selectedPassToAdd,
+        waznyDo: dataWygasnieciaStr,
+        pozostaloWejsc: parsedLimitWejsc,
+        poczatkoweWejsc: parsedLimitWejsc,
+        cena: cenaObjKarnetu,
+        znizkaProcentowa: znizkaTekst,
+        rata: isContract ? (newPassCustomRata || '0 / 12') : '1 / 1',
+        statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'} • Ważny do: ${dataWygasnieciaStr})` : `Ważny do: ${dataWygasnieciaStr}`,
+        isContract12M: isContract,
+        contractSuspensionDaysLeft: isContract ? (parseInt(newPassCustomSuspensionDays, 10) || 30) : undefined,
+        blokadaDo: null,
+        powodBlokady: null,
+        zawieszonyOd: null,
+        zawieszonyDo: null,
+        historiaZawieszen: []
+      };
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = [...stareKarnety, nowyKarnetObj];
+      const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
+      const updatePayload: any = {
+        karnetyKlubowicza: uaktualnioneKarnety,
+        Wygasa: latestExpiry,
+        Cena: cenaObjKarnetu,
+        Portfel: nowyStanStr
+      };
+
+      if (isContract) {
+        updatePayload.umowa_oplacona_do = dataWygasnieciaStr;
+      }
+
+      const { error } = await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
+
+      if (error) {
+        alert(`Błąd zapisu w bazie: ${error.message}`);
+        return;
+      }
+
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: isContract ? 'zakup_umowy' : 'zakup_karnetu',
+        kwota: logKwota,
+        opis: logOpis
+      }]);
+
+      setSelectedPassToAdd('');
+      setNewPassCustomRata('0 / 12');
+      setNewPassCustomSuspensionDays('30');
+      setNewPassCustomPrice('');
+      setIsAddSecondPassModalOpen(false);
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
     }
-
-    let bazowaCena = 150.00;
-    if (isContract && newPassCustomPrice && newPassCustomPrice.trim() !== '') {
-      bazowaCena = parseFloat(newPassCustomPrice.replace(/[^0-9.]/g, '')) || 0;
-    } else if (defKarnetu) {
-      bazowaCena = parseFloat(defKarnetu.cena) || 0;
-    }
-
-    // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
-    const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
-    const kwotaKarnetu = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
-    const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
-
-    let znizkaTekst = '';
-    if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
-      znizkaTekst = `(-${activeDiscount}%)`;
-    }
-
-    let metaAdd: Record<string, any> = {};
-    try { metaAdd = JSON.parse(defKarnetu?.inne_ustawienia || '{}'); } catch(e) {}
-    const limitWejscBaza = (isContract || isTimeBased) ? null : (defKarnetu ? (defKarnetu.ilosc_wejsc || metaAdd.ilosc_wejsc || metaAdd.iloscTreningow || null) : null);
-    const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
-
-    let nowyStanStr = profileClient.wallet;
-    let logKwota = 0;
-    let logOpis = `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Zapłacono z góry)`;
-
-    if (paymentMethod === 'later' && kwotaKarnetu > 0) {
-      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-      const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
-      nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-      logKwota = -kwotaKarnetu;
-      logOpis = `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Obciążenie portfela - do zapłaty)`;
-    } else if (kwotaKarnetu === 0) {
-      logKwota = 0;
-      logOpis = `Dodano karnet: ${selectedPassToAdd} (Karnet 0.00 PLN - portfel bez zmian)`;
-    }
-
-    const nowyKarnetObj = {
-      id: Date.now(),
-      nazwa: selectedPassToAdd,
-      waznyDo: dataWygasnieciaStr,
-      pozostaloWejsc: parsedLimitWejsc,
-      poczatkoweWejsc: parsedLimitWejsc,
-      cena: cenaObjKarnetu,
-      znizkaProcentowa: znizkaTekst,
-      rata: isContract ? (newPassCustomRata || '0 / 12') : '1 / 1',
-      statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'})` : `Ważny do: ${dataWygasnieciaStr}`,
-      isContract12M: isContract,
-      contractSuspensionDaysLeft: isContract ? (parseInt(newPassCustomSuspensionDays, 10) || 30) : undefined,
-      blokadaDo: null,
-      powodBlokady: null,
-      zawieszonyOd: null,
-      zawieszonyDo: null,
-      historiaZawieszen: []
-    };
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = [...stareKarnety, nowyKarnetObj];
-    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
-
-    const updatePayload: any = {
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Wygasa: latestExpiry,
-      Cena: cenaObjKarnetu,
-      Portfel: nowyStanStr
-    };
-
-    if (isContract) {
-      updatePayload.umowa_oplacona_do = dataWygasnieciaStr;
-    }
-
-    const { error } = await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
-
-    if (error) {
-      alert(`Błąd zapisu w bazie: ${error.message}`);
-      return;
-    }
-
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: isContract ? 'zakup_umowy' : 'zakup_karnetu',
-      kwota: logKwota,
-      opis: logOpis
-    }]);
-
-    setSelectedPassToAdd('');
-    setNewPassCustomRata('0 / 12');
-    setNewPassCustomSuspensionDays('30');
-    setNewPassCustomPrice('');
-    setIsAddSecondPassModalOpen(false);
-    loadData(profileClient.id);
   };
 
   const handleConfirmSuspendPass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profileClient || !suspendPassTarget) return;
+    if (!profileClient || !suspendPassTarget || isSubmittingRef.current) return;
 
     let sOd = suspendStartDate;
     let sDo = suspendEndDate;
@@ -1862,113 +1935,126 @@ export default function KlienciPage() {
 
     if (!confirm(`Czy na pewno chcesz zawiesić ten karnet od ${sOd} do ${sDo} (łącznie ${calculatedDays} dni)?\nData ważności karnetu zostanie automatycznie wydłużona o ${calculatedDays} dni.`)) return;
 
-    let currentExpDate = new Date(suspendPassTarget.waznyDo || todayStr);
-    currentExpDate.setDate(currentExpDate.getDate() + calculatedDays);
-    const newExtendedExpiry = currentExpDate.toISOString().split('T')[0];
+    isSubmittingRef.current = true;
+    try {
+      let currentExpDate = new Date(suspendPassTarget.waznyDo || todayStr);
+      currentExpDate.setDate(currentExpDate.getDate() + calculatedDays);
+      const newExtendedExpiry = currentExpDate.toISOString().split('T')[0];
 
-    let updatedSuspensionDaysLeft = suspendPassTarget.contractSuspensionDaysLeft;
-    if (suspendPassTarget.isContract12M) {
-      const currentPool = suspendPassTarget.contractSuspensionDaysLeft !== undefined ? suspendPassTarget.contractSuspensionDaysLeft : 30;
-      updatedSuspensionDaysLeft = Math.max(0, currentPool - calculatedDays);
-    }
-
-    const newSuspensionRecord = {
-      id: Date.now(),
-      od: sOd,
-      do: sDo,
-      dni: calculatedDays,
-      kto: '🛡️ Zarządca / Administrator',
-      status: 'aktywne',
-      created_at: new Date().toISOString()
-    };
-
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.id === suspendPassTarget.id) {
-        const passHist = safeJsonParse(k.historiaZawieszen, []);
-        return {
-          ...k,
-          waznyDo: newExtendedExpiry,
-          zawieszonyOd: sOd,
-          zawieszonyDo: sDo,
-          contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
-          statusTekst: k.isContract12M ? `Umowa 12M (${k.rata || '0 / 12'}) - Zawieszony do ${sDo}` : `Zawieszony do ${sDo}`,
-          historiaZawieszen: [newSuspensionRecord, ...passHist]
-        };
+      let updatedSuspensionDaysLeft = suspendPassTarget.contractSuspensionDaysLeft;
+      if (isContractPassCheck(suspendPassTarget)) {
+        const currentPool = suspendPassTarget.contractSuspensionDaysLeft !== undefined ? suspendPassTarget.contractSuspensionDaysLeft : 30;
+        updatedSuspensionDaysLeft = Math.max(0, currentPool - calculatedDays);
       }
-      return k;
-    });
 
-    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+      const newSuspensionRecord = {
+        id: Date.now(),
+        od: sOd,
+        do: sDo,
+        dni: calculatedDays,
+        kto: '🛡️ Zarządca / Administrator',
+        status: 'aktywne',
+        created_at: new Date().toISOString()
+      };
 
-    const { error } = await supabase.from('klienci').update({ 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Wygasa: latestExpiry 
-    }).eq('id', profileClient.id);
-    
-    if (!error) {
-      await supabase.from('transakcje').insert([{
-        klient_id: profileClient.id,
-        typ_operacji: 'zawieszenie_karnetu',
-        kwota: null,
-        opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (${calculatedDays} dni). Ważność wydłużono do ${newExtendedExpiry}.`
-      }]);
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.id === suspendPassTarget.id) {
+          const passHist = safeJsonParse(k.historiaZawieszen, []);
+          const isContract = isContractPassCheck(k);
+          return {
+            ...k,
+            waznyDo: newExtendedExpiry,
+            zawieszonyOd: sOd,
+            zawieszonyDo: sDo,
+            isContract12M: isContract,
+            contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
+            statusTekst: isContract ? `Umowa 12M (${k.rata || '0 / 12'}) - Zawieszony do ${sDo}` : `Zawieszony do ${sDo}`,
+            historiaZawieszen: [newSuspensionRecord, ...passHist]
+          };
+        }
+        return k;
+      });
+
+      const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
+      const { error } = await supabase.from('klienci').update({ 
+        karnetyKlubowicza: uaktualnioneKarnety,
+        Wygasa: latestExpiry 
+      }).eq('id', profileClient.id);
       
-      await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
-      alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony. Data ważności karnetu została wydłużona o ${calculatedDays} dni do ${newExtendedExpiry}.`);
-      setIsSuspendModalOpen(false);
-      loadData(profileClient.id);
-    } else {
-      alert(`Błąd: ${error.message}`);
+      if (!error) {
+        await supabase.from('transakcje').insert([{
+          klient_id: profileClient.id,
+          typ_operacji: 'zawieszenie_karnetu',
+          kwota: null,
+          opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (${calculatedDays} dni). Ważność wydłużono do ${newExtendedExpiry}.`
+        }]);
+        
+        await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
+        alert(`Karnet "${suspendPassTarget.nazwa}" został zawieszony. Data ważności karnetu została wydłużona o ${calculatedDays} dni do ${newExtendedExpiry}.`);
+        setIsSuspendModalOpen(false);
+        loadData(profileClient.id);
+      } else {
+        alert(`Błąd: ${error.message}`);
+      }
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   const handleOdwiesKarnet = async (karnetTarget: any) => {
-    if (!profileClient || !karnetTarget.zawieszonyOd) return;
-
+    if (!profileClient || !karnetTarget.zawieszonyOd || isSubmittingRef.current) return;
     if (!confirm(`Czy na pewno chcesz odwiesić ten karnet przedterminowo?`)) return;
 
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.id === karnetTarget.id) {
-        const passHist = safeJsonParse(k.historiaZawieszen, []);
-        const updatedHist = passHist.map((h: any) => h.status === 'aktywne' ? { ...h, status: 'zakonczone', dataOdwieszenia: todayStr } : h);
-        return {
-          ...k,
-          zawieszonyOd: null,
-          zawieszonyDo: null,
-          statusTekst: k.isContract12M ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${k.waznyDo}` : `Ważny do: ${k.waznyDo}`,
-          historiaZawieszen: updatedHist
-        };
+    isSubmittingRef.current = true;
+    try {
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.id === karnetTarget.id) {
+          const passHist = safeJsonParse(k.historiaZawieszen, []);
+          const updatedHist = passHist.map((h: any) => h.status === 'aktywne' ? { ...h, status: 'zakonczone', dataOdwieszenia: todayStr } : h);
+          const isContract = isContractPassCheck(k);
+          return {
+            ...k,
+            zawieszonyOd: null,
+            zawieszonyDo: null,
+            isContract12M: isContract,
+            statusTekst: isContract ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${k.waznyDo}` : `Ważny do: ${k.waznyDo}`,
+            historiaZawieszen: updatedHist
+          };
+        }
+        return k;
+      });
+
+      const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+
+      const { error } = await supabase.from('klienci').update({ 
+        karnetyKlubowicza: uaktualnioneKarnety,
+        Wygasa: latestExpiry 
+      }).eq('id', profileClient.id);
+
+      if (!error) {
+        await supabase.from('transakcje').insert([{
+          klient_id: profileClient.id,
+          typ_operacji: 'odwieszenie_karnetu',
+          kwota: null,
+          opis: `Odwieszono karnet ${karnetTarget.nazwa}. Karnet jest ponownie aktywny.`
+        }]);
+        alert(`Karnet został odwieszony.`);
+        setIsSuspendModalOpen(false);
+        loadData(profileClient.id);
+      } else {
+        alert(`Błąd: ${error.message}`);
       }
-      return k;
-    });
-
-    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
-
-    const { error } = await supabase.from('klienci').update({ 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Wygasa: latestExpiry 
-    }).eq('id', profileClient.id);
-
-    if (!error) {
-      await supabase.from('transakcje').insert([{
-        klient_id: profileClient.id,
-        typ_operacji: 'odwieszenie_karnetu',
-        kwota: null,
-        opis: `Odwieszono karnet ${karnetTarget.nazwa}. Karnet jest ponownie aktywny.`
-      }]);
-      alert(`Karnet został odwieszony.`);
-      setIsSuspendModalOpen(false);
-      loadData(profileClient.id);
-    } else {
-      alert(`Błąd: ${error.message}`);
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   const handleConfirmBlockPass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profileClient || !suspendPassTarget) return;
+    if (!profileClient || !suspendPassTarget || isSubmittingRef.current) return;
 
     let bOd = blockPassStartDate;
     let bDo = blockPassEndDate;
@@ -1989,289 +2075,322 @@ export default function KlienciPage() {
 
     if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? Użytkownik zostanie automatycznie wypisany z nadchodzących zajęć.`)) return;
 
-    const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
+    isSubmittingRef.current = true;
+    try {
+      const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
 
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.id === suspendPassTarget.id) {
-        return { 
-          ...k, 
-          blokadaOd: bOd, 
-          blokadaDo: bDo, 
-          powodBlokady: powod 
-        };
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.id === suspendPassTarget.id) {
+          return { 
+            ...k, 
+            blokadaOd: bOd, 
+            blokadaDo: bDo, 
+            powodBlokady: powod 
+          };
+        }
+        return k;
+      });
+
+      const { error } = await supabase.from('klienci').update({ 
+        karnetyKlubowicza: uaktualnioneKarnety,
+        blokadaDo: bDo,
+        powodBlokady: powod
+      }).eq('id', profileClient.id);
+      
+      if (!error) {
+        setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, blokadaDo: bDo, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety } : c));
+        setProfileClient((prev: any) => ({ ...prev, blokadaDo: bDo, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety }));
+        await handleAutoWypiszPoZablokowaniu(profileClient.id, profileClient, powod);
+        alert(`Karnet został zablokowany do ${bDo}.`);
+        setIsSuspendModalOpen(false);
+        loadData(profileClient.id);
+      } else {
+        alert(`Błąd: ${error.message}`);
       }
-      return k;
-    });
-
-    const { error } = await supabase.from('klienci').update({ 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      blokadaDo: bDo,
-      powodBlokady: powod
-    }).eq('id', profileClient.id);
-    
-    if (!error) {
-      setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, blokadaDo: bDo, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety } : c));
-      setProfileClient((prev: any) => ({ ...prev, blokadaDo: bDo, powodBlokady: powod, karnetyKlubowicza: uaktualnioneKarnety }));
-      await handleAutoWypiszPoZablokowaniu(profileClient.id, profileClient, powod);
-      alert(`Karnet został zablokowany do ${bDo}.`);
-      setIsSuspendModalOpen(false);
-      loadData(profileClient.id);
-    } else {
-      alert(`Błąd: ${error.message}`);
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   const handleCancelBlock = async (karnetTarget: any) => {
-    if (!profileClient) return;
+    if (!profileClient || isSubmittingRef.current) return;
     if (!confirm("Czy na pewno chcesz usunąć blokadę tego karnetu i konta?")) return;
 
-    const isContractBlock = profileClient.powodBlokady?.toLowerCase().includes('umow') || 
-                            karnetTarget?.powodBlokady?.toLowerCase().includes('umow') ||
-                            profileClient.powodBlokady?.toLowerCase().includes('umowę');
+    isSubmittingRef.current = true;
+    try {
+      const isContractBlock = profileClient.powodBlokady?.toLowerCase().includes('umow') || 
+                              karnetTarget?.powodBlokady?.toLowerCase().includes('umow') ||
+                              profileClient.powodBlokady?.toLowerCase().includes('umowę') ||
+                              profileClient.powodBlokady?.toLowerCase().includes('wpłat');
 
-    const endOfMonthStr = getContractEndOfMonthDate(todayStr);
+      const endOfMonthStr = getContractEndOfMonthDate(todayStr);
 
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.id === karnetTarget.id || k.blokadaDo) {
-        return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null };
+      const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.id === karnetTarget.id || k.blokadaDo) {
+          return { ...k, blokadaOd: null, blokadaDo: null, powodBlokady: null };
+        }
+        return k;
+      });
+
+      const updatePayload: any = { 
+        karnetyKlubowicza: uaktualnioneKarnety,
+        blokadaDo: null,
+        powodBlokady: null
+      };
+
+      if (isContractBlock) {
+        updatePayload.umowa_oplacona_do = endOfMonthStr;
       }
-      return k;
-    });
 
-    const updatePayload: any = { 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      blokadaDo: null,
-      powodBlokady: null
-    };
+      const { error } = await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
 
-    if (isContractBlock) {
-      updatePayload.umowa_oplacona_do = endOfMonthStr;
-    }
-
-    const { error } = await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
-
-    if (!error) {
-      setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, ...updatePayload } : c));
-      setProfileClient((prev: any) => ({ ...prev, ...updatePayload }));
-      alert("Blokada konta i karnetu została całkowicie odwołana.");
-      setIsSuspendModalOpen(false);
-      loadData(profileClient.id);
-    } else {
-      alert(`Błąd podczas odwoływania blokady: ${error.message}`);
+      if (!error) {
+        setClients(prev => prev.map(c => c.id === profileClient.id ? { ...c, ...updatePayload } : c));
+        setProfileClient((prev: any) => ({ ...prev, ...updatePayload }));
+        alert("Blokada konta i karnetu została całkowicie odwołana.");
+        setIsSuspendModalOpen(false);
+        loadData(profileClient.id);
+      } else {
+        alert(`Błąd podczas odwoływania blokady: ${error.message}`);
+      }
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   // BEZPOŚREDNIE ODBLOKOWANIE KONTA BEZ NARUSZANIA ZAWIESZEŃ
   const handleDirectUnblockAccount = async (targetClient: any) => {
-    if (!targetClient) return;
+    if (!targetClient || isSubmittingRef.current) return;
     if (!confirm(`Czy na pewno chcesz natychmiast odblokować konto klubowicza ${targetClient.firstName} ${targetClient.lastName}? Zaplanowane lub trwające zawieszenia karnetu pozostaną nienaruszone.`)) {
       return;
     }
 
-    const stareKarnety = safeJsonParse(targetClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.blokadaDo || k.powodBlokady) {
-        return {
-          ...k,
-          blokadaOd: null,
-          blokadaDo: null,
-          powodBlokady: null
-        };
+    isSubmittingRef.current = true;
+    try {
+      const stareKarnety = safeJsonParse(targetClient.karnetyKlubowicza, []);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.blokadaDo || k.powodBlokady) {
+          return {
+            ...k,
+            blokadaOd: null,
+            blokadaDo: null,
+            powodBlokady: null
+          };
+        }
+        return k;
+      });
+
+      const isContractBlock = targetClient.powodBlokady?.toLowerCase().includes('umow') || 
+                              targetClient.powodBlokady?.toLowerCase().includes('umowę') || 
+                              targetClient.powodBlokady?.toLowerCase().includes('wpłat');
+
+      const endOfMonthStr = getContractEndOfMonthDate(todayStr);
+
+      const updatePayload: any = {
+        blokadaDo: null,
+        powodBlokady: null,
+        karnetyKlubowicza: uaktualnioneKarnety
+      };
+
+      if (isContractBlock) {
+        updatePayload.umowa_oplacona_do = endOfMonthStr;
       }
-      return k;
-    });
 
-    const isContractBlock = targetClient.powodBlokady?.toLowerCase().includes('umow') || 
-                            targetClient.powodBlokady?.toLowerCase().includes('umowę') || 
-                            targetClient.powodBlokady?.toLowerCase().includes('wpłat');
+      const { error } = await supabase.from('klienci').update(updatePayload).eq('id', targetClient.id);
 
-    const endOfMonthStr = getContractEndOfMonthDate(todayStr);
+      if (!error) {
+        await supabase.from('transakcje').insert([{
+          klient_id: targetClient.id,
+          typ_operacji: 'odblokowanie_konta',
+          kwota: null,
+          opis: `Ręczne odblokowanie konta klubowicza przez zarządcę (zdjęto blokadę zapisów i wstępu). Zawieszenia karnetów pozostały nienaruszone.`
+        }]);
 
-    const updatePayload: any = {
-      blokadaDo: null,
-      powodBlokady: null,
-      karnetyKlubowicza: uaktualnioneKarnety
-    };
+        await supabase.from('booking_logs').insert([{
+          action_type: 'MANUAL_UNBLOCK',
+          status: 'SUCCESS',
+          reason: `Zarządca odblokował konto klubowicza ID:${targetClient.id}.`,
+          rule_applied: 'admin_manual_unblock',
+          payload: { klient_id: targetClient.id }
+        }]);
 
-    if (isContractBlock) {
-      updatePayload.umowa_oplacona_do = endOfMonthStr;
-    }
-
-    const { error } = await supabase.from('klienci').update(updatePayload).eq('id', targetClient.id);
-
-    if (!error) {
-      await supabase.from('transakcje').insert([{
-        klient_id: targetClient.id,
-        typ_operacji: 'odblokowanie_konta',
-        kwota: null,
-        opis: `Ręczne odblokowanie konta klubowicza przez zarządcę (zdjęto blokadę zapisów i wstępu). Zawieszenia karnetów pozostały nienaruszone.`
-      }]);
-
-      await supabase.from('booking_logs').insert([{
-        action_type: 'MANUAL_UNBLOCK',
-        status: 'SUCCESS',
-        reason: `Zarządca odblokował konto klubowicza ID:${targetClient.id}.`,
-        rule_applied: 'admin_manual_unblock',
-        payload: { klient_id: targetClient.id }
-      }]);
-
-      setClients(prev => prev.map(c => c.id === targetClient.id ? { ...c, ...updatePayload } : c));
-      if (profileClient && profileClient.id === targetClient.id) {
-        setProfileClient((prev: any) => ({ ...prev, ...updatePayload }));
+        setClients(prev => prev.map(c => c.id === targetClient.id ? { ...c, ...updatePayload } : c));
+        if (profileClient && profileClient.id === targetClient.id) {
+          setProfileClient((prev: any) => ({ ...prev, ...updatePayload }));
+        }
+        alert(`Konto klubowicza ${targetClient.firstName} ${targetClient.lastName} zostało pomyślnie odblokowane!`);
+        loadData(targetClient.id);
+      } else {
+        alert(`Błąd podczas odblokowywania konta: ${error.message}`);
       }
-      alert(`Konto klubowicza ${targetClient.firstName} ${targetClient.lastName} zostało pomyślnie odblokowane!`);
-      loadData(targetClient.id);
-    } else {
-      alert(`Błąd podczas odblokowywania konta: ${error.message}`);
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   const handleSavePassEditSubmit = async () => {
-    if (!profileClient || !editingPassModal) return;
-
+    if (!profileClient || !editingPassModal || isSubmittingRef.current) return;
     if (!confirm("Czy na pewno chcesz zapisać zmiany w karnecie?")) return;
 
-    const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
-    const isContract = editingPassModal.isContract12M || bazowyKarnet?.isContract12M || bazowyKarnet?.typ_karnetu === 'Umowa 12 miesięcy';
-    const isTimeBased = bazowyKarnet?.typ_karnetu === 'Na czas';
-    const nowaCenaWartosc = parseFloat(String(editingPassModal.cena).replace(/[^0-9.]/g, '')) || 0;
-    const activeRabat = getEffectiveDiscount(profileClient, isContract, nowaCenaWartosc);
-    const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
+    isSubmittingRef.current = true;
+    try {
+      const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
+      const isContract = isContractPassCheck(editingPassModal, bazowyKarnet);
+      const isTimeBased = bazowyKarnet?.typ_karnetu === 'Na czas';
+      const nowaCenaWartosc = parseFloat(String(editingPassModal.cena).replace(/[^0-9.]/g, '')) || 0;
+      const activeRabat = getEffectiveDiscount(profileClient, isContract, nowaCenaWartosc);
+      const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
 
-    let znizkaTekst = profileClient.discount ? `(-${profileClient.discount}%)` : '';
-    if (!isContract && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna && nowaCenaWartosc > 150) {
-      const roznica = cenaRegularna - nowaCenaWartosc;
-      const procent = Math.round((roznica / cenaRegularna) * 100);
-      znizkaTekst = `(-${procent}%)`;
-    }
-
-    const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-    const uaktualnioneKarnety = stareKarnety.map((k: any) => {
-      if (k.id === editingPassModal.id) {
-        return {
-          ...k,
-          nazwa: editingPassModal.nazwa,
-          waznyDo: editingPassModal.waznyDo,
-          pozostaloWejsc: (isContract || isTimeBased) ? null : editingPassModal.pozostaloWejsc,
-          cena: String(editingPassModal.cena).includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
-          znizkaProcentowa: isContract ? '' : znizkaTekst,
-          rata: isContract ? editingPassModal.rata : (editingPassModal.rata || '1 / 1'),
-          isContract12M: isContract,
-          contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft !== undefined ? editingPassModal.contractSuspensionDaysLeft : 30) : undefined,
-          statusTekst: isContract ? `Umowa 12M (${editingPassModal.rata || '0 / 12'}) - Ważny do: ${editingPassModal.waznyDo}` : `Ważny do: ${editingPassModal.waznyDo}`
-        };
-      }
-      return k;
-    });
-
-    const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
-    const passPrice = getPassPrice(uaktualnioneKarnety);
-
-    await supabase.from('klienci').update({ 
-      karnetyKlubowicza: uaktualnioneKarnety,
-      Wygasa: latestExpiry,
-      Cena: passPrice
-    }).eq('id', profileClient.id);
-
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: 'edycja_karnetu',
-      kwota: null,
-      opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata: ${editingPassModal.rata})` : ''}`
-    }]);
-
-    setEditingPassModal(null);
-    alert("Karnet został zaktualizowany!");
-    loadData(profileClient.id);
-  };
-
-  const handleConfirmDeletePass = async (passId: number) => {
-    if (confirm("Czy na pewno chcesz usunąć ten karnet? Klient zostanie automatycznie wypisany ze wszystkich przyszłych zajęć.")) {
-      if (!profileClient) return;
-
-      const now = new Date();
-      let cancelledCount = 0;
-
-      const { data: userSignups } = await supabase
-        .from('zapisy_zajec')
-        .select('*')
-        .eq('klient_id', profileClient.id);
-
-      if (userSignups && userSignups.length > 0) {
-        for (const signup of userSignups) {
-          const classDate = parseDateFromClassKey(signup.class_key);
-          if (classDate && classDate.getTime() > now.getTime()) {
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .eq('class_key', signup.class_key)
-              .eq('klient_id', profileClient.id);
-            cancelledCount++;
-
-            await promoteWaitlistForClass(signup.class_key);
-          }
-        }
+      let znizkaTekst = profileClient.discount ? `(-${profileClient.discount}%)` : '';
+      if (!isContract && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna && nowaCenaWartosc > 150) {
+        const roznica = cenaRegularna - nowaCenaWartosc;
+        const procent = Math.round((roznica / cenaRegularna) * 100);
+        znizkaTekst = `(-${procent}%)`;
       }
 
       const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
-      const uaktualnioneKarnety = stareKarnety.filter((k: any) => k.id !== passId);
+      const uaktualnioneKarnety = stareKarnety.map((k: any) => {
+        if (k.id === editingPassModal.id) {
+          return {
+            ...k,
+            nazwa: editingPassModal.nazwa,
+            waznyDo: editingPassModal.waznyDo,
+            pozostaloWejsc: (isContract || isTimeBased) ? null : editingPassModal.pozostaloWejsc,
+            cena: String(editingPassModal.cena).includes('PLN') ? editingPassModal.cena : `${editingPassModal.cena} PLN`,
+            znizkaProcentowa: isContract ? '' : znizkaTekst,
+            rata: isContract ? editingPassModal.rata : (editingPassModal.rata || '1 / 1'),
+            isContract12M: isContract,
+            contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft !== undefined ? editingPassModal.contractSuspensionDaysLeft : 30) : undefined,
+            statusTekst: isContract ? `Umowa 12M (${editingPassModal.rata || '0 / 12'}) - Ważny do: ${editingPassModal.waznyDo}` : `Ważny do: ${editingPassModal.waznyDo}`
+          };
+        }
+        return k;
+      });
+
       const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
-      const newCena = getPassPrice(uaktualnioneKarnety);
-      
+      const passPrice = getPassPrice(uaktualnioneKarnety);
+
       await supabase.from('klienci').update({ 
         karnetyKlubowicza: uaktualnioneKarnety,
         Wygasa: latestExpiry,
-        Cena: newCena
+        Cena: passPrice
       }).eq('id', profileClient.id);
-      
-      if (cancelledCount > 0) {
-        await supabase.from('transakcje').insert([{
-          klient_id: profileClient.id,
-          typ_operacji: 'zajecia_wypis',
-          opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu usunięcia karnetu.`
-        }]);
-      }
 
       await supabase.from('transakcje').insert([{
         klient_id: profileClient.id,
         typ_operacji: 'edycja_karnetu',
         kwota: null,
-        opis: `Ręczne usunięcie karnetu z profilu`
+        opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata: ${editingPassModal.rata})` : ''}`
       }]);
 
       setEditingPassModal(null);
-      setIsGlobalPassMenuOpen(false);
-      alert(cancelledCount > 0 ? `Karnet usunięty. Wypisano z ${cancelledCount} przyszłych zajęć.` : "Karnet został usunięty!");
+      alert("Karnet został zaktualizowany!");
       loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
+  };
+
+  const handleConfirmDeletePass = async (passId: number) => {
+    if (confirm("Czy na pewno chcesz usunąć ten karnet? Klient zostanie automatycznie wypisany ze wszystkich przyszłych zajęć.")) {
+      if (!profileClient || isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
+
+      try {
+        const now = new Date();
+        let cancelledCount = 0;
+
+        const { data: userSignups } = await supabase
+          .from('zapisy_zajec')
+          .select('*')
+          .eq('klient_id', profileClient.id);
+
+        if (userSignups && userSignups.length > 0) {
+          for (const signup of userSignups) {
+            const classDate = parseDateFromClassKey(signup.class_key);
+            if (classDate && classDate.getTime() > now.getTime()) {
+              await supabase
+                .from('zapisy_zajec')
+                .delete()
+                .eq('class_key', signup.class_key)
+                .eq('klient_id', profileClient.id);
+              cancelledCount++;
+
+              await promoteWaitlistForClass(signup.class_key);
+            }
+          }
+        }
+
+        const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
+        const uaktualnioneKarnety = stareKarnety.filter((k: any) => k.id !== passId);
+        const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+        const newCena = getPassPrice(uaktualnioneKarnety);
+        
+        await supabase.from('klienci').update({ 
+          karnetyKlubowicza: uaktualnioneKarnety,
+          Wygasa: latestExpiry,
+          Cena: newCena
+        }).eq('id', profileClient.id);
+        
+        if (cancelledCount > 0) {
+          await supabase.from('transakcje').insert([{
+            klient_id: profileClient.id,
+            typ_operacji: 'zajecia_wypis',
+            opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu usunięcia karnetu.`
+          }]);
+        }
+
+        await supabase.from('transakcje').insert([{
+          klient_id: profileClient.id,
+          typ_operacji: 'edycja_karnetu',
+          kwota: null,
+          opis: `Ręczne usunięcie karnetu z profilu`
+        }]);
+
+        setEditingPassModal(null);
+        setIsGlobalPassMenuOpen(false);
+        alert(cancelledCount > 0 ? `Karnet usunięty. Wypisano z ${cancelledCount} przyszłych zajęć.` : "Karnet został usunięty!");
+        loadData(profileClient.id);
+      } finally {
+        isSubmittingRef.current = false;
+      }
     }
   };
 
   const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!profileClient || !walletAmountInput) return;
+    if (!profileClient || !walletAmountInput || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const kwotaZmiany = parseFloat(walletAmountInput);
-    if (isNaN(kwotaZmiany)) return;
+    try {
+      const kwotaZmiany = parseFloat(walletAmountInput);
+      if (isNaN(kwotaZmiany)) return;
 
-    const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
-    const nowyStan = currentWalletNum + kwotaZmiany;
-    const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
+      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+      const nowyStan = currentWalletNum + kwotaZmiany;
+      const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
 
-    await supabase.from('transakcje').insert([{
-      klient_id: profileClient.id,
-      typ_operacji: 'portfel',
-      kwota: kwotaZmiany,
-      opis: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta / Odpis z portfela')
-    }]);
+      await supabase.from('transakcje').insert([{
+        klient_id: profileClient.id,
+        typ_operacji: 'portfel',
+        kwota: kwotaZmiany,
+        opis: walletReasonInput || (kwotaZmiany >= 0 ? 'Doładowanie portfela' : 'Korekta / Odpis z portfela')
+      }]);
 
-    await supabase.from('klienci').update({ Portfel: nowyStanStr }).eq('id', profileClient.id);
+      await supabase.from('klienci').update({ 
+        Portfel: nowyStanStr,
+        portfel: nowyStan
+      }).eq('id', profileClient.id);
 
-    setWalletAmountInput('');
-    setWalletReasonInput('');
-    setIsTopUpWalletOpen(false);
-    loadData(profileClient.id);
+      setWalletAmountInput('');
+      setWalletReasonInput('');
+      setIsTopUpWalletOpen(false);
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
   };
 
   const filteredClients = clients.filter(c => 
@@ -2449,7 +2568,7 @@ export default function KlienciPage() {
                 const stalyRabat = parseFloat(client.discount || '0') || 0;
                 const sysRabat = calculateSystemDiscount(client);
 
-                const isContract = aktywnyKarnetObj?.isContract12M;
+                const isContract = isContractPassCheck(aktywnyKarnetObj, pasujacyKarnetDef);
                 const dniZawLeft = aktywnyKarnetObj?.contractSuspensionDaysLeft ?? (isContract ? 30 : null);
 
                 const passHistZaw = aktywnyKarnetObj ? safeJsonParse(aktywnyKarnetObj.historiaZawieszen, []) : [];
@@ -2491,9 +2610,9 @@ export default function KlienciPage() {
                           <span className="font-bold text-slate-900 text-xs whitespace-normal break-words leading-tight" title={nazwaKarnetu || 'Brak karnetu'}>
                             {nazwaKarnetu || 'Brak karnetu'}
                           </span>
-                          {aktywnyKarnetObj?.isContract12M && (
+                          {isContract && (
                             <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-1.5 py-0.2 rounded border border-amber-300 uppercase shrink-0 whitespace-nowrap">
-                              12M • {aktywnyKarnetObj.rata || '0/12'}
+                              12M • {aktywnyKarnetObj?.rata || '0/12'}
                             </span>
                           )}
                         </div>
@@ -2806,7 +2925,8 @@ export default function KlienciPage() {
                     setExtendSelectedNewPassName(pass.nazwa);
                     setExtendCustomPriceInput(pass.cena ? pass.cena.replace(/[^0-9.]/g, '') : '');
                     const defK = dostepneKarnety.find(dk => dk.nazwa === pass.nazwa);
-                    setExtendNewDate(getCalendarExpiryDate(pass.waznyDo, defK?.limitCzasowy));
+                    const isContract = isContractPassCheck(pass, defK);
+                    setExtendNewDate(isContract ? getContractEndOfMonthDate(pass.waznyDo) : getCalendarExpiryDate(pass.waznyDo, defK?.limitCzasowy));
                   }
                   setIsExtendPassModalOpen(true); 
                   setTableActionClient(null); 
@@ -2978,8 +3098,8 @@ export default function KlienciPage() {
                            <input 
                              type="number" 
                              className="w-12 bg-white border border-emerald-300 rounded px-1 text-xs font-bold text-slate-800 outline-none focus:border-emerald-500"
-                             value={discountInput}
-                             onChange={e => setDiscountInput(e.target.value)}
+                             value={discountInput} 
+                             onChange={e => setDiscountInput(e.target.value)} 
                              placeholder="%"
                            />
                            <span className="text-[10px] font-bold text-emerald-800">%</span>
@@ -3002,8 +3122,8 @@ export default function KlienciPage() {
                            <input 
                              type="number" 
                              className="w-12 bg-white border border-sky-300 rounded px-1 text-xs font-bold text-slate-800 outline-none focus:border-sky-500"
-                             value={systemDiscountInput}
-                             onChange={e => setSystemDiscountInput(e.target.value)}
+                             value={systemDiscountInput} 
+                             onChange={e => setSystemDiscountInput(e.target.value)} 
                              placeholder="%"
                            />
                            <span className="text-[10px] font-bold text-sky-800">%</span>
@@ -3026,7 +3146,6 @@ export default function KlienciPage() {
                     >
                       + DODAJ DRUGI KARNET
                     </button>
-
                     <div className="relative">
                       <button 
                         onClick={() => setIsGlobalPassMenuOpen(!isGlobalPassMenuOpen)} 
@@ -3045,7 +3164,8 @@ export default function KlienciPage() {
                               setExtendSelectedNewPassName(pass.nazwa);
                               setExtendCustomPriceInput(pass.cena ? pass.cena.replace(/[^0-9.]/g, '') : '');
                               const defK = dostepneKarnety.find(dk => dk.nazwa === pass.nazwa);
-                              setExtendNewDate(getCalendarExpiryDate(pass.waznyDo, defK?.limitCzasowy));
+                              const isContract = isContractPassCheck(pass, defK);
+                              setExtendNewDate(isContract ? getContractEndOfMonthDate(pass.waznyDo) : getCalendarExpiryDate(pass.waznyDo, defK?.limitCzasowy));
                               setIsExtendPassModalOpen(true);
                             } else {
                               alert("Brak aktywnego karnetu do przedłużenia.");
@@ -3086,7 +3206,8 @@ export default function KlienciPage() {
                       let isExpiring = false;
                       let isPending = karnet.statusTekst?.includes('Oczekujący');
                       const czyZawieszony = !!karnet.zawieszonyOd;
-                      const isContract = karnet.isContract12M;
+                      const defKarnetu = dostepneKarnety.find(dk => dk.nazwa === karnet.nazwa);
+                      const isContract = isContractPassCheck(karnet, defKarnetu);
 
                       if (!isPending) {
                         if (karnet.waznyDo) {
@@ -3178,7 +3299,8 @@ export default function KlienciPage() {
                                   setExtendSelectedNewPassName(karnet.nazwa);
                                   setExtendCustomPriceInput(karnet.cena ? karnet.cena.replace(/[^0-9.]/g, '') : '');
                                   const defK = dostepneKarnety.find(dk => dk.nazwa === karnet.nazwa);
-                                  setExtendNewDate(getCalendarExpiryDate(karnet.waznyDo, defK?.limitCzasowy));
+                                  const isContractCheck = isContractPassCheck(karnet, defK);
+                                  setExtendNewDate(isContractCheck ? getContractEndOfMonthDate(karnet.waznyDo) : getCalendarExpiryDate(karnet.waznyDo, defK?.limitCzasowy));
                                   setIsExtendPassModalOpen(true);
                                 }} 
                                 className="bg-sky-50 hover:bg-sky-100 text-sky-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-sky-200 cursor-pointer shadow-sm"
@@ -3888,7 +4010,7 @@ export default function KlienciPage() {
                 <div className="font-bold text-slate-900 text-sm whitespace-nowrap">Karnet: {extendPassTarget.nazwa}</div>
                 <div className="font-mono text-slate-600 whitespace-nowrap">Wygasa: {extendPassTarget.waznyDo}</div>
                 <div className="font-bold text-slate-700 whitespace-nowrap">Aktualna cena: {extendPassTarget.cena}</div>
-                {extendPassTarget.isContract12M && (
+                {isContractPassCheck(extendPassTarget) && (
                   <div className="text-amber-800 font-bold text-[11px]">Umowa 12M • Bieżąca rata: {extendPassTarget.rata || '0 / 12'}</div>
                 )}
               </div>
@@ -3910,7 +4032,7 @@ export default function KlienciPage() {
                           const val = e.target.value;
                           setExtendSelectedNewPassName(val);
                           const def = dostepneKarnety.find(k => k.nazwa === val);
-                          const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
+                          const isContract = isContractPassCheck(null, def);
                           if (isContract) {
                             setExtendNewDate(getContractEndOfMonthDate(extendPassTarget?.waznyDo));
                           } else {
@@ -3923,7 +4045,7 @@ export default function KlienciPage() {
                         className="bg-white border border-sky-300 rounded-lg px-2 py-1 font-bold ml-2 text-slate-800 cursor-pointer"
                       >
                         {dostepneKarnety.map(k => {
-                          const isContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy';
+                          const isContract = isContractPassCheck(null, k);
                           const baseCena = parseFloat(k.cena) || 0;
                           let finalCena = baseCena;
                           let hasDiscount = false;
@@ -3945,7 +4067,7 @@ export default function KlienciPage() {
                       <span className="font-black text-slate-900 whitespace-nowrap">
                         {(() => {
                           const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
-                          const isContract = defKarnetu?.isContract12M || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
+                          const isContract = isContractPassCheck(extendPassTarget, defKarnetu);
                           let baseCena = 0;
                           if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
                             baseCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
@@ -4230,7 +4352,7 @@ export default function KlienciPage() {
                 <select value={selectedPassToAdd} onChange={(e) => setSelectedPassToAdd(e.target.value)} className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer">
                   <option value="">-- Wybierz karnet --</option>
                   {dostepneKarnety.map(k => {
-                    const isContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy';
+                    const isContract = isContractPassCheck(null, k);
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
@@ -4253,7 +4375,7 @@ export default function KlienciPage() {
               {/* OPCJE DLA UMOWY 12 MIESIĘCY */}
               {(() => {
                 const targetDef = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
-                const isContract = targetDef?.isContract12M || targetDef?.typ_karnetu === 'Umowa 12 miesięcy';
+                const isContract = isContractPassCheck(null, targetDef);
                 if (!isContract) return null;
 
                 return (
@@ -4328,7 +4450,7 @@ export default function KlienciPage() {
                   onChange={(e) => {
                     const wybranyNazwa = e.target.value;
                     const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
-                    const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
+                    const isContract = isContractPassCheck(null, def);
                     const baseCena = def ? parseFloat(def.cena) : 0;
                     const actRab = getEffectiveDiscount(profileClient, isContract, baseCena);
                     const finalCena = (actRab > 0 && !isContract && baseCena > 150) ? baseCena * (1 - actRab / 100) : baseCena;
@@ -4346,7 +4468,7 @@ export default function KlienciPage() {
                 >
                   <option value="">-- Wybierz karnet z bazy --</option>
                   {dostepneKarnety.map(k => {
-                    const isContract = k.isContract12M || k.typ_karnetu === 'Umowa 12 miesięcy';
+                    const isContract = isContractPassCheck(null, k);
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
@@ -4566,7 +4688,7 @@ export default function KlienciPage() {
             <div className="space-y-4 max-h-64 overflow-y-auto pr-2">
               {(profileClient.karnetyKlubowicza || []).map((karnet: any) => (
                 <div key={karnet.id} className="bg-sky-50/50 border border-sky-100 p-3 rounded-xl text-xs">
-                  <div className="font-bold text-sky-900 mb-2">Karnet: {karnet.nazwa} {karnet.isContract12M ? '(Umowa 12M)' : ''}</div>
+                  <div className="font-bold text-sky-900 mb-2">Karnet: {karnet.nazwa} {isContractPassCheck(karnet) ? '(Umowa 12M)' : ''}</div>
                   {karnet.historiaZawieszen && karnet.historiaZawieszen.length > 0 ? (
                     <div className="space-y-2">
                       {karnet.historiaZawieszen.map((hz: any) => (
@@ -4647,7 +4769,7 @@ export default function KlienciPage() {
                   onChange={(e) => {
                     const passName = e.target.value;
                     const def = dostepneKarnety.find(k => k.nazwa === passName);
-                    const isContract = def?.isContract12M || def?.typ_karnetu === 'Umowa 12 miesięcy';
+                    const isContract = isContractPassCheck(null, def);
                     setNewClient({
                       ...newClient, 
                       selectedPass: passName,
@@ -4658,9 +4780,12 @@ export default function KlienciPage() {
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer focus:outline-none focus:border-sky-500"
                 >
                   <option value="">-- Brak przypisanego karnetu --</option>
-                  {dostepneKarnety.map(k => (
-                    <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN){k.isContract12M ? ' • Umowa 12M' : ''}</option>
-                  ))}
+                  {dostepneKarnety.map(k => {
+                    const isContract = isContractPassCheck(null, k);
+                    return (
+                      <option key={k.id} value={k.nazwa}>{k.nazwa} ({k.cena} PLN){isContract ? ' • Umowa 12M' : ''}</option>
+                    );
+                  })}
                 </select>
               </div>
 
