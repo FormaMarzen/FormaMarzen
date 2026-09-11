@@ -39,14 +39,14 @@ export default function TwojBonusPage() {
     {
       id: 'umowa',
       badge: 'Karnety Cykliczne (Umowa)',
-      title: 'Rozliczenie ratalne (1-12)',
-      desc: 'Klubowicz zdobywa kolejne poziomy wraz z kolejnymi opłaconymi ratami. Brak ciągłości lub zmiana umowy zeruje roadmapę.'
+      title: 'Rozliczenie ratalne i kontynuacja (13, 14, 15...)',
+      desc: 'Klubowicz zdobywa kolejne poziomy z każdą opłaconą ratą. Przedłużenie umowy po 12 miesiącach kontynuuje naliczanie jako miesiąc 13, 14 itd.'
     },
     {
       id: 'open',
       badge: 'Karnety OPEN (Na czas)',
-      title: 'Ciągłość odnowień',
-      desc: 'Każde odnowienie przed wygaśnięciem obecnego karnetu zwiększa licznik cyklu. Przerwa w karnecie kasuje dotychczasowy postęp.'
+      title: 'Ciągłość odnowień (np. 6M + 6M = 7, 8, 9...)',
+      desc: 'Regularne odnawianie karnetu buduje staż ciągłości. Po karnecie półrocznym kolejny karnet kontynuuje licznik jako 7, 8, 9 miesiąc.'
     },
     {
       id: 'wejscia',
@@ -220,7 +220,7 @@ export default function TwojBonusPage() {
         }
       }
 
-      // 2. Pobieranie statusu programu oraz zasad z club_booking_rules
+      // 2. Pobieranie statusu programu oraz zasad
       const { data: rulesData } = await supabase.from('club_booking_rules').select('*').limit(1).maybeSingle();
       if (rulesData) {
         if (rulesData.bonus_program_active !== undefined) {
@@ -644,38 +644,51 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Obliczanie postępu użytkownika
+  // INTELIGENTNE OBLICZANIE POSTĘPU Z UWZGLĘDNIENIEM KUMULACJI CIĄGŁOŚCI (13, 14, 15... LUB 7, 8, 9...)
   const calculateMemberProgress = (tabela: any, targetUser: any = currentUser) => {
     if (!isProgramActive || !targetUser) return { value: 0, isReset: false, reason: '' };
 
-    const targetUserPass = targetUser?.karnetyKlubowicza?.[0];
-    const isCurrent = targetUserPass && targetUserPass.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase();
-    if (!isCurrent) {
+    // 1. Sprawdzamy czy klubowicz ma ten karnet w swojej tablicy karnetów
+    const userPass = targetUser?.karnetyKlubowicza?.find(
+      (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
+    );
+
+    if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
 
+    // 2. Brak ciągłości - całkowity reset
     if (targetUser?.hasLostContinuity) {
       return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
     }
 
-    if (targetUserPass.isPassChangedReset || targetUserPass.changedPassReset) {
+    if (userPass.isPassChangedReset || userPass.changedPassReset) {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
-    if (tabela.typ_karnetu === 'Umowa 12 miesięcy') {
-      const rataMatch = String(targetUserPass.rata || '').match(/(\d+)/);
-      const ratCount = rataMatch ? parseInt(rataMatch[1], 10) : 1;
-      return { value: ratCount, isReset: false, reason: '' };
+    const ogolnaCiaglosc = Number(targetUser?.cyklCiaglosci) || 1;
+
+    // 3. KARNET NA UMOWĘ (RATALNY) - uwzględnienie kolejnej umowy (13, 14, 15...)
+    if (tabela.typ_karnetu === 'Umowa 12 miesięcy' || userPass.isContract12M) {
+      const rataMatch = String(userPass.rata || '').match(/(\d+)/);
+      const bieżącaRata = rataMatch ? parseInt(rataMatch[1], 10) : 1;
+
+      // Jeśli ogólna ciągłość jest większa niż bieżąca rata w umowie (bo to kolejna umowa w ciągłości),
+      // naliczamy ciągłość sumaryczną (np. 12 + 1 = 13, 14 itd.)
+      const naliczonaWartosc = Math.max(bieżącaRata, ogolnaCiaglosc);
+      return { value: naliczonaWartosc, isReset: false, reason: '' };
     }
 
+    // 4. KARNET NA ILOŚĆ TRENINGÓW (OGÓLNOROZWOJOWY)
     if (tabela.typ_karnetu === 'Na ilość treningów' || tabela.nazwa?.toLowerCase().includes('wejść')) {
-      const poczatkowe = parseInt(targetUserPass.poczatkoweWejsc || targetUserPass.ilosc_wejsc || '10', 10);
-      const pozostalo = parseInt(targetUserPass.pozostaloWejsc !== undefined && targetUserPass.pozostaloWejsc !== null ? targetUserPass.pozostaloWejsc : poczatkowe, 10);
+      const poczatkowe = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
+      const pozostalo = parseInt(userPass.pozostaloWejsc !== undefined && userPass.pozostaloWejsc !== null ? userPass.pozostaloWejsc : poczatkowe, 10);
       const odbyte = Math.max(0, poczatkowe - pozostalo);
       return { value: odbyte, isReset: false, reason: '' };
     }
 
-    return { value: targetUser?.cyklCiaglosci || 1, isReset: false, reason: '' };
+    // 5. KARNETY NA CZAS / OPEN / PÓŁROCZNE (np. 6M + 6M = miesiąc 7, 8, 9...)
+    return { value: ogolnaCiaglosc, isReset: false, reason: '' };
   };
 
   // Precyzyjne, ciągłe obliczanie pozycji paska postępu na osi roadmapy
@@ -686,26 +699,22 @@ export default function TwojBonusPage() {
     const totalSegments = sortedTiers.length;
     if (totalSegments === 0) return 0;
 
-    // Jeżeli wartość przekracza najwyższy próg
     const lastThreshold = Number(sortedTiers[totalSegments - 1].threshold) || 1;
     if (userVal >= lastThreshold) return 100;
 
     const segmentWidth = 100 / (totalSegments > 1 ? totalSegments - 1 : 1);
 
-    // Gdy mamy tylko 1 próg
     if (totalSegments === 1) {
       const singleThresh = Number(sortedTiers[0].threshold) || 1;
       return Math.min(100, Math.round((userVal / singleThresh) * 100));
     }
 
-    // Gdy użytkownik jest przed pierwszym progiem (np. ma 1 cykl a próg to 2)
     const firstThresh = Number(sortedTiers[0].threshold) || 1;
     if (userVal < firstThresh) {
       const fraction = userVal / firstThresh;
       return Math.round(fraction * segmentWidth);
     }
 
-    // Użytkownik jest pomiędzy kolejnymi progami
     for (let i = 0; i < totalSegments - 1; i++) {
       const currentThresh = Number(sortedTiers[i].threshold);
       const nextThresh = Number(sortedTiers[i + 1].threshold);
@@ -736,7 +745,7 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
-  // Lista klubowiczów oczekujących na sprawdzenie poziomu
+  // Lista klubowiczów oczekujących na sprawdzenie poziomu (tylko niezrobieni)
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const pass = client?.karnetyKlubowicza?.[0];
@@ -791,7 +800,6 @@ export default function TwojBonusPage() {
   }
 
   const activeViewingUser = inspectedClient || currentUser;
-  const activeViewingPass = activeViewingUser?.karnetyKlubowicza?.[0];
 
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
   const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2 && !k.hasLostContinuity).length;
@@ -809,14 +817,14 @@ export default function TwojBonusPage() {
     }
   };
 
+  // Sortowanie tabel: posiadany karnet klubowicza jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
     const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
       (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
-    ) || (activeViewingPass?.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase());
-
+    );
     const bIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
       (k: any) => k.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase()
-    ) || (activeViewingPass?.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase());
+    );
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -1038,7 +1046,7 @@ export default function TwojBonusPage() {
         {displayedTables.map((tabela, tableIndex) => {
           const isUserPass = activeViewingUser?.karnetyKlubowicza?.some(
             (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
-          ) || (activeViewingPass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase());
+          );
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
