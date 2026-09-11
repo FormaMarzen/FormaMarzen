@@ -21,13 +21,10 @@ export default function TwojBonusPage() {
   // Tabele bonusowe (karnety z przypisanymi poziomami)
   const [bonusTables, setBonusTables] = useState<any[]>([]);
 
-  // Zakładki widoku
-  const [activeTab, setActiveTab] = useState<'poziomy' | 'warunki' | 'rejestr'>('poziomy');
-
   // Wybrany/podświetlony poziom z roadmapy
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
 
-  // Warunki kwalifikacji (edytowalne przez admina)
+  // Warunki kwalifikacji (umieszczone bezpośrednio pod roadmapą, edytowalne przez admina)
   const [qualificationRules, setQualificationRules] = useState<any[]>([
     {
       id: 'umowa',
@@ -210,7 +207,7 @@ export default function TwojBonusPage() {
         }
       }
 
-      // 2. Pobieranie statusu programu oraz zasad z club_booking_rules lub inne_ustawienia
+      // 2. Pobieranie statusu programu oraz zasad z club_booking_rules
       const { data: rulesData } = await supabase.from('club_booking_rules').select('*').limit(1).maybeSingle();
       if (rulesData) {
         if (rulesData.bonus_program_active !== undefined) {
@@ -279,7 +276,7 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 4. Pobieranie danych klubowiczów
+      // 4. Pobieranie klientów
       const { data: klienciData } = await supabase.from('klienci').select('*');
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -622,12 +619,29 @@ export default function TwojBonusPage() {
     return userMonths;
   };
 
+  // SORTOWANIE TABEL: DLA KLUBOWICZA JEGO KARNET JEST ZAWSZE PIERWSZY NA STRONIE
+  const displayedTables = [...bonusTables].sort((a, b) => {
+    if (appRole === 'klubowicz') {
+      const aIsUserPass = currentUser?.karnetyKlubowicza?.some(
+        (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
+      ) || (userActivePass?.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase());
+
+      const bIsUserPass = currentUser?.karnetyKlubowicza?.some(
+        (k: any) => k.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase()
+      ) || (userActivePass?.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase());
+
+      if (aIsUserPass && !bIsUserPass) return -1;
+      if (!aIsUserPass && bIsUserPass) return 1;
+    }
+    return (a.kolejnosc ?? 0) - (b.kolejnosc ?? 0);
+  });
+
   return (
     <div className="max-w-[1700px] w-full mx-auto space-y-6 pb-28 px-3 sm:px-6 font-sans antialiased text-slate-800 overflow-x-hidden">
       
       {/* 1. GÓRNY BANER PROGRAMU */}
       {appRole === 'klubowicz' ? (
-        /* WIDOK DLA KLUBOWICZA: TYLKO TYTUŁ I STATUS */
+        /* DLA KLUBOWICZA: TYLKO NAZWA PROGRAMU I STATUS */
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
             <span>🏆</span> PROGRAM BONUSOWY
@@ -642,7 +656,7 @@ export default function TwojBonusPage() {
           </div>
         </div>
       ) : (
-        /* WIDOK DLA ADMINISTRATORA / TRENERA: PRZEŁĄCZNIK STATUSU ORAZ PRZYCISKI AKCJI */
+        /* DLA ADMINISTRATORA / TRENERA: PRZEŁĄCZNIK STATUSU ORAZ PRZYCISKI AKCJI */
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
@@ -740,359 +754,325 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 3. ZAKŁADKI WIDOKU */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
-        <button
-          onClick={() => setActiveTab('poziomy')}
-          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm shrink-0 ${
-            activeTab === 'poziomy'
-              ? 'bg-[#1a385c] text-white shadow-md'
-              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          <span>🥇</span> TABELE ROADMAPY ({bonusTables.length})
-        </button>
+      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY - Z PRIORYTETEM DLA KARNETU KLUBOWICZA) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        {displayedTables.map((tabela, tableIndex) => {
+          const isUserPass = currentUser?.karnetyKlubowicza?.some(
+            (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
+          ) || (userActivePass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase());
 
-        <button
-          onClick={() => setActiveTab('warunki')}
-          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm shrink-0 ${
-            activeTab === 'warunki'
-              ? 'bg-[#1a385c] text-white shadow-md'
-              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          <span>🛡️</span> WARUNKI KWALIFIKACJI
-        </button>
+          const userVal = getUserValForTable(tabela);
 
-        {/* ZAKŁADKA REJESTR KLUBOWICZÓW - WIDOCZNA TYLKO DLA ADMINISTRATORA / TRENERA */}
-        {(appRole === 'admin' || appRole === 'trener') && (
-          <button
-            onClick={() => setActiveTab('rejestr')}
-            className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm shrink-0 ${
-              activeTab === 'rejestr'
-                ? 'bg-[#1a385c] text-white shadow-md'
-                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            <span>👥</span> REJESTR KLUBOWICZÓW ({allKlienci.length})
-          </button>
-        )}
-      </div>
+          const maxThreshold = tabela.customTiers && tabela.customTiers.length > 0
+            ? Math.max(...tabela.customTiers.map((t: any) => Number(t.threshold) || 1))
+            : 12;
+          const progressPercent = Math.min(100, Math.max(0, (userVal / maxThreshold) * 100));
+          const highlightedTierId = selectedRoadmapTier[tabela.id] || null;
 
-      {/* 4. GŁÓWNA ZAWARTOŚĆ: 2 KARNETY NA JEDNEJ WYSOKOŚCI */}
-      {activeTab === 'poziomy' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-          {bonusTables.map((tabela, tableIndex) => {
-            const isUserPass = userActivePass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase();
-            const userVal = getUserValForTable(tabela);
-
-            const maxThreshold = tabela.customTiers && tabela.customTiers.length > 0
-              ? Math.max(...tabela.customTiers.map((t: any) => Number(t.threshold) || 1))
-              : 12;
-            const progressPercent = Math.min(100, Math.max(0, (userVal / maxThreshold) * 100));
-            const highlightedTierId = selectedRoadmapTier[tabela.id] || null;
-
-            return (
-              <div
-                key={tabela.id}
-                className={`bg-slate-50/80 border rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 transition-all ${
-                  isUserPass ? 'border-amber-400 ring-2 ring-amber-300/40 bg-amber-50/20' : 'border-sky-200'
-                }`}
-              >
-                {/* A. WYRAZISTY, KONTRASTOWY NAGŁÓWEK DANEGO KARNETU (NOWY STYL) */}
-                <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="bg-amber-400 text-slate-950 font-black text-[10px] px-3 py-0.5 rounded-lg uppercase tracking-wider shadow-sm">
-                        {tabela.typ_karnetu || 'Karnet cykliczny'}
+          return (
+            <div
+              key={tabela.id}
+              className={`bg-slate-50/80 border rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 transition-all ${
+                isUserPass ? 'border-emerald-500 ring-2 ring-emerald-400/40 bg-emerald-50/15' : 'border-sky-200'
+              }`}
+            >
+              {/* A. WYRAZISTY, KONTRASTOWY NAGŁÓWEK DANEGO KARNETU */}
+              <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  
+                  {/* TYP KARNETU ORAZ INFORMACJA O POSIADANYM KARNECIE PRZEZ KLUBOWICZA */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-amber-400 text-slate-950 font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm">
+                      {tabela.typ_karnetu || 'Karnet cykliczny'}
+                    </span>
+                    {isUserPass && (
+                      <span className="bg-emerald-500 text-white font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm flex items-center gap-1.5 border border-emerald-400/40">
+                        <span>⭐</span> TWÓJ AKTUALNY KARNET
                       </span>
-                      {isUserPass && (
-                        <span className="bg-emerald-500 text-white font-black text-[9px] px-2.5 py-0.5 rounded-lg uppercase tracking-wider shadow-sm flex items-center gap-1">
-                          <span>✓</span> TWÓJ KARNET
-                        </span>
-                      )}
-                    </div>
-
-                    {/* PRZYCISKI SORTOWANIA I USUWANIA TABELI DLA ADMINA */}
-                    {(appRole === 'admin' || appRole === 'trener') && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          disabled={tableIndex === 0}
-                          onClick={() => handleMoveTable(tableIndex, 'left')}
-                          className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
-                            tableIndex === 0
-                              ? 'bg-white/10 text-white/30 cursor-not-allowed'
-                              : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
-                          }`}
-                          title="Przesuń tabelę w lewo / wyżej"
-                        >
-                          ←
-                        </button>
-                        <button
-                          disabled={tableIndex === bonusTables.length - 1}
-                          onClick={() => handleMoveTable(tableIndex, 'right')}
-                          className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
-                            tableIndex === bonusTables.length - 1
-                              ? 'bg-white/10 text-white/30 cursor-not-allowed'
-                              : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
-                          }`}
-                          title="Przesuń tabelę w prawo / niżej"
-                        >
-                          →
-                        </button>
-                        <button
-                          onClick={() => handleDeleteTable(tabela.id, tabela.nazwa)}
-                          className="w-7 h-7 rounded-lg bg-white/10 text-rose-300 hover:bg-rose-600 hover:text-white text-xs flex items-center justify-center cursor-pointer transition-colors ml-1"
-                          title="Usuń tę tabelę"
-                        >
-                          ✕
-                        </button>
-                      </div>
                     )}
                   </div>
 
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-white/10">
-                    <div>
-                      <h2 className="text-lg sm:text-xl font-black uppercase tracking-tight text-white">
-                        {tabela.nazwa}
-                      </h2>
-                      <div className="text-xs text-sky-200 font-bold mt-0.5">
-                        Cena bazowa: <strong className="text-amber-300">{Number(tabela.cena || 0).toFixed(2)} PLN</strong>
-                      </div>
-                    </div>
-
-                    {(appRole === 'admin' || appRole === 'trener') && (
+                  {/* PRZYCISKI SORTOWANIA I USUWANIA DLA ADMINA */}
+                  {(appRole === 'admin' || appRole === 'trener') && (
+                    <div className="flex items-center gap-1">
                       <button
-                        onClick={() => handleOpenAddTierModal(tabela.id)}
-                        className="bg-amber-400 hover:bg-amber-300 text-slate-950 text-[10px] font-black px-3.5 py-2 rounded-xl cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm shrink-0 self-start sm:self-auto"
+                        disabled={tableIndex === 0}
+                        onClick={() => handleMoveTable(tableIndex, 'left')}
+                        className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
+                          tableIndex === 0
+                            ? 'bg-white/10 text-white/30 cursor-not-allowed'
+                            : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
+                        }`}
+                        title="Przesuń tabelę w lewo / wyżej"
                       >
-                        <span>+</span> DODAJ PRÓG
+                        ←
                       </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* B. LINIA ROADMAPY (PASEK POSTĘPU) */}
-                <div className="bg-white border border-sky-200 rounded-2xl p-3.5 shadow-sm space-y-3">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
-                      <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
-                    </span>
-                    <span className="text-[10px] font-bold text-slate-500">
-                      Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
-                    </span>
-                  </div>
-
-                  <div className="relative pt-4 pb-2 px-3">
-                    <div className="absolute top-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full -translate-y-1/2" />
-                    <div
-                      className="absolute top-1/2 left-0 h-1.5 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full -translate-y-1/2 transition-all duration-500"
-                      style={{ width: `${progressPercent}%` }}
-                    />
-
-                    <div className="relative flex justify-between items-center z-10">
-                      {tabela.customTiers?.map((tier: any) => {
-                        const isReached = isProgramActive && userVal >= Number(tier.threshold);
-                        const isSelected = highlightedTierId === tier.id;
-
-                        return (
-                          <button
-                            key={tier.id}
-                            type="button"
-                            onClick={() => setSelectedRoadmapTier(prev => ({
-                              ...prev,
-                              [tabela.id]: prev[tabela.id] === tier.id ? null : tier.id
-                            }))}
-                            className="group flex flex-col items-center cursor-pointer focus:outline-none"
-                            title={`Kliknij, aby podświetlić próg: ${tier.levelName}`}
-                          >
-                            <div
-                              className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black transition-all shadow-sm ${
-                                isReached
-                                  ? 'bg-emerald-500 text-white ring-3 ring-emerald-100'
-                                  : 'bg-white text-slate-500 border-2 border-slate-300 group-hover:border-amber-400'
-                              } ${isSelected ? 'ring-3 ring-amber-400 scale-110' : ''}`}
-                            >
-                              {isReached ? '✓' : tier.threshold}
-                            </div>
-                            <span className={`text-[8px] font-black uppercase mt-1 tracking-tight ${
-                              isReached ? 'text-emerald-900 font-extrabold' : 'text-slate-400'
-                            } ${isSelected ? 'text-amber-900 underline' : ''}`}>
-                              {tier.levelName}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="bg-sky-50/50 rounded-xl px-3 py-1.5 text-[10px] text-slate-600 font-medium flex items-center justify-between border border-sky-100">
-                    <span>Kliknij punkt na osi, aby wyfiltrować próg</span>
-                    <span className="font-bold text-sky-950">{Math.round(progressPercent)}% zaliczone</span>
-                  </div>
-                </div>
-
-                {/* C. KOMPAKTOWE POZIOMY NAGRÓD */}
-                <div className="space-y-2.5">
-                  {tabela.customTiers?.map((tier: any) => {
-                    const isUnlocked = isProgramActive && isUserPass && userVal >= Number(tier.threshold);
-                    const isHighlighted = highlightedTierId === tier.id;
-
-                    return (
-                      <div
-                        key={tier.id}
-                        className={`bg-white border rounded-2xl p-3.5 shadow-sm space-y-2 relative transition-all hover:shadow-md ${
-                          isHighlighted ? 'border-amber-500 ring-2 ring-amber-300' : 'border-sky-200'
-                        } ${getAccentBorder(tier.accent)}`}
+                      <button
+                        disabled={tableIndex === bonusTables.length - 1}
+                        onClick={() => handleMoveTable(tableIndex, 'right')}
+                        className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
+                          tableIndex === bonusTables.length - 1
+                            ? 'bg-white/10 text-white/30 cursor-not-allowed'
+                            : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
+                        }`}
+                        title="Przesuń tabelę w prawo / niżej"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="border border-amber-300 text-amber-900 bg-amber-50 text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
-                              {tier.levelName}
-                            </span>
-                            <span className="text-xs font-black text-slate-900">
-                              {tier.threshold} {tier.unit}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5">
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
-                              isUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {appRole === 'klubowicz' ? (isUnlocked ? 'ODBLOKOWANY ✓' : 'W TRAKCIE') : 'AKTYWNY'}
-                            </span>
-
-                            {(appRole === 'admin' || appRole === 'trener') && (
-                              <div className="flex items-center gap-1 ml-1">
-                                <button
-                                  onClick={() => handleOpenEditTierModal(tabela.id, tier)}
-                                  className="text-slate-400 hover:text-amber-800 text-xs p-1 cursor-pointer transition-colors"
-                                  title="Edytuj próg"
-                                >
-                                  ✏️
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteTier(tabela.id, tier.id)}
-                                  className="text-slate-400 hover:text-rose-600 text-xs p-1 cursor-pointer transition-colors"
-                                  title="Usuń próg"
-                                >
-                                  🗑️
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Nagroda główna */}
-                        <div className="bg-amber-50/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
-                          <div className="flex items-center gap-1.5 truncate">
-                            <span className="text-[10px]">🎁</span>
-                            <span className="font-bold text-slate-800 text-[11px] truncate">{tier.rewardTitle}</span>
-                          </div>
-                          {tier.rewardBadge && (
-                            <span className="bg-amber-200 text-amber-950 text-[9px] font-black px-1.5 py-0.5 rounded shrink-0">
-                              {tier.rewardBadge}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Bonus dodatkowy */}
-                        {tier.secondaryTitle && (
-                          <div className="bg-sky-50/80 border border-sky-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
-                            <div className="flex items-center gap-1.5 truncate">
-                              <span className="text-[10px]">👋</span>
-                              <span className="font-semibold text-slate-700 text-[11px] truncate">{tier.secondaryTitle}</span>
-                            </div>
-                            {tier.secondaryBadge && (
-                              <span className="bg-sky-200 text-sky-950 text-[9px] font-black px-1.5 py-0.5 rounded shrink-0">
-                                {tier.secondaryBadge}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {(!tabela.customTiers || tabela.customTiers.length === 0) && (
-                    <div className="text-center py-6 text-xs text-slate-400 font-medium italic bg-white rounded-2xl border border-dashed border-sky-200">
-                      Brak zdefiniowanych progów w tej tabeli.
+                        →
+                      </button>
+                      <button
+                        onClick={() => handleDeleteTable(tabela.id, tabela.nazwa)}
+                        className="w-7 h-7 rounded-lg bg-white/10 text-rose-300 hover:bg-rose-600 hover:text-white text-xs flex items-center justify-center cursor-pointer transition-colors ml-1"
+                        title="Usuń tę tabelę"
+                      >
+                        ✕
+                      </button>
                     </div>
                   )}
                 </div>
 
-                {/* PRZYCISK ZAPISU DO SUPABASE DLA ADMINISTRATORA */}
-                {(appRole === 'admin' || appRole === 'trener') && (
-                  <button
-                    type="button"
-                    disabled={isSaving}
-                    onClick={() => handleSaveTableToSupabase(tabela.id)}
-                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-2.5 rounded-2xl text-[11px] uppercase tracking-wider cursor-pointer shadow-sm transition-all text-center"
-                  >
-                    💾 Zapisz konfigurację tabeli: {tabela.nazwa}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-white/10">
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-black uppercase tracking-tight text-white flex items-center gap-2">
+                      {tabela.nazwa}
+                    </h2>
+                    <div className="text-xs text-sky-200 font-bold mt-0.5">
+                      Cena bazowa: <strong className="text-amber-300">{Number(tabela.cena || 0).toFixed(2)} PLN</strong>
+                    </div>
+                  </div>
 
-      {/* 5. ZAKŁADKA 2: WARUNKI KWALIFIKACJI (SAMODZIELNA EDYCJA PRZEZ ADMINA) */}
-      {activeTab === 'warunki' && (
-        <div className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-7 shadow-sm space-y-6">
-          <div className="border-b border-sky-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-black text-sky-950 uppercase tracking-wide flex items-center gap-2">
-                <span>🛡️</span> Warunki kwalifikacji i zasady ciągłości
-              </h3>
-              <p className="text-xs text-slate-500 mt-1 font-medium">
-                Zasady kwalifikacji do progów lojalnościowych w klubie Forma Marzeń.
-              </p>
-            </div>
-            {appRole === 'admin' && (
-              <div className="text-[11px] font-bold text-sky-800 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-xl">
-                ✍️ Kliknij „Edytuj treść”, aby zmodyfikować zasady
+                  {(appRole === 'admin' || appRole === 'trener') && (
+                    <button
+                      onClick={() => handleOpenAddTierModal(tabela.id)}
+                      className="bg-amber-400 hover:bg-amber-300 text-slate-950 text-[10px] font-black px-3.5 py-2 rounded-xl cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm shrink-0 self-start sm:self-auto"
+                    >
+                      <span>+</span> DODAJ PRÓG
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {qualificationRules.map((rule) => (
-              <div key={rule.id} className="bg-sky-50/60 border border-sky-200 rounded-2xl p-5 space-y-3 relative flex flex-col justify-between">
-                <div className="space-y-2">
-                  <span className="bg-sky-200 text-sky-950 font-black text-[10px] px-2.5 py-1 rounded-md uppercase">
-                    {rule.badge}
+              {/* B. LINIA ROADMAPY (PASEK POSTĘPU) */}
+              <div className="bg-white border border-sky-200 rounded-2xl p-3.5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
-                  <h4 className="font-black text-slate-900 text-sm">{rule.title}</h4>
-                  <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                    {rule.desc}
-                  </p>
+                  <span className="text-[10px] font-bold text-slate-500">
+                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
+                  </span>
                 </div>
 
-                {appRole === 'admin' && (
-                  <div className="pt-3 border-t border-sky-100 flex justify-end">
-                    <button
-                      onClick={() => handleOpenEditRuleModal(rule)}
-                      className="bg-white hover:bg-sky-100 border border-sky-300 text-sky-950 font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer shadow-sm transition-colors"
+                <div className="relative pt-4 pb-2 px-3">
+                  <div className="absolute top-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full -translate-y-1/2" />
+                  <div
+                    className="absolute top-1/2 left-0 h-1.5 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full -translate-y-1/2 transition-all duration-500"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+
+                  <div className="relative flex justify-between items-center z-10">
+                    {tabela.customTiers?.map((tier: any) => {
+                      const isReached = isProgramActive && userVal >= Number(tier.threshold);
+                      const isSelected = highlightedTierId === tier.id;
+
+                      return (
+                        <button
+                          key={tier.id}
+                          type="button"
+                          onClick={() => setSelectedRoadmapTier(prev => ({
+                            ...prev,
+                            [tabela.id]: prev[tabela.id] === tier.id ? null : tier.id
+                          }))}
+                          className="group flex flex-col items-center cursor-pointer focus:outline-none"
+                          title={`Kliknij, aby podświetlić próg: ${tier.levelName}`}
+                        >
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black transition-all shadow-sm ${
+                              isReached
+                                ? 'bg-emerald-500 text-white ring-3 ring-emerald-100'
+                                : 'bg-white text-slate-500 border-2 border-slate-300 group-hover:border-amber-400'
+                            } ${isSelected ? 'ring-3 ring-amber-400 scale-110' : ''}`}
+                          >
+                            {isReached ? '✓' : tier.threshold}
+                          </div>
+                          <span className={`text-[8px] font-black uppercase mt-1 tracking-tight ${
+                            isReached ? 'text-emerald-900 font-extrabold' : 'text-slate-400'
+                          } ${isSelected ? 'text-amber-900 underline' : ''}`}>
+                            {tier.levelName}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="bg-sky-50/50 rounded-xl px-3 py-1.5 text-[10px] text-slate-600 font-medium flex items-center justify-between border border-sky-100">
+                  <span>Kliknij punkt na osi, aby wyfiltrować próg</span>
+                  <span className="font-bold text-sky-950">{Math.round(progressPercent)}% zaliczone</span>
+                </div>
+              </div>
+
+              {/* C. KOMPAKTOWE POZIOMY NAGRÓD */}
+              <div className="space-y-2.5">
+                {tabela.customTiers?.map((tier: any) => {
+                  const isUnlocked = isProgramActive && isUserPass && userVal >= Number(tier.threshold);
+                  const isHighlighted = highlightedTierId === tier.id;
+
+                  return (
+                    <div
+                      key={tier.id}
+                      className={`bg-white border rounded-2xl p-3.5 shadow-sm space-y-2 relative transition-all hover:shadow-md ${
+                        isHighlighted ? 'border-amber-500 ring-2 ring-amber-300' : 'border-sky-200'
+                      } ${getAccentBorder(tier.accent)}`}
                     >
-                      ✏️ Edytuj treść
-                    </button>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="border border-amber-300 text-amber-900 bg-amber-50 text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
+                            {tier.levelName}
+                          </span>
+                          <span className="text-xs font-black text-slate-900">
+                            {tier.threshold} {tier.unit}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                            isUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            {appRole === 'klubowicz' ? (isUnlocked ? 'ODBLOKOWANY ✓' : 'W TRAKCIE') : 'AKTYWNY'}
+                          </span>
+
+                          {(appRole === 'admin' || appRole === 'trener') && (
+                            <div className="flex items-center gap-1 ml-1">
+                              <button
+                                onClick={() => handleOpenEditTierModal(tabela.id, tier)}
+                                className="text-slate-400 hover:text-amber-800 text-xs p-1 cursor-pointer transition-colors"
+                                title="Edytuj próg"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => handleDeleteTier(tabela.id, tier.id)}
+                                className="text-slate-400 hover:text-rose-600 text-xs p-1 cursor-pointer transition-colors"
+                                title="Usuń próg"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Nagroda główna */}
+                      <div className="bg-amber-50/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="text-[10px]">🎁</span>
+                          <span className="font-bold text-slate-800 text-[11px] truncate">{tier.rewardTitle}</span>
+                        </div>
+                        {tier.rewardBadge && (
+                          <span className="bg-amber-200 text-amber-950 text-[9px] font-black px-1.5 py-0.5 rounded shrink-0">
+                            {tier.rewardBadge}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Bonus dodatkowy */}
+                      {tier.secondaryTitle && (
+                        <div className="bg-sky-50/80 border border-sky-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-1.5 truncate">
+                            <span className="text-[10px]">👋</span>
+                            <span className="font-semibold text-slate-700 text-[11px] truncate">{tier.secondaryTitle}</span>
+                          </div>
+                          {tier.secondaryBadge && (
+                            <span className="bg-sky-200 text-sky-950 text-[9px] font-black px-1.5 py-0.5 rounded shrink-0">
+                              {tier.secondaryBadge}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {(!tabela.customTiers || tabela.customTiers.length === 0) && (
+                  <div className="text-center py-6 text-xs text-slate-400 font-medium italic bg-white rounded-2xl border border-dashed border-sky-200">
+                    Brak zdefiniowanych progów w tej tabeli.
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
 
-      {/* 6. ZAKŁADKA 3: REJESTR KLUBOWICZÓW (TYLKO DLA ADMINA) */}
-      {activeTab === 'rejestr' && (appRole === 'admin' || appRole === 'trener') && (
+              {/* PRZYCISK ZAPISU DO SUPABASE DLA ADMINA */}
+              {(appRole === 'admin' || appRole === 'trener') && (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => handleSaveTableToSupabase(tabela.id)}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-2.5 rounded-2xl text-[11px] uppercase tracking-wider cursor-pointer shadow-sm transition-all text-center"
+                >
+                  💾 Zapisz konfigurację tabeli: {tabela.nazwa}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 4. WARUNKI KWALIFIKACJI (UMIESZCZONE POD TABELAMI ROADMAPY, BEZ PRZEWIJANIA W BOK) */}
+      <div className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-7 shadow-sm space-y-5">
+        <div className="border-b border-sky-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-black text-sky-950 uppercase tracking-wide flex items-center gap-2">
+              <span>🛡️</span> Warunki kwalifikacji i zasady ciągłości
+            </h3>
+            <p className="text-xs text-slate-500 mt-1 font-medium">
+              Zasady kwalifikacji do progów lojalnościowych w klubie Forma Marzeń.
+            </p>
+          </div>
+          {appRole === 'admin' && (
+            <div className="text-[11px] font-bold text-sky-800 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-xl self-start sm:self-auto">
+              ✍️ Kliknij „Edytuj treść”, aby zmodyfikować zasady
+            </div>
+          )}
+        </div>
+
+        {/* UKŁAD PIONOWY NA TELEFONIE, 3 KOLUMNY NA EKRANIE KOMPUTERA */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+          {qualificationRules.map((rule) => (
+            <div key={rule.id} className="bg-sky-50/60 border border-sky-200 rounded-2xl p-5 space-y-3 relative flex flex-col justify-between">
+              <div className="space-y-2">
+                <span className="bg-sky-200 text-sky-950 font-black text-[10px] px-2.5 py-1 rounded-md uppercase inline-block">
+                  {rule.badge}
+                </span>
+                <h4 className="font-black text-slate-900 text-sm">{rule.title}</h4>
+                <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                  {rule.desc}
+                </p>
+              </div>
+
+              {appRole === 'admin' && (
+                <div className="pt-3 border-t border-sky-100 flex justify-end">
+                  <button
+                    onClick={() => handleOpenEditRuleModal(rule)}
+                    className="bg-white hover:bg-sky-100 border border-sky-300 text-sky-950 font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer shadow-sm transition-colors"
+                  >
+                    ✏️ Edytuj treść
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 5. REJESTR KLUBOWICZÓW (WIDOCZNY TYLKO DLA ADMINISTRATORA I TRENERA NA SAMYM DOLE) */}
+      {(appRole === 'admin' || appRole === 'trener') && (
         <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden">
-          <div className="p-6 border-b border-sky-100">
+          <div className="p-5 sm:p-6 border-b border-sky-100">
             <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
               👥 Rejestr ciągłości i statusów klubowiczów
             </h3>
+            <p className="text-xs text-slate-400 mt-0.5 font-medium">
+              Podgląd stażu oraz osiągniętych progów klubowiczów z bazy danych Supabase.
+            </p>
           </div>
 
           <div className="overflow-x-auto">
@@ -1138,7 +1118,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 7. MODAL: EDYCJA WARUNKU KWALIFIKACJI (ADMIN) */}
+      {/* MODAL 1: EDYCJA WARUNKU KWALIFIKACJI (ADMIN) */}
       {isEditRuleModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
@@ -1203,7 +1183,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 8. MODAL: DODAWANIE NOWEJ TABELI */}
+      {/* MODAL 2: DODAWANIE NOWEJ TABELI (ADMIN) */}
       {isAddTableModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
@@ -1274,7 +1254,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 9. MODAL: DODAWANIE / EDYCJA PROGU */}
+      {/* MODAL 3: DODAWANIE / EDYCJA PROGU (ADMIN) */}
       {isTierModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4">
