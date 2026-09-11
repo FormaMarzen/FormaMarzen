@@ -18,6 +18,9 @@ export default function TwojBonusPage() {
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
 
+  // Zweryfikowani klubowicze przez administratora (ukrywa ich z listy oczekujących)
+  const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
+
   // Główny status programu (włączony / wyłączony)
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
@@ -286,7 +289,7 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 4. Pobieranie danych klientów
+      // 4. Pobieranie klientów
       const { data: klienciData } = await supabase.from('klienci').select('*');
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -428,7 +431,7 @@ export default function TwojBonusPage() {
     setIsEditTableModalOpen(true);
   };
 
-  // Zapisanie zmodyfikowanej nazwy / parametrów tabeli
+  // Zapisanie zmodyfikowanej nazwy tabeli
   const handleSaveEditTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tableNameInput.trim() || !editingTableId) return;
@@ -641,7 +644,7 @@ export default function TwojBonusPage() {
     }
   };
 
-  // OBLICZANIE POSTĘPU Z UWZGLĘDNIENIEM BRAKU CIĄGŁOŚCI I ZMIANY KARNETU
+  // Obliczanie postępu użytkownika
   const calculateMemberProgress = (tabela: any, targetUser: any = currentUser) => {
     if (!isProgramActive || !targetUser) return { value: 0, isReset: false, reason: '' };
 
@@ -675,7 +678,50 @@ export default function TwojBonusPage() {
     return { value: targetUser?.cyklCiaglosci || 1, isReset: false, reason: '' };
   };
 
-  // Obliczenie czy dany klubowicz ma odblokowany poziom do weryfikacji
+  // Precyzyjne, ciągłe obliczanie pozycji paska postępu na osi roadmapy
+  const calculateSmoothRoadmapProgress = (userVal: number, customTiers: any[]) => {
+    if (!customTiers || customTiers.length === 0 || userVal <= 0) return 0;
+
+    const sortedTiers = [...customTiers].sort((a, b) => Number(a.threshold) - Number(b.threshold));
+    const totalSegments = sortedTiers.length;
+    if (totalSegments === 0) return 0;
+
+    // Jeżeli wartość przekracza najwyższy próg
+    const lastThreshold = Number(sortedTiers[totalSegments - 1].threshold) || 1;
+    if (userVal >= lastThreshold) return 100;
+
+    const segmentWidth = 100 / (totalSegments > 1 ? totalSegments - 1 : 1);
+
+    // Gdy mamy tylko 1 próg
+    if (totalSegments === 1) {
+      const singleThresh = Number(sortedTiers[0].threshold) || 1;
+      return Math.min(100, Math.round((userVal / singleThresh) * 100));
+    }
+
+    // Gdy użytkownik jest przed pierwszym progiem (np. ma 1 cykl a próg to 2)
+    const firstThresh = Number(sortedTiers[0].threshold) || 1;
+    if (userVal < firstThresh) {
+      const fraction = userVal / firstThresh;
+      return Math.round(fraction * segmentWidth);
+    }
+
+    // Użytkownik jest pomiędzy kolejnymi progami
+    for (let i = 0; i < totalSegments - 1; i++) {
+      const currentThresh = Number(sortedTiers[i].threshold);
+      const nextThresh = Number(sortedTiers[i + 1].threshold);
+
+      if (userVal >= currentThresh && userVal <= nextThresh) {
+        const range = nextThresh - currentThresh;
+        const progressInRange = range > 0 ? (userVal - currentThresh) / range : 0;
+        const basePosition = i * segmentWidth;
+        return Math.min(100, Math.round(basePosition + progressInRange * segmentWidth));
+      }
+    }
+
+    return 0;
+  };
+
+  // Pobieranie odblokowanych poziomów danego klubowicza
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client || client.hasLostContinuity) return [];
     const clientPass = client?.karnetyKlubowicza?.[0];
@@ -690,20 +736,30 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
-  // Lista klubowiczów którzy zaliczyli jakikolwiek próg (dla admina do weryfikacji)
+  // Lista klubowiczów oczekujących na sprawdzenie poziomu
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const pass = client?.karnetyKlubowicza?.[0];
     const topLevel = unlocked.length > 0 ? unlocked[unlocked.length - 1] : null;
+    const verificationKey = `${client.id}_${topLevel?.id}`;
+    const isAlreadyVerified = verifiedMemberTiers.includes(verificationKey);
+
     return {
       ...client,
       passName: pass?.nazwa || 'Brak',
       unlockedLevels: unlocked,
-      topLevel
+      topLevel,
+      verificationKey,
+      isAlreadyVerified
     };
-  }).filter(c => c.unlockedLevels.length > 0);
+  }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  // Filtrowani podopieczni w wyszukiwarce
+  // Zatwierdzenie poziomu przez administratora
+  const handleMarkTierAsVerified = (verificationKey: string) => {
+    setVerifiedMemberTiers(prev => [...prev, verificationKey]);
+  };
+
+  // Wyszukiwarka podopiecznych
   const searchedMembers = adminSearchQuery.trim().length >= 2
     ? allKlienci.filter(c => {
         const full = `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase();
@@ -711,7 +767,6 @@ export default function TwojBonusPage() {
       })
     : [];
 
-  // Sprawdzenie czy aktywny klubowicz posiada odblokowany próg (dla czerwonego badge'a z wykrzyknikiem)
   const currentMemberUnlockedTiers = getUnlockedLevelsForClient(currentUser);
   const hasMemberUnlockedTier = currentMemberUnlockedTiers.length > 0;
 
@@ -735,11 +790,9 @@ export default function TwojBonusPage() {
     );
   }
 
-  // Aktywny użytkownik dla widoku tabel (jeśli admin bada kogoś z listy, renderujemy jego konto)
   const activeViewingUser = inspectedClient || currentUser;
   const activeViewingPass = activeViewingUser?.karnetyKlubowicza?.[0];
 
-  // Statystyki dla administratora
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
   const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2 && !k.hasLostContinuity).length;
   const avgContinuity = allKlienci.length > 0 
@@ -756,7 +809,6 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Sortowanie tabel: karnet podopiecznego jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
     const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
       (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
@@ -776,7 +828,6 @@ export default function TwojBonusPage() {
       
       {/* 1. GÓRNY BANER PROGRAMU */}
       {appRole === 'klubowicz' ? (
-        /* DLA KLUBOWICZA: TYLKO NAZWA PROGRAMU I STATUS ORAZ CZERWONY BADGE PO ZALICZENIU POZIOMU */
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
@@ -798,7 +849,6 @@ export default function TwojBonusPage() {
           </div>
         </div>
       ) : (
-        /* DLA ADMINISTRATORA / TRENERA */
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
@@ -810,7 +860,6 @@ export default function TwojBonusPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* PRZEŁĄCZNIK STATUSU PROGRAMU DLA ADMINA */}
             <div className="flex items-center gap-3 bg-sky-50/80 border border-sky-200 px-4 py-2 rounded-2xl">
               <span className="text-xs font-black text-slate-700 uppercase">
                 {isProgramActive ? 'Program Aktywny' : 'Program Wstrzymany'}
@@ -846,11 +895,9 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ LISTA OSÓB DO WERYFIKACJI (WZÓR ZE ZRZUTÓW EKRANU) */}
+      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ LISTA WERYFIKACJI */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-4">
-          
-          {/* PASEK WYSZUKIWANIA PODOPIECZNEGO */}
           <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2.5">
             <label className="text-[11px] font-black text-sky-950 uppercase tracking-wider flex items-center gap-2">
               <span>🔍</span> WYSZUKAJ PODOPIECZNEGO (OPCJONALNIE):
@@ -873,7 +920,6 @@ export default function TwojBonusPage() {
               )}
             </div>
 
-            {/* WYNIKI SZYBKIEGO WYSZUKIWANIA */}
             {searchedMembers.length > 0 && (
               <div className="bg-white border border-sky-200 rounded-2xl p-2 shadow-lg divide-y divide-sky-100 max-h-56 overflow-y-auto mt-2">
                 {searchedMembers.map((client) => (
@@ -898,14 +944,13 @@ export default function TwojBonusPage() {
             )}
           </div>
 
-          {/* BANER INSPEKCJI PODOPIECZNEGO PRZEZ ADMINA */}
           {inspectedClient && (
             <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex items-center justify-between gap-3 shadow-sm">
               <div className="flex items-center gap-2.5">
                 <span className="text-xl">👁️</span>
                 <div>
                   <span className="text-xs font-black text-amber-950 uppercase">
-                    Podgląd profilu klubowicza: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
+                    Podgląd profilu: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
                   </span>
                   <p className="text-[11px] text-amber-900 font-medium">
                     Karnet: {inspectedClient.karnetyKlubowicza?.[0]?.nazwa || 'Brak'} • Ciągłość: {inspectedClient.cyklCiaglosci || 1} mies.
@@ -921,71 +966,74 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* CZERWONY BOKS: KLUBOWICZE Z ODBLOKOWANYM POZIOMEM DO SPRAWDZENIA */}
-          <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <span className="w-3.5 h-3.5 rounded-full bg-rose-600 animate-pulse inline-block" />
-                <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">
-                  KLUBOWICZE Z ODBLOKOWANYM POZIOMEM DO WERYFIKACJI ({qualifiedMembersList.length})
-                </h3>
+          {/* TABELA KLUBOWICZÓW POJAWIA SIĘ TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
+          {qualifiedMembersList.length > 0 && (
+            <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full bg-rose-600 animate-pulse inline-block" />
+                  <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">
+                    KLUBOWICZE Z ODBLOKOWANYM POZIOMEM DO WERYFIKACJI ({qualifiedMembersList.length})
+                  </h3>
+                </div>
+                <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider">
+                  Wymagają Twojego sprawdzenia
+                </span>
               </div>
-              <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider">
-                Wymagają Twojego sprawdzenia
-              </span>
-            </div>
 
-            <div className="overflow-x-auto bg-white border border-rose-200 rounded-2xl">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider">
-                    <th className="py-3 px-4">KLUBOWICZ</th>
-                    <th className="py-3 px-4">E-MAIL</th>
-                    <th className="py-3 px-4">KARNET</th>
-                    <th className="py-3 px-4">ODBLOKOWANY POZIOM</th>
-                    <th className="py-3 px-4 text-right">AKCJA</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-rose-100 text-xs font-medium">
-                  {qualifiedMembersList.map((client) => (
-                    <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
-                      <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-rose-600" />
-                        {client.firstName} {client.lastName}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-600">{client.email}</td>
-                      <td className="py-3.5 px-4 font-bold text-slate-800">{client.passName}</td>
-                      <td className="py-3.5 px-4">
-                        <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-0.5 rounded-md text-[10px] uppercase border border-amber-300">
-                          {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.topLevel?.unit})
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <button
-                          onClick={() => setInspectedClient(client)}
-                          className="bg-rose-600 hover:bg-rose-700 text-white font-black px-4 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-                        >
-                          SPRAWDŹ →
-                        </button>
-                      </td>
+              <div className="overflow-x-auto bg-white border border-rose-200 rounded-2xl">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider">
+                      <th className="py-3 px-4">KLUBOWICZ</th>
+                      <th className="py-3 px-4">E-MAIL</th>
+                      <th className="py-3 px-4">KARNET</th>
+                      <th className="py-3 px-4">ODBLOKOWANY POZIOM</th>
+                      <th className="py-3 px-4 text-right">AKCJA</th>
                     </tr>
-                  ))}
-                  {qualifiedMembersList.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-400 font-medium text-xs italic">
-                        Brak klubowiczów oczekujących na weryfikację odblokowanych poziomów.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-rose-100 text-xs font-medium">
+                    {qualifiedMembersList.map((client) => (
+                      <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
+                        <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-rose-600" />
+                          {client.firstName} {client.lastName}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-600">{client.email}</td>
+                        <td className="py-3.5 px-4 font-bold text-slate-800">{client.passName}</td>
+                        <td className="py-3.5 px-4">
+                          <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-0.5 rounded-md text-[10px] uppercase border border-amber-300">
+                            {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.topLevel?.unit})
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => setInspectedClient(client)}
+                              className="bg-rose-600 hover:bg-rose-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+                            >
+                              SPRAWDŹ →
+                            </button>
+                            <button
+                              onClick={() => handleMarkTierAsVerified(client.verificationKey)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+                              title="Zatwierdź nagrodę i zdejmij z listy"
+                            >
+                              ✓ ZALICZ
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-
+          )}
         </div>
       )}
 
-      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY - Z PRIORYTETEM KARNETU KLUBOWICZA NA 1. MIEJSCU) */}
+      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
           const isUserPass = activeViewingUser?.karnetyKlubowicza?.some(
@@ -995,10 +1043,8 @@ export default function TwojBonusPage() {
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
 
-          const maxThreshold = tabela.customTiers && tabela.customTiers.length > 0
-            ? Math.max(...tabela.customTiers.map((t: any) => Number(t.threshold) || 1))
-            : 12;
-          const progressPercent = Math.min(100, Math.max(0, (userVal / maxThreshold) * 100));
+          // Ciągłe wyliczanie postępu na pasku roadmapy (np. 1 cykl przy progu 2 = 50% drogi)
+          const progressPercent = calculateSmoothRoadmapProgress(userVal, tabela.customTiers);
           const highlightedTierId = selectedRoadmapTier[tabela.id] || null;
 
           return (
@@ -1011,8 +1057,6 @@ export default function TwojBonusPage() {
               {/* A. WYRAZISTY, KONTRASTOWY NAGŁÓWEK DANEGO KARNETU */}
               <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  
-                  {/* TYP KARNETU ORAZ PLAKIETKA TWÓJ KARNET Z WYKRZYKNIKIEM PO OSIĄGNIĘCIU PROGU */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="bg-amber-400 text-slate-950 font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm">
                       {tabela.typ_karnetu || 'Karnet cykliczny'}
@@ -1029,7 +1073,6 @@ export default function TwojBonusPage() {
                     )}
                   </div>
 
-                  {/* AKCJE ADMINISTRATORA: SORTOWANIE, EDYCJA NAZWY ORAZ USUWANIE TABELI */}
                   {(appRole === 'admin' || appRole === 'trener') && (
                     <div className="flex items-center gap-1">
                       <button
@@ -1040,7 +1083,7 @@ export default function TwojBonusPage() {
                             ? 'bg-white/10 text-white/30 cursor-not-allowed'
                             : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
                         }`}
-                        title="Przesuń tabelę w lewo / wyżej"
+                        title="Przesuń tabelę w lewo"
                       >
                         ←
                       </button>
@@ -1052,7 +1095,7 @@ export default function TwojBonusPage() {
                             ? 'bg-white/10 text-white/30 cursor-not-allowed'
                             : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
                         }`}
-                        title="Przesuń tabelę w prawo / niżej"
+                        title="Przesuń tabelę w prawo"
                       >
                         →
                       </button>
@@ -1095,14 +1138,14 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* B. LINIA ROADMAPY (PASEK POSTĘPU) */}
+              {/* B. LINIA ROADMAPY Z PŁYNNYM PASKIEM POSTĘPU */}
               <div className="bg-white border border-sky-200 rounded-2xl p-3.5 shadow-sm space-y-3">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
                   <span className="text-[10px] font-bold text-slate-500">
-                    Staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
+                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
                   </span>
                 </div>
 
@@ -1157,7 +1200,7 @@ export default function TwojBonusPage() {
 
                 <div className="bg-sky-50/50 rounded-xl px-3 py-1.5 text-[10px] text-slate-600 font-medium flex items-center justify-between border border-sky-100">
                   <span>Kliknij punkt na osi, aby wyfiltrować próg</span>
-                  <span className="font-bold text-sky-950">{Math.round(progressPercent)}% zaliczone</span>
+                  <span className="font-bold text-sky-950">{progressPercent}% do celu</span>
                 </div>
               </div>
 
@@ -1213,7 +1256,6 @@ export default function TwojBonusPage() {
                         </div>
                       </div>
 
-                      {/* Nagroda główna */}
                       <div className="bg-amber-50/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
                         <div className="flex items-center gap-1.5 truncate">
                           <span className="text-[10px]">🎁</span>
@@ -1226,7 +1268,6 @@ export default function TwojBonusPage() {
                         )}
                       </div>
 
-                      {/* Bonus dodatkowy */}
                       {tier.secondaryTitle && (
                         <div className="bg-sky-50/80 border border-sky-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
                           <div className="flex items-center gap-1.5 truncate">
@@ -1251,7 +1292,6 @@ export default function TwojBonusPage() {
                 )}
               </div>
 
-              {/* PRZYCISK ZAPISU DO SUPABASE DLA ADMINA */}
               {(appRole === 'admin' || appRole === 'trener') && (
                 <button
                   type="button"
@@ -1267,7 +1307,7 @@ export default function TwojBonusPage() {
         })}
       </div>
 
-      {/* 4. WARUNKI KWALIFIKACJI W FORMIE PRZYCISKU ROZWIJANEJ LISTY (AKORDEON) */}
+      {/* 4. WARUNKI KWALIFIKACJI (AKORDEON POD ROADMAPĄ) */}
       <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden transition-all">
         <button
           type="button"
@@ -1299,7 +1339,6 @@ export default function TwojBonusPage() {
           </div>
         </button>
 
-        {/* ROZWIJANA TREŚĆ AKORDEONU */}
         {isRulesExpanded && (
           <div className="p-5 sm:p-7 pt-0 border-t border-sky-100 space-y-5 animate-in fade-in duration-200">
             {appRole === 'admin' && (
@@ -1611,7 +1650,6 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* Nagroda klubowicza */}
               <div className="bg-amber-50/70 p-3.5 rounded-2xl border border-amber-200 space-y-2">
                 <h4 className="font-black text-amber-950 uppercase text-[10px]">🎁 Nagroda klubowicza</h4>
                 <div className="grid grid-cols-3 gap-2">
@@ -1637,7 +1675,6 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* Dodatkowy bonus */}
               <div className="bg-sky-50/70 p-3.5 rounded-2xl border border-sky-200 space-y-2">
                 <h4 className="font-black text-sky-950 uppercase text-[10px]">👋 Bonus dodatkowy</h4>
                 <div className="grid grid-cols-3 gap-2">
