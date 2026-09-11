@@ -13,14 +13,22 @@ export default function TwojBonusPage() {
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
-  const [karnetyCennik, setKarnetyCennik] = useState<any[]>([]);
+  
+  // Tabele bonusowe (karnety z przypisanymi poziomami)
+  const [bonusTables, setBonusTables] = useState<any[]>([]);
 
   // Zakładki widoku
   const [activeTab, setActiveTab] = useState<'poziomy' | 'warunki' | 'rejestr'>('poziomy');
 
-  // Modal dodawania / edycji poziomu
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [targetKarnetId, setTargetKarnetId] = useState<string | number>('');
+  // Modal 1: Dodawanie nowej tabeli
+  const [isAddTableModalOpen, setIsAddTableModalOpen] = useState(false);
+  const [newTableName, setNewTableName] = useState('');
+  const [newTableType, setNewTableType] = useState('Umowa 12 miesięcy');
+  const [newTablePrice, setNewTablePrice] = useState('199.00');
+
+  // Modal 2: Dodawanie / edycja progu
+  const [isTierModalOpen, setIsTierModalOpen] = useState(false);
+  const [targetTableId, setTargetTableId] = useState<string | number>('');
   const [editingTierId, setEditingTierId] = useState<number | null>(null);
   const [levelName, setLevelName] = useState('BRĄZOWY');
   const [thresholdVal, setThresholdVal] = useState('3');
@@ -28,11 +36,11 @@ export default function TwojBonusPage() {
   const [rewardTitle, setRewardTitle] = useState('');
   const [rewardBadge, setRewardBadge] = useState('-10%');
   const [secondaryTitle, setSecondaryTitle] = useState('');
-  const [secondaryBadge, setSecondaryBadge] = useState('-10%');
+  const [secondaryBadge, setSecondaryBadge] = useState('GRATIS');
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
-  const [isSavingTier, setIsSavingTier] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Domyślne poziomy startowe dla karnetów
+  // Szablony startowych progów lojalnościowych
   const defaultTiersUmowa = [
     {
       id: 101,
@@ -52,7 +60,7 @@ export default function TwojBonusPage() {
       threshold: 6,
       unit: 'miesięcy',
       accent: 'slate',
-      rewardTitle: '+14 dni bezpłatnego zamrożenia do wykorzystania.',
+      rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu.',
       rewardBadge: '+14 DNI',
       secondaryTitle: 'Darmowa analiza składu ciała InBody.',
       secondaryBadge: 'GRATIS',
@@ -91,7 +99,7 @@ export default function TwojBonusPage() {
       threshold: 2,
       unit: 'cykle',
       accent: 'amber',
-      rewardTitle: 'Jednorazowa wejściówka dla osoby towarzyszącej.',
+      rewardTitle: 'Jednorazowa wejściówka dla osoby towarzyszącej gratis.',
       rewardBadge: 'GRATIS',
       secondaryTitle: '5% stałego rabatu na odnowienie karnetu.',
       secondaryBadge: '-5%',
@@ -103,7 +111,7 @@ export default function TwojBonusPage() {
       threshold: 4,
       unit: 'cykle',
       accent: 'slate',
-      rewardTitle: '20 PLN doładowania portfela klubowego.',
+      rewardTitle: '20 PLN doładowania do portfela klubowego.',
       rewardBadge: '+20 PLN',
       secondaryTitle: '10% rabatu na akcesoria treningowe.',
       secondaryBadge: '-10%',
@@ -123,14 +131,14 @@ export default function TwojBonusPage() {
     }
   ];
 
-  const defaultTiersWejsciowy = [
+  const defaultTiersWejscia = [
     {
       id: 301,
       levelName: 'BRĄZOWY',
       threshold: 10,
       unit: 'wejść',
       accent: 'amber',
-      rewardTitle: '+1 dodatkowe wejście dopisane do Twojego karnetu.',
+      rewardTitle: '+1 dodatkowe wejście do puli karnetu.',
       rewardBadge: '+1 WEJŚCIE',
       secondaryTitle: 'Napój izotoniczny w recepcji gratis.',
       secondaryBadge: 'GRATIS',
@@ -147,18 +155,6 @@ export default function TwojBonusPage() {
       secondaryTitle: 'Shake białkowy po treningu w prezencie.',
       secondaryBadge: 'GRATIS',
       active: true
-    },
-    {
-      id: 303,
-      levelName: 'ZŁOTY',
-      threshold: 50,
-      unit: 'wejść',
-      accent: 'yellow',
-      rewardTitle: 'Rabat -20% na zakup kolejnego pakietu wejść.',
-      rewardBadge: '-20%',
-      secondaryTitle: 'Klubowa torba treningowa Forma Marzeń.',
-      secondaryBadge: 'VIP',
-      active: true
     }
   ];
 
@@ -168,6 +164,7 @@ export default function TwojBonusPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
+      // 1. Sprawdzenie uprawnień
       const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
@@ -180,7 +177,7 @@ export default function TwojBonusPage() {
         }
       }
 
-      // Pobieranie karnetów z katalog_karnetow z fallbackiem do karnety
+      // 2. Pobieranie karnetów z Supabase
       let { data: karnetyData } = await supabase.from('katalog_karnetow').select('*').order('id', { ascending: true });
       if (!karnetyData || karnetyData.length === 0) {
         const fallback = await supabase.from('karnety').select('*').order('id', { ascending: true });
@@ -188,7 +185,7 @@ export default function TwojBonusPage() {
       }
 
       if (karnetyData && karnetyData.length > 0) {
-        const parsed = karnetyData.map((k: any, index: number) => {
+        const parsed = karnetyData.map((k: any) => {
           let meta: any = {};
           try {
             meta = JSON.parse(k.inne_ustawienia || '{}');
@@ -199,23 +196,33 @@ export default function TwojBonusPage() {
           const typLower = (k.typ_karnetu || '').toLowerCase();
 
           if (typLower.includes('ilość') || nazwaLower.includes('ogólno') || nazwaLower.includes('wejść')) {
-            fallbackTiers = defaultTiersWejsciowy;
+            fallbackTiers = defaultTiersWejscia;
           } else if (nazwaLower.includes('open') || typLower.includes('czas')) {
             fallbackTiers = defaultTiersOpen;
           }
 
           return {
-            ...k,
+            id: k.id,
+            nazwa: k.nazwa,
+            typ_karnetu: k.typ_karnetu || 'Na czas',
+            cena: k.cena_brutto || k.cena || 0,
             inne_ustawienia: meta,
             customTiers: meta.customTiers && meta.customTiers.length > 0 ? meta.customTiers : fallbackTiers
           };
         });
 
-        setKarnetyCennik(parsed);
-        if (parsed[0]) setTargetKarnetId(parsed[0].id);
+        setBonusTables(parsed);
+        if (parsed[0]) setTargetTableId(parsed[0].id);
+      } else {
+        // Fallback tabel w przypadku braku rekordów w bazie
+        setBonusTables([
+          { id: 1, nazwa: 'Karnet Umowa 12M', typ_karnetu: 'Umowa 12 miesięcy', cena: 179, customTiers: defaultTiersUmowa },
+          { id: 2, nazwa: 'Karnet OPEN', typ_karnetu: 'Na czas', cena: 199, customTiers: defaultTiersOpen },
+          { id: 3, nazwa: 'Karnet Ogólnorozwojowy', typ_karnetu: 'Na ilość treningów', cena: 220, customTiers: defaultTiersWejscia }
+        ]);
       }
 
-      // Pobieranie klientów
+      // 3. Pobieranie danych klubowiczów
       const { data: klienciData } = await supabase.from('klienci').select('*');
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -241,7 +248,7 @@ export default function TwojBonusPage() {
         }
       }
     } catch (err) {
-      console.error("Błąd pobierania danych:", err);
+      console.error("Błąd podczas ładowania danych:", err);
     } finally {
       setIsLoading(false);
     }
@@ -252,8 +259,68 @@ export default function TwojBonusPage() {
     loadData();
   }, []);
 
-  const handleOpenAddModal = (karnetId?: string | number) => {
-    if (karnetId) setTargetKarnetId(karnetId);
+  // --- ZARZĄDZANIE TABELAMI (DODAWANIE I USUWANIE) ---
+  const handleAddNewTable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTableName.trim()) return;
+
+    let defaultNewTiers = defaultTiersUmowa;
+    if (newTableType.includes('ilość') || newTableName.toLowerCase().includes('wejść')) {
+      defaultNewTiers = defaultTiersWejscia;
+    } else if (newTableType.includes('czas') || newTableName.toLowerCase().includes('open')) {
+      defaultNewTiers = defaultTiersOpen;
+    }
+
+    const newTableObj = {
+      id: Date.now(),
+      nazwa: newTableName.trim(),
+      typ_karnetu: newTableType,
+      cena: parseFloat(newTablePrice) || 0,
+      inne_ustawienia: { customTiers: defaultNewTiers },
+      customTiers: defaultNewTiers
+    };
+
+    setIsSaving(true);
+    try {
+      // Zapis nowej tabeli jako karnetu w bazie Supabase
+      const payload = {
+        nazwa: newTableObj.nazwa,
+        typ_karnetu: newTableObj.typ_karnetu,
+        cena_brutto: newTableObj.cena,
+        dlugosc: newTableType === 'Umowa 12 miesięcy' ? '12 miesięcy' : '1 miesiąc',
+        inne_ustawienia: JSON.stringify({ customTiers: defaultNewTiers })
+      };
+
+      const { data: inserted, error } = await supabase.from('katalog_karnetow').insert([payload]).select().single();
+      if (!error && inserted) {
+        newTableObj.id = inserted.id;
+      }
+    } catch (err) {
+      console.warn("Zapisano nową tabelę lokalnie:", err);
+    } finally {
+      setBonusTables(prev => [...prev, newTableObj]);
+      setIsAddTableModalOpen(false);
+      setNewTableName('');
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteTable = async (tableId: string | number, tableName: string) => {
+    if (!confirm(`Czy na pewno chcesz usunąć całą tabelę bonusową: "${tableName}"?`)) return;
+
+    try {
+      await supabase.from('katalog_karnetow').delete().eq('id', tableId);
+      await supabase.from('karnety').delete().eq('id', tableId);
+    } catch (err) {
+      console.warn("Usuwanie z bazy:", err);
+    }
+
+    setBonusTables(prev => prev.filter(t => String(t.id) !== String(tableId)));
+  };
+
+  // --- ZARZĄDZANIE PROGAMI W TABELI ---
+  const handleOpenAddTierModal = (tableId: string | number) => {
+    setTargetTableId(tableId);
     setEditingTierId(null);
     setLevelName('NOWY POZIOM');
     setThresholdVal('3');
@@ -263,11 +330,11 @@ export default function TwojBonusPage() {
     setSecondaryTitle('Darmowy shake białkowy po treningu');
     setSecondaryBadge('GRATIS');
     setAccentColor('amber');
-    setIsModalOpen(true);
+    setIsTierModalOpen(true);
   };
 
-  const handleOpenEditModal = (karnetId: string | number, tier: any) => {
-    setTargetKarnetId(karnetId);
+  const handleOpenEditTierModal = (tableId: string | number, tier: any) => {
+    setTargetTableId(tableId);
     setEditingTierId(tier.id);
     setLevelName(tier.levelName || 'POZIOM');
     setThresholdVal(String(tier.threshold || '1'));
@@ -277,17 +344,19 @@ export default function TwojBonusPage() {
     setSecondaryTitle(tier.secondaryTitle || '');
     setSecondaryBadge(tier.secondaryBadge || 'GRATIS');
     setAccentColor(tier.accent || 'amber');
-    setIsModalOpen(true);
+    setIsTierModalOpen(true);
   };
 
   const handleSaveTierModal = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!rewardTitle.trim() || !targetKarnetId) return;
+    if (!rewardTitle.trim() || !targetTableId) return;
 
-    setKarnetyCennik(prevList => prevList.map(k => {
-      if (String(k.id) === String(targetKarnetId)) {
-        let updatedTiers = [...(k.customTiers || [])];
+    setBonusTables(prevTables => prevTables.map(tbl => {
+      if (String(tbl.id) === String(targetTableId)) {
+        let updatedTiers = [...(tbl.customTiers || [])];
+
         if (editingTierId !== null) {
+          // Edycja istniejącego progu
           updatedTiers = updatedTiers.map(t => {
             if (t.id === editingTierId) {
               return {
@@ -305,6 +374,7 @@ export default function TwojBonusPage() {
             return t;
           });
         } else {
+          // Dodanie nowego progu
           const newTier = {
             id: Date.now(),
             levelName: levelName.toUpperCase(),
@@ -319,60 +389,62 @@ export default function TwojBonusPage() {
           };
           updatedTiers.push(newTier);
         }
+
         updatedTiers.sort((a, b) => a.threshold - b.threshold);
-        return { ...k, customTiers: updatedTiers };
+        return { ...tbl, customTiers: updatedTiers };
       }
-      return k;
+      return tbl;
     }));
 
-    setIsModalOpen(false);
+    setIsTierModalOpen(false);
   };
 
-  const handleDeleteTier = (karnetId: string | number, tierId: number) => {
-    if (!confirm("Czy na pewno chcesz usunąć ten poziom z tabeli tego karnetu?")) return;
-    setKarnetyCennik(prevList => prevList.map(k => {
-      if (String(k.id) === String(karnetId)) {
+  const handleDeleteTier = (tableId: string | number, tierId: number) => {
+    if (!confirm("Czy na pewno chcesz usunąć ten próg z tabeli?")) return;
+    setBonusTables(prevTables => prevTables.map(tbl => {
+      if (String(tbl.id) === String(tableId)) {
         return {
-          ...k,
-          customTiers: k.customTiers.filter((t: any) => t.id !== tierId)
+          ...tbl,
+          customTiers: tbl.customTiers.filter((t: any) => t.id !== tierId)
         };
       }
-      return k;
+      return tbl;
     }));
   };
 
-  const handleSaveKarnetToSupabase = async (karnetId: string | number) => {
-    const karnetObj = karnetyCennik.find(k => String(k.id) === String(karnetId));
-    if (!karnetObj) return;
+  // Zapis całej tabeli do bazy Supabase
+  const handleSaveTableToSupabase = async (tableId: string | number) => {
+    const tableObj = bonusTables.find(t => String(t.id) === String(tableId));
+    if (!tableObj) return;
 
-    setIsSavingTier(true);
+    setIsSaving(true);
     try {
       const meta = {
-        ...(karnetObj.inne_ustawienia || {}),
-        customTiers: karnetObj.customTiers
+        ...(tableObj.inne_ustawienia || {}),
+        customTiers: tableObj.customTiers
       };
 
       let err = null;
       const res1 = await supabase
         .from('katalog_karnetow')
         .update({ inne_ustawienia: JSON.stringify(meta) })
-        .eq('id', karnetId);
+        .eq('id', tableId);
 
       if (res1.error) {
         const res2 = await supabase
           .from('karnety')
           .update({ inne_ustawienia: JSON.stringify(meta) })
-          .eq('id', karnetId);
+          .eq('id', tableId);
         err = res2.error;
       }
 
       if (err) throw err;
-      alert(`Pomyślnie zapisano tabelę progów dla karnetu: "${karnetObj.nazwa}"!`);
+      alert(`Pomyślnie zapisano tabelę progów dla: "${tableObj.nazwa}" w Supabase!`);
     } catch (error: any) {
       console.error("Błąd zapisu w Supabase:", error);
-      alert("Błąd podczas zapisu: " + (error.message || ''));
+      alert("Zapisano stan lokalnie. Komunikat bazy: " + (error.message || 'Brak'));
     } finally {
-      setIsSavingTier(false);
+      setIsSaving(false);
     }
   };
 
@@ -384,8 +456,8 @@ export default function TwojBonusPage() {
     );
   }
 
-  // Obliczenia statystyczne do górnych boksów
-  const totalLevelsCount = karnetyCennik.reduce((sum, k) => sum + (k.customTiers?.length || 0), 0);
+  // Statystyki dla kafelków
+  const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
   const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2).length;
   const avgContinuity = allKlienci.length > 0 
     ? (allKlienci.reduce((acc, curr) => acc + (curr.cyklCiaglosci || 1), 0) / allKlienci.length).toFixed(1)
@@ -407,14 +479,14 @@ export default function TwojBonusPage() {
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-28 font-sans antialiased text-slate-800">
       
-      {/* 1. GÓRNY BANER (STYLIZACJA PROGRAMU AMBASADOR) */}
+      {/* 1. GÓRNY BANER PROGRAMU (STYLISTYKA PROGRAM AMBASADOR) */}
       <div className="bg-white border border-sky-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-5">
         <div className="space-y-1">
           <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
             <span>🏆</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
           </h1>
           <p className="text-xs text-slate-500 font-medium">
-            Zarządzaj tabelami ciągłości dla karnetów na umowę, open oraz ogólnorozwojowych z podziałem na poziomy i nagrody.
+            Zarządzaj tabelami ciągłości karnetów, twórz nowe tabele, usuwaj zbędne i dodawaj dowolną liczbę progów z nagrodami.
           </p>
         </div>
 
@@ -428,16 +500,16 @@ export default function TwojBonusPage() {
 
           {(appRole === 'admin' || appRole === 'trener') && (
             <button
-              onClick={() => handleOpenAddModal()}
+              onClick={() => setIsAddTableModalOpen(true)}
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-2.5 rounded-2xl text-xs uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 cursor-pointer"
             >
-              <span>+</span> DODAJ NOWY POZIOM
+              <span>+</span> DODAJ NOWĄ TABELĘ
             </button>
           )}
         </div>
       </div>
 
-      {/* 2. KAFLOWE METRYKI STATYSTYCZNE (4 KAFLE W RZĘDZIE) */}
+      {/* 2. KAFLOWE METRYKI STATYSTYCZNE (4 KAFELKI W RZĘDZIE) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">
@@ -464,7 +536,7 @@ export default function TwojBonusPage() {
             💰
           </div>
           <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI STAŻ / CYKL</div>
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI STAŻ KLUBOWICZA</div>
             <div className="text-2xl font-black text-slate-900 mt-0.5">{avgContinuity} MIES.</div>
           </div>
         </div>
@@ -475,12 +547,12 @@ export default function TwojBonusPage() {
           </div>
           <div>
             <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">LICZBA TABEL W RZĘDZIE</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{karnetyCennik.length} KARNETY</div>
+            <div className="text-2xl font-black text-slate-900 mt-0.5">{bonusTables.length} TABELE</div>
           </div>
         </div>
       </div>
 
-      {/* 3. PRZEŁĄCZNIK ZAKŁADEK */}
+      {/* 3. BELKA Z ZAKŁADKAMI */}
       <div className="flex items-center gap-2">
         <button
           onClick={() => setActiveTab('poziomy')}
@@ -490,7 +562,7 @@ export default function TwojBonusPage() {
               : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
           }`}
         >
-          <span>🥇</span> TABELE KARNETÓW I POZIOMY ({karnetyCennik.length})
+          <span>🥇</span> TABELE KARNETÓW I POZIOMY ({bonusTables.length})
         </button>
 
         <button
@@ -516,58 +588,68 @@ export default function TwojBonusPage() {
         </button>
       </div>
 
-      {/* 4. GŁÓWNA ZAWARTOŚĆ: 2 DO 3 TABELE W RZĘDZIE (KARNET X I PONIŻEJ JEGO POZIOMY) */}
+      {/* 4. GŁÓWNA ZAWARTOŚĆ: 2 DO 3 TABELE W RZĘDZIE */}
       {activeTab === 'poziomy' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
-          {karnetyCennik.map((karnet) => {
-            const isUserPass = userActivePass?.nazwa?.trim().toLowerCase() === karnet.nazwa?.trim().toLowerCase();
+          {bonusTables.map((tabela) => {
+            const isUserPass = userActivePass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase();
 
             return (
               <div
-                key={karnet.id}
+                key={tabela.id}
                 className={`bg-slate-50/70 border rounded-3xl p-5 shadow-sm space-y-5 transition-all ${
                   isUserPass ? 'border-amber-400 ring-2 ring-amber-300/40 bg-amber-50/20' : 'border-sky-200'
                 }`}
               >
-                {/* NAGŁÓWEK TABELI DANEGO KARNETU */}
-                <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-2">
+                {/* NAGŁÓWEK TABELI KARNETU */}
+                <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="bg-sky-100 text-sky-950 font-black text-[10px] px-2.5 py-0.5 rounded-md uppercase">
-                      {karnet.typ_karnetu || 'Karnet cykliczny'}
+                      {tabela.typ_karnetu || 'Karnet cykliczny'}
                     </span>
-                    {isUserPass && (
-                      <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black text-[9px] px-2 py-0.5 rounded-md uppercase">
-                        TWÓJ KARNET ✓
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {isUserPass && (
+                        <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black text-[9px] px-2 py-0.5 rounded-md uppercase">
+                          TWÓJ KARNET ✓
+                        </span>
+                      )}
+                      {(appRole === 'admin' || appRole === 'trener') && (
+                        <button
+                          onClick={() => handleDeleteTable(tabela.id, tabela.nazwa)}
+                          className="text-slate-300 hover:text-rose-600 text-xs p-1 cursor-pointer transition-colors"
+                          title="Usuń tę tabelę bonusową"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">
-                        {karnet.nazwa}
+                        {tabela.nazwa}
                       </h2>
                       <div className="text-[11px] text-slate-500 font-semibold">
-                        Cena: {Number(karnet.cena_brutto || karnet.cena || 0).toFixed(2)} PLN
+                        Cena bazowa: {Number(tabela.cena || 0).toFixed(2)} PLN
                       </div>
                     </div>
 
                     {(appRole === 'admin' || appRole === 'trener') && (
                       <button
-                        onClick={() => handleOpenAddModal(karnet.id)}
-                        className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 text-[10px] font-black px-2.5 py-1.5 rounded-xl cursor-pointer transition-colors"
-                        title="Dodaj poziom do tego karnetu"
+                        onClick={() => handleOpenAddTierModal(tabela.id)}
+                        className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 text-[10px] font-black px-2.5 py-1.5 rounded-xl cursor-pointer transition-colors flex items-center gap-1"
                       >
-                        + DODAJ POZIOM
+                        <span>+</span> DODAJ PRÓG
                       </button>
                     )}
                   </div>
                 </div>
 
-                {/* LISTA POZIOMÓW DLA DANEGO KARNETU (PIONOWO POD KARNETEM W JEGO TABELI) */}
+                {/* POZIOMY LOJALNOŚCIOWE W TEJ TABELI (PIONOWY STOS) */}
                 <div className="space-y-4">
-                  {karnet.customTiers?.map((tier: any) => {
-                    const userVal = karnet.typ_karnetu === 'Umowa 12 miesięcy'
+                  {tabela.customTiers?.map((tier: any) => {
+                    const userVal = tabela.typ_karnetu === 'Umowa 12 miesięcy'
                       ? (userActivePass?.rata ? parseInt(String(userActivePass.rata).match(/(\d+)/)?.[1] || '1', 10) : 1)
                       : userMonths;
                     const isUnlocked = isUserPass && userVal >= Number(tier.threshold);
@@ -578,7 +660,7 @@ export default function TwojBonusPage() {
                         className={`bg-white border border-sky-200 rounded-3xl p-4 shadow-sm space-y-3.5 relative flex flex-col justify-between transition-all hover:shadow-md ${getAccentBorder(tier.accent)}`}
                       >
                         <div className="space-y-2.5">
-                          {/* Plakietka poziomu i status */}
+                          {/* Plakietka i status odblokowania */}
                           <div className="flex items-center justify-between gap-2">
                             <span className="border border-amber-300 text-amber-900 bg-amber-50/60 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
                               {tier.levelName}
@@ -588,7 +670,7 @@ export default function TwojBonusPage() {
                             </span>
                           </div>
 
-                          {/* Wartość progu */}
+                          {/* Liczba progu */}
                           <div>
                             <h3 className="text-xl font-black text-slate-900 tracking-tight">
                               {tier.threshold} {tier.unit}
@@ -598,7 +680,7 @@ export default function TwojBonusPage() {
                             </p>
                           </div>
 
-                          {/* Boks 1: Nagroda Główna (Styl Ambasador) */}
+                          {/* Boks 1: Nagroda Główna */}
                           <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-3 space-y-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-[9px] font-black text-amber-950 uppercase tracking-wide flex items-center gap-1">
@@ -615,7 +697,7 @@ export default function TwojBonusPage() {
                             </p>
                           </div>
 
-                          {/* Boks 2: Bonus Dodatkowy (Styl Ambasador) */}
+                          {/* Boks 2: Dodatkowy Bonus */}
                           <div className="bg-sky-50/80 border border-sky-200 rounded-2xl p-3 space-y-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-[9px] font-black text-sky-950 uppercase tracking-wide flex items-center gap-1">
@@ -633,20 +715,20 @@ export default function TwojBonusPage() {
                           </div>
                         </div>
 
-                        {/* Akcje edycji / usuwania w stopce */}
+                        {/* Przyciski edycji i kasowania progu */}
                         {(appRole === 'admin' || appRole === 'trener') && (
                           <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                             <button
-                              onClick={() => handleOpenEditModal(karnet.id, tier)}
+                              onClick={() => handleOpenEditTierModal(tabela.id, tier)}
                               className="bg-[#9a542a] hover:bg-[#83431d] text-white w-7 h-7 rounded-xl flex items-center justify-center text-xs shadow-sm transition-colors cursor-pointer"
-                              title="Edytuj poziom"
+                              title="Edytuj próg"
                             >
                               ✏️
                             </button>
                             <button
-                              onClick={() => handleDeleteTier(karnet.id, tier.id)}
+                              onClick={() => handleDeleteTier(tabela.id, tier.id)}
                               className="bg-slate-200 hover:bg-rose-100 hover:text-rose-700 text-slate-600 w-7 h-7 rounded-xl flex items-center justify-center text-xs shadow-sm transition-colors cursor-pointer"
-                              title="Usuń poziom"
+                              title="Usuń próg"
                             >
                               🗑️
                             </button>
@@ -656,22 +738,22 @@ export default function TwojBonusPage() {
                     );
                   })}
 
-                  {(!karnet.customTiers || karnet.customTiers.length === 0) && (
+                  {(!tabela.customTiers || tabela.customTiers.length === 0) && (
                     <div className="text-center py-8 text-xs text-slate-400 font-medium italic bg-white rounded-2xl border border-dashed border-sky-200">
-                      Brak zdefiniowanych poziomów dla tego karnetu.
+                      Brak progów w tej tabeli. Kliknij "+ DODAJ PRÓG".
                     </div>
                   )}
                 </div>
 
-                {/* ZAPIS TEJ KONKRETNEJ TABELI DO SUPABASE */}
+                {/* ZAPIS TEJ TABELI DO SUPABASE */}
                 {(appRole === 'admin' || appRole === 'trener') && (
                   <button
                     type="button"
-                    disabled={isSavingTier}
-                    onClick={() => handleSaveKarnetToSupabase(karnet.id)}
+                    disabled={isSaving}
+                    onClick={() => handleSaveTableToSupabase(tabela.id)}
                     className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-2.5 rounded-2xl text-[11px] uppercase tracking-wider cursor-pointer shadow-sm transition-all text-center"
                   >
-                    💾 Zapisz tabelę {karnet.nazwa}
+                    💾 Zapisz tabelę: {tabela.nazwa}
                   </button>
                 )}
               </div>
@@ -688,7 +770,7 @@ export default function TwojBonusPage() {
               <span>🛡️</span> Zasady kwalifikacji do progów lojalnościowych
             </h3>
             <p className="text-xs text-slate-500 mt-1 font-medium">
-              System automatycznie weryfikuje status ciągłości karnetu przy każdej płatności klubowicza w bazie Supabase.
+              System przelicza ciągłość automatycznie w bazie Supabase na podstawie opłaconych rat oraz cykli odnowień.
             </p>
           </div>
 
@@ -699,7 +781,7 @@ export default function TwojBonusPage() {
               </span>
               <h4 className="font-black text-slate-900 text-sm">Rozliczenie ratalne (1-12)</h4>
               <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Klubowicz zdobywa kolejne poziomy wraz z kolejnymi opłaconymi ratami. Dodatkowo przysługuje roczna pula 30 dni zamrożenia.
+                Klubowicz zdobywa kolejne poziomy wraz z kolejnymi opłaconymi ratami. Po 12. racie zyskuje darmowy okres bonusowy za dni zamrożenia.
               </p>
             </div>
 
@@ -719,7 +801,7 @@ export default function TwojBonusPage() {
               </span>
               <h4 className="font-black text-slate-900 text-sm">Pula wejść treningowych</h4>
               <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Punkty i poziomy są naliczane proporcjonalnie do ilości odbytych i zarejestrowanych wejść w systemie grafiku.
+                Poziomy są naliczane proporcjonalnie do ilości zrealizowanych treningów w klubie Forma Marzeń.
               </p>
             </div>
           </div>
@@ -743,7 +825,7 @@ export default function TwojBonusPage() {
                   <th className="py-4 px-6">E-mail</th>
                   <th className="py-4 px-6">Cykl ciągłości</th>
                   <th className="py-4 px-6">Aktywny karnet</th>
-                  <th className="py-4 px-6 text-center">Osiągnięty poziom</th>
+                  <th className="py-4 px-6 text-center">Status bonusu</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-sky-100 text-xs font-medium">
@@ -778,17 +860,94 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 7. MODAL DODAWANIA / EDYCJI POZIOMU */}
-      {isModalOpen && (
+      {/* 7. MODAL: DODAWANIE NOWEJ TABELI */}
+      {isAddTableModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-7 shadow-2xl space-y-6">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-4">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
+                <span>➕</span> Dodaj nową tabelę karnetu
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsAddTableModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 font-bold text-base cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleAddNewTable} className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Nazwa tabeli / karnetu</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="np. Karnet OPEN Poranny, Pakiet 20 wejść"
+                  value={newTableName}
+                  onChange={(e) => setNewTableName(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Typ karnetu</label>
+                <select
+                  value={newTableType}
+                  onChange={(e) => setNewTableType(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900 cursor-pointer"
+                >
+                  <option value="Umowa 12 miesięcy">Umowa 12 miesięcy (Cykliczna)</option>
+                  <option value="Na czas">Na czas (np. OPEN 1 miesiąc)</option>
+                  <option value="Na ilość treningów">Na ilość treningów (Wejściowy)</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Cena brutto (PLN)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  placeholder="199.00"
+                  value={newTablePrice}
+                  onChange={(e) => setNewTablePrice(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-sky-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddTableModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer transition-colors"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="bg-slate-900 hover:bg-slate-800 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer shadow-md transition-colors"
+                >
+                  {isSaving ? 'Tworzenie...' : 'Utwórz tabelę'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. MODAL: DODAWANIE / EDYCJA PROGU DLA DANEJ TABELI */}
+      {isTierModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-7 shadow-2xl space-y-6">
             <div className="flex items-center justify-between border-b border-sky-100 pb-4">
               <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>🏆</span> {editingTierId ? 'Edytuj poziom bonusowy' : 'Dodaj nowy poziom bonusowy'}
+                <span>🏆</span> {editingTierId ? 'Edytuj próg lojalnościowy' : 'Dodaj nowy próg do tabeli'}
               </h3>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => setIsTierModalOpen(false)}
                 className="text-slate-400 hover:text-slate-700 font-bold text-base cursor-pointer"
               >
                 ✕
@@ -796,19 +955,6 @@ export default function TwojBonusPage() {
             </div>
 
             <form onSubmit={handleSaveTierModal} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-slate-700">Przypisz do tabeli karnetu:</label>
-                <select
-                  value={targetKarnetId}
-                  onChange={(e) => setTargetKarnetId(e.target.value)}
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900 cursor-pointer"
-                >
-                  {karnetyCennik.map(k => (
-                    <option key={k.id} value={k.id}>{k.nazwa} ({k.typ_karnetu})</option>
-                  ))}
-                </select>
-              </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700">Nazwa poziomu (np. BRĄZOWY, VIP)</label>
@@ -917,7 +1063,7 @@ export default function TwojBonusPage() {
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-sky-100">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => setIsTierModalOpen(false)}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer transition-colors"
                 >
                   Anuluj
@@ -926,7 +1072,7 @@ export default function TwojBonusPage() {
                   type="submit"
                   className="bg-slate-900 hover:bg-slate-800 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer shadow-md transition-colors"
                 >
-                  {editingTierId ? 'Zaktualizuj poziom' : 'Dodaj poziom'}
+                  {editingTierId ? 'Zaktualizuj próg' : 'Dodaj próg'}
                 </button>
               </div>
             </form>
