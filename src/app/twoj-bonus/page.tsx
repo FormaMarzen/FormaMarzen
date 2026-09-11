@@ -26,7 +26,7 @@ const safeJsonParse = (val: any, fallback: any = []) => {
 // Normalizacja tekstu
 const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[\u2010-\u2015\u2212\-_]/g, ' ').replace(/\s+/g, ' ').trim();
 
-// Rozpoznawanie umów 12M
+// Identyfikacja czy dany karnet lub tabela to umowa 12M
 const isContractPassCheck = (item: any): boolean => {
   if (!item) return false;
   if (item?.isContract12M === true || item?.isContract12M === 'true') return true;
@@ -43,7 +43,7 @@ const isMatchingPass = (userPass: any, tabela: any): boolean => {
   const uIsContract = isContractPassCheck(userPass);
   const tIsContract = isContractPassCheck(tabela);
 
-  // Jeśli jedno jest umową a drugie nie -> NIE PASUJĄ DO SIEBIE
+  // Umowa może pasować tylko i wyłącznie do tabeli umowy!
   if (uIsContract !== tIsContract) return false;
 
   const uName = cleanStr(userPass.nazwa || userPass.pass || '');
@@ -71,11 +71,10 @@ const isMatchingPass = (userPass: any, tabela: any): boolean => {
   return false;
 };
 
-// Ekstrakcja liczby rat z obiektu karnetu (np. "9 / 12" -> 9, "10 / 12" -> 10)
+// Precyzyjny odczyt liczby rat z obiektu karnetu (np. "9 / 12" -> 9, "10 / 12" -> 10)
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
 
-  // 1. Pole rata (np. "9 / 12", "10 / 12")
   if (pass.rata !== undefined && pass.rata !== null) {
     const raw = String(pass.rata).trim();
     const slashMatch = raw.match(/(\d+)\s*\/\s*(\d+)/);
@@ -88,7 +87,6 @@ const getInstallmentsFromPass = (pass: any): number => {
     }
   }
 
-  // 2. Pole statusTekst (np. "Umowa 12M (Rata 9/12...)")
   if (pass.statusTekst) {
     const m = String(pass.statusTekst).match(/rata\s*(\d+)/i) || String(pass.statusTekst).match(/(\d+)\s*\/\s*12/);
     if (m && parseInt(m[1], 10) > 0) {
@@ -96,8 +94,7 @@ const getInstallmentsFromPass = (pass: any): number => {
     }
   }
 
-  // 3. Inne możliwe klucze
-  const altKeys = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty'];
+  const altKeys = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty', 'liczbaRat'];
   for (const k of altKeys) {
     if (pass[k] !== undefined && pass[k] !== null) {
       const val = parseInt(String(pass[k]), 10);
@@ -275,7 +272,7 @@ export default function TwojBonusPage() {
     }
   ];
 
-  // Pobieranie danych z Supabase w Promise.all (bez limitu 1000 rekordów)
+  // Pobieranie danych z Supabase równolegle za pomocą Promise.all (bez limitu 1000 rekordów)
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -736,7 +733,7 @@ export default function TwojBonusPage() {
 
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
-    // 1. DLA UMÓW 12M: Liczba opłaconych rat z pola `karnet.rata`
+    // 1. DLA UMÓW 12M: Liczba opłaconych rat bezpośrednio z pola `karnet.rata`
     if (isContract) {
       const installmentsCount = getInstallmentsFromPass(userPass);
       const clientOverallContinuity = Number(user.cyklCiaglosci || user.cyklciaglosci) || 1;
@@ -755,7 +752,7 @@ export default function TwojBonusPage() {
     return { value: clientOverallContinuity, isReset: false, reason: '' };
   };
 
-  // Precyzyjne, ciągłe skalowanie paska postępu na osi roadmapy
+  // Ciągłe skalowanie paska postępu na osi roadmapy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
     return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
