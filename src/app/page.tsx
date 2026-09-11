@@ -26,7 +26,7 @@ const fetchAllFromSupabase = async (
   table: string,
   orderBy: string = 'created_at',
   ascending: boolean = false,
-  maxPages: number = 50 // Bezpieczny limit do 50 000 rekordów
+  maxPages: number = 50
 ) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
@@ -65,10 +65,46 @@ const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
     }
   }
   const targetYear = base.getFullYear();
-  const targetMonth = base.getMonth() + 1; // kolejny miesiąc kalendarzowy (1-indexed)
+  const targetMonth = base.getMonth() + 1;
   const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
   const resMonth = String(targetMonth + 1).padStart(2, '0');
   return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
+};
+
+// PRECYZYJNY PARSER DATY Z CLASS_KEY
+const parseDateFromClassKey = (classKey: string): Date => {
+  const parts = classKey ? String(classKey).split('_') : [];
+  const datePart = parts[1] || '';
+  const currentYear = new Date().getFullYear();
+
+  if (!datePart) return new Date();
+
+  if (datePart.includes('/')) {
+    const segments = datePart.split('/');
+    if (segments.length === 2) {
+      const [d, m] = segments;
+      return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+    } else if (segments.length === 3) {
+      const [d, m, y] = segments;
+      const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
+      return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
+    }
+  } else if (datePart.includes('-')) {
+    const segments = datePart.split('-');
+    if (segments.length === 3) {
+      if (segments[0].length === 4) {
+        const [y, m, d] = segments;
+        return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+      } else {
+        const [d, m, y] = segments;
+        return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+      }
+    } else if (segments.length === 2) {
+      const [d, m] = segments;
+      return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+    }
+  }
+  return new Date();
 };
 
 export default function DashboardPage() {
@@ -84,7 +120,7 @@ export default function DashboardPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // ZABEZPIECZENIE PRZED WIELOKROTNYM SZYBKIM KLIKNIĘCIEM (ANTI-DOUBLE CLICK / OVERBOOKING)
+  // ZABEZPIECZENIE PRZED WIELOKROTNYM SZYBKIM KLIKNIĘCIEM
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
   const isSubmittingRef = useRef(false);
 
@@ -140,9 +176,7 @@ export default function DashboardPage() {
         .map(id => Number(id))
         .filter(id => !isNaN(id) && id > 0 && id !== 5000 && id !== 999999999);
 
-      if (validIds.length === 0) {
-        return;
-      }
+      if (validIds.length === 0) return;
 
       const res = await fetch('/api/push/send', {
         method: 'POST',
@@ -164,7 +198,7 @@ export default function DashboardPage() {
     }
   };
 
-  // HELPER: AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ I WYSYŁKA PUSH
+  // AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ I WYSYŁKA PUSH
   const promoteWaitlistMember = async (classItem: any, displayDate: string, currentSignups: any[], removedUserId: number) => {
     if (!classItem) return;
     const classKey = `${classItem.id}_${displayDate}`;
@@ -251,10 +285,7 @@ export default function DashboardPage() {
 
       if (!subscription) {
         const publicVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-        if (!publicVapidKey) {
-          console.warn('Brak NEXT_PUBLIC_VAPID_PUBLIC_KEY w zmiennych środowiskowych.');
-          return;
-        }
+        if (!publicVapidKey) return;
 
         const convertedVapidKey = urlBase64ToUint8Array(publicVapidKey);
         subscription = await registration.pushManager.subscribe({
@@ -454,7 +485,7 @@ export default function DashboardPage() {
   const [dupTrainer, setDupTrainer] = useState('');
   const [dupLimit, setDupLimit] = useState('12');
 
-  // MODAL WYDARZEŃ: JEDNODNIOWE I KILKUDNIOWE
+  // MODAL WYDARZEŃ
   const [isMultiDayModalOpen, setIsMultiDayModalOpen] = useState(false);
   const [eventModeType, setEventModeType] = useState<'jednodniowe' | 'kilkudniowe'>('kilkudniowe');
   const [multiDayTitle, setMultiDayTitle] = useState('OBÓZ W WAŁCZU');
@@ -1147,8 +1178,12 @@ export default function DashboardPage() {
     return k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined;
   };
 
-  const calculateContinuityDiscount = (client: any) => {
+  // NALICZANIE CIĄGŁOŚCI: WYKLUCZAMY KARNETY <= 150 ZŁ
+  const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
+    if (basePriceToCheck !== undefined && basePriceToCheck <= 150) {
+      return { hasContinuity: false, percent: 0, label: '0% (Karnet ≤ 150 zł - brak rabatu ciągłości)' };
+    }
     const karnety = client.karnetyKlubowicza || [];
     if (karnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
 
@@ -1158,6 +1193,9 @@ export default function DashboardPage() {
 
     let isContinuous = false;
     for (const k of karnety) {
+      const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+      if (passPrice <= 150) continue; // Karnety <= 150 zł nie biorą udziału w ciągłości
+
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
         expDate.setHours(0, 0, 0, 0);
@@ -1181,7 +1219,11 @@ export default function DashboardPage() {
       return { hasContinuity: false, percent: 0, label: '0% (Brak ciągłości - zresetowano)' };
     }
 
-    const liczbaKarnetow = karnety.length;
+    const validPassesForCount = karnety.filter((k: any) => {
+      const price = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+      return price > 150;
+    });
+    const liczbaKarnetow = validPassesForCount.length || 1;
     let rabatProcent = 0;
 
     if (liczbaKarnetow === 1) {
@@ -1199,13 +1241,17 @@ export default function DashboardPage() {
     };
   };
 
-  const getEffectiveDiscount = (client: any) => {
+  const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number) => {
     if (!client) return { percent: 0, label: '', type: 'none' };
+    if (basePriceToCheck !== undefined && basePriceToCheck <= 150) {
+      return { percent: 0, label: '', type: 'none' };
+    }
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     if (manualDiscountVal > 0) {
       return { percent: manualDiscountVal, label: `(-${manualDiscountVal}% rabat ręczny)`, type: 'manual' };
     }
-    const continuityInfo = calculateContinuityDiscount(client);
+    if (isContract) return { percent: 0, label: '', type: 'none' };
+    const continuityInfo = calculateContinuityDiscount(client, basePriceToCheck);
     if (continuityInfo.hasContinuity && continuityInfo.percent > 0) {
       return { percent: continuityInfo.percent, label: `(-${continuityInfo.percent}% ciągłość)`, type: 'system' };
     }
@@ -1442,6 +1488,24 @@ export default function DashboardPage() {
       let matchedCurrentClient: any = null;
       if (klienciData) {
         const todayDateOnly = new Date().toISOString().split('T')[0];
+        const yesterdayDate = new Date();
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
+
+        // Zmapowanie liczby przyszłych rezerwacji dla każdego klienta w celu ochrony wyzerowanych karnetów
+        const nowBeginning = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+        const clientFutureBookingsMap = new Map<number, number>();
+        if (zapisyData && zapisyData.length > 0) {
+          zapisyData.forEach((s: any) => {
+            if (!s.klient_id) return;
+            const classDate = parseDateFromClassKey(s.class_key);
+            if (classDate >= nowBeginning) {
+              const prev = clientFutureBookingsMap.get(Number(s.klient_id)) || 0;
+              clientFutureBookingsMap.set(Number(s.klient_id), prev + 1);
+            }
+          });
+        }
+
         const enriched = klienciData.map((c: any) => {
           let parsedKarnety = [];
           if (Array.isArray(c.karnetyKlubowicza)) {
@@ -1450,7 +1514,9 @@ export default function DashboardPage() {
             try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
           }
 
+          const hasFutureBookings = (clientFutureBookingsMap.get(Number(c.id)) || 0) > 0;
           let karnetyZmienione = false;
+
           parsedKarnety = parsedKarnety.map((k: any) => {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
             const isContract = isContractPass(k) || (pasujacyDef && isContractPass(pasujacyDef));
@@ -1471,19 +1537,34 @@ export default function DashboardPage() {
               }
             }
 
-            // AKTYWACJA 1-DNIOWEGO BUFORA CIĄGŁOŚCI PO WYKORZYSTANIU OSTATNIEGO WEJŚCIA
+            // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ (REGUŁA <= 150 ZŁ)
             if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
-              const tomorrowDate = new Date();
-              tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-              const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+              const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+              const isLowPrice = passPriceNum <= 150;
 
-              if (!k.zeroEntriesGraceUntil) {
-                karnetyZmienione = true;
-                k.zeroEntriesGraceUntil = tomorrowStr;
-                if (!k.waznyDo || k.waznyDo < tomorrowStr) {
-                  k.waznyDo = tomorrowStr;
+              if (isLowPrice) {
+                const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncz'))
+                  ? 'Wykorzystano wejście'
+                  : 'Wykorzystano wejścia';
+
+                if (k.zeroEntriesGraceUntil !== null || k.statusTekst !== labelWejsc) {
+                  karnetyZmienione = true;
+                  k.zeroEntriesGraceUntil = null;
+                  k.statusTekst = labelWejsc;
                 }
-                k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`;
+              } else {
+                const tomorrowDate = new Date();
+                tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+                const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+
+                if (!k.zeroEntriesGraceUntil) {
+                  karnetyZmienione = true;
+                  k.zeroEntriesGraceUntil = tomorrowStr;
+                  if (!k.waznyDo || k.waznyDo < tomorrowStr) {
+                    k.waznyDo = tomorrowStr;
+                  }
+                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`;
+                }
               }
             }
 
@@ -1493,7 +1574,22 @@ export default function DashboardPage() {
             return k;
           }).filter((k: any) => {
             if (isContractPass(k)) return true;
-            if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly) {
+            
+            // OCHRONA: Jeśli klubowicz ma aktywne/przyszłe rezerwacje w grafiku, karnet NIE jest usuwany
+            if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
+              return true;
+            }
+
+            const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+            const isLowPriceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && passPriceNum <= 150 && k.waznyDo && k.waznyDo < todayDateOnly;
+            const isZeroGraceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly;
+
+            if (isZeroGraceExpired || isLowPriceExpired) {
+              karnetyZmienione = true;
+              return false;
+            }
+
+            if (k.waznyDo && k.waznyDo < yesterdayStr && !k.isContract12M) {
               karnetyZmienione = true;
               return false;
             }
@@ -1537,8 +1633,8 @@ export default function DashboardPage() {
             zapisyWypisy: c.zapisyWypisy || []
           };
         });
+
         setKlienciList(enriched);
-        
         checkContractPaymentEnforcement(enriched);
         
         if (userEmail) {
@@ -2273,7 +2369,6 @@ export default function DashboardPage() {
     loadData();
     return true;
   };
-
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -2430,8 +2525,9 @@ export default function DashboardPage() {
     const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
     const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
-    const effectiveDiscount = getEffectiveDiscount(profileClient);
-    const finalPriceNum = (effectiveDiscount.percent > 0 && !isContract)
+    // WYKLUCZENIE Z CIĄGŁOŚCI DLA <= 150 ZŁ
+    const effectiveDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCenaNum);
+    const finalPriceNum = (effectiveDiscount.percent > 0 && !isContract && bazowaCenaNum > 150)
       ? bazowaCenaNum * (1 - effectiveDiscount.percent / 100) 
       : bazowaCenaNum;
     const nowaCena = `${finalPriceNum.toFixed(2)} PLN`;
@@ -2454,7 +2550,7 @@ export default function DashboardPage() {
           rata: isContract ? updatedRata : k.rata,
           zaznaczoneZajecia: extendSelectedNewPassName ? allowedClasses : k.zaznaczoneZajecia,
           dostepDo: extendSelectedNewPassName ? dostepDo : k.dostepDo,
-          znizkaProcentowa: isContract ? '' : effectiveDiscount.label,
+          znizkaProcentowa: (isContract || bazowaCenaNum <= 150) ? '' : effectiveDiscount.label,
           statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata || '0/12'} • Ważny do: ${targetDateStr})` : `Ważny do: ${targetDateStr}`,
           zeroEntriesGraceUntil: null,
           blokadaDo: isContract ? null : k.blokadaDo,
@@ -2511,8 +2607,9 @@ export default function DashboardPage() {
     let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     
-    const effectiveDiscount = getEffectiveDiscount(currentUser);
-    const cenaWartosc = (effectiveDiscount.percent > 0 && !isContract)
+    // WYKLUCZENIE Z CIĄGŁOŚCI DLA <= 150 ZŁ
+    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum);
+    const cenaWartosc = (effectiveDiscount.percent > 0 && !isContract && basePriceNum > 150)
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
       : basePriceNum;
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
@@ -2575,9 +2672,9 @@ export default function DashboardPage() {
         cena: cenaStr,
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
-        znizkaProcentowa: effectiveDiscount.label,
+        znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label,
         rata: '1 / 1',
-        statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`,
+        statusTekst: (basePriceNum <= 150 && totalPool <= 0) ? 'Wykorzystano wejście' : `Ważny do: ${nowaDataWygasnieciaStr}`,
         blokadaDo: null,
         powodBlokady: null,
         zawieszonyOd: null,
@@ -2604,7 +2701,7 @@ export default function DashboardPage() {
             cena: cenaStr, 
             zaznaczoneZajecia: allowedClasses,
             dostepDo: dostepDo,
-            znizkaProcentowa: effectiveDiscount.label,
+            znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label,
             statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
           };
         }
@@ -2623,7 +2720,7 @@ export default function DashboardPage() {
         cena: cenaStr, 
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
-        znizkaProcentowa: effectiveDiscount.label, 
+        znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label, 
         rata: '1 / 1', 
         statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
         blokadaDo: null, 
@@ -2744,7 +2841,7 @@ export default function DashboardPage() {
     const dostepDo = bazowyKarnet?.dostep_do_zajec || 'wszystkich zajęć';
 
     let znizkaTekst = '';
-    if (!isContract && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna) {
+    if (!isContract && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna && nowaCenaWartosc > 150) {
       const roznica = cenaRegularna - nowaCenaWartosc;
       const procent = Math.round((roznica / cenaRegularna) * 100);
       znizkaTekst = `(-${procent}%)`;
@@ -3089,6 +3186,7 @@ export default function DashboardPage() {
     showToast("Blokada została odwołana.");
     setIsSuspendModalOpen(false);
   };
+
   const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !walletAmountInput) return;
@@ -3273,7 +3371,6 @@ export default function DashboardPage() {
     showToast(`Oznaczono nieobecność. Nałożono 3 dni blokady zapisów na ${klient.firstName} ${klient.lastName}.`);
     loadData();
   };
-
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3631,14 +3728,24 @@ export default function DashboardPage() {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
           const nextRemaining = currentRemaining - 1;
+          const passPriceNum = parseFloat(String(updatedKarnety[passIndex].cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+          const isLowPrice = passPriceNum <= 150;
+          
           let graceDate = null;
           let statusText = updatedKarnety[passIndex].statusTekst;
 
           if (nextRemaining === 0) {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            graceDate = tomorrow.toISOString().split('T')[0];
-            statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+            if (isLowPrice) {
+              graceDate = null;
+              statusText = (updatedKarnety[passIndex].poczatkoweWejsc === 1 || (updatedKarnety[passIndex].nazwa || '').toLowerCase().includes('1 wejście') || (updatedKarnety[passIndex].nazwa || '').toLowerCase().includes('pojedyncz'))
+                ? 'Wykorzystano wejście'
+                : 'Wykorzystano wejścia';
+            } else {
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              graceDate = tomorrow.toISOString().split('T')[0];
+              statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+            }
           }
 
           updatedKarnety[passIndex] = {
@@ -3744,14 +3851,24 @@ export default function DashboardPage() {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
           const nextRemaining = currentRemaining - 1;
+          const passPriceNum = parseFloat(String(updatedKarnety[passIndex].cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+          const isLowPrice = passPriceNum <= 150;
+          
           let graceDate = null;
           let statusText = updatedKarnety[passIndex].statusTekst;
 
           if (nextRemaining === 0) {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            graceDate = tomorrow.toISOString().split('T')[0];
-            statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+            if (isLowPrice) {
+              graceDate = null;
+              statusText = (updatedKarnety[passIndex].poczatkoweWejsc === 1 || (updatedKarnety[passIndex].nazwa || '').toLowerCase().includes('1 wejście') || (updatedKarnety[passIndex].nazwa || '').toLowerCase().includes('pojedyncz'))
+                ? 'Wykorzystano wejście'
+                : 'Wykorzystano wejścia';
+            } else {
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              graceDate = tomorrow.toISOString().split('T')[0];
+              statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+            }
           }
 
           updatedKarnety[passIndex] = {
@@ -3827,7 +3944,7 @@ export default function DashboardPage() {
     await loadData();
   };
 
-  // SAMODZIELNY WYPIS KLUBOWICZA: OSOBY NA LIŚCIE REZERWOWEJ MOGĄ SIĘ WYPISAĆ W DOWOLNYM MOMENCIE
+  // SAMODZIELNY WYPIS KLUBOWICZA
   const handleKlubowiczWypiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3837,7 +3954,6 @@ export default function DashboardPage() {
     const myEntry = aktualni.find((u: any) => String(u.id) === String(currentUser.id));
     const isOnWaitlist = myEntry?.status === 'krzesełko';
 
-    // Jeśli klubowicz NIE jest na liście rezerwowej, sprawdzamy blokadę czasową
     if (!isOnWaitlist) {
       const deadlineInfo = getCancelDeadlineInfo(selectedClass, selectedClass.displayDate);
       if (deadlineInfo && !deadlineInfo.canCancel) {
@@ -3846,7 +3962,6 @@ export default function DashboardPage() {
       }
     }
 
-    // Pytanie z potwierdzeniem
     const confirmPrompt = isOnWaitlist 
       ? "Czy na pewno chcesz wypisać się z listy rezerwowej (krzesełka) tych zajęć?"
       : "Czy na pewno chcesz wypisać się z tych zajęć?";
@@ -3874,6 +3989,7 @@ export default function DashboardPage() {
       loadData();
       return; 
     }
+
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
@@ -3889,11 +4005,12 @@ export default function DashboardPage() {
     const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-      // Zwracamy wejście bez sztucznego ograniczania limitem początkowym
+      // Zwracamy wejście bez sztucznego ucinania limitem początkowym (np. 2/1)
       updatedKarnety[passIndex] = {
         ...updatedKarnety[passIndex],
         pozostaloWejsc: currentRemaining + 1,
-        zeroEntriesGraceUntil: null
+        zeroEntriesGraceUntil: null,
+        statusTekst: updatedKarnety[passIndex].waznyDo ? `Ważny do: ${updatedKarnety[passIndex].waznyDo}` : 'Aktywny'
       };
     }
 
@@ -3948,7 +4065,7 @@ export default function DashboardPage() {
     loadData();
   };
 
-  // WYPISANIE KLUBOWICZA Z LISTY AKTYWNYCH ZAPISÓW (PANEL GŁÓWNY)
+  // WYPISANIE KLUBOWICZA Z LISTY AKTYWNYCH ZAPISÓW
   const handleWypiszZListyAktywnych = async (classKey: string, title: string, startStr: string, fullDateObj: Date) => {
     const now = new Date();
     const [sh = '00', sm = '00'] = (startStr || '00:00').split(':');
@@ -3969,7 +4086,6 @@ export default function DashboardPage() {
       : Number(bookingRules.cancel_deadline_minutes ?? 90);
     const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-    // Lista rezerwowa może wypisać się ZAWSZE bez ograniczeń czasowych
     if (!isOnWaitlist && diffMinutes < cancelDeadlineMinutes && diffMinutes > 0) {
       showToast(`Nie możesz się wypisać! Minimalny czas na bezpłatny wypis z tych zajęć wynosi ${cancelDeadlineMinutes} minut przed startem.`, 'error');
       return;
@@ -4016,7 +4132,8 @@ export default function DashboardPage() {
       updatedKarnety[passIndex] = {
         ...updatedKarnety[passIndex],
         pozostaloWejsc: currentRemaining + 1,
-        zeroEntriesGraceUntil: null
+        zeroEntriesGraceUntil: null,
+        statusTekst: updatedKarnety[passIndex].waznyDo ? `Ważny do: ${updatedKarnety[passIndex].waznyDo}` : 'Aktywny'
       };
     }
 
@@ -4073,7 +4190,6 @@ export default function DashboardPage() {
     await loadData();
   };
 
-  // ZAPIS KLUBOWICZA DO ZAJĘĆ PRZEZ TRENERA / ADMINA Z WALIDACJĄ OVERBOOKINGU
   const handleZapiszKlientaDoZajec = async (klient: any) => {
     if (!selectedClass) return;
     if (selectedClass.isOdwołane || selectedClass.isUsunięte) { 
@@ -4218,14 +4334,24 @@ export default function DashboardPage() {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
           const nextRemaining = currentRemaining - 1;
+          const passPriceNum = parseFloat(String(updatedKarnety[passIndex].cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+          const isLowPrice = passPriceNum <= 150;
+          
           let graceDate = null;
           let statusText = updatedKarnety[passIndex].statusTekst;
 
           if (nextRemaining === 0) {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            graceDate = tomorrow.toISOString().split('T')[0];
-            statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+            if (isLowPrice) {
+              graceDate = null;
+              statusText = (updatedKarnety[passIndex].poczatkoweWejsc === 1 || (updatedKarnety[passIndex].nazwa || '').toLowerCase().includes('1 wejście') || (updatedKarnety[passIndex].nazwa || '').toLowerCase().includes('pojedyncz'))
+                ? 'Wykorzystano wejście'
+                : 'Wykorzystano wejścia';
+            } else {
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              graceDate = tomorrow.toISOString().split('T')[0];
+              statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+            }
           }
 
           updatedKarnety[passIndex] = {
@@ -4268,7 +4394,6 @@ export default function DashboardPage() {
     }
   };
 
-  // OBSŁUGA WYPISYWANIA PRZEZ TRENERA/ADMINA
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
@@ -4309,10 +4434,12 @@ export default function DashboardPage() {
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+        // Bezstratne powiększenie puli wejść
         updatedKarnety[passIndex] = {
           ...updatedKarnety[passIndex],
           pozostaloWejsc: currentRemaining + 1,
-          zeroEntriesGraceUntil: null
+          zeroEntriesGraceUntil: null,
+          statusTekst: updatedKarnety[passIndex].waznyDo ? `Ważny do: ${updatedKarnety[passIndex].waznyDo}` : 'Aktywny'
         };
       }
     }
@@ -4527,7 +4654,6 @@ export default function DashboardPage() {
             }
           }
         }
-
         if (isValid) { 
           hasAnyValid = true; 
           if (isExpiring) { 
@@ -5745,14 +5871,13 @@ export default function DashboardPage() {
           </section>
         </div>
       )}
-
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
         const selectedPassDef = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
         const isContract = isContractPass(selectedPassDef) || isContractPass({ nazwa: selectedBuyPass });
         const basePrice = selectedPassDef ? parseFloat(selectedPassDef.cena) : 0;
-        const discountedPrice = (effectiveDiscount.percent > 0 && !isContract) 
+        const discountedPrice = (effectiveDiscount.percent > 0 && !isContract && basePrice > 150) 
           ? basePrice * (1 - effectiveDiscount.percent / 100) 
           : basePrice;
 
@@ -5779,12 +5904,12 @@ export default function DashboardPage() {
                     {dostepneKarnety.map(k => {
                       const isItemContract = isContractPass(k);
                       const kBasePrice = parseFloat(k.cena) || 0;
-                      const kFinalPrice = (effectiveDiscount.percent > 0 && !isItemContract) 
+                      const kFinalPrice = (effectiveDiscount.percent > 0 && !isItemContract && kBasePrice > 150) 
                         ? (kBasePrice * (1 - effectiveDiscount.percent / 100)).toFixed(2)
                         : k.cena;
                       return (
                         <option key={k.id} value={k.nazwa}>
-                          {k.nazwa} (Cena: {kFinalPrice} PLN {effectiveDiscount.percent > 0 && !isItemContract ? `| Rabat ${effectiveDiscount.percent}%` : ''} {isItemContract ? '• Umowa 12M' : ''})
+                          {k.nazwa} (Cena: {kFinalPrice} PLN {effectiveDiscount.percent > 0 && !isItemContract && kBasePrice > 150 ? `| Rabat ${effectiveDiscount.percent}%` : ''} {isItemContract ? '• Umowa 12M' : ''})
                         </option>
                       );
                     })}
@@ -5797,7 +5922,7 @@ export default function DashboardPage() {
                       <span>Cena katalogowa:</span>
                       <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                     </div>
-                    {effectiveDiscount.percent > 0 && !isContract && (
+                    {effectiveDiscount.percent > 0 && !isContract && basePrice > 150 && (
                       <div className="flex justify-between text-emerald-700 font-bold">
                         <span>Naliczony rabat {effectiveDiscount.label}:</span>
                         <span>-{effectiveDiscount.percent}% (-{(basePrice - discountedPrice).toFixed(2)} PLN)</span>
@@ -5871,7 +5996,6 @@ export default function DashboardPage() {
           return nameA.localeCompare(nameB);
         };
 
-        // WYMÓG 2: OSOBY OZNACZONE OBECNE/NIEOBECNE SCHODZĄ NA DÓŁ LISTY
         const sortAttendanceAndAlfabet = (a: any, b: any) => {
           const aOznaczony = !!(a.obecny || a.nieobecny);
           const bOznaczony = !!(b.obecny || b.nieobecny);
@@ -5898,13 +6022,27 @@ export default function DashboardPage() {
         let d = '01', m = '01';
         if (selectedClass.displayDate && selectedClass.displayDate.includes('/')) {
           [d, m] = selectedClass.displayDate.split('/');
+        } else if (selectedClass.isoDate && selectedClass.isoDate.includes('-')) {
+          const p = selectedClass.isoDate.split('-');
+          m = p[1]; d = p[2];
         }
         const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-        const cDate = new Date(yr, parseInt(m) - 1, parseInt(d));
+        const cDate = new Date(yr, parseInt(m, 10) - 1, parseInt(d, 10));
         const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
         const dayName = dayNames[cDate.getDay()];
         const fullDateDisplay = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${yr}`;
         const durationDisplay = calculateDuration(selectedClass.start, selectedClass.end);
+
+        // WERYFIKACJA ROZPOCZĘCIA TRENINGU
+        const isClassStarted = (() => {
+          const now = new Date();
+          const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
+          const startDateTime = new Date(yr, parseInt(m, 10) - 1, parseInt(d, 10), parseInt(sh, 10), parseInt(sm, 10), 0);
+          return now >= startDateTime;
+        })();
+
+        // REGUŁA: PO ROZPOCZĘCIU TRENINGU TRENER NIE MOŻE WYPISAĆ UCZESTNIKA (ADMIN MOŻE ZAWSZE)
+        const canUnregister = appRole === 'admin' || (appRole === 'trener' && !isClassStarted);
 
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
@@ -5920,6 +6058,11 @@ export default function DashboardPage() {
                     <span className="bg-sky-100 text-sky-900 font-mono font-bold text-xs px-2.5 py-0.5 rounded-lg border border-sky-200">
                       ⏱ {selectedClass.start} - {selectedClass.end} ({durationDisplay})
                     </span>
+                    {isClassStarted && (
+                      <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black text-[10px] px-2 py-0.5 rounded-lg uppercase">
+                        Trening w toku / odbyty
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs font-bold text-slate-500 flex items-center gap-2">
                     <span>📅 {fullDateDisplay}</span>
@@ -6060,6 +6203,7 @@ export default function DashboardPage() {
                             )}
                           </div>
                         </div>
+
                         {canManageClass && (
                           <div className="flex items-center justify-end gap-2 border-t border-sky-100 pt-3 text-xs w-full">
                             {(!osobaZapisana.nieobecny) && (
@@ -6090,7 +6234,8 @@ export default function DashboardPage() {
                               </label>
                             )}
 
-                            {(!osobaZapisana.obecny && !osobaZapisana.nieobecny) && (
+                            {/* REGUŁA: PRZYCISK WYPISZ ZNIKA DLA TRENERA PO ROZPOCZĘCIU TRENINGU */}
+                            {(!osobaZapisana.obecny && !osobaZapisana.nieobecny && canUnregister) && (
                               <button
                                 onClick={() => { setBlokadaZapisow(false); setClientToUnregister(osoba); }}
                                 className="px-3 py-2 text-rose-500 hover:text-rose-700 bg-slate-50 hover:bg-rose-50 font-black uppercase tracking-wider text-[10px] rounded-xl border border-slate-200 hover:border-rose-200 transition-all shadow-sm cursor-pointer"
@@ -6232,12 +6377,14 @@ export default function DashboardPage() {
                               >
                                 Wypis: {cutoffMin >= 60 ? `${cutoffMin / 60}h` : `${cutoffMin}m`} przed (Edytuj ✏️)
                               </button>
-                              <button
-                                onClick={() => setClientToUnregister(osoba)}
-                                className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
-                              >
-                                WYPISZ
-                              </button>
+                              {canUnregister && (
+                                <button
+                                  onClick={() => setClientToUnregister(osoba)}
+                                  className="text-rose-600 hover:text-rose-800 font-bold uppercase tracking-wider text-[11px] cursor-pointer"
+                                >
+                                  WYPISZ
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -6246,6 +6393,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
+
               {/* Dolny pasek zapisu */}
               {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
@@ -7025,6 +7173,7 @@ export default function DashboardPage() {
                       <button type="button" onClick={() => setSuspendMode('days')} className={`flex-1 py-1.5 cursor-pointer transition-colors ${suspendMode === 'days' ? 'bg-amber-200 text-amber-900' : 'text-amber-700 hover:bg-amber-50'}`}>Liczba dni</button>
                       <button type="button" onClick={() => setSuspendMode('dates')} className={`flex-1 py-1.5 border-l border-amber-200 cursor-pointer transition-colors ${suspendMode === 'dates' ? 'bg-amber-200 text-amber-900' : 'text-amber-700 hover:bg-amber-50'}`}>Od-Do</button>
                     </div>
+
                     {suspendMode === 'days' ? (
                       <div className="space-y-1">
                         <label className="font-bold text-amber-900">Liczba dni zawieszenia od dzisiaj</label>
@@ -7218,7 +7367,7 @@ export default function DashboardPage() {
         const defKarnetu = dostepneKarnety.find(k => k.nazwa === (extendSelectedNewPassName || extendPassTarget.nazwa));
         const isContract = isContractPass(extendPassTarget) || isContractPass(defKarnetu);
         const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(extendPassTarget.cena.replace(/[^0-9.]/g, '')) || 0;
-        const finalPrice = (effectiveDiscount.percent > 0 && !isContract) ? basePrice * (1 - effectiveDiscount.percent / 100) : basePrice;
+        const finalPrice = (effectiveDiscount.percent > 0 && !isContract && basePrice > 150) ? basePrice * (1 - effectiveDiscount.percent / 100) : basePrice;
 
         return (
           <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -7255,7 +7404,7 @@ export default function DashboardPage() {
                     <span>Cena katalogowa:</span>
                     <span className="font-bold">{basePrice.toFixed(2)} PLN</span>
                   </div>
-                  {effectiveDiscount.percent > 0 && !isContract && (
+                  {effectiveDiscount.percent > 0 && !isContract && basePrice > 150 && (
                     <div className="flex justify-between text-emerald-700 font-bold">
                       <span>Rabat {effectiveDiscount.label}:</span>
                       <span>-{effectiveDiscount.percent}% (-{(basePrice - finalPrice).toFixed(2)} PLN)</span>
@@ -7323,7 +7472,7 @@ export default function DashboardPage() {
                     </tr>
                   ))}
                   {(!profileClient.transakcje || profileClient.transakcje.length === 0) && (
-                    <tr>
+                    <tr key="empty-trans">
                       <td colSpan={4} className="py-8 text-center text-slate-400">Brak zarejestrowanych transakcji w bazie.</td>
                     </tr>
                   )}
@@ -7516,7 +7665,7 @@ export default function DashboardPage() {
                     </tr>
                   ))}
                   {modalHistoryData.length === 0 && (
-                    <tr>
+                    <tr key="empty-history">
                       <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych zdarzeń w historii tych zajęć.</td>
                     </tr>
                   )}
