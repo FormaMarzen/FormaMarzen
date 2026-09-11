@@ -7,6 +7,29 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Funkcje pomocnicze do elastycznego rozpoznawania karnetów i umów
+const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[\u2010-\u2015\u2212\-_]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const isContractPass = (item: any) => {
+  if (!item) return false;
+  const typ = cleanStr(item.typ_karnetu || item.typKarnetu || item.typ || '');
+  const nazwa = cleanStr(item.nazwa || '');
+  return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || item.isContract12M === true;
+};
+
+const isMatchingPass = (userPass: any, tabela: any) => {
+  if (!userPass || !tabela) return false;
+  const uName = cleanStr(userPass.nazwa);
+  const tName = cleanStr(tabela.nazwa);
+  if (uName === tName) return true;
+  if (uName.includes(tName) || tName.includes(uName)) return true;
+  if (isContractPass(userPass) && isContractPass(tabela)) {
+    if (uName.includes('open') && tName.includes('open')) return true;
+    if (uName.includes('ogolno') && tName.includes('ogolno')) return true;
+  }
+  return false;
+};
+
 export default function TwojBonusPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -18,23 +41,23 @@ export default function TwojBonusPage() {
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
 
-  // Zweryfikowani klubowicze przez administratora (ukrywa ich z listy oczekujących)
+  // Zweryfikowani klubowicze przez administratora
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
 
-  // Główny status programu (włączony / wyłączony)
+  // Główny status programu
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
 
-  // Tabele bonusowe (karnety z przypisanymi poziomami)
+  // Tabele bonusowe
   const [bonusTables, setBonusTables] = useState<any[]>([]);
 
-  // Wybrany/podświetlony poziom z roadmapy
+  // Wybrany poziom z roadmapy
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
 
   // Rozwijana lista warunków kwalifikacji (akordeon)
   const [isRulesExpanded, setIsRulesExpanded] = useState<boolean>(false);
 
-  // Warunki kwalifikacji (edytowalne przez admina)
+  // Warunki kwalifikacji
   const [qualificationRules, setQualificationRules] = useState<any[]>([
     {
       id: 'umowa',
@@ -83,7 +106,7 @@ export default function TwojBonusPage() {
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Domyślne poziomy startowe
+  // Domyślne poziomy
   const defaultTiersUmowa = [
     {
       id: 101,
@@ -201,7 +224,7 @@ export default function TwojBonusPage() {
     }
   ];
 
-  // Pobieranie danych z Supabase w równoległym Promise.all z limitem 5000 rekordów
+  // Równoległe pobieranie danych z Supabase (bez limitu 1000 rekordów)
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -212,12 +235,14 @@ export default function TwojBonusPage() {
         trenerzyResponse,
         rulesResponse,
         katalogResponse,
-        klienciResponse
+        klienciResponse,
+        transakcjeResponse
       ] = await Promise.all([
         supabase.from('trenerzy').select('*'),
         supabase.from('club_booking_rules').select('*').limit(1).maybeSingle(),
         supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).order('id', { ascending: true }),
-        supabase.from('klienci').select('*').order('id', { ascending: false }).range(0, 4999)
+        supabase.from('klienci').select('*').order('id', { ascending: false }).range(0, 4999),
+        supabase.from('transakcje').select('id, klient_id, typ_operacji, opis, created_at').order('id', { ascending: false }).range(0, 4999)
       ]);
 
       // 1. Uprawnienia
@@ -297,7 +322,15 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 4. Klienci
+      // 4. Mapowanie transakcji do klientów
+      const transakcjeData = transakcjeResponse.data || [];
+      const txMap = new Map<number, any[]>();
+      transakcjeData.forEach((tx: any) => {
+        if (!txMap.has(tx.klient_id)) txMap.set(tx.klient_id, []);
+        txMap.get(tx.klient_id)?.push(tx);
+      });
+
+      // 5. Klienci
       const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -314,7 +347,8 @@ export default function TwojBonusPage() {
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
             cyklCiaglosci: Number(c.cyklCiaglosci) || 1,
-            hasLostContinuity: c.hasLostContinuity === true
+            hasLostContinuity: c.hasLostContinuity === true,
+            transactions: txMap.get(c.id) || []
           };
         });
         setAllKlienci(mapped);
@@ -356,7 +390,7 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Zmiana kolejności tabel (lewo / prawo)
+  // Zmiana kolejności tabel
   const handleMoveTable = async (index: number, direction: 'left' | 'right') => {
     const targetIndex = direction === 'left' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= bonusTables.length) return;
@@ -652,14 +686,72 @@ export default function TwojBonusPage() {
     }
   };
 
-  // NALICZANIE RAT, CIĄGŁOŚCI I PRZEDŁUŻEŃ UMÓW
+  // WYSZUKIWANIE RATY I POSTĘPU ZE WSZYSTKICH POTENCJALNYCH ŹRÓDEŁ W SUPABASE
+  const extractContractInstallments = (userPass: any, client: any) => {
+    let bestCount = 0;
+
+    // A. userPass.rata (np. "9/12", "9", "Rata 9")
+    if (userPass?.rata !== undefined && userPass?.rata !== null) {
+      const m = String(userPass.rata).match(/(\d+)/);
+      if (m) bestCount = Math.max(bestCount, parseInt(m[1], 10));
+    }
+
+    // B. userPass.statusTekst (np. "Umowa 12M (Rata 9/12 • Ważny do: ...)")
+    if (userPass?.statusTekst) {
+      const m = String(userPass.statusTekst).match(/rata\s*(\d+)/i) || String(userPass.statusTekst).match(/(\d+)\s*\/\s*12/);
+      if (m) bestCount = Math.max(bestCount, parseInt(m[1], 10));
+    }
+
+    // C. Bezpośrednie właściwości w obiekcie karnetu
+    const possibleProps = [
+      'oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone',
+      'zaplaconeRaty', 'zaplacone_raty', 'liczbaRat', 'liczba_rat',
+      'iloscRat', 'ilosc_rat', 'oplaconaRata', 'aktualnaRata',
+      'numerRaty', 'numer_raty'
+    ];
+    for (const prop of possibleProps) {
+      if (userPass?.[prop] !== undefined && userPass?.[prop] !== null) {
+        const val = parseInt(String(userPass[prop]), 10);
+        if (!isNaN(val) && val > 0) bestCount = Math.max(bestCount, val);
+      }
+    }
+
+    // D. Tablice harmonogramu lub historii rat
+    if (Array.isArray(userPass?.harmonogram)) {
+      const paidCount = userPass.harmonogram.filter((h: any) => 
+        h.oplacona === true || h.status === 'oplacona' || h.paid === true || h.status === 'paid'
+      ).length;
+      if (paidCount > 0) bestCount = Math.max(bestCount, paidCount);
+    }
+    if (Array.isArray(userPass?.historiaRat)) {
+      bestCount = Math.max(bestCount, userPass.historiaRat.length);
+    }
+
+    // E. Wyszukiwanie w transakcjach klienta z tabeli `transakcje`
+    if (Array.isArray(client?.transactions) && client.transactions.length > 0) {
+      const installmentTransactions = client.transactions.filter((tx: any) => {
+        const op = (tx.typ_operacji || '').toLowerCase();
+        const opis = (tx.opis || '').toLowerCase();
+        return op.includes('rata') || opis.includes('rata') || op.includes('umow') || (opis.includes('umow') && !opis.includes('wypis'));
+      });
+      if (installmentTransactions.length > 0) {
+        bestCount = Math.max(bestCount, installmentTransactions.length);
+      }
+    }
+
+    // F. Sprawdzenie stażu ciągłości w profilu klienta
+    const overall = Number(client?.cyklCiaglosci) || 0;
+    bestCount = Math.max(bestCount, overall);
+
+    return bestCount;
+  };
+
+  // INTELIGENTNE OBLICZANIE POSTĘPU
   const calculateMemberProgress = (tabela: any, targetUser: any = currentUser) => {
     if (!isProgramActive || !targetUser) return { value: 0, isReset: false, reason: '' };
 
-    const userPass = targetUser?.karnetyKlubowicza?.find(
-      (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
-    );
-
+    // Dopasowanie karnetu elastyczną metodą isMatchingPass
+    const userPass = targetUser?.karnetyKlubowicza?.find((k: any) => isMatchingPass(k, tabela));
     if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
@@ -674,31 +766,23 @@ export default function TwojBonusPage() {
 
     const clientOverallContinuity = Number(targetUser?.cyklCiaglosci) || 1;
 
-    // Karnety na umowę: sprawdzamy bieżącą ratę oraz sumujemy przedłużenia (13, 14, 15...)
-    if (tabela.typ_karnetu === 'Umowa 12 miesięcy' || userPass.isContract12M) {
-      let currentInstallment = 0;
-      if (userPass.rata !== undefined && userPass.rata !== null) {
-        const match = String(userPass.rata).match(/(\d+)/);
-        if (match) currentInstallment = parseInt(match[1], 10);
-      }
-
-      if (!currentInstallment && userPass.oplaconeRaty) {
-        currentInstallment = parseInt(String(userPass.oplaconeRaty), 10);
-      }
-
-      const calculatedMonths = Math.max(currentInstallment, clientOverallContinuity);
+    // 1. Karnety na umowę (sprawdzanie rat i obsługa kolejnej umowy 13, 14, 15...)
+    if (isContractPass(tabela) || isContractPass(userPass)) {
+      const installmentsCount = extractContractInstallments(userPass, targetUser);
+      const calculatedMonths = Math.max(installmentsCount, clientOverallContinuity);
       return { value: calculatedMonths > 0 ? calculatedMonths : 1, isReset: false, reason: '' };
     }
 
-    // Karnety na ilość treningów -> odbyte treningi
-    if (tabela.typ_karnetu === 'Na ilość treningów' || tabela.nazwa?.toLowerCase().includes('wejść')) {
+    // 2. Karnety na ilość wejść -> odbyte treningi
+    const isEntries = cleanStr(tabela.typ_karnetu).includes('ilość') || cleanStr(tabela.nazwa).includes('wejść');
+    if (isEntries) {
       const poczatkowe = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
       const pozostalo = parseInt(userPass.pozostaloWejsc !== undefined && userPass.pozostaloWejsc !== null ? userPass.pozostaloWejsc : poczatkowe, 10);
       const odbyte = Math.max(0, poczatkowe - pozostalo);
       return { value: odbyte, isReset: false, reason: '' };
     }
 
-    // Karnety na czas / open
+    // 3. Karnety na czas / open / półroczne odnawiane (7, 8, 9...)
     return { value: clientOverallContinuity, isReset: false, reason: '' };
   };
 
@@ -713,7 +797,7 @@ export default function TwojBonusPage() {
     const clientPass = client?.karnetyKlubowicza?.[0];
     if (!clientPass) return [];
 
-    const matchedTable = bonusTables.find(t => t.nazwa?.trim().toLowerCase() === clientPass.nazwa?.trim().toLowerCase());
+    const matchedTable = bonusTables.find(t => isMatchingPass(clientPass, t));
     if (!matchedTable || !matchedTable.customTiers) return [];
 
     const progress = calculateMemberProgress(matchedTable, client);
@@ -793,12 +877,8 @@ export default function TwojBonusPage() {
   };
 
   const displayedTables = [...bonusTables].sort((a, b) => {
-    const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
-      (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
-    );
-    const bIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
-      (k: any) => k.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase()
-    );
+    const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some((k: any) => isMatchingPass(k, a));
+    const bIsUserPass = activeViewingUser?.karnetyKlubowicza?.some((k: any) => isMatchingPass(k, b));
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -948,7 +1028,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW POJAWIA SIĘ TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
+          {/* TABELA KLUBOWICZÓW: UKRYTA GDY PUSTO, WIDOCZNA TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1015,12 +1095,10 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
+      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const isUserPass = activeViewingUser?.karnetyKlubowicza?.some(
-            (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
-          );
+          const isUserPass = activeViewingUser?.karnetyKlubowicza?.some((k: any) => isMatchingPass(k, tabela));
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
@@ -1502,7 +1580,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* MODAL 3: EDYCJA NAZWY / PARAMETRÓW TABELI (ADMIN - NAPRAWIONO setTableTypeInput) */}
+      {/* MODAL 3: EDYCJA PARAMETRÓW TABELI (ADMIN) */}
       {isEditTableModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
