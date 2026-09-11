@@ -83,7 +83,7 @@ export default function TwojBonusPage() {
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Domyślne poziomy
+  // Domyślne poziomy startowe
   const defaultTiersUmowa = [
     {
       id: 101,
@@ -201,14 +201,27 @@ export default function TwojBonusPage() {
     }
   ];
 
+  // Pobieranie danych z Supabase w równoległym Promise.all z limitem 5000 rekordów
   const loadData = async () => {
     setIsLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
-      // 1. Sprawdzenie roli
-      const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
+      const [
+        trenerzyResponse,
+        rulesResponse,
+        katalogResponse,
+        klienciResponse
+      ] = await Promise.all([
+        supabase.from('trenerzy').select('*'),
+        supabase.from('club_booking_rules').select('*').limit(1).maybeSingle(),
+        supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).order('id', { ascending: true }),
+        supabase.from('klienci').select('*').order('id', { ascending: false }).range(0, 4999)
+      ]);
+
+      // 1. Uprawnienia
+      const trenerzyData = trenerzyResponse.data;
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
       } else {
@@ -220,8 +233,8 @@ export default function TwojBonusPage() {
         }
       }
 
-      // 2. Pobieranie statusu programu oraz zasad
-      const { data: rulesData } = await supabase.from('club_booking_rules').select('*').limit(1).maybeSingle();
+      // 2. Status programu i zasady
+      const rulesData = rulesResponse.data;
       if (rulesData) {
         if (rulesData.bonus_program_active !== undefined) {
           setIsProgramActive(rulesData.bonus_program_active);
@@ -238,13 +251,8 @@ export default function TwojBonusPage() {
         }
       }
 
-      // 3. Pobieranie tabel karnetów
-      let { data: karnetyData } = await supabase
-        .from('katalog_karnetow')
-        .select('*')
-        .order('kolejnosc', { ascending: true })
-        .order('id', { ascending: true });
-
+      // 3. Tabele karnetów
+      let karnetyData = katalogResponse.data;
       if (!karnetyData || karnetyData.length === 0) {
         const fallback = await supabase.from('karnety').select('*').order('id', { ascending: true });
         karnetyData = fallback.data;
@@ -289,8 +297,8 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 4. Pobieranie klientów
-      const { data: klienciData } = await supabase.from('klienci').select('*');
+      // 4. Klienci
+      const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
           let parsedKarnety = [];
@@ -305,7 +313,7 @@ export default function TwojBonusPage() {
             lastName: c.Nazwisko || '',
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
-            cyklCiaglosci: c.cyklCiaglosci || 1,
+            cyklCiaglosci: Number(c.cyklCiaglosci) || 1,
             hasLostContinuity: c.hasLostContinuity === true
           };
         });
@@ -644,11 +652,10 @@ export default function TwojBonusPage() {
     }
   };
 
-  // INTELIGENTNE OBLICZANIE POSTĘPU Z UWZGLĘDNIENIEM KUMULACJI CIĄGŁOŚCI (13, 14, 15... LUB 7, 8, 9...)
+  // NALICZANIE RAT, CIĄGŁOŚCI I PRZEDŁUŻEŃ UMÓW
   const calculateMemberProgress = (tabela: any, targetUser: any = currentUser) => {
     if (!isProgramActive || !targetUser) return { value: 0, isReset: false, reason: '' };
 
-    // 1. Sprawdzamy czy klubowicz ma ten karnet w swojej tablicy karnetów
     const userPass = targetUser?.karnetyKlubowicza?.find(
       (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
     );
@@ -657,7 +664,6 @@ export default function TwojBonusPage() {
       return { value: 0, isReset: false, reason: '' };
     }
 
-    // 2. Brak ciągłości - całkowity reset
     if (targetUser?.hasLostContinuity) {
       return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
     }
@@ -666,20 +672,25 @@ export default function TwojBonusPage() {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
-    const ogolnaCiaglosc = Number(targetUser?.cyklCiaglosci) || 1;
+    const clientOverallContinuity = Number(targetUser?.cyklCiaglosci) || 1;
 
-    // 3. KARNET NA UMOWĘ (RATALNY) - uwzględnienie kolejnej umowy (13, 14, 15...)
+    // Karnety na umowę: sprawdzamy bieżącą ratę oraz sumujemy przedłużenia (13, 14, 15...)
     if (tabela.typ_karnetu === 'Umowa 12 miesięcy' || userPass.isContract12M) {
-      const rataMatch = String(userPass.rata || '').match(/(\d+)/);
-      const bieżącaRata = rataMatch ? parseInt(rataMatch[1], 10) : 1;
+      let currentInstallment = 0;
+      if (userPass.rata !== undefined && userPass.rata !== null) {
+        const match = String(userPass.rata).match(/(\d+)/);
+        if (match) currentInstallment = parseInt(match[1], 10);
+      }
 
-      // Jeśli ogólna ciągłość jest większa niż bieżąca rata w umowie (bo to kolejna umowa w ciągłości),
-      // naliczamy ciągłość sumaryczną (np. 12 + 1 = 13, 14 itd.)
-      const naliczonaWartosc = Math.max(bieżącaRata, ogolnaCiaglosc);
-      return { value: naliczonaWartosc, isReset: false, reason: '' };
+      if (!currentInstallment && userPass.oplaconeRaty) {
+        currentInstallment = parseInt(String(userPass.oplaconeRaty), 10);
+      }
+
+      const calculatedMonths = Math.max(currentInstallment, clientOverallContinuity);
+      return { value: calculatedMonths > 0 ? calculatedMonths : 1, isReset: false, reason: '' };
     }
 
-    // 4. KARNET NA ILOŚĆ TRENINGÓW (OGÓLNOROZWOJOWY)
+    // Karnety na ilość treningów -> odbyte treningi
     if (tabela.typ_karnetu === 'Na ilość treningów' || tabela.nazwa?.toLowerCase().includes('wejść')) {
       const poczatkowe = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
       const pozostalo = parseInt(userPass.pozostaloWejsc !== undefined && userPass.pozostaloWejsc !== null ? userPass.pozostaloWejsc : poczatkowe, 10);
@@ -687,50 +698,16 @@ export default function TwojBonusPage() {
       return { value: odbyte, isReset: false, reason: '' };
     }
 
-    // 5. KARNETY NA CZAS / OPEN / PÓŁROCZNE (np. 6M + 6M = miesiąc 7, 8, 9...)
-    return { value: ogolnaCiaglosc, isReset: false, reason: '' };
+    // Karnety na czas / open
+    return { value: clientOverallContinuity, isReset: false, reason: '' };
   };
 
-  // Precyzyjne, ciągłe obliczanie pozycji paska postępu na osi roadmapy
-  const calculateSmoothRoadmapProgress = (userVal: number, customTiers: any[]) => {
-    if (!customTiers || customTiers.length === 0 || userVal <= 0) return 0;
-
-    const sortedTiers = [...customTiers].sort((a, b) => Number(a.threshold) - Number(b.threshold));
-    const totalSegments = sortedTiers.length;
-    if (totalSegments === 0) return 0;
-
-    const lastThreshold = Number(sortedTiers[totalSegments - 1].threshold) || 1;
-    if (userVal >= lastThreshold) return 100;
-
-    const segmentWidth = 100 / (totalSegments > 1 ? totalSegments - 1 : 1);
-
-    if (totalSegments === 1) {
-      const singleThresh = Number(sortedTiers[0].threshold) || 1;
-      return Math.min(100, Math.round((userVal / singleThresh) * 100));
-    }
-
-    const firstThresh = Number(sortedTiers[0].threshold) || 1;
-    if (userVal < firstThresh) {
-      const fraction = userVal / firstThresh;
-      return Math.round(fraction * segmentWidth);
-    }
-
-    for (let i = 0; i < totalSegments - 1; i++) {
-      const currentThresh = Number(sortedTiers[i].threshold);
-      const nextThresh = Number(sortedTiers[i + 1].threshold);
-
-      if (userVal >= currentThresh && userVal <= nextThresh) {
-        const range = nextThresh - currentThresh;
-        const progressInRange = range > 0 ? (userVal - currentThresh) / range : 0;
-        const basePosition = i * segmentWidth;
-        return Math.min(100, Math.round(basePosition + progressInRange * segmentWidth));
-      }
-    }
-
-    return 0;
+  const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
+    if (maxThreshold <= 0) return 0;
+    return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
   };
 
-  // Pobieranie odblokowanych poziomów danego klubowicza
+  // Odblokowane poziomy
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client || client.hasLostContinuity) return [];
     const clientPass = client?.karnetyKlubowicza?.[0];
@@ -745,7 +722,7 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
-  // Lista klubowiczów oczekujących na sprawdzenie poziomu (tylko niezrobieni)
+  // Lista oczekujących do weryfikacji
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const pass = client?.karnetyKlubowicza?.[0];
@@ -763,12 +740,10 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  // Zatwierdzenie poziomu przez administratora
   const handleMarkTierAsVerified = (verificationKey: string) => {
     setVerifiedMemberTiers(prev => [...prev, verificationKey]);
   };
 
-  // Wyszukiwarka podopiecznych
   const searchedMembers = adminSearchQuery.trim().length >= 2
     ? allKlienci.filter(c => {
         const full = `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase();
@@ -817,7 +792,6 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Sortowanie tabel: posiadany karnet klubowicza jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
     const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
       (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
@@ -1051,8 +1025,11 @@ export default function TwojBonusPage() {
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
 
-          // Ciągłe wyliczanie postępu na pasku roadmapy (np. 1 cykl przy progu 2 = 50% drogi)
-          const progressPercent = calculateSmoothRoadmapProgress(userVal, tabela.customTiers);
+          const maxThreshold = tabela.customTiers && tabela.customTiers.length > 0
+            ? Math.max(...tabela.customTiers.map((t: any) => Number(t.threshold) || 1))
+            : 12;
+
+          const fillProgressPercent = getProportionalLeftPercent(userVal, maxThreshold);
           const highlightedTierId = selectedRoadmapTier[tabela.id] || null;
 
           return (
@@ -1146,8 +1123,8 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* B. LINIA ROADMAPY Z PŁYNNYM PASKIEM POSTĘPU */}
-              <div className="bg-white border border-sky-200 rounded-2xl p-3.5 shadow-sm space-y-3">
+              {/* B. LINIA ROADMAPY Z PROPORCJONALNYM, PŁYNNYM PASKIEM POSTĘPU */}
+              <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-4">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
@@ -1163,44 +1140,46 @@ export default function TwojBonusPage() {
                   </div>
                 )}
 
-                <div className="relative pt-4 pb-2 px-3">
-                  <div className="absolute top-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full -translate-y-1/2" />
+                <div className="relative pt-6 pb-6 px-4">
+                  <div className="absolute top-1/2 left-4 right-4 h-2 bg-slate-100 rounded-full -translate-y-1/2" />
                   <div
-                    className="absolute top-1/2 left-0 h-1.5 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full -translate-y-1/2 transition-all duration-500"
-                    style={{ width: `${progressPercent}%` }}
+                    className="absolute top-1/2 left-4 h-2 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full -translate-y-1/2 transition-all duration-500"
+                    style={{ width: `calc((100% - 32px) * ${fillProgressPercent / 100})` }}
                   />
 
-                  <div className="relative flex justify-between items-center z-10">
+                  <div className="relative h-7" style={{ margin: '0 2px' }}>
                     {tabela.customTiers?.map((tier: any) => {
-                      const isReached = isProgramActive && !progressData.isReset && userVal >= Number(tier.threshold);
+                      const tierVal = Number(tier.threshold) || 1;
+                      const nodePosPercent = getProportionalLeftPercent(tierVal, maxThreshold);
+                      const isReached = isProgramActive && !progressData.isReset && userVal >= tierVal;
                       const isSelected = highlightedTierId === tier.id;
 
                       return (
-                        <button
+                        <div
                           key={tier.id}
-                          type="button"
+                          className="absolute -translate-x-1/2 top-1/2 -translate-y-1/2 flex flex-col items-center cursor-pointer z-10"
+                          style={{ left: `${nodePosPercent}%` }}
                           onClick={() => setSelectedRoadmapTier(prev => ({
                             ...prev,
                             [tabela.id]: prev[tabela.id] === tier.id ? null : tier.id
                           }))}
-                          className="group flex flex-col items-center cursor-pointer focus:outline-none"
-                          title={`Kliknij, aby podświetlić próg: ${tier.levelName}`}
+                          title={`Próg: ${tier.levelName} (${tier.threshold} ${tier.unit})`}
                         >
                           <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black transition-all shadow-sm ${
+                            className={`w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-black transition-all shadow-sm ${
                               isReached
-                                ? 'bg-emerald-500 text-white ring-3 ring-emerald-100'
-                                : 'bg-white text-slate-500 border-2 border-slate-300 group-hover:border-amber-400'
-                            } ${isSelected ? 'ring-3 ring-amber-400 scale-110' : ''}`}
+                                ? 'bg-emerald-500 text-white ring-4 ring-emerald-100'
+                                : 'bg-white text-slate-600 border-2 border-slate-300 hover:border-amber-400'
+                            } ${isSelected ? 'ring-4 ring-amber-400 scale-110' : ''}`}
                           >
                             {isReached ? '✓' : tier.threshold}
                           </div>
-                          <span className={`text-[8px] font-black uppercase mt-1 tracking-tight ${
+                          <span className={`text-[8px] font-black uppercase mt-1 tracking-tight whitespace-nowrap ${
                             isReached ? 'text-emerald-900 font-extrabold' : 'text-slate-400'
                           } ${isSelected ? 'text-amber-900 underline' : ''}`}>
                             {tier.levelName}
                           </span>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -1208,7 +1187,7 @@ export default function TwojBonusPage() {
 
                 <div className="bg-sky-50/50 rounded-xl px-3 py-1.5 text-[10px] text-slate-600 font-medium flex items-center justify-between border border-sky-100">
                   <span>Kliknij punkt na osi, aby wyfiltrować próg</span>
-                  <span className="font-bold text-sky-950">{progressPercent}% do celu</span>
+                  <span className="font-bold text-sky-950">{Math.round(fillProgressPercent)}% do maksymalnego poziomu</span>
                 </div>
               </div>
 
@@ -1523,7 +1502,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* MODAL 3: EDYCJA NAZWY / PARAMETRÓW TABELI (ADMIN) */}
+      {/* MODAL 3: EDYCJA NAZWY / PARAMETRÓW TABELI (ADMIN - NAPRAWIONO setTableTypeInput) */}
       {isEditTableModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
