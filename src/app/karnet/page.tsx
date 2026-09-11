@@ -42,7 +42,6 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
       if (parsed > today) base = parsed;
     }
   }
-  // Następny miesiąc kalendarzowy: ostatni dzień miesiąca
   const targetYear = base.getFullYear();
   const targetMonth = base.getMonth() + 1; // kolejny miesiąc (1-indexed)
   const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
@@ -296,6 +295,7 @@ export default function KarnetyPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [dostepneRodzajeZajec, setDostepneRodzajeZajec] = useState<any[]>([]);
   
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -592,6 +592,9 @@ export default function KarnetyPage() {
     for (const k of activePasses) {
       if (isContractPassCheck(k)) continue;
 
+      const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+      if (passPrice <= 150) continue;
+
       const passCycle = typeof k.cykl === 'number' ? k.cykl : 1;
       maxCykl = Math.max(maxCykl, passCycle);
 
@@ -645,8 +648,10 @@ export default function KarnetyPage() {
     const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
-    // Przekazanie basePriceToCheck do sprawdzenia progu 150 zł
-    const continuityInfo = !isTargetContract ? calculateContinuityDiscount(client, basePriceToCheck) : { hasContinuity: false, percent: 0, label: '' };
+    // Wykluczenie karnetów <= 150 zł z ciągłości
+    const continuityInfo = (!isTargetContract && (basePriceToCheck === undefined || basePriceToCheck > 150))
+      ? calculateContinuityDiscount(client, basePriceToCheck) 
+      : { hasContinuity: false, percent: 0, label: '' };
     const continuityDiscountVal = continuityInfo.hasContinuity ? continuityInfo.percent : 0;
 
     const rawAmbDiscountVal = Number(client.ambassadorDiscountPercent) || 0;
@@ -745,7 +750,10 @@ export default function KarnetyPage() {
   };
 
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata: any) => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setIsProcessingPayment(true);
+
     try {
       const response = await fetch('/api/autopay/init', {
         method: 'POST',
@@ -786,6 +794,7 @@ export default function KarnetyPage() {
     } catch (err: any) {
       console.error("Błąd przekierowania do Autopay:", err);
       showToast(`Błąd płatności: ${err.message}`, 'error');
+      isSubmittingRef.current = false;
       setIsProcessingPayment(false);
     }
   };
@@ -881,7 +890,7 @@ export default function KarnetyPage() {
                   const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
                   const isLowPrice = passPriceNum <= 150;
 
-                  // WYMÓG 1: KARNETY <= 150 ZŁ BEZ BUFORA CIĄGŁOŚCI
+                  // WYMÓG: KARNETY <= 150 ZŁ BEZ BUFORA CIĄGŁOŚCI
                   if (isLowPrice) {
                     const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncze'))
                       ? 'Wykorzystano wejście'
@@ -926,7 +935,7 @@ export default function KarnetyPage() {
                 return false;
               }
 
-              // WYMÓG 2: BLOKADA KASOWANIA WYZEROWANEGO KARNETU PRZY PRZYSZŁYCH ZAPISACH
+              // BLOKADA KASOWANIA WYZEROWANEGO KARNETU PRZY PRZYSZŁYCH ZAPISACH
               if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) {
                 if (hasFutureBookings) {
                   return true; // Blokada usunięcia: klubowicz ma aktywny zapis w grafiku
@@ -1321,7 +1330,7 @@ export default function KarnetyPage() {
   // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M DO KOŃCA MIESIĄCA KALENDARZOWEGO
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || !passToExtend) return;
+    if (!currentUser || !passToExtend || isProcessingPayment || isSubmittingRef.current) return;
 
     // KARNETY ILOŚCIOWE NIE MAJĄ PRZEDŁUŻANIA - WYMAGAJĄ ZAKUPU NOWEGO
     if (isQuantityPassCheck(passToExtend)) {
@@ -1407,7 +1416,6 @@ export default function KarnetyPage() {
           portfelUzyto: walletDeduction > 0 ? `${walletDeduction.toFixed(2)} PLN` : null,
           usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
         }];
-
         let statusFinalTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
         if (isContract) {
           if (isBonus13thPeriod) {
@@ -1439,7 +1447,7 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    // WYMÓG 1: TYLKO KARNETY POWYŻEJ 150 ZŁ PODNOSZĄ CYKL I RABAT ZA CIĄGŁOŚĆ
+    // TYLKO KARNETY POWYŻEJ 150 ZŁ PODNOSZĄ CYKL I RABAT ZA CIĄGŁOŚĆ
     if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
@@ -1614,10 +1622,12 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
+    if (isSubmittingRef.current || isProcessingPayment) return;
 
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
     const isNewQuantityPass = isQuantityPassCheck(defKarnetu);
@@ -2857,7 +2867,6 @@ export default function KarnetyPage() {
             </button>
           </div>
         </div>
-
         {/* SEKCJA: ZARZĄDZANIE ZAWIESZENIAMI */}
         <div className="pt-2">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
@@ -2971,6 +2980,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
+
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
