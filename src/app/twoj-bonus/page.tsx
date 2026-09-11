@@ -23,32 +23,46 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
-// Agresywne dopasowanie karnetu klubowicza do właściwej tabeli
-const getMatchedPass = (passes: any[], tabela: any) => {
+// Kanoniczny normalizator klucza karnetu
+const normalizePassKey = (str: string): string => {
+  if (!str) return '';
+  const s = String(str)
+    .toLowerCase()
+    .replace(/[ę]/g, 'e')
+    .replace(/[ą]/g, 'a')
+    .replace(/[ó]/g, 'o')
+    .replace(/[ś]/g, 's')
+    .replace(/[ł]/g, 'l')
+    .replace(/[żź]/g, 'z')
+    .replace(/[ć]/g, 'c')
+    .replace(/[ń]/g, 'n')
+    .replace(/[\u2010-\u2015\u2212\-_/.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const isContract = s.includes('umow') || s.includes('12m') || s.includes('12 m') || s.includes('12 mies');
+
+  if (isContract) {
+    if (s.includes('ogolno') || s.includes('rozciag')) return 'CONTRACT_OGOLNO';
+    if (s.includes('open')) return 'CONTRACT_OPEN';
+    return `CONTRACT_${s.split(' ')[0]}`;
+  }
+
+  if (s.includes('ogolno') || s.includes('wejs')) return 'ENTRIES_OGOLNO';
+  if (s.includes('open')) return 'TIME_OPEN';
+  return `OTHER_${s.split(' ')[0]}`;
+};
+
+// Precyzyjne parowanie karnetu klubowicza z tabelą bonusową
+const getMatchedPassForTable = (passes: any[], tabela: any) => {
   if (!passes || passes.length === 0 || !tabela) return null;
-  const tName = String(tabela.nazwa || '').toLowerCase().trim();
-  const tIsContract = tName.includes('umow') || String(tabela.typ_karnetu || '').toLowerCase().includes('umow');
+  const targetKey = normalizePassKey(tabela.nazwa || tabela.typ_karnetu || '');
+  if (!targetKey) return null;
 
-  // 1. Dokładne dopasowanie
-  let match = passes.find((k: any) => String(k.nazwa || '').toLowerCase().trim() === tName);
-  if (match) return match;
-
-  // 2. Jeśli tabela to umowa, wymuś znalezienie umowy w portfelu
-  if (tIsContract) {
-    return passes.find((k: any) => String(k.nazwa || '').toLowerCase().includes('umow') || k.isContract12M);
-  }
-
-  // 3. Jeśli tabela to wejścia
-  if (tName.includes('wejść') || tName.includes('ogólno')) {
-    return passes.find((k: any) => String(k.nazwa || '').toLowerCase().includes('wejść') || String(k.nazwa || '').toLowerCase().includes('ogólno'));
-  }
-
-  // 4. Jeśli tabela to OPEN (zwykły), szukaj OPEN ale BEZ słowa "umowa"
-  if (tName.includes('open')) {
-    return passes.find((k: any) => String(k.nazwa || '').toLowerCase().includes('open') && !String(k.nazwa || '').toLowerCase().includes('umow'));
-  }
-
-  return null;
+  return passes.find((p: any) => {
+    const passKey = normalizePassKey(p.nazwa || p.pass || '');
+    return passKey === targetKey;
+  }) || null;
 };
 
 export default function TwojBonusPage() {
@@ -58,12 +72,14 @@ export default function TwojBonusPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
 
-  // Wyszukiwanie podopiecznego
+  // Wyszukiwanie podopiecznego przez administratora
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
+
+  // Zweryfikowani klubowicze przez administratora
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
 
-  // Status programu
+  // Główny status programu
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
 
@@ -123,24 +139,19 @@ export default function TwojBonusPage() {
 
   // Szablony progów
   const defaultTiersUmowa = [
-    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
-    { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
-    { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
-    { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
+    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
+    { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
+    { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy po przedłużeniu umowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
+    { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1 z wybranym trenerem', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
   ];
 
   const defaultTiersOpen = [
-    { id: 201, levelName: 'BRĄZOWY', threshold: 2, unit: 'cykle', accent: 'amber', rewardTitle: 'Wejściówka dla osoby towarzyszącej gratis', rewardBadge: 'GRATIS', secondaryTitle: '5% stałego rabatu na odnowienie', secondaryBadge: '-5%', active: true },
-    { id: 202, levelName: 'SREBRNY', threshold: 4, unit: 'cykle', accent: 'slate', rewardTitle: '20 PLN doładowania do portfela', rewardBadge: '+20 PLN', secondaryTitle: '10% rabatu na akcesoria treningowe', secondaryBadge: '-10%', active: true },
-    { id: 203, levelName: 'ZŁOTY', threshold: 6, unit: 'cykli', accent: 'yellow', rewardTitle: '15% zniżki na kolejny karnet OPEN', rewardBadge: '-15%', secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis', secondaryBadge: 'GRATIS', active: true }
+    { id: 201, levelName: 'BRĄZOWY', threshold: 2, unit: 'cykle', accent: 'amber', rewardTitle: 'Jednorazowa wejściówka dla osoby towarzyszącej gratis.', rewardBadge: 'GRATIS', secondaryTitle: '5% stałego rabatu na odnowienie karnetu.', secondaryBadge: '-5%', active: true },
+    { id: 202, levelName: 'SREBRNY', threshold: 4, unit: 'cykle', accent: 'slate', rewardTitle: '20 PLN doładowania do portfela klubowego.', rewardBadge: '+20 PLN', secondaryTitle: '10% rabatu na akcesoria treningowe.', secondaryBadge: '-10%', active: true },
+    { id: 203, levelName: 'ZŁOTY', threshold: 6, unit: 'cykli', accent: 'yellow', rewardTitle: '15% zniżki na kolejny karnet OPEN.', rewardBadge: '-15%', secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis.', secondaryBadge: 'GRATIS', active: true }
   ];
 
-  const defaultTiersWejscia = [
-    { id: 301, levelName: 'BRĄZOWY', threshold: 10, unit: 'wejść', accent: 'amber', rewardTitle: '+1 dodatkowe wejście do puli karnetu', rewardBadge: '+1 WEJŚCIE', secondaryTitle: 'Napój izotoniczny w recepcji gratis', secondaryBadge: 'GRATIS', active: true },
-    { id: 302, levelName: 'SREBRNY', threshold: 25, unit: 'wejść', accent: 'slate', rewardTitle: '+2 darmowe wejścia do puli treningowej', rewardBadge: '+2 WEJŚCIA', secondaryTitle: 'Shake białkowy po treningu', secondaryBadge: 'GRATIS', active: true }
-  ];
-
-  // Pobieranie danych
+  // Pobieranie danych z Supabase
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -192,22 +203,17 @@ export default function TwojBonusPage() {
           let meta: any = {};
           try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
 
-          let fallbackTiers = defaultTiersUmowa;
-          const nazwaLower = String(k.nazwa || '').toLowerCase();
-          const typLower = String(k.typ_karnetu || '').toLowerCase();
-
-          if (!typLower.includes('umow') && !nazwaLower.includes('umow')) {
-            fallbackTiers = defaultTiersOpen;
-          }
+          const passKey = normalizePassKey(k.nazwa || k.typ_karnetu || '');
+          const isContract = passKey.startsWith('CONTRACT_');
 
           return {
             id: k.id,
             nazwa: k.nazwa,
-            typ_karnetu: k.typ_karnetu || 'Umowa 12 miesięcy',
+            typ_karnetu: k.typ_karnetu || (isContract ? 'Umowa 12 miesięcy' : 'Na czas'),
             cena: k.cena_brutto || k.cena || 0,
             kolejnosc: k.kolejnosc !== null && k.kolejnosc !== undefined ? k.kolejnosc : index,
             inne_ustawienia: meta,
-            customTiers: meta.customTiers && meta.customTiers.length > 0 ? meta.customTiers : fallbackTiers
+            customTiers: meta.customTiers && meta.customTiers.length > 0 ? meta.customTiers : (isContract ? defaultTiersUmowa : defaultTiersOpen)
           };
         });
 
@@ -217,7 +223,7 @@ export default function TwojBonusPage() {
       } else {
         setBonusTables([
           { id: 1, nazwa: 'OPEN - UMOWA 12 MIESIĘCY', typ_karnetu: 'Umowa 12 miesięcy', cena: 289, kolejnosc: 0, customTiers: defaultTiersUmowa },
-          { id: 2, nazwa: 'OPEN', typ_karnetu: 'Na czas', cena: 319, kolejnosc: 1, customTiers: defaultTiersOpen }
+          { id: 2, nazwa: 'OGÓLNOROZWOJOWE I ROZCIĄGANIE - UMOWA 12 MIESIĘCY', typ_karnetu: 'Umowa 12 miesięcy', cena: 269, kolejnosc: 1, customTiers: defaultTiersUmowa }
         ]);
       }
 
@@ -244,7 +250,7 @@ export default function TwojBonusPage() {
         }
       }
     } catch (err) {
-      console.error("Błąd ładowania danych w TwojBonus:", err);
+      console.error("Błąd ładowania danych:", err);
     } finally {
       setIsLoading(false);
     }
@@ -290,10 +296,8 @@ export default function TwojBonusPage() {
     e.preventDefault();
     if (!tableNameInput.trim()) return;
 
-    let defaultNewTiers = defaultTiersUmowa;
-    if (!tableTypeInput.includes('umow') && !tableNameInput.toLowerCase().includes('umow')) {
-      defaultNewTiers = defaultTiersOpen;
-    }
+    const isContract = normalizePassKey(tableNameInput || tableTypeInput).startsWith('CONTRACT_');
+    const defaultNewTiers = isContract ? defaultTiersUmowa : defaultTiersOpen;
 
     const newTableObj = {
       id: Date.now(),
@@ -458,15 +462,15 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // BEZWZGLĘDNE OBLICZANIE POSTĘPU (GWARANCJA ZWRÓCENIA WŁAŚCIWEJ RATY/STAŻU)
+  // OBLICZANIE POSTĘPU I RAT DLA KARNETU
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
 
     const passes = safeJsonParse(user.karnetyKlubowicza || user.karnetyklubowicza, []);
-    const userPass = getMatchedPass(passes, tabela);
+    const userPass = getMatchedPassForTable(passes, tabela);
 
-    // Jeśli funkcja parująca nie znalazła odpowiednika -> 0
+    // Brak dopasowanego karnetu
     if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
@@ -476,41 +480,35 @@ export default function TwojBonusPage() {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
-    const tName = String(tabela.nazwa || '').toLowerCase();
-    const isContractTable = tName.includes('umow') || String(tabela.typ_karnetu).toLowerCase().includes('umow');
+    const tKey = normalizePassKey(tabela.nazwa || tabela.typ_karnetu || '');
+    const isContract = tKey.startsWith('CONTRACT_');
     const overallContinuity = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
 
-    // 1. DLA UMÓW 12M: Wymuszone odczytanie raty (np. "9 / 12" -> 9)
-    if (isContractTable) {
-      const rataStr = String(userPass.rata || userPass.statusTekst || '');
+    // 1. DLA UMÓW 12M: Precyzyjny odczyt raty
+    if (isContract) {
       let rataNum = 0;
-      
-      const slashMatch = rataStr.match(/(\d+)\s*\/\s*\d+/);
+      const rawRata = String(userPass.rata || userPass.statusTekst || '').trim();
+
+      const slashMatch = rawRata.match(/(\d+)\s*\/\s*\d+/);
       if (slashMatch) {
         rataNum = parseInt(slashMatch[1], 10);
       } else {
-        const singleMatch = rataStr.match(/(?:rata)?\s*(\d+)/i);
+        const singleMatch = rawRata.match(/(?:rata)?\s*(\d+)/i);
         if (singleMatch) rataNum = parseInt(singleMatch[1], 10);
       }
 
-      if (rataNum === 0 && userPass.oplaconeRaty) rataNum = parseInt(userPass.oplaconeRaty, 10) || 0;
+      if (rataNum === 0 && userPass.oplaconeRaty) {
+        rataNum = parseInt(String(userPass.oplaconeRaty), 10) || 0;
+      }
 
-      // System sumuje - dla pierwszej umowy to jest rata (9). Dla kolejnej to ogólna ciągłość (np. 14).
-      let finalVal = Math.max(rataNum, overallContinuity);
-      if (finalVal <= 0) finalVal = 1; // Klient z umową MA MINIMUM 1 miesiąc
+      // Dla umowy bieżącej to jest rata (np. 9). Po 12 miesiącach dolicza kolejne miesiące ciągłości (np. 13, 14, 15).
+      let finalMonths = Math.max(rataNum, overallContinuity);
+      if (finalMonths <= 0) finalMonths = 1;
 
-      return { value: finalVal, isReset: false, reason: '' };
+      return { value: finalMonths, isReset: false, reason: '' };
     }
 
-    // 2. DLA KARNETÓW ILOŚCIOWYCH
-    const isEntries = tName.includes('ilość') || tName.includes('wejść') || tName.includes('ogólno');
-    if (isEntries) {
-      const pocz = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
-      const poz = parseInt(userPass.pozostaloWejsc ?? pocz, 10);
-      return { value: Math.max(0, pocz - poz), isReset: false, reason: '' };
-    }
-
-    // 3. DLA KARNETÓW NA CZAS / ZWYKŁE OPEN
+    // 2. DLA KARNETÓW NA CZAS / OPEN
     if (user.hasLostContinuity || user.haslostcontinuity) {
       return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
     }
@@ -518,20 +516,20 @@ export default function TwojBonusPage() {
     return { value: overallContinuity, isReset: false, reason: '' };
   };
 
-  // Płynny pasek procentowy
+  // Płynne skalowanie paska postępu na osi roadmapy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
     return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
   };
 
-  // Funkcje do odblokowanych nagród
+  // Odblokowane poziomy
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client) return [];
     const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
     const clientPass = passes[0];
     if (!clientPass) return [];
 
-    const matchedTable = bonusTables.find(t => getMatchedPass([clientPass], t));
+    const matchedTable = bonusTables.find(t => getMatchedPassForTable([clientPass], t));
     if (!matchedTable || !matchedTable.customTiers) return [];
 
     const progress = calculateMemberProgress(matchedTable, client);
@@ -540,6 +538,7 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
+  // Lista oczekujących na weryfikację
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
@@ -612,9 +611,10 @@ export default function TwojBonusPage() {
     }
   };
 
+  // Sortowanie tabel: aktywny karnet jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
-    const aIsUserPass = !!getMatchedPass(activeViewingPasses, a);
-    const bIsUserPass = !!getMatchedPass(activeViewingPasses, b);
+    const aIsUserPass = !!getMatchedPassForTable(activeViewingPasses, a);
+    const bIsUserPass = !!getMatchedPassForTable(activeViewingPasses, b);
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -767,7 +767,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: UKRYTA GDY PUSTO, WIDOCZNA TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
+          {/* TABELA KLUBOWICZÓW: UKRYTA GDY PUSTO */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -837,7 +837,8 @@ export default function TwojBonusPage() {
       {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const isUserPass = !!getMatchedPass(activeViewingPasses, tabela);
+          const matchedPass = getMatchedPassForTable(activeViewingPasses, tabela);
+          const isUserPass = !!matchedPass;
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
@@ -947,7 +948,7 @@ export default function TwojBonusPage() {
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
                   <span className="text-[10px] font-bold text-slate-500">
-                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (tabela.typ_karnetu.toLowerCase().includes('umow') ? 'miesięcy' : 'cykli')}</strong>
+                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (normalizePassKey(tabela.nazwa).startsWith('CONTRACT_') ? 'miesięcy' : 'cykli')}</strong>
                   </span>
                 </div>
 
