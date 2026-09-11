@@ -23,86 +23,32 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
-// Normalizacja tekstu
-const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[\u2010-\u2015\u2212\-_]/g, ' ').replace(/\s+/g, ' ').trim();
+// Agresywne dopasowanie karnetu klubowicza do właściwej tabeli
+const getMatchedPass = (passes: any[], tabela: any) => {
+  if (!passes || passes.length === 0 || !tabela) return null;
+  const tName = String(tabela.nazwa || '').toLowerCase().trim();
+  const tIsContract = tName.includes('umow') || String(tabela.typ_karnetu || '').toLowerCase().includes('umow');
 
-// Identyfikacja czy dany karnet lub tabela to umowa 12M
-const isContractPassCheck = (item: any): boolean => {
-  if (!item) return false;
-  if (item?.isContract12M === true || item?.isContract12M === 'true') return true;
-  const typ = cleanStr(item?.typ_karnetu || item?.typKarnetu || item?.typ || '');
-  const nazwa = cleanStr(item?.nazwa || item?.pass || '');
-  const rata = String(item?.rata || '');
-  return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
-};
+  // 1. Dokładne dopasowanie
+  let match = passes.find((k: any) => String(k.nazwa || '').toLowerCase().trim() === tName);
+  if (match) return match;
 
-// Ścisłe dopasowanie: umowa dopasowuje się TYLKO do tabeli umowy
-const isMatchingPass = (userPass: any, tabela: any): boolean => {
-  if (!userPass || !tabela) return false;
-
-  const uIsContract = isContractPassCheck(userPass);
-  const tIsContract = isContractPassCheck(tabela);
-
-  // Umowa może pasować tylko i wyłącznie do tabeli umowy!
-  if (uIsContract !== tIsContract) return false;
-
-  const uName = cleanStr(userPass.nazwa || userPass.pass || '');
-  const tName = cleanStr(tabela.nazwa || '');
-
-  if (uName === tName) return true;
-
-  const stripContractWords = (str: string) => {
-    return str
-      .replace(/umowa\s*12\s*miesięcy/g, '')
-      .replace(/umowa\s*12\s*m/g, '')
-      .replace(/umowa\s*12/g, '')
-      .replace(/umowa/g, '')
-      .replace(/12\s*miesięcy/g, '')
-      .replace(/12m/g, '')
-      .replace(/karnet/g, '')
-      .trim();
-  };
-
-  const uCore = stripContractWords(uName);
-  const tCore = stripContractWords(tName);
-
-  if (uCore && tCore && uCore === tCore) return true;
-
-  return false;
-};
-
-// Precyzyjny odczyt liczby rat z obiektu karnetu (np. "9 / 12" -> 9, "10 / 12" -> 10)
-const getInstallmentsFromPass = (pass: any): number => {
-  if (!pass) return 0;
-
-  if (pass.rata !== undefined && pass.rata !== null) {
-    const raw = String(pass.rata).trim();
-    const slashMatch = raw.match(/(\d+)\s*\/\s*(\d+)/);
-    if (slashMatch && parseInt(slashMatch[1], 10) > 0) {
-      return parseInt(slashMatch[1], 10);
-    }
-    const singleMatch = raw.match(/(\d+)/);
-    if (singleMatch && parseInt(singleMatch[1], 10) > 0) {
-      return parseInt(singleMatch[1], 10);
-    }
+  // 2. Jeśli tabela to umowa, wymuś znalezienie umowy w portfelu
+  if (tIsContract) {
+    return passes.find((k: any) => String(k.nazwa || '').toLowerCase().includes('umow') || k.isContract12M);
   }
 
-  if (pass.statusTekst) {
-    const m = String(pass.statusTekst).match(/rata\s*(\d+)/i) || String(pass.statusTekst).match(/(\d+)\s*\/\s*12/);
-    if (m && parseInt(m[1], 10) > 0) {
-      return parseInt(m[1], 10);
-    }
+  // 3. Jeśli tabela to wejścia
+  if (tName.includes('wejść') || tName.includes('ogólno')) {
+    return passes.find((k: any) => String(k.nazwa || '').toLowerCase().includes('wejść') || String(k.nazwa || '').toLowerCase().includes('ogólno'));
   }
 
-  const altKeys = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty', 'liczbaRat'];
-  for (const k of altKeys) {
-    if (pass[k] !== undefined && pass[k] !== null) {
-      const val = parseInt(String(pass[k]), 10);
-      if (!isNaN(val) && val > 0) return val;
-    }
+  // 4. Jeśli tabela to OPEN (zwykły), szukaj OPEN ale BEZ słowa "umowa"
+  if (tName.includes('open')) {
+    return passes.find((k: any) => String(k.nazwa || '').toLowerCase().includes('open') && !String(k.nazwa || '').toLowerCase().includes('umow'));
   }
 
-  return 0;
+  return null;
 };
 
 export default function TwojBonusPage() {
@@ -112,24 +58,18 @@ export default function TwojBonusPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
 
-  // Wyszukiwanie podopiecznego przez administratora
+  // Wyszukiwanie podopiecznego
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
-
-  // Zweryfikowani klubowicze przez administratora
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
 
-  // Główny status programu
+  // Status programu
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
 
   // Tabele bonusowe
   const [bonusTables, setBonusTables] = useState<any[]>([]);
-
-  // Wybrany poziom z roadmapy
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
-
-  // Rozwijana lista warunków kwalifikacji (akordeon)
   const [isRulesExpanded, setIsRulesExpanded] = useState<boolean>(false);
 
   // Warunki kwalifikacji
@@ -159,7 +99,7 @@ export default function TwojBonusPage() {
   const [ruleTitle, setRuleTitle] = useState('');
   const [ruleDesc, setRuleDesc] = useState('');
 
-  // Modale: Tworzenie i Edycja Tabeli
+  // Modale tabel
   const [isAddTableModalOpen, setIsAddTableModalOpen] = useState(false);
   const [isEditTableModalOpen, setIsEditTableModalOpen] = useState(false);
   const [editingTableId, setEditingTableId] = useState<string | number>('');
@@ -167,7 +107,7 @@ export default function TwojBonusPage() {
   const [tableTypeInput, setTableTypeInput] = useState('Umowa 12 miesięcy');
   const [tablePriceInput, setTablePriceInput] = useState('199.00');
 
-  // Modale: Tworzenie i Edycja Progu
+  // Modale progów
   const [isTierModalOpen, setIsTierModalOpen] = useState(false);
   const [targetTableId, setTargetTableId] = useState<string | number>('');
   const [editingTierId, setEditingTierId] = useState<number | null>(null);
@@ -183,96 +123,24 @@ export default function TwojBonusPage() {
 
   // Szablony progów
   const defaultTiersUmowa = [
-    {
-      id: 101,
-      levelName: 'BRĄZOWY',
-      threshold: 2,
-      unit: 'miesiące',
-      accent: 'amber',
-      rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie',
-      rewardBadge: 'GRATIS',
-      secondaryTitle: '10% zniżki na barze i suplementy',
-      secondaryBadge: '-10%',
-      active: true
-    },
-    {
-      id: 102,
-      levelName: 'ZŁOTY',
-      threshold: 6,
-      unit: 'miesięcy',
-      accent: 'yellow',
-      rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu',
-      rewardBadge: '+14 DNI',
-      secondaryTitle: 'Darmowa analiza składu ciała InBody',
-      secondaryBadge: 'GRATIS',
-      active: true
-    },
-    {
-      id: 103,
-      levelName: 'TRZYNASTY',
-      threshold: 13,
-      unit: 'miesięcy',
-      accent: 'purple',
-      rewardTitle: 'Darmowy miesiąc bonusowy po przedłużeniu umowy',
-      rewardBadge: '-100%',
-      secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń',
-      secondaryBadge: 'PREZENT',
-      active: true
-    },
-    {
-      id: 104,
-      levelName: 'OSIEMNASTY',
-      threshold: 18,
-      unit: 'miesięcy',
-      accent: 'purple',
-      rewardTitle: 'Trening personalny 1:1 z wybranym trenerem',
-      rewardBadge: 'VIP',
-      secondaryTitle: 'Stały status Ambasadora Klubu',
-      secondaryBadge: 'VIP',
-      active: true
-    }
+    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
+    { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
+    { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
+    { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
   ];
 
   const defaultTiersOpen = [
-    {
-      id: 201,
-      levelName: 'BRĄZOWY',
-      threshold: 2,
-      unit: 'cykle',
-      accent: 'amber',
-      rewardTitle: 'Jednorazowa wejściówka dla osoby towarzyszącej gratis.',
-      rewardBadge: 'GRATIS',
-      secondaryTitle: '5% stałego rabatu na odnowienie karnetu.',
-      secondaryBadge: '-5%',
-      active: true
-    },
-    {
-      id: 202,
-      levelName: 'SREBRNY',
-      threshold: 4,
-      unit: 'cykle',
-      accent: 'slate',
-      rewardTitle: '20 PLN doładowania do portfela klubowego.',
-      rewardBadge: '+20 PLN',
-      secondaryTitle: '10% rabatu na akcesoria treningowe.',
-      secondaryBadge: '-10%',
-      active: true
-    },
-    {
-      id: 203,
-      levelName: 'ZŁOTY',
-      threshold: 6,
-      unit: 'cykli',
-      accent: 'yellow',
-      rewardTitle: '15% zniżki na kolejny karnet OPEN.',
-      rewardBadge: '-15%',
-      secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis.',
-      secondaryBadge: 'GRATIS',
-      active: true
-    }
+    { id: 201, levelName: 'BRĄZOWY', threshold: 2, unit: 'cykle', accent: 'amber', rewardTitle: 'Wejściówka dla osoby towarzyszącej gratis', rewardBadge: 'GRATIS', secondaryTitle: '5% stałego rabatu na odnowienie', secondaryBadge: '-5%', active: true },
+    { id: 202, levelName: 'SREBRNY', threshold: 4, unit: 'cykle', accent: 'slate', rewardTitle: '20 PLN doładowania do portfela', rewardBadge: '+20 PLN', secondaryTitle: '10% rabatu na akcesoria treningowe', secondaryBadge: '-10%', active: true },
+    { id: 203, levelName: 'ZŁOTY', threshold: 6, unit: 'cykli', accent: 'yellow', rewardTitle: '15% zniżki na kolejny karnet OPEN', rewardBadge: '-15%', secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis', secondaryBadge: 'GRATIS', active: true }
   ];
 
-  // Pobieranie danych z Supabase równolegle za pomocą Promise.all (bez limitu 1000 rekordów)
+  const defaultTiersWejscia = [
+    { id: 301, levelName: 'BRĄZOWY', threshold: 10, unit: 'wejść', accent: 'amber', rewardTitle: '+1 dodatkowe wejście do puli karnetu', rewardBadge: '+1 WEJŚCIE', secondaryTitle: 'Napój izotoniczny w recepcji gratis', secondaryBadge: 'GRATIS', active: true },
+    { id: 302, levelName: 'SREBRNY', threshold: 25, unit: 'wejść', accent: 'slate', rewardTitle: '+2 darmowe wejścia do puli treningowej', rewardBadge: '+2 WEJŚCIA', secondaryTitle: 'Shake białkowy po treningu', secondaryBadge: 'GRATIS', active: true }
+  ];
+
+  // Pobieranie danych
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -291,38 +159,28 @@ export default function TwojBonusPage() {
         supabase.from('klienci').select('*').order('id', { ascending: false }).range(0, 4999)
       ]);
 
-      // 1. Sprawdzenie roli
       const trenerzyData = trenerzyResponse.data;
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
       } else {
         const trenerObj = trenerzyData?.find((t: any) => t.email === userEmail);
-        if (trenerObj) {
-          setAppRole('trener');
-        } else {
-          setAppRole('klubowicz');
-        }
+        if (trenerObj) setAppRole('trener');
+        else setAppRole('klubowicz');
       }
 
-      // 2. Status programu i zasady
       const rulesData = rulesResponse.data;
       if (rulesData) {
-        if (rulesData.bonus_program_active !== undefined) {
-          setIsProgramActive(rulesData.bonus_program_active);
-        }
+        if (rulesData.bonus_program_active !== undefined) setIsProgramActive(rulesData.bonus_program_active);
         if (rulesData.bonus_qualification_rules) {
           try {
             const parsedRules = typeof rulesData.bonus_qualification_rules === 'string'
               ? JSON.parse(rulesData.bonus_qualification_rules)
               : rulesData.bonus_qualification_rules;
-            if (Array.isArray(parsedRules) && parsedRules.length > 0) {
-              setQualificationRules(parsedRules);
-            }
+            if (Array.isArray(parsedRules) && parsedRules.length > 0) setQualificationRules(parsedRules);
           } catch (e) {}
         }
       }
 
-      // 3. Tabele karnetów
       let karnetyData = katalogResponse.data;
       if (!karnetyData || karnetyData.length === 0) {
         const fallback = await supabase.from('karnety').select('*').order('id', { ascending: true });
@@ -332,13 +190,11 @@ export default function TwojBonusPage() {
       if (karnetyData && karnetyData.length > 0) {
         const parsed = karnetyData.map((k: any, index: number) => {
           let meta: any = {};
-          try {
-            meta = JSON.parse(k.inne_ustawienia || '{}');
-          } catch (e) {}
+          try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
 
           let fallbackTiers = defaultTiersUmowa;
-          const nazwaLower = (k.nazwa || '').toLowerCase();
-          const typLower = (k.typ_karnetu || '').toLowerCase();
+          const nazwaLower = String(k.nazwa || '').toLowerCase();
+          const typLower = String(k.typ_karnetu || '').toLowerCase();
 
           if (!typLower.includes('umow') && !nazwaLower.includes('umow')) {
             fallbackTiers = defaultTiersOpen;
@@ -365,7 +221,6 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 4. Klienci z bazy
       const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -400,28 +255,20 @@ export default function TwojBonusPage() {
     loadData();
   }, []);
 
-  // Przełączanie statusu programu przez administratora
   const handleToggleProgramStatus = async () => {
     const nextStatus = !isProgramActive;
     setIsProgramActive(nextStatus);
     setIsSavingStatus(true);
-
     try {
       const { data: existingRule } = await supabase.from('club_booking_rules').select('id').limit(1).maybeSingle();
       if (existingRule) {
-        await supabase
-          .from('club_booking_rules')
-          .update({ bonus_program_active: nextStatus })
-          .eq('id', existingRule.id);
+        await supabase.from('club_booking_rules').update({ bonus_program_active: nextStatus }).eq('id', existingRule.id);
       }
-    } catch (e) {
-      console.warn("Błąd zapisu statusu w Supabase:", e);
-    } finally {
+    } catch (e) {} finally {
       setIsSavingStatus(false);
     }
   };
 
-  // Zmiana kolejności tabel
   const handleMoveTable = async (index: number, direction: 'left' | 'right') => {
     const targetIndex = direction === 'left' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= bonusTables.length) return;
@@ -435,20 +282,10 @@ export default function TwojBonusPage() {
     setBonusTables(updatedWithOrder);
 
     try {
-      await Promise.all(
-        updatedWithOrder.map((t) =>
-          supabase
-            .from('katalog_karnetow')
-            .update({ kolejnosc: t.kolejnosc })
-            .eq('id', t.id)
-        )
-      );
-    } catch (err) {
-      console.warn("Błąd zapisu kolejności w Supabase:", err);
-    }
+      await Promise.all(updatedWithOrder.map((t) => supabase.from('katalog_karnetow').update({ kolejnosc: t.kolejnosc }).eq('id', t.id)));
+    } catch (err) {}
   };
 
-  // Dodawanie nowej tabeli
   const handleAddNewTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tableNameInput.trim()) return;
@@ -478,14 +315,9 @@ export default function TwojBonusPage() {
         dlugosc: tableTypeInput === 'Umowa 12 miesięcy' ? '12 miesięcy' : '1 miesiąc',
         inne_ustawienia: JSON.stringify({ customTiers: defaultNewTiers })
       };
-
       const { data: inserted, error } = await supabase.from('katalog_karnetow').insert([payload]).select().single();
-      if (!error && inserted) {
-        newTableObj.id = inserted.id;
-      }
-    } catch (err) {
-      console.warn("Zapisano nową tabelę lokalnie:", err);
-    } finally {
+      if (!error && inserted) newTableObj.id = inserted.id;
+    } catch (err) {} finally {
       setBonusTables(prev => [...prev, newTableObj]);
       setIsAddTableModalOpen(false);
       setTableNameInput('');
@@ -493,7 +325,6 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Otwieranie modalu edycji nazwy/ceny tabeli
   const handleOpenEditTableModal = (tabela: any) => {
     setEditingTableId(tabela.id);
     setTableNameInput(tabela.nazwa || '');
@@ -502,59 +333,35 @@ export default function TwojBonusPage() {
     setIsEditTableModalOpen(true);
   };
 
-  // Zapisanie zmodyfikowanej nazwy tabeli
   const handleSaveEditTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tableNameInput.trim() || !editingTableId) return;
-
     setIsSaving(true);
     const updatedName = tableNameInput.trim();
     const updatedPrice = parseFloat(tablePriceInput) || 0;
 
     setBonusTables(prev => prev.map(t => {
-      if (String(t.id) === String(editingTableId)) {
-        return {
-          ...t,
-          nazwa: updatedName,
-          typ_karnetu: tableTypeInput,
-          cena: updatedPrice
-        };
-      }
+      if (String(t.id) === String(editingTableId)) return { ...t, nazwa: updatedName, typ_karnetu: tableTypeInput, cena: updatedPrice };
       return t;
     }));
 
     try {
-      await supabase
-        .from('katalog_karnetow')
-        .update({
-          nazwa: updatedName,
-          typ_karnetu: tableTypeInput,
-          cena_brutto: updatedPrice
-        })
-        .eq('id', editingTableId);
-    } catch (err) {
-      console.warn("Błąd aktualizacji tabeli w bazie:", err);
-    } finally {
+      await supabase.from('katalog_karnetow').update({ nazwa: updatedName, typ_karnetu: tableTypeInput, cena_brutto: updatedPrice }).eq('id', editingTableId);
+    } catch (err) {} finally {
       setIsEditTableModalOpen(false);
       setIsSaving(false);
     }
   };
 
-  // Usuwanie tabeli
   const handleDeleteTable = async (tableId: string | number, tableName: string) => {
     if (!confirm(`Czy na pewno chcesz usunąć całą tabelę bonusową dla: "${tableName}"?`)) return;
-
     try {
       await supabase.from('katalog_karnetow').delete().eq('id', tableId);
       await supabase.from('karnety').delete().eq('id', tableId);
-    } catch (err) {
-      console.warn("Błąd usuwania z bazy:", err);
-    }
-
+    } catch (err) {}
     setBonusTables(prev => prev.filter(t => String(t.id) !== String(tableId)));
   };
 
-  // Dodawanie / Edycja progu
   const handleOpenAddTierModal = (tableId: string | number) => {
     setTargetTableId(tableId);
     setEditingTierId(null);
@@ -590,99 +397,48 @@ export default function TwojBonusPage() {
     setBonusTables(prevTables => prevTables.map(tbl => {
       if (String(tbl.id) === String(targetTableId)) {
         let updatedTiers = [...(tbl.customTiers || [])];
-
         if (editingTierId !== null) {
           updatedTiers = updatedTiers.map(t => {
             if (t.id === editingTierId) {
-              return {
-                ...t,
-                levelName: levelName.toUpperCase(),
-                threshold: Number(thresholdVal),
-                unit: thresholdUnit,
-                rewardTitle: rewardTitle.trim(),
-                rewardBadge: rewardBadge.trim(),
-                secondaryTitle: secondaryTitle.trim(),
-                secondaryBadge: secondaryBadge.trim(),
-                accent: accentColor
-              };
+              return { ...t, levelName: levelName.toUpperCase(), threshold: Number(thresholdVal), unit: thresholdUnit, rewardTitle: rewardTitle.trim(), rewardBadge: rewardBadge.trim(), secondaryTitle: secondaryTitle.trim(), secondaryBadge: secondaryBadge.trim(), accent: accentColor };
             }
             return t;
           });
         } else {
-          const newTier = {
-            id: Date.now(),
-            levelName: levelName.toUpperCase(),
-            threshold: Number(thresholdVal),
-            unit: thresholdUnit,
-            rewardTitle: rewardTitle.trim(),
-            rewardBadge: rewardBadge.trim(),
-            secondaryTitle: secondaryTitle.trim(),
-            secondaryBadge: secondaryBadge.trim(),
-            accent: accentColor,
-            active: true
-          };
-          updatedTiers.push(newTier);
+          updatedTiers.push({ id: Date.now(), levelName: levelName.toUpperCase(), threshold: Number(thresholdVal), unit: thresholdUnit, rewardTitle: rewardTitle.trim(), rewardBadge: rewardBadge.trim(), secondaryTitle: secondaryTitle.trim(), secondaryBadge: secondaryBadge.trim(), accent: accentColor, active: true });
         }
-
         updatedTiers.sort((a, b) => a.threshold - b.threshold);
         return { ...tbl, customTiers: updatedTiers };
       }
       return tbl;
     }));
-
     setIsTierModalOpen(false);
   };
 
   const handleDeleteTier = (tableId: string | number, tierId: number) => {
     if (!confirm("Czy na pewno chcesz usunąć ten próg z tabeli?")) return;
     setBonusTables(prevTables => prevTables.map(tbl => {
-      if (String(tbl.id) === String(tableId)) {
-        return {
-          ...tbl,
-          customTiers: tbl.customTiers.filter((t: any) => t.id !== tierId)
-        };
-      }
+      if (String(tbl.id) === String(tableId)) return { ...tbl, customTiers: tbl.customTiers.filter((t: any) => t.id !== tierId) };
       return tbl;
     }));
   };
 
-  // Zapis tabeli do Supabase
   const handleSaveTableToSupabase = async (tableId: string | number) => {
     const tableObj = bonusTables.find(t => String(t.id) === String(tableId));
     if (!tableObj) return;
-
     setIsSaving(true);
     try {
-      const meta = {
-        ...(tableObj.inne_ustawienia || {}),
-        customTiers: tableObj.customTiers
-      };
-
-      let err = null;
-      const res1 = await supabase
-        .from('katalog_karnetow')
-        .update({ inne_ustawienia: JSON.stringify(meta), kolejnosc: tableObj.kolejnosc })
-        .eq('id', tableId);
-
-      if (res1.error) {
-        const res2 = await supabase
-          .from('karnety')
-          .update({ inne_ustawienia: JSON.stringify(meta) })
-          .eq('id', tableId);
-        err = res2.error;
-      }
-
-      if (err) throw err;
-      alert(`Pomyślnie zapisano konfigurację tabeli: "${tableObj.nazwa}" w bazie!`);
+      const meta = { ...(tableObj.inne_ustawienia || {}), customTiers: tableObj.customTiers };
+      const res1 = await supabase.from('katalog_karnetow').update({ inne_ustawienia: JSON.stringify(meta), kolejnosc: tableObj.kolejnosc }).eq('id', tableId);
+      if (res1.error) await supabase.from('karnety').update({ inne_ustawienia: JSON.stringify(meta) }).eq('id', tableId);
+      alert(`Pomyślnie zapisano konfigurację tabeli w bazie!`);
     } catch (error: any) {
-      console.error("Błąd zapisu w Supabase:", error);
-      alert("Zapisano lokalnie. Komunikat bazy: " + (error.message || 'Brak'));
+      alert("Zapisano lokalnie.");
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Edycja warunków kwalifikacji przez administratora
   const handleOpenEditRuleModal = (rule: any) => {
     setEditingRuleId(rule.id);
     setRuleBadge(rule.badge);
@@ -693,79 +449,89 @@ export default function TwojBonusPage() {
 
   const handleSaveRuleModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    const updated = qualificationRules.map(r => {
-      if (r.id === editingRuleId) {
-        return { ...r, badge: ruleBadge, title: ruleTitle, desc: ruleDesc };
-      }
-      return r;
-    });
+    const updated = qualificationRules.map(r => r.id === editingRuleId ? { ...r, badge: ruleBadge, title: ruleTitle, desc: ruleDesc } : r);
     setQualificationRules(updated);
     setIsEditRuleModalOpen(false);
-
     try {
       const { data: existingRule } = await supabase.from('club_booking_rules').select('id').limit(1).maybeSingle();
-      if (existingRule) {
-        await supabase
-          .from('club_booking_rules')
-          .update({ bonus_qualification_rules: JSON.stringify(updated) })
-          .eq('id', existingRule.id);
-      }
-    } catch (e) {
-      console.warn("Błąd zapisu warunków:", e);
-    }
+      if (existingRule) await supabase.from('club_booking_rules').update({ bonus_qualification_rules: JSON.stringify(updated) }).eq('id', existingRule.id);
+    } catch (e) {}
   };
 
-  // PRAWIDŁOWE OBLICZANIE POSTĘPU Z ZAPISU JSON W SUPABASE
+  // BEZWZGLĘDNE OBLICZANIE POSTĘPU (GWARANCJA ZWRÓCENIA WŁAŚCIWEJ RATY/STAŻU)
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
 
     const passes = safeJsonParse(user.karnetyKlubowicza || user.karnetyklubowicza, []);
-    const userPass = passes.find((k: any) => isMatchingPass(k, tabela));
+    const userPass = getMatchedPass(passes, tabela);
 
+    // Jeśli funkcja parująca nie znalazła odpowiednika -> 0
     if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
 
+    // Reset ręczny po zmianie karnetu
     if (userPass.isPassChangedReset || userPass.changedPassReset) {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
-    const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
+    const tName = String(tabela.nazwa || '').toLowerCase();
+    const isContractTable = tName.includes('umow') || String(tabela.typ_karnetu).toLowerCase().includes('umow');
+    const overallContinuity = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
 
-    // 1. DLA UMÓW 12M: Liczba opłaconych rat bezpośrednio z pola `karnet.rata`
-    if (isContract) {
-      const installmentsCount = getInstallmentsFromPass(userPass);
-      const clientOverallContinuity = Number(user.cyklCiaglosci || user.cyklciaglosci) || 1;
+    // 1. DLA UMÓW 12M: Wymuszone odczytanie raty (np. "9 / 12" -> 9)
+    if (isContractTable) {
+      const rataStr = String(userPass.rata || userPass.statusTekst || '');
+      let rataNum = 0;
       
-      // Kumulacja rat i stażu ciągłości (dla 1. umowy to dokładnie np. 9 rat; po 12 miesiącach dolicza kolejne)
-      const finalMonths = Math.max(installmentsCount, clientOverallContinuity);
-      return { value: finalMonths > 0 ? finalMonths : 1, isReset: false, reason: '' };
+      const slashMatch = rataStr.match(/(\d+)\s*\/\s*\d+/);
+      if (slashMatch) {
+        rataNum = parseInt(slashMatch[1], 10);
+      } else {
+        const singleMatch = rataStr.match(/(?:rata)?\s*(\d+)/i);
+        if (singleMatch) rataNum = parseInt(singleMatch[1], 10);
+      }
+
+      if (rataNum === 0 && userPass.oplaconeRaty) rataNum = parseInt(userPass.oplaconeRaty, 10) || 0;
+
+      // System sumuje - dla pierwszej umowy to jest rata (9). Dla kolejnej to ogólna ciągłość (np. 14).
+      let finalVal = Math.max(rataNum, overallContinuity);
+      if (finalVal <= 0) finalVal = 1; // Klient z umową MA MINIMUM 1 miesiąc
+
+      return { value: finalVal, isReset: false, reason: '' };
     }
 
-    // 2. DLA KARNETÓW NA CZAS / OPEN
-    if (user.hasLostContinuity) {
+    // 2. DLA KARNETÓW ILOŚCIOWYCH
+    const isEntries = tName.includes('ilość') || tName.includes('wejść') || tName.includes('ogólno');
+    if (isEntries) {
+      const pocz = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
+      const poz = parseInt(userPass.pozostaloWejsc ?? pocz, 10);
+      return { value: Math.max(0, pocz - poz), isReset: false, reason: '' };
+    }
+
+    // 3. DLA KARNETÓW NA CZAS / ZWYKŁE OPEN
+    if (user.hasLostContinuity || user.haslostcontinuity) {
       return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
     }
 
-    const clientOverallContinuity = Number(user.cyklCiaglosci || user.cyklciaglosci) || 1;
-    return { value: clientOverallContinuity, isReset: false, reason: '' };
+    return { value: overallContinuity, isReset: false, reason: '' };
   };
 
-  // Ciągłe skalowanie paska postępu na osi roadmapy
+  // Płynny pasek procentowy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
     return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
   };
 
-  // Odblokowane poziomy
+  // Funkcje do odblokowanych nagród
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client) return [];
     const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
     const clientPass = passes[0];
     if (!clientPass) return [];
 
-    const matchedTable = bonusTables.find(t => isMatchingPass(clientPass, t));
+    const matchedTable = bonusTables.find(t => getMatchedPass([clientPass], t));
     if (!matchedTable || !matchedTable.customTiers) return [];
 
     const progress = calculateMemberProgress(matchedTable, client);
@@ -774,7 +540,6 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
-  // Lista oczekujących do weryfikacji przez administratora
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
@@ -793,12 +558,10 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  // Zatwierdzenie poziomu przez administratora
   const handleMarkTierAsVerified = (verificationKey: string) => {
     setVerifiedMemberTiers(prev => [...prev, verificationKey]);
   };
 
-  // Wyszukiwarka podopiecznych
   const searchedMembers = adminSearchQuery.trim().length >= 2
     ? allKlienci.filter(c => {
         const full = `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase();
@@ -829,7 +592,6 @@ export default function TwojBonusPage() {
     );
   }
 
-  // Aktywny badany użytkownik
   const activeViewingUser = inspectedClient || currentUser;
   const activeViewingPasses = safeJsonParse(activeViewingUser?.karnetyKlubowicza || activeViewingUser?.karnetyklubowicza, []);
   const activeViewingPass = activeViewingPasses[0];
@@ -850,10 +612,9 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Sortowanie tabel: posiadany karnet klubowicza jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
-    const aIsUserPass = activeViewingPasses.some((k: any) => isMatchingPass(k, a));
-    const bIsUserPass = activeViewingPasses.some((k: any) => isMatchingPass(k, b));
+    const aIsUserPass = !!getMatchedPass(activeViewingPasses, a);
+    const bIsUserPass = !!getMatchedPass(activeViewingPasses, b);
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -993,7 +754,7 @@ export default function TwojBonusPage() {
                     Podgląd profilu: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
                   </span>
                   <p className="text-[11px] text-amber-900 font-medium">
-                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość: {inspectedClient.cyklCiaglosci || inspectedClient.cyklciaglosci || 1} mies.
+                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość ogólna: {inspectedClient.cyklCiaglosci || inspectedClient.cyklciaglosci || 1} mies.
                   </p>
                 </div>
               </div>
@@ -1076,7 +837,7 @@ export default function TwojBonusPage() {
       {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const isUserPass = activeViewingPasses.some((k: any) => isMatchingPass(k, tabela));
+          const isUserPass = !!getMatchedPass(activeViewingPasses, tabela);
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
@@ -1186,7 +947,7 @@ export default function TwojBonusPage() {
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
                   <span className="text-[10px] font-bold text-slate-500">
-                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (isContractPassCheck(tabela) ? 'miesięcy' : 'cykli')}</strong>
+                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (tabela.typ_karnetu.toLowerCase().includes('umow') ? 'miesięcy' : 'cykli')}</strong>
                   </span>
                 </div>
 
