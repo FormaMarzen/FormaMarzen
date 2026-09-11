@@ -23,10 +23,9 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
-// Kanoniczny normalizator klucza karnetu
-const normalizePassKey = (str: string): string => {
-  if (!str) return '';
-  const s = String(str)
+// Normalizacja tekstu do porównań
+const cleanStr = (s: string) =>
+  (s || '')
     .toLowerCase()
     .replace(/[ę]/g, 'e')
     .replace(/[ą]/g, 'a')
@@ -40,29 +39,80 @@ const normalizePassKey = (str: string): string => {
     .replace(/\s+/g, ' ')
     .trim();
 
-  const isContract = s.includes('umow') || s.includes('12m') || s.includes('12 m') || s.includes('12 mies');
-
-  if (isContract) {
-    if (s.includes('ogolno') || s.includes('rozciag')) return 'CONTRACT_OGOLNO';
-    if (s.includes('open')) return 'CONTRACT_OPEN';
-    return `CONTRACT_${s.split(' ')[0]}`;
-  }
-
-  if (s.includes('ogolno') || s.includes('wejs')) return 'ENTRIES_OGOLNO';
-  if (s.includes('open')) return 'TIME_OPEN';
-  return `OTHER_${s.split(' ')[0]}`;
+// Rozpoznawanie umów 12M
+const isContractPassCheck = (item: any): boolean => {
+  if (!item) return false;
+  if (item?.isContract12M === true || item?.isContract12M === 'true') return true;
+  const typ = cleanStr(item?.typ_karnetu || item?.typKarnetu || item?.typ || '');
+  const nazwa = cleanStr(item?.nazwa || item?.pass || '');
+  const rata = String(item?.rata || '');
+  return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
 };
 
-// Precyzyjne parowanie karnetu klubowicza z tabelą bonusową
-const getMatchedPassForTable = (passes: any[], tabela: any) => {
-  if (!passes || passes.length === 0 || !tabela) return null;
-  const targetKey = normalizePassKey(tabela.nazwa || tabela.typ_karnetu || '');
-  if (!targetKey) return null;
+// Ścisłe, bezbłędne parowanie karnetu klubowicza z tabelą bonusową
+const isPassMatchingTable = (pass: any, tabela: any): boolean => {
+  if (!pass || !tabela) return false;
 
-  return passes.find((p: any) => {
-    const passKey = normalizePassKey(p.nazwa || p.pass || '');
-    return passKey === targetKey;
-  }) || null;
+  const pName = cleanStr(pass.nazwa || pass.pass || '');
+  const tName = cleanStr(tabela.nazwa || '');
+
+  // 1. Dokładne dopasowanie nazwy
+  if (pName === tName) return true;
+
+  // 2. Umowa pasuje TYLKO do tabeli umowy
+  const pIsContract = pName.includes('umow') || isContractPassCheck(pass);
+  const tIsContract = tName.includes('umow') || isContractPassCheck(tabela);
+  if (pIsContract !== tIsContract) return false;
+
+  // 3. Karnet 6-miesięczny pasuje TYLKO do tabeli 6-miesięcznej
+  const pIs6M = pName.includes('6 m') || pName.includes('6m') || pName.includes('pol roku') || pName.includes('pół roku');
+  const tIs6M = tName.includes('6 m') || tName.includes('6m') || tName.includes('pol roku') || tName.includes('pół roku');
+  if (pIs6M !== tIs6M) return false;
+
+  // 4. Dopasowanie tematyczne
+  const pIsOpen = pName.includes('open');
+  const tIsOpen = tName.includes('open');
+  if (pIsOpen && tIsOpen) return true;
+
+  const pIsOgolno = pName.includes('ogolno') || pName.includes('rozciag');
+  const tIsOgolno = tName.includes('ogolno') || tName.includes('rozciag');
+  if (pIsOgolno && tIsOgolno) return true;
+
+  return false;
+};
+
+// Precyzyjny odczyt liczby rat z obiektu karnetu (np. "9 / 12" -> 9, "10 / 12" -> 10)
+const getInstallmentsFromPass = (pass: any): number => {
+  if (!pass) return 0;
+
+  if (pass.rata !== undefined && pass.rata !== null) {
+    const raw = String(pass.rata).trim();
+    const slashMatch = raw.match(/(\d+)\s*\/\s*(\d+)/);
+    if (slashMatch && parseInt(slashMatch[1], 10) > 0) {
+      return parseInt(slashMatch[1], 10);
+    }
+    const singleMatch = raw.match(/(\d+)/);
+    if (singleMatch && parseInt(singleMatch[1], 10) > 0) {
+      return parseInt(singleMatch[1], 10);
+    }
+  }
+
+  if (pass.statusTekst) {
+    const m = String(pass.statusTekst).match(/rata\s*(\d+)/i) || String(pass.statusTekst).match(/(\d+)\s*\/\s*12/);
+    if (m && parseInt(m[1], 10) > 0) {
+      return parseInt(m[1], 10);
+    }
+  }
+
+  const altKeys = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty', 'liczbaRat'];
+  for (const k of altKeys) {
+    if (pass[k] !== undefined && pass[k] !== null) {
+      const val = parseInt(String(pass[k]), 10);
+      if (!isNaN(val) && val > 0) return val;
+    }
+  }
+
+  return 0;
 };
 
 export default function TwojBonusPage() {
@@ -151,7 +201,7 @@ export default function TwojBonusPage() {
     { id: 203, levelName: 'ZŁOTY', threshold: 6, unit: 'cykli', accent: 'yellow', rewardTitle: '15% zniżki na kolejny karnet OPEN.', rewardBadge: '-15%', secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis.', secondaryBadge: 'GRATIS', active: true }
   ];
 
-  // Pobieranie danych z Supabase
+  // Pobieranie danych z Supabase w Promise.all
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -203,8 +253,7 @@ export default function TwojBonusPage() {
           let meta: any = {};
           try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
 
-          const passKey = normalizePassKey(k.nazwa || k.typ_karnetu || '');
-          const isContract = passKey.startsWith('CONTRACT_');
+          const isContract = isContractPassCheck(k);
 
           return {
             id: k.id,
@@ -223,14 +272,14 @@ export default function TwojBonusPage() {
       } else {
         setBonusTables([
           { id: 1, nazwa: 'OPEN - UMOWA 12 MIESIĘCY', typ_karnetu: 'Umowa 12 miesięcy', cena: 289, kolejnosc: 0, customTiers: defaultTiersUmowa },
-          { id: 2, nazwa: 'OGÓLNOROZWOJOWE I ROZCIĄGANIE - UMOWA 12 MIESIĘCY', typ_karnetu: 'Umowa 12 miesięcy', cena: 269, kolejnosc: 1, customTiers: defaultTiersUmowa }
+          { id: 2, nazwa: 'OPEN', typ_karnetu: 'Na czas', cena: 319, kolejnosc: 1, customTiers: defaultTiersOpen }
         ]);
       }
 
       const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
-          const rawKarnety = c.karnetyKlubowicza || c.karnetyklubowicza;
+          const rawKarnety = c.karnetyKlubowicza || c.KarnetyKlubowicza || c.karnetyklubowicza;
           const parsedKarnety = safeJsonParse(rawKarnety, []);
 
           return {
@@ -239,8 +288,7 @@ export default function TwojBonusPage() {
             lastName: c.Nazwisko || c.lastName || '',
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
-            cyklCiaglosci: Number(c.cyklCiaglosci || c.cyklciaglosci) || 1,
-            hasLostContinuity: c.hasLostContinuity === true || c.haslostcontinuity === true
+            cyklCiaglosci: Number(c.cyklCiaglosci || c.cyklciaglosci) || 1
           };
         });
         setAllKlienci(mapped);
@@ -250,7 +298,7 @@ export default function TwojBonusPage() {
         }
       }
     } catch (err) {
-      console.error("Błąd ładowania danych:", err);
+      console.error("Błąd ładowania danych w TwojBonus:", err);
     } finally {
       setIsLoading(false);
     }
@@ -296,7 +344,7 @@ export default function TwojBonusPage() {
     e.preventDefault();
     if (!tableNameInput.trim()) return;
 
-    const isContract = normalizePassKey(tableNameInput || tableTypeInput).startsWith('CONTRACT_');
+    const isContract = isContractPassCheck({ nazwa: tableNameInput, typ_karnetu: tableTypeInput });
     const defaultNewTiers = isContract ? defaultTiersUmowa : defaultTiersOpen;
 
     const newTableObj = {
@@ -462,58 +510,48 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // OBLICZANIE POSTĘPU I RAT DLA KARNETU
+  // OBLICZANIE POSTĘPU Z POLA RATA (UMOWA) LUB CYKLU CIĄGŁOŚCI (OPEN)
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
 
-    const passes = safeJsonParse(user.karnetyKlubowicza || user.karnetyklubowicza, []);
-    const userPass = getMatchedPassForTable(passes, tabela);
+    const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
+    const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
 
-    // Brak dopasowanego karnetu
+    // Jeśli ten karnet nie należy do sprawdzanej tabeli -> 0
     if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
 
-    // Reset ręczny po zmianie karnetu
+    // Reset ręczny przy zmianie karnetu
     if (userPass.isPassChangedReset || userPass.changedPassReset) {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
-    const tKey = normalizePassKey(tabela.nazwa || tabela.typ_karnetu || '');
-    const isContract = tKey.startsWith('CONTRACT_');
-    const overallContinuity = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
+    const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
-    // 1. DLA UMÓW 12M: Precyzyjny odczyt raty
+    // 1. DLA UMÓW 12M: Liczba rat z pola rata (np. "9 / 12" -> 9). Po 12 miesiącach kontynuacja jako 13, 14, 15...
     if (isContract) {
-      let rataNum = 0;
-      const rawRata = String(userPass.rata || userPass.statusTekst || '').trim();
-
-      const slashMatch = rawRata.match(/(\d+)\s*\/\s*\d+/);
-      if (slashMatch) {
-        rataNum = parseInt(slashMatch[1], 10);
-      } else {
-        const singleMatch = rawRata.match(/(?:rata)?\s*(\d+)/i);
-        if (singleMatch) rataNum = parseInt(singleMatch[1], 10);
-      }
-
-      if (rataNum === 0 && userPass.oplaconeRaty) {
-        rataNum = parseInt(String(userPass.oplaconeRaty), 10) || 0;
-      }
-
-      // Dla umowy bieżącej to jest rata (np. 9). Po 12 miesiącach dolicza kolejne miesiące ciągłości (np. 13, 14, 15).
-      let finalMonths = Math.max(rataNum, overallContinuity);
-      if (finalMonths <= 0) finalMonths = 1;
-
+      const installmentsCount = getInstallmentsFromPass(userPass);
+      const continuityCount = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
+      const finalMonths = Math.max(installmentsCount, continuityCount, 1);
       return { value: finalMonths, isReset: false, reason: '' };
     }
 
-    // 2. DLA KARNETÓW NA CZAS / OPEN
-    if (user.hasLostContinuity || user.haslostcontinuity) {
-      return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
+    // 2. DLA KARNETÓW NA WEJŚCIA
+    const pName = cleanStr(userPass.nazwa || '');
+    const tName = cleanStr(tabela.nazwa || '');
+    const isEntries = pName.includes('wejs') || tName.includes('wejs') || tName.includes('ilosc');
+    if (isEntries) {
+      const pocz = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
+      const poz = parseInt(userPass.pozostaloWejsc ?? pocz, 10);
+      return { value: Math.max(0, pocz - poz), isReset: false, reason: '' };
     }
 
-    return { value: overallContinuity, isReset: false, reason: '' };
+    // 3. DLA KARNETÓW CZASOWYCH (OPEN / 6M)
+    // Pobieramy staż ciągłości przypisany do profilu (np. 2 miesiące dla Magdaleny)
+    const continuity = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
+    return { value: continuity, isReset: false, reason: '' };
   };
 
   // Płynne skalowanie paska postępu na osi roadmapy
@@ -525,11 +563,11 @@ export default function TwojBonusPage() {
   // Odblokowane poziomy
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client) return [];
-    const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
+    const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
     const clientPass = passes[0];
     if (!clientPass) return [];
 
-    const matchedTable = bonusTables.find(t => getMatchedPassForTable([clientPass], t));
+    const matchedTable = bonusTables.find(t => isPassMatchingTable(clientPass, t));
     if (!matchedTable || !matchedTable.customTiers) return [];
 
     const progress = calculateMemberProgress(matchedTable, client);
@@ -541,7 +579,7 @@ export default function TwojBonusPage() {
   // Lista oczekujących na weryfikację
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
-    const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
+    const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
     const pass = passes[0];
     const topLevel = unlocked.length > 0 ? unlocked[unlocked.length - 1] : null;
     const verificationKey = `${client.id}_${topLevel?.id}`;
@@ -592,13 +630,13 @@ export default function TwojBonusPage() {
   }
 
   const activeViewingUser = inspectedClient || currentUser;
-  const activeViewingPasses = safeJsonParse(activeViewingUser?.karnetyKlubowicza || activeViewingUser?.karnetyklubowicza, []);
+  const activeViewingPasses = safeJsonParse(activeViewingUser?.karnetyKlubowicza || activeViewingUser?.KarnetyKlubowicza || activeViewingUser?.karnetyklubowicza, []);
   const activeViewingPass = activeViewingPasses[0];
 
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
-  const countContinuityMembers = allKlienci.filter((k: any) => (Number(k.cyklCiaglosci || k.cyklciaglosci) || 1) >= 2 && !k.hasLostContinuity).length;
+  const countContinuityMembers = allKlienci.filter((k: any) => (Number(k.cyklCiaglosci || k.cyklciaglosci) || 1) >= 2).length;
   const avgContinuity = allKlienci.length > 0 
-    ? (allKlienci.reduce((acc, curr) => acc + (curr.hasLostContinuity ? 1 : (Number(curr.cyklCiaglosci || curr.cyklciaglosci) || 1)), 0) / allKlienci.length).toFixed(1)
+    ? (allKlienci.reduce((acc, curr) => acc + (Number(curr.cyklCiaglosci || curr.cyklciaglosci) || 1), 0) / allKlienci.length).toFixed(1)
     : '1.0';
 
   const getAccentBorder = (accent: string) => {
@@ -611,10 +649,10 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Sortowanie tabel: aktywny karnet jest zawsze pierwszy na stronie
+  // Sortowanie tabel: aktywny karnet na pierwszym miejscu
   const displayedTables = [...bonusTables].sort((a, b) => {
-    const aIsUserPass = !!getMatchedPassForTable(activeViewingPasses, a);
-    const bIsUserPass = !!getMatchedPassForTable(activeViewingPasses, b);
+    const aIsUserPass = activeViewingPasses.some((k: any) => isPassMatchingTable(k, a));
+    const bIsUserPass = activeViewingPasses.some((k: any) => isPassMatchingTable(k, b));
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -721,7 +759,7 @@ export default function TwojBonusPage() {
             {searchedMembers.length > 0 && (
               <div className="bg-white border border-sky-200 rounded-2xl p-2 shadow-lg divide-y divide-sky-100 max-h-56 overflow-y-auto mt-2">
                 {searchedMembers.map((client) => {
-                  const clientPasses = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
+                  const clientPasses = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
                   return (
                     <div
                       key={client.id}
@@ -837,7 +875,7 @@ export default function TwojBonusPage() {
       {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const matchedPass = getMatchedPassForTable(activeViewingPasses, tabela);
+          const matchedPass = activeViewingPasses.find((k: any) => isPassMatchingTable(k, tabela));
           const isUserPass = !!matchedPass;
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
@@ -948,7 +986,7 @@ export default function TwojBonusPage() {
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
                   <span className="text-[10px] font-bold text-slate-500">
-                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (normalizePassKey(tabela.nazwa).startsWith('CONTRACT_') ? 'miesięcy' : 'cykli')}</strong>
+                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (isContractPassCheck(tabela) ? 'miesięcy' : 'cykli')}</strong>
                   </span>
                 </div>
 
