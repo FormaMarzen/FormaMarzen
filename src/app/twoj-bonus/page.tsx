@@ -7,23 +7,45 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Funkcje pomocnicze do elastycznego rozpoznawania karnetów i umów
-const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[\u2010-\u2015\u2212\-_]/g, ' ').replace(/\s+/g, ' ').trim();
-
-const isContractPass = (item: any) => {
-  if (!item) return false;
-  const typ = cleanStr(item.typ_karnetu || item.typKarnetu || item.typ || '');
-  const nazwa = cleanStr(item.nazwa || '');
-  return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || item.isContract12M === true;
+// Bezpieczny parser JSON
+const safeJsonParse = (val: any, fallback: any = []) => {
+  if (!val) return fallback;
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'object') return val;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      return parsed !== null ? parsed : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+  return fallback;
 };
 
+// Normalizacja tekstu do bezbłędnego porównywania nazw karnetów
+const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[\u2010-\u2015\u2212\-_]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Kuloodporna identyfikacja umowy (1:1 z klienci/page.tsx)
+const isContractPassCheck = (k: any, defKarnetu?: any): boolean => {
+  if (!k && !defKarnetu) return false;
+  if (k?.isContract12M === true || k?.isContract12M === 'true') return true;
+  if (defKarnetu?.isContract12M === true || defKarnetu?.isContract12M === 'true') return true;
+  if (k?.rata && String(k.rata).includes('/ 12')) return true;
+  const nazwa = (k?.nazwa || k?.pass || defKarnetu?.nazwa || '').toLowerCase();
+  const typ = (k?.typKarnetu || k?.typ_karnetu || defKarnetu?.typ_karnetu || defKarnetu?.typKarnetu || '').toLowerCase();
+  return typ.includes('umowa') || typ.includes('12m') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12 miesięcy');
+};
+
+// Sprawdzenie czy karnet klubowicza odpowiada danej tabeli bonusowej
 const isMatchingPass = (userPass: any, tabela: any) => {
   if (!userPass || !tabela) return false;
-  const uName = cleanStr(userPass.nazwa);
-  const tName = cleanStr(tabela.nazwa);
+  const uName = cleanStr(userPass.nazwa || userPass.pass || '');
+  const tName = cleanStr(tabela.nazwa || '');
   if (uName === tName) return true;
   if (uName.includes(tName) || tName.includes(uName)) return true;
-  if (isContractPass(userPass) && isContractPass(tabela)) {
+
+  if (isContractPassCheck(userPass) && isContractPassCheck(tabela)) {
     if (uName.includes('open') && tName.includes('open')) return true;
     if (uName.includes('ogolno') && tName.includes('ogolno')) return true;
   }
@@ -41,23 +63,23 @@ export default function TwojBonusPage() {
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
 
-  // Zweryfikowani klubowicze przez administratora
+  // Zweryfikowani klubowicze przez administratora (ukrywa ich z listy oczekujących)
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
 
-  // Główny status programu
+  // Główny status programu (włączony / wyłączony)
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
 
-  // Tabele bonusowe
+  // Tabele bonusowe (karnety z przypisanymi poziomami)
   const [bonusTables, setBonusTables] = useState<any[]>([]);
 
-  // Wybrany poziom z roadmapy
+  // Wybrany/podświetlony poziom z roadmapy
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
 
   // Rozwijana lista warunków kwalifikacji (akordeon)
   const [isRulesExpanded, setIsRulesExpanded] = useState<boolean>(false);
 
-  // Warunki kwalifikacji
+  // Warunki kwalifikacji (edytowalne przez admina)
   const [qualificationRules, setQualificationRules] = useState<any[]>([
     {
       id: 'umowa',
@@ -106,7 +128,7 @@ export default function TwojBonusPage() {
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Domyślne poziomy
+  // Szablony progów
   const defaultTiersUmowa = [
     {
       id: 101,
@@ -224,7 +246,7 @@ export default function TwojBonusPage() {
     }
   ];
 
-  // Równoległe pobieranie danych z Supabase (bez limitu 1000 rekordów)
+  // Szybkie pobieranie danych z Supabase (Promise.all, bez limitu 1000 rekordów)
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -245,7 +267,7 @@ export default function TwojBonusPage() {
         supabase.from('transakcje').select('id, klient_id, typ_operacji, opis, created_at').order('id', { ascending: false }).range(0, 4999)
       ]);
 
-      // 1. Uprawnienia
+      // 1. Sprawdzenie uprawnień
       const trenerzyData = trenerzyResponse.data;
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
@@ -322,7 +344,7 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 4. Mapowanie transakcji do klientów
+      // 4. Mapowanie transakcji
       const transakcjeData = transakcjeResponse.data || [];
       const txMap = new Map<number, any[]>();
       transakcjeData.forEach((tx: any) => {
@@ -330,24 +352,21 @@ export default function TwojBonusPage() {
         txMap.get(tx.klient_id)?.push(tx);
       });
 
-      // 5. Klienci
+      // 5. Klienci (zabezpieczenie na obydwa warianty wielkości liter w bazie)
       const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
-          let parsedKarnety = [];
-          if (Array.isArray(c.karnetyKlubowicza)) {
-            parsedKarnety = c.karnetyKlubowicza;
-          } else if (typeof c.karnetyKlubowicza === 'string') {
-            try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch (e) {}
-          }
+          const rawKarnety = c.karnetyKlubowicza || c.karnetyklubowicza;
+          const parsedKarnety = safeJsonParse(rawKarnety, []);
+
           return {
             ...c,
-            firstName: c.Imię || '',
-            lastName: c.Nazwisko || '',
+            firstName: c.Imię || c.firstName || '',
+            lastName: c.Nazwisko || c.lastName || '',
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
-            cyklCiaglosci: Number(c.cyklCiaglosci) || 1,
-            hasLostContinuity: c.hasLostContinuity === true,
+            cyklCiaglosci: Number(c.cyklCiaglosci || c.cyklciaglosci) || 1,
+            hasLostContinuity: c.hasLostContinuity === true || c.haslostcontinuity === true,
             transactions: txMap.get(c.id) || []
           };
         });
@@ -358,7 +377,7 @@ export default function TwojBonusPage() {
         }
       }
     } catch (err) {
-      console.error("Błąd ładowania danych:", err);
+      console.error("Błąd ładowania danych w TwojBonus:", err);
     } finally {
       setIsLoading(false);
     }
@@ -686,29 +705,29 @@ export default function TwojBonusPage() {
     }
   };
 
-  // WYSZUKIWANIE RATY I POSTĘPU ZE WSZYSTKICH POTENCJALNYCH ŹRÓDEŁ W SUPABASE
+  // BEZBŁĘDNE OBLICZANIE RAT Z POLA `karnet.rata` ORAZ CIĄGŁOŚCI ODNOWIEŃ
   const extractContractInstallments = (userPass: any, client: any) => {
     let bestCount = 0;
 
-    // A. userPass.rata (np. "9/12", "9", "Rata 9")
+    // 1. Bezpośredni odczyt z pola `karnet.rata` (np. "9 / 12", "9/12", "Rata 9/12")
     if (userPass?.rata !== undefined && userPass?.rata !== null) {
-      const m = String(userPass.rata).match(/(\d+)/);
-      if (m) bestCount = Math.max(bestCount, parseInt(m[1], 10));
+      const m = String(userPass.rata).match(/(\d+)\s*\/\s*(\d+)/);
+      if (m) {
+        bestCount = Math.max(bestCount, parseInt(m[1], 10));
+      } else {
+        const singleMatch = String(userPass.rata).match(/(\d+)/);
+        if (singleMatch) bestCount = Math.max(bestCount, parseInt(singleMatch[1], 10));
+      }
     }
 
-    // B. userPass.statusTekst (np. "Umowa 12M (Rata 9/12 • Ważny do: ...)")
+    // 2. StatusTekst (np. "Umowa 12M (Rata 9/12 • Ważny do: ...)")
     if (userPass?.statusTekst) {
       const m = String(userPass.statusTekst).match(/rata\s*(\d+)/i) || String(userPass.statusTekst).match(/(\d+)\s*\/\s*12/);
       if (m) bestCount = Math.max(bestCount, parseInt(m[1], 10));
     }
 
-    // C. Bezpośrednie właściwości w obiekcie karnetu
-    const possibleProps = [
-      'oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone',
-      'zaplaconeRaty', 'zaplacone_raty', 'liczbaRat', 'liczba_rat',
-      'iloscRat', 'ilosc_rat', 'oplaconaRata', 'aktualnaRata',
-      'numerRaty', 'numer_raty'
-    ];
+    // 3. Dodatkowe właściwości rat
+    const possibleProps = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty'];
     for (const prop of possibleProps) {
       if (userPass?.[prop] !== undefined && userPass?.[prop] !== null) {
         const val = parseInt(String(userPass[prop]), 10);
@@ -716,47 +735,34 @@ export default function TwojBonusPage() {
       }
     }
 
-    // D. Tablice harmonogramu lub historii rat
-    if (Array.isArray(userPass?.harmonogram)) {
-      const paidCount = userPass.harmonogram.filter((h: any) => 
-        h.oplacona === true || h.status === 'oplacona' || h.paid === true || h.status === 'paid'
-      ).length;
-      if (paidCount > 0) bestCount = Math.max(bestCount, paidCount);
-    }
-    if (Array.isArray(userPass?.historiaRat)) {
-      bestCount = Math.max(bestCount, userPass.historiaRat.length);
-    }
-
-    // E. Wyszukiwanie w transakcjach klienta z tabeli `transakcje`
+    // 4. Historia transakcji ratalnych
     if (Array.isArray(client?.transactions) && client.transactions.length > 0) {
       const installmentTransactions = client.transactions.filter((tx: any) => {
         const op = (tx.typ_operacji || '').toLowerCase();
         const opis = (tx.opis || '').toLowerCase();
-        return op.includes('rata') || opis.includes('rata') || op.includes('umow') || (opis.includes('umow') && !opis.includes('wypis'));
+        return op.includes('rata') || opis.includes('rata') || op.includes('12m') || (opis.includes('umow') && !opis.includes('wypis'));
       });
       if (installmentTransactions.length > 0) {
         bestCount = Math.max(bestCount, installmentTransactions.length);
       }
     }
 
-    // F. Sprawdzenie stażu ciągłości w profilu klienta
-    const overall = Number(client?.cyklCiaglosci) || 0;
-    bestCount = Math.max(bestCount, overall);
-
     return bestCount;
   };
 
-  // INTELIGENTNE OBLICZANIE POSTĘPU
-  const calculateMemberProgress = (tabela: any, targetUser: any = currentUser) => {
-    if (!isProgramActive || !targetUser) return { value: 0, isReset: false, reason: '' };
+  // OBLICZANIE POSTĘPU DLA DANEGO UŻYTKOWNIKA I DANEJ TABELI
+  const calculateMemberProgress = (tabela: any, targetUser: any) => {
+    const user = targetUser || inspectedClient || currentUser;
+    if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
 
-    // Dopasowanie karnetu elastyczną metodą isMatchingPass
-    const userPass = targetUser?.karnetyKlubowicza?.find((k: any) => isMatchingPass(k, tabela));
+    const passes = safeJsonParse(user.karnetyKlubowicza || user.karnetyklubowicza, []);
+    const userPass = passes.find((k: any) => isMatchingPass(k, tabela));
+
     if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
 
-    if (targetUser?.hasLostContinuity) {
+    if (user.hasLostContinuity) {
       return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
     }
 
@@ -764,16 +770,18 @@ export default function TwojBonusPage() {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
-    const clientOverallContinuity = Number(targetUser?.cyklCiaglosci) || 1;
+    const clientOverallContinuity = Number(user.cyklCiaglosci || user.cyklciaglosci) || 1;
 
-    // 1. Karnety na umowę (sprawdzanie rat i obsługa kolejnej umowy 13, 14, 15...)
-    if (isContractPass(tabela) || isContractPass(userPass)) {
-      const installmentsCount = extractContractInstallments(userPass, targetUser);
+    // A. Karnety na umowę (12M / cykliczne)
+    if (isContractPassCheck(tabela) || isContractPassCheck(userPass)) {
+      const installmentsCount = extractContractInstallments(userPass, user);
+
+      // Dla 1. umowy bierzemy opłaconą ratę (np. 9). W razie przedłużenia bierzemy wyższy licznik ciągłości (13, 14, 15...).
       const calculatedMonths = Math.max(installmentsCount, clientOverallContinuity);
       return { value: calculatedMonths > 0 ? calculatedMonths : 1, isReset: false, reason: '' };
     }
 
-    // 2. Karnety na ilość wejść -> odbyte treningi
+    // B. Karnety na ilość wejść (Ogólnorozwojowe)
     const isEntries = cleanStr(tabela.typ_karnetu).includes('ilość') || cleanStr(tabela.nazwa).includes('wejść');
     if (isEntries) {
       const poczatkowe = parseInt(userPass.poczatkoweWejsc || userPass.ilosc_wejsc || '10', 10);
@@ -782,10 +790,11 @@ export default function TwojBonusPage() {
       return { value: odbyte, isReset: false, reason: '' };
     }
 
-    // 3. Karnety na czas / open / półroczne odnawiane (7, 8, 9...)
+    // C. Karnety na czas / OPEN / półroczne (7, 8, 9...)
     return { value: clientOverallContinuity, isReset: false, reason: '' };
   };
 
+  // Precyzyjne, ciągłe skalowanie paska postępu na osi roadmapy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
     return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
@@ -794,7 +803,8 @@ export default function TwojBonusPage() {
   // Odblokowane poziomy
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client || client.hasLostContinuity) return [];
-    const clientPass = client?.karnetyKlubowicza?.[0];
+    const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
+    const clientPass = passes[0];
     if (!clientPass) return [];
 
     const matchedTable = bonusTables.find(t => isMatchingPass(clientPass, t));
@@ -806,10 +816,11 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
-  // Lista oczekujących do weryfikacji
+  // Lista oczekujących do weryfikacji przez administratora
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
-    const pass = client?.karnetyKlubowicza?.[0];
+    const passes = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
+    const pass = passes[0];
     const topLevel = unlocked.length > 0 ? unlocked[unlocked.length - 1] : null;
     const verificationKey = `${client.id}_${topLevel?.id}`;
     const isAlreadyVerified = verifiedMemberTiers.includes(verificationKey);
@@ -824,10 +835,12 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
+  // Zatwierdzenie poziomu przez administratora
   const handleMarkTierAsVerified = (verificationKey: string) => {
     setVerifiedMemberTiers(prev => [...prev, verificationKey]);
   };
 
+  // Wyszukiwarka podopiecznych
   const searchedMembers = adminSearchQuery.trim().length >= 2
     ? allKlienci.filter(c => {
         const full = `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase();
@@ -858,12 +871,15 @@ export default function TwojBonusPage() {
     );
   }
 
+  // Aktywny badany użytkownik
   const activeViewingUser = inspectedClient || currentUser;
+  const activeViewingPasses = safeJsonParse(activeViewingUser?.karnetyKlubowicza || activeViewingUser?.karnetyklubowicza, []);
+  const activeViewingPass = activeViewingPasses[0];
 
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
-  const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2 && !k.hasLostContinuity).length;
+  const countContinuityMembers = allKlienci.filter((k: any) => (Number(k.cyklCiaglosci || k.cyklciaglosci) || 1) >= 2 && !k.hasLostContinuity).length;
   const avgContinuity = allKlienci.length > 0 
-    ? (allKlienci.reduce((acc, curr) => acc + (curr.hasLostContinuity ? 1 : (curr.cyklCiaglosci || 1)), 0) / allKlienci.length).toFixed(1)
+    ? (allKlienci.reduce((acc, curr) => acc + (curr.hasLostContinuity ? 1 : (Number(curr.cyklCiaglosci || curr.cyklciaglosci) || 1)), 0) / allKlienci.length).toFixed(1)
     : '1.0';
 
   const getAccentBorder = (accent: string) => {
@@ -876,9 +892,10 @@ export default function TwojBonusPage() {
     }
   };
 
+  // Sortowanie tabel: posiadany karnet klubowicza jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
-    const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some((k: any) => isMatchingPass(k, a));
-    const bIsUserPass = activeViewingUser?.karnetyKlubowicza?.some((k: any) => isMatchingPass(k, b));
+    const aIsUserPass = activeViewingPasses.some((k: any) => isMatchingPass(k, a));
+    const bIsUserPass = activeViewingPasses.some((k: any) => isMatchingPass(k, b));
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -984,24 +1001,27 @@ export default function TwojBonusPage() {
 
             {searchedMembers.length > 0 && (
               <div className="bg-white border border-sky-200 rounded-2xl p-2 shadow-lg divide-y divide-sky-100 max-h-56 overflow-y-auto mt-2">
-                {searchedMembers.map((client) => (
-                  <div
-                    key={client.id}
-                    onClick={() => {
-                      setInspectedClient(client);
-                      setAdminSearchQuery('');
-                    }}
-                    className="p-3 hover:bg-sky-50/80 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
-                  >
-                    <div>
-                      <div className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</div>
-                      <div className="text-[10px] text-slate-500">{client.email} • Karnet: {client.karnetyKlubowicza?.[0]?.nazwa || 'Brak'}</div>
+                {searchedMembers.map((client) => {
+                  const clientPasses = safeJsonParse(client.karnetyKlubowicza || client.karnetyklubowicza, []);
+                  return (
+                    <div
+                      key={client.id}
+                      onClick={() => {
+                        setInspectedClient(client);
+                        setAdminSearchQuery('');
+                      }}
+                      className="p-3 hover:bg-sky-50/80 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</div>
+                        <div className="text-[10px] text-slate-500">{client.email} • Karnet: {clientPasses[0]?.nazwa || 'Brak'}</div>
+                      </div>
+                      <button className="bg-sky-900 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg uppercase">
+                        Pokaż naliczenie →
+                      </button>
                     </div>
-                    <button className="bg-sky-900 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg uppercase">
-                      Pokaż naliczenie →
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1015,7 +1035,7 @@ export default function TwojBonusPage() {
                     Podgląd profilu: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
                   </span>
                   <p className="text-[11px] text-amber-900 font-medium">
-                    Karnet: {inspectedClient.karnetyKlubowicza?.[0]?.nazwa || 'Brak'} • Ciągłość: {inspectedClient.cyklCiaglosci || 1} mies.
+                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość: {inspectedClient.cyklCiaglosci || inspectedClient.cyklciaglosci || 1} mies.
                   </p>
                 </div>
               </div>
@@ -1028,7 +1048,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: UKRYTA GDY PUSTO, WIDOCZNA TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
+          {/* TABELA KLUBOWICZÓW POJAWIA SIĘ TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1095,10 +1115,10 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI */}
+      {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const isUserPass = activeViewingUser?.karnetyKlubowicza?.some((k: any) => isMatchingPass(k, tabela));
+          const isUserPass = activeViewingPasses.some((k: any) => isMatchingPass(k, tabela));
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
@@ -1117,7 +1137,7 @@ export default function TwojBonusPage() {
                 isUserPass ? 'border-emerald-500 ring-2 ring-emerald-400/40 bg-emerald-50/15' : 'border-sky-200'
               }`}
             >
-              {/* A. WYRAZISTY, KONTRASTOWY NAGŁÓWEK DANEGO KARNETU */}
+              {/* A. NAGŁÓWEK TABELI KARNETU */}
               <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 flex-wrap">
