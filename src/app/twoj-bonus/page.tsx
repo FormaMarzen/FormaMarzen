@@ -20,6 +20,9 @@ export default function TwojBonusPage() {
   // Zakładki widoku
   const [activeTab, setActiveTab] = useState<'poziomy' | 'warunki' | 'rejestr'>('poziomy');
 
+  // Wybrany/podświetlony poziom z roadmapy dla podglądu
+  const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
+
   // Modal 1: Dodawanie nowej tabeli
   const [isAddTableModalOpen, setIsAddTableModalOpen] = useState(false);
   const [newTableName, setNewTableName] = useState('');
@@ -155,6 +158,18 @@ export default function TwojBonusPage() {
       secondaryTitle: 'Shake białkowy po treningu w prezencie.',
       secondaryBadge: 'GRATIS',
       active: true
+    },
+    {
+      id: 303,
+      levelName: 'ZŁOTY',
+      threshold: 50,
+      unit: 'wejść',
+      accent: 'yellow',
+      rewardTitle: 'Rabat -20% na kolejny pakiet wejść.',
+      rewardBadge: '-20%',
+      secondaryTitle: 'Klubowa torba treningowa Forma Marzeń.',
+      secondaryBadge: 'VIP',
+      active: true
     }
   ];
 
@@ -164,7 +179,7 @@ export default function TwojBonusPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
-      // 1. Sprawdzenie uprawnień
+      // Sprawdzenie roli
       const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
@@ -177,7 +192,7 @@ export default function TwojBonusPage() {
         }
       }
 
-      // 2. Pobieranie karnetów z Supabase
+      // Pobieranie karnetów z bazy
       let { data: karnetyData } = await supabase.from('katalog_karnetow').select('*').order('id', { ascending: true });
       if (!karnetyData || karnetyData.length === 0) {
         const fallback = await supabase.from('karnety').select('*').order('id', { ascending: true });
@@ -214,7 +229,6 @@ export default function TwojBonusPage() {
         setBonusTables(parsed);
         if (parsed[0]) setTargetTableId(parsed[0].id);
       } else {
-        // Fallback tabel w przypadku braku rekordów w bazie
         setBonusTables([
           { id: 1, nazwa: 'Karnet Umowa 12M', typ_karnetu: 'Umowa 12 miesięcy', cena: 179, customTiers: defaultTiersUmowa },
           { id: 2, nazwa: 'Karnet OPEN', typ_karnetu: 'Na czas', cena: 199, customTiers: defaultTiersOpen },
@@ -222,7 +236,7 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // 3. Pobieranie danych klubowiczów
+      // Pobieranie klientów
       const { data: klienciData } = await supabase.from('klienci').select('*');
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -248,7 +262,7 @@ export default function TwojBonusPage() {
         }
       }
     } catch (err) {
-      console.error("Błąd podczas ładowania danych:", err);
+      console.error("Błąd ładowania danych:", err);
     } finally {
       setIsLoading(false);
     }
@@ -259,7 +273,7 @@ export default function TwojBonusPage() {
     loadData();
   }, []);
 
-  // --- ZARZĄDZANIE TABELAMI (DODAWANIE I USUWANIE) ---
+  // --- ZARZĄDZANIE TABELAMI ---
   const handleAddNewTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTableName.trim()) return;
@@ -282,7 +296,6 @@ export default function TwojBonusPage() {
 
     setIsSaving(true);
     try {
-      // Zapis nowej tabeli jako karnetu w bazie Supabase
       const payload = {
         nazwa: newTableObj.nazwa,
         typ_karnetu: newTableObj.typ_karnetu,
@@ -306,13 +319,13 @@ export default function TwojBonusPage() {
   };
 
   const handleDeleteTable = async (tableId: string | number, tableName: string) => {
-    if (!confirm(`Czy na pewno chcesz usunąć całą tabelę bonusową: "${tableName}"?`)) return;
+    if (!confirm(`Czy na pewno chcesz usunąć całą tabelę bonusową dla: "${tableName}"?`)) return;
 
     try {
       await supabase.from('katalog_karnetow').delete().eq('id', tableId);
       await supabase.from('karnety').delete().eq('id', tableId);
     } catch (err) {
-      console.warn("Usuwanie z bazy:", err);
+      console.warn("Błąd usuwania z bazy:", err);
     }
 
     setBonusTables(prev => prev.filter(t => String(t.id) !== String(tableId)));
@@ -356,7 +369,6 @@ export default function TwojBonusPage() {
         let updatedTiers = [...(tbl.customTiers || [])];
 
         if (editingTierId !== null) {
-          // Edycja istniejącego progu
           updatedTiers = updatedTiers.map(t => {
             if (t.id === editingTierId) {
               return {
@@ -374,7 +386,6 @@ export default function TwojBonusPage() {
             return t;
           });
         } else {
-          // Dodanie nowego progu
           const newTier = {
             id: Date.now(),
             levelName: levelName.toUpperCase(),
@@ -412,7 +423,6 @@ export default function TwojBonusPage() {
     }));
   };
 
-  // Zapis całej tabeli do bazy Supabase
   const handleSaveTableToSupabase = async (tableId: string | number) => {
     const tableObj = bonusTables.find(t => String(t.id) === String(tableId));
     if (!tableObj) return;
@@ -442,7 +452,7 @@ export default function TwojBonusPage() {
       alert(`Pomyślnie zapisano tabelę progów dla: "${tableObj.nazwa}" w Supabase!`);
     } catch (error: any) {
       console.error("Błąd zapisu w Supabase:", error);
-      alert("Zapisano stan lokalnie. Komunikat bazy: " + (error.message || 'Brak'));
+      alert("Zapisano stan. Komunikat bazy: " + (error.message || 'Brak'));
     } finally {
       setIsSaving(false);
     }
@@ -451,12 +461,12 @@ export default function TwojBonusPage() {
   if (!isMounted || isLoading) {
     return (
       <div className="p-16 text-center text-slate-400 font-black uppercase text-xs tracking-wider">
-        Ładowanie tabel bonusowych Forma Marzeń...
+        Ładowanie systemu lojalnościowego i roadmapy...
       </div>
     );
   }
 
-  // Statystyki dla kafelków
+  // Statystyki
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
   const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2).length;
   const avgContinuity = allKlienci.length > 0 
@@ -476,17 +486,25 @@ export default function TwojBonusPage() {
     }
   };
 
+  // Helper do obliczania wartości dla użytkownika w danej tabeli
+  const getUserValForTable = (tabela: any) => {
+    if (tabela.typ_karnetu === 'Umowa 12 miesięcy') {
+      return userActivePass?.rata ? parseInt(String(userActivePass.rata).match(/(\d+)/)?.[1] || '1', 10) : userMonths;
+    }
+    return userMonths;
+  };
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-28 font-sans antialiased text-slate-800">
       
-      {/* 1. GÓRNY BANER PROGRAMU (STYLISTYKA PROGRAM AMBASADOR) */}
+      {/* 1. GÓRNY BANER: PROGRAM BONUSOWY (DESIGN AMBASADOR) */}
       <div className="bg-white border border-sky-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-5">
         <div className="space-y-1">
           <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
-            <span>🏆</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
+            <span>🏆</span> PROGRAM BONUSOWY I INTERAKTYWNA ROADMAPA
           </h1>
           <p className="text-xs text-slate-500 font-medium">
-            Zarządzaj tabelami ciągłości karnetów, twórz nowe tabele, usuwaj zbędne i dodawaj dowolną liczbę progów z nagrodami.
+            Śledź postęp na osi czasu roadmapy. Każda tabela posiada wizualny pasek ciągłości oraz dedykowane poziomy nagród.
           </p>
         </div>
 
@@ -509,7 +527,7 @@ export default function TwojBonusPage() {
         </div>
       </div>
 
-      {/* 2. KAFLOWE METRYKI STATYSTYCZNE (4 KAFELKI W RZĘDZIE) */}
+      {/* 2. KAFLOWE METRYKI STATYSTYCZNE */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">
@@ -536,7 +554,7 @@ export default function TwojBonusPage() {
             💰
           </div>
           <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI STAŻ KLUBOWICZA</div>
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI CYKL CIĄGŁOŚCI</div>
             <div className="text-2xl font-black text-slate-900 mt-0.5">{avgContinuity} MIES.</div>
           </div>
         </div>
@@ -546,13 +564,13 @@ export default function TwojBonusPage() {
             🛡️
           </div>
           <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">LICZBA TABEL W RZĘDZIE</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{bonusTables.length} TABELE</div>
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">TABELE KARNETÓW</div>
+            <div className="text-2xl font-black text-slate-900 mt-0.5">{bonusTables.length}</div>
           </div>
         </div>
       </div>
 
-      {/* 3. BELKA Z ZAKŁADKAMI */}
+      {/* 3. ZAKŁADKI WIDOKU */}
       <div className="flex items-center gap-2">
         <button
           onClick={() => setActiveTab('poziomy')}
@@ -562,7 +580,7 @@ export default function TwojBonusPage() {
               : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
           }`}
         >
-          <span>🥇</span> TABELE KARNETÓW I POZIOMY ({bonusTables.length})
+          <span>🥇</span> TABELE ROADMAPY ({bonusTables.length})
         </button>
 
         <button
@@ -588,20 +606,30 @@ export default function TwojBonusPage() {
         </button>
       </div>
 
-      {/* 4. GŁÓWNA ZAWARTOŚĆ: 2 DO 3 TABELE W RZĘDZIE */}
+      {/* 4. GŁÓWNA ZAWARTOŚĆ: 2 DO 3 TABELE W RZĘDZIE Z LINIĄ ROADMAPY POD NAZWĄ */}
       {activeTab === 'poziomy' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
           {bonusTables.map((tabela) => {
             const isUserPass = userActivePass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase();
+            const userVal = getUserValForTable(tabela);
+
+            // Wyliczanie postępu na pasku roadmapy
+            const maxThreshold = tabela.customTiers && tabela.customTiers.length > 0
+              ? Math.max(...tabela.customTiers.map((t: any) => Number(t.threshold) || 1))
+              : 12;
+            const progressPercent = Math.min(100, Math.max(0, (userVal / maxThreshold) * 100));
+
+            // Sprawdzenie, który poziom jest wybrany do podglądu
+            const highlightedTierId = selectedRoadmapTier[tabela.id] || null;
 
             return (
               <div
                 key={tabela.id}
-                className={`bg-slate-50/70 border rounded-3xl p-5 shadow-sm space-y-5 transition-all ${
+                className={`bg-slate-50/70 border rounded-3xl p-5 shadow-sm space-y-6 transition-all ${
                   isUserPass ? 'border-amber-400 ring-2 ring-amber-300/40 bg-amber-50/20' : 'border-sky-200'
                 }`}
               >
-                {/* NAGŁÓWEK TABELI KARNETU */}
+                {/* A. NAGŁÓWEK TABELI KARNETU */}
                 <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="bg-sky-100 text-sky-950 font-black text-[10px] px-2.5 py-0.5 rounded-md uppercase">
@@ -617,7 +645,7 @@ export default function TwojBonusPage() {
                         <button
                           onClick={() => handleDeleteTable(tabela.id, tabela.nazwa)}
                           className="text-slate-300 hover:text-rose-600 text-xs p-1 cursor-pointer transition-colors"
-                          title="Usuń tę tabelę bonusową"
+                          title="Usuń tę tabelę"
                         >
                           ✕
                         </button>
@@ -646,37 +674,107 @@ export default function TwojBonusPage() {
                   </div>
                 </div>
 
-                {/* POZIOMY LOJALNOŚCIOWE W TEJ TABELI (PIONOWY STOS) */}
+                {/* B. LINIA ROADMAPY Z PASKIEM POSTĘPU I KAMINIAMI MILOWYMI */}
+                <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>🗺️</span> ROADMAPA POSTĘPU
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-500">
+                      Staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
+                    </span>
+                  </div>
+
+                  {/* Wizualny pasek postępu (Roadmap Bar) */}
+                  <div className="relative pt-6 pb-4 px-2">
+                    {/* Szara linia tła */}
+                    <div className="absolute top-1/2 left-0 right-0 h-2 bg-slate-100 rounded-full -translate-y-1/2" />
+
+                    {/* Wypełniona linia postępu */}
+                    <div
+                      className="absolute top-1/2 left-0 h-2 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full -translate-y-1/2 transition-all duration-500"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+
+                    {/* Punkty / Węzły kamieni milowych */}
+                    <div className="relative flex justify-between items-center z-10">
+                      {tabela.customTiers?.map((tier: any) => {
+                        const isReached = userVal >= Number(tier.threshold);
+                        const isSelected = highlightedTierId === tier.id;
+
+                        return (
+                          <button
+                            key={tier.id}
+                            type="button"
+                            onClick={() => setSelectedRoadmapTier(prev => ({
+                              ...prev,
+                              [tabela.id]: prev[tabela.id] === tier.id ? null : tier.id
+                            }))}
+                            className="group flex flex-col items-center cursor-pointer focus:outline-none"
+                            title={`Kliknij, aby podświetlić próg: ${tier.levelName}`}
+                          >
+                            {/* Punkt milowy */}
+                            <div
+                              className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all shadow-sm ${
+                                isReached
+                                  ? 'bg-emerald-500 text-white ring-4 ring-emerald-100'
+                                  : 'bg-white text-slate-500 border-2 border-slate-300 group-hover:border-amber-400'
+                              } ${isSelected ? 'ring-4 ring-amber-400 scale-110' : ''}`}
+                            >
+                              {isReached ? '✓' : tier.threshold}
+                            </div>
+
+                            {/* Etykieta pod węzłem */}
+                            <span className={`text-[9px] font-black uppercase mt-1.5 tracking-tight ${
+                              isReached ? 'text-emerald-900 font-extrabold' : 'text-slate-400'
+                            } ${isSelected ? 'text-amber-900 underline' : ''}`}>
+                              {tier.levelName}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="bg-sky-50/60 rounded-xl p-2.5 text-[10px] text-slate-600 font-medium flex items-center justify-between border border-sky-100">
+                    <span>Kliknij w poziom na roadmapie, aby go przefiltrować.</span>
+                    <span className="font-bold text-sky-950">{Math.round(progressPercent)}% zaliczone</span>
+                  </div>
+                </div>
+
+                {/* C. WYPISANE POZIOMY POD ROADMAPĄ (PIONOWY STOS KART) */}
                 <div className="space-y-4">
                   {tabela.customTiers?.map((tier: any) => {
-                    const userVal = tabela.typ_karnetu === 'Umowa 12 miesięcy'
-                      ? (userActivePass?.rata ? parseInt(String(userActivePass.rata).match(/(\d+)/)?.[1] || '1', 10) : 1)
-                      : userMonths;
                     const isUnlocked = isUserPass && userVal >= Number(tier.threshold);
+                    const isHighlighted = highlightedTierId === tier.id;
 
                     return (
                       <div
                         key={tier.id}
-                        className={`bg-white border border-sky-200 rounded-3xl p-4 shadow-sm space-y-3.5 relative flex flex-col justify-between transition-all hover:shadow-md ${getAccentBorder(tier.accent)}`}
+                        className={`bg-white border rounded-3xl p-4 shadow-sm space-y-3.5 relative flex flex-col justify-between transition-all hover:shadow-md ${
+                          isHighlighted ? 'border-amber-500 ring-2 ring-amber-300' : 'border-sky-200'
+                        } ${getAccentBorder(tier.accent)}`}
                       >
                         <div className="space-y-2.5">
-                          {/* Plakietka i status odblokowania */}
+                          {/* Plakietka i status */}
                           <div className="flex items-center justify-between gap-2">
                             <span className="border border-amber-300 text-amber-900 bg-amber-50/60 text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
                               {tier.levelName}
                             </span>
-                            <span className="bg-emerald-100 text-emerald-800 text-[9px] font-black px-2 py-0.5 rounded-lg uppercase tracking-wider">
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg uppercase tracking-wider ${
+                              isUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                            }`}>
                               {appRole === 'klubowicz' ? (isUnlocked ? 'ODBLOKOWANY ✓' : 'W TRAKCIE') : 'AKTYWNY'}
                             </span>
                           </div>
 
-                          {/* Liczba progu */}
+                          {/* Wartość liczbowa progu */}
                           <div>
                             <h3 className="text-xl font-black text-slate-900 tracking-tight">
                               {tier.threshold} {tier.unit}
                             </h3>
                             <p className="text-[10px] text-slate-400 font-bold uppercase mt-0.5">
-                              Wymagana ciągłość karnetu
+                              Wymagana ciągłość w profilu
                             </p>
                           </div>
 
@@ -697,7 +795,7 @@ export default function TwojBonusPage() {
                             </p>
                           </div>
 
-                          {/* Boks 2: Dodatkowy Bonus */}
+                          {/* Boks 2: Bonus Dodatkowy */}
                           <div className="bg-sky-50/80 border border-sky-200 rounded-2xl p-3 space-y-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-[9px] font-black text-sky-950 uppercase tracking-wide flex items-center gap-1">
@@ -715,7 +813,7 @@ export default function TwojBonusPage() {
                           </div>
                         </div>
 
-                        {/* Przyciski edycji i kasowania progu */}
+                        {/* Akcje administracyjne */}
                         {(appRole === 'admin' || appRole === 'trener') && (
                           <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                             <button
@@ -745,7 +843,7 @@ export default function TwojBonusPage() {
                   )}
                 </div>
 
-                {/* ZAPIS TEJ TABELI DO SUPABASE */}
+                {/* PRZYCISK ZAPISU DO SUPABASE */}
                 {(appRole === 'admin' || appRole === 'trener') && (
                   <button
                     type="button"
@@ -753,7 +851,7 @@ export default function TwojBonusPage() {
                     onClick={() => handleSaveTableToSupabase(tabela.id)}
                     className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-2.5 rounded-2xl text-[11px] uppercase tracking-wider cursor-pointer shadow-sm transition-all text-center"
                   >
-                    💾 Zapisz tabelę: {tabela.nazwa}
+                    💾 Zapisz roadmapę: {tabela.nazwa}
                   </button>
                 )}
               </div>
@@ -767,10 +865,10 @@ export default function TwojBonusPage() {
         <div className="bg-white border border-sky-200 rounded-3xl p-7 shadow-sm space-y-6">
           <div className="border-b border-sky-100 pb-4">
             <h3 className="text-base font-black text-sky-950 uppercase tracking-wide flex items-center gap-2">
-              <span>🛡️</span> Zasady kwalifikacji do progów lojalnościowych
+              <span>🛡️</span> Warunki kwalifikacji i zasady roadmapy ciągłości
             </h3>
             <p className="text-xs text-slate-500 mt-1 font-medium">
-              System przelicza ciągłość automatycznie w bazie Supabase na podstawie opłaconych rat oraz cykli odnowień.
+              System przelicza ciągłość automatycznie w profilu każdego klubowicza na podstawie opłaconych rat oraz regularności.
             </p>
           </div>
 
@@ -825,7 +923,7 @@ export default function TwojBonusPage() {
                   <th className="py-4 px-6">E-mail</th>
                   <th className="py-4 px-6">Cykl ciągłości</th>
                   <th className="py-4 px-6">Aktywny karnet</th>
-                  <th className="py-4 px-6 text-center">Status bonusu</th>
+                  <th className="py-4 px-6 text-center">Osiągnięty poziom</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-sky-100 text-xs font-medium">
@@ -937,7 +1035,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 8. MODAL: DODAWANIE / EDYCJA PROGU DLA DANEJ TABELI */}
+      {/* 8. MODAL: DODAWANIE / EDYCJA PROGU */}
       {isTierModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-7 shadow-2xl space-y-6">
