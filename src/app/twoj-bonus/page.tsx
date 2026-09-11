@@ -23,32 +23,52 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
-// Normalizacja tekstu do bezbłędnego porównywania nazw karnetów
+// Normalizacja tekstu do porównań
 const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[\u2010-\u2015\u2212\-_]/g, ' ').replace(/\s+/g, ' ').trim();
 
-// Kuloodporna identyfikacja umowy (1:1 z klienci/page.tsx)
-const isContractPassCheck = (k: any, defKarnetu?: any): boolean => {
-  if (!k && !defKarnetu) return false;
-  if (k?.isContract12M === true || k?.isContract12M === 'true') return true;
-  if (defKarnetu?.isContract12M === true || defKarnetu?.isContract12M === 'true') return true;
-  if (k?.rata && String(k.rata).includes('/ 12')) return true;
-  const nazwa = (k?.nazwa || k?.pass || defKarnetu?.nazwa || '').toLowerCase();
-  const typ = (k?.typKarnetu || k?.typ_karnetu || defKarnetu?.typ_karnetu || defKarnetu?.typKarnetu || '').toLowerCase();
-  return typ.includes('umowa') || typ.includes('12m') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12 miesięcy');
+// Identyfikacja czy dany karnet lub tabela to umowa 12M
+const isContractPassCheck = (item: any): boolean => {
+  if (!item) return false;
+  if (item?.isContract12M === true || item?.isContract12M === 'true') return true;
+  const typ = cleanStr(item?.typ_karnetu || item?.typKarnetu || item?.typ || '');
+  const nazwa = cleanStr(item?.nazwa || item?.pass || '');
+  const rata = String(item?.rata || '');
+  return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
 };
 
-// Sprawdzenie czy karnet klubowicza odpowiada danej tabeli bonusowej
-const isMatchingPass = (userPass: any, tabela: any) => {
+// Precyzyjne dopasowanie karnetu klubowicza do właściwej tabeli (umowa nie dopasuje się do karnetu na czas)
+const isMatchingPass = (userPass: any, tabela: any): boolean => {
   if (!userPass || !tabela) return false;
+
+  const uIsContract = isContractPassCheck(userPass);
+  const tIsContract = isContractPassCheck(tabela);
+
+  // Umowa może pasować tylko i wyłącznie do tabeli umowy!
+  if (uIsContract !== tIsContract) return false;
+
   const uName = cleanStr(userPass.nazwa || userPass.pass || '');
   const tName = cleanStr(tabela.nazwa || '');
-  if (uName === tName) return true;
-  if (uName.includes(tName) || tName.includes(uName)) return true;
 
-  if (isContractPassCheck(userPass) && isContractPassCheck(tabela)) {
-    if (uName.includes('open') && tName.includes('open')) return true;
-    if (uName.includes('ogolno') && tName.includes('ogolno')) return true;
-  }
+  if (uName === tName) return true;
+
+  // Usunięcie słów kluczowych umowy, aby porównać rdzeń nazwy (np. "open", "ogolnorozwojowe")
+  const stripContractWords = (str: string) => {
+    return str
+      .replace(/umowa\s*12\s*miesięcy/g, '')
+      .replace(/umowa\s*12\s*m/g, '')
+      .replace(/umowa\s*12/g, '')
+      .replace(/umowa/g, '')
+      .replace(/12\s*miesięcy/g, '')
+      .replace(/12m/g, '')
+      .replace(/karnet/g, '')
+      .trim();
+  };
+
+  const uCore = stripContractWords(uName);
+  const tCore = stripContractWords(tName);
+
+  if (uCore && tCore && uCore === tCore) return true;
+
   return false;
 };
 
@@ -63,23 +83,23 @@ export default function TwojBonusPage() {
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
 
-  // Zweryfikowani klubowicze przez administratora (ukrywa ich z listy oczekujących)
+  // Zweryfikowani klubowicze przez administratora
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
 
-  // Główny status programu (włączony / wyłączony)
+  // Główny status programu
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
 
-  // Tabele bonusowe (karnety z przypisanymi poziomami)
+  // Tabele bonusowe
   const [bonusTables, setBonusTables] = useState<any[]>([]);
 
-  // Wybrany/podświetlony poziom z roadmapy
+  // Wybrany poziom z roadmapy
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
 
   // Rozwijana lista warunków kwalifikacji (akordeon)
   const [isRulesExpanded, setIsRulesExpanded] = useState<boolean>(false);
 
-  // Warunki kwalifikacji (edytowalne przez admina)
+  // Warunki kwalifikacji
   const [qualificationRules, setQualificationRules] = useState<any[]>([
     {
       id: 'umowa',
@@ -246,7 +266,7 @@ export default function TwojBonusPage() {
     }
   ];
 
-  // Szybkie pobieranie danych z Supabase (Promise.all, bez limitu 1000 rekordów)
+  // Pobieranie danych z Supabase (Promise.all, bez limitu 1000 rekordów)
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -267,7 +287,7 @@ export default function TwojBonusPage() {
         supabase.from('transakcje').select('id, klient_id, typ_operacji, opis, created_at').order('id', { ascending: false }).range(0, 4999)
       ]);
 
-      // 1. Sprawdzenie uprawnień
+      // 1. Uprawnienia
       const trenerzyData = trenerzyResponse.data;
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
@@ -352,7 +372,7 @@ export default function TwojBonusPage() {
         txMap.get(tx.klient_id)?.push(tx);
       });
 
-      // 5. Klienci (zabezpieczenie na obydwa warianty wielkości liter w bazie)
+      // 5. Klienci
       const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -705,29 +725,35 @@ export default function TwojBonusPage() {
     }
   };
 
-  // BEZBŁĘDNE OBLICZANIE RAT Z POLA `karnet.rata` ORAZ CIĄGŁOŚCI ODNOWIEŃ
-  const extractContractInstallments = (userPass: any, client: any) => {
+  // PRECYZYJNY ODCZYT RATY Z POLA karnet.rata (np. "9 / 12" -> 9)
+  const extractContractInstallments = (userPass: any, client: any): number => {
     let bestCount = 0;
 
-    // 1. Bezpośredni odczyt z pola `karnet.rata` (np. "9 / 12", "9/12", "Rata 9/12")
+    // 1. Bezpośredni odczyt z pola `karnet.rata`
     if (userPass?.rata !== undefined && userPass?.rata !== null) {
-      const m = String(userPass.rata).match(/(\d+)\s*\/\s*(\d+)/);
-      if (m) {
+      const rawRata = String(userPass.rata).trim();
+      const m = rawRata.match(/(\d+)\s*\/\s*(\d+)/);
+      if (m && parseInt(m[1], 10) > 0) {
         bestCount = Math.max(bestCount, parseInt(m[1], 10));
       } else {
-        const singleMatch = String(userPass.rata).match(/(\d+)/);
-        if (singleMatch) bestCount = Math.max(bestCount, parseInt(singleMatch[1], 10));
+        const single = rawRata.match(/(\d+)/);
+        if (single && parseInt(single[1], 10) > 0) {
+          bestCount = Math.max(bestCount, parseInt(single[1], 10));
+        }
       }
     }
 
     // 2. StatusTekst (np. "Umowa 12M (Rata 9/12 • Ważny do: ...)")
     if (userPass?.statusTekst) {
-      const m = String(userPass.statusTekst).match(/rata\s*(\d+)/i) || String(userPass.statusTekst).match(/(\d+)\s*\/\s*12/);
-      if (m) bestCount = Math.max(bestCount, parseInt(m[1], 10));
+      const rawStatus = String(userPass.statusTekst);
+      const m = rawStatus.match(/rata\s*(\d+)/i) || rawStatus.match(/(\d+)\s*\/\s*12/);
+      if (m && parseInt(m[1], 10) > 0) {
+        bestCount = Math.max(bestCount, parseInt(m[1], 10));
+      }
     }
 
     // 3. Dodatkowe właściwości rat
-    const possibleProps = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty'];
+    const possibleProps = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty', 'liczbaRat'];
     for (const prop of possibleProps) {
       if (userPass?.[prop] !== undefined && userPass?.[prop] !== null) {
         const val = parseInt(String(userPass[prop]), 10);
@@ -735,15 +761,15 @@ export default function TwojBonusPage() {
       }
     }
 
-    // 4. Historia transakcji ratalnych
+    // 4. Historia transakcji w Supabase (jako dodatkowa weryfikacja)
     if (Array.isArray(client?.transactions) && client.transactions.length > 0) {
-      const installmentTransactions = client.transactions.filter((tx: any) => {
-        const op = (tx.typ_operacji || '').toLowerCase();
+      const contractTx = client.transactions.filter((tx: any) => {
+        const typ = (tx.typ_operacji || '').toLowerCase();
         const opis = (tx.opis || '').toLowerCase();
-        return op.includes('rata') || opis.includes('rata') || op.includes('12m') || (opis.includes('umow') && !opis.includes('wypis'));
+        return typ === 'oplata_raty_12m' || typ === 'zakup_umowy' || opis.includes('rata') || (opis.includes('umow') && !opis.includes('wypowiedzen'));
       });
-      if (installmentTransactions.length > 0) {
-        bestCount = Math.max(bestCount, installmentTransactions.length);
+      if (contractTx.length > 0) {
+        bestCount = Math.max(bestCount, contractTx.length);
       }
     }
 
@@ -794,7 +820,7 @@ export default function TwojBonusPage() {
     return { value: clientOverallContinuity, isReset: false, reason: '' };
   };
 
-  // Precyzyjne, ciągłe skalowanie paska postępu na osi roadmapy
+  // Ciągłe skalowanie paska postępu na osi roadmapy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
     return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
@@ -1048,7 +1074,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW POJAWIA SIĘ TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
+          {/* TABELA KLUBOWICZÓW: UKRYTA GDY PUSTO, WIDOCZNA TYLKO GDY SĄ OSOBY DO SPRAWDZENIA */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1137,7 +1163,7 @@ export default function TwojBonusPage() {
                 isUserPass ? 'border-emerald-500 ring-2 ring-emerald-400/40 bg-emerald-50/15' : 'border-sky-200'
               }`}
             >
-              {/* A. NAGŁÓWEK TABELI KARNETU */}
+              {/* A. WYRAZISTY, KONTRASTOWY NAGŁÓWEK DANEGO KARNETU */}
               <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1228,7 +1254,7 @@ export default function TwojBonusPage() {
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
                   <span className="text-[10px] font-bold text-slate-500">
-                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
+                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || (isContractPassCheck(tabela) ? 'miesięcy' : 'cykli')}</strong>
                   </span>
                 </div>
 
