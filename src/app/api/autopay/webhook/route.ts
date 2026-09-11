@@ -20,29 +20,37 @@ function isContractPass(k: any): boolean {
   return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m');
 }
 
-// OBLICZANIE OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
+// OBLICZANIE OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (RÓWNIEŻ PRZY PŁATNOŚCIACH Z WYPRZEDZENIEM)
 function calculateEndOfMonthDate(currentPaidUntil?: string | null): string {
   const now = new Date();
   const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1; // 1 - 12
+  const currentMonth = now.getMonth() + 1;
+  const firstDayOfCurrentMonthStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
 
-  let targetYear = currentYear;
-  let targetMonth = currentMonth;
+  let baseYear = currentYear;
+  let baseMonth = currentMonth;
 
-  if (currentPaidUntil && String(currentPaidUntil) >= `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`) {
-    const nextMonthDate = new Date(currentYear, currentMonth, 1);
-    targetYear = nextMonthDate.getFullYear();
-    targetMonth = nextMonthDate.getMonth() + 1;
+  if (currentPaidUntil && currentPaidUntil !== '-') {
+    const parts = String(currentPaidUntil).split('-').map(Number);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      const pYear = parts[0];
+      const pMonth = parts[1];
+      if (String(currentPaidUntil) >= firstDayOfCurrentMonthStr) {
+        const nextMonthDate = new Date(pYear, pMonth, 1);
+        baseYear = nextMonthDate.getFullYear();
+        baseMonth = nextMonthDate.getMonth() + 1;
+      }
+    }
   }
 
-  const lastDay = new Date(targetYear, targetMonth, 0).getDate();
-  return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  const lastDay = new Date(baseYear, baseMonth, 0).getDate();
+  return `${baseYear}-${String(baseMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 }
 
 async function sendPushToAdmins(title: string, body: string, url: string = '/raporty/klienci') {
   try {
     const publicKey = (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '').trim();
-    const privateKey = (process.env.VAPID_PRIVATE_KEY || '').trim();
+    const privateKey = (process.env.VAPID_KEY_PRIVATE || process.env.VAPID_PRIVATE_KEY || '').trim();
     let subject = (process.env.VAPID_SUBJECT || 'mailto:kontakt@formamarzen.pl').trim();
 
     if (!publicKey || !privateKey) {
@@ -210,7 +218,7 @@ export async function POST(req: Request) {
       return new NextResponse('Brak OrderID', { status: 400 });
     }
 
-    // 1. Pobranie rekordu transakcji
+    // 1. Pobranie rekordu transakcji Autopay
     const { data: transakcja, error: fetchErr } = await supabase
       .from('autopay_transakcje')
       .select('*')
@@ -223,10 +231,28 @@ export async function POST(req: Request) {
       return new NextResponse(xmlNotFound, { status: 200, headers: { 'Content-Type': 'application/xml' } });
     }
 
-    // Zabezpieczenie przed zdublowanym przetworzeniem webhooka
+    // Zabezpieczenie przed powtórnym przetworzeniem tego samego orderID
     if (transakcja.status === 'success') {
       const xmlAlreadySuccess = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
       return new NextResponse(xmlAlreadySuccess, { status: 200, headers: { 'Content-Type': 'application/xml' } });
+    }
+
+    // Zabezpieczenie przed dublowaniem w tabeli transakcje
+    const { data: existingTransakcja } = await supabase
+      .from('transakcje')
+      .select('id')
+      .eq('klient_id', transakcja.user_id)
+      .ilike('opis', `%${orderID}%`)
+      .maybeSingle();
+
+    if (existingTransakcja) {
+      await supabase
+        .from('autopay_transakcje')
+        .update({ status: 'success' })
+        .eq('order_id', orderID);
+
+      const xmlAlreadyProcessed = `<?xml version="1.0" encoding="UTF-8"?><confirmation><status>CONFIRMED</status></confirmation>`;
+      return new NextResponse(xmlAlreadyProcessed, { status: 200, headers: { 'Content-Type': 'application/xml' } });
     }
 
     const isSuccess = paymentStatus.toUpperCase() === 'SUCCESS' || paymentStatus.toUpperCase() === 'SUCCESSFUL';
@@ -324,7 +350,7 @@ export async function POST(req: Request) {
           klient_id: transakcja.user_id,
           typ_operacji: 'odziez_autopay',
           kwota: transactionAmount,
-          opis: `Zamówienie odzieży klubowej: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (Autopay online)`
+          opis: `Zamówienie odzieży klubowej: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (Autopay online, Zamówienie: ${orderID})`
         }]);
 
         await sendPushToAdmins(
@@ -371,7 +397,7 @@ export async function POST(req: Request) {
               klient_id: transakcja.user_id,
               typ_operacji: 'koszulka_autopay',
               kwota: transactionAmount,
-              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online)`
+              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online, Zamówienie: ${orderID})`
             }]);
 
             await sendPushToAdmins(
@@ -397,7 +423,7 @@ export async function POST(req: Request) {
             klient_id: transakcja.user_id,
             typ_operacji: 'redukcja_fee_autopay',
             kwota: transactionAmount,
-            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay)`
+            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay, Zamówienie: ${orderID})`
           }]);
 
           await sendPushToAdmins(
@@ -407,7 +433,7 @@ export async function POST(req: Request) {
           );
         }
 
-      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M PRZEZ AUTOPAY
+      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M
       } else if (transakcja.type === 'contract_installment') {
         if (klient) {
           const targetPaidUntil = metadata.targetPaidUntil || calculateEndOfMonthDate(klient.umowa_oplacona_do);
@@ -454,7 +480,7 @@ export async function POST(req: Request) {
             karnetyKlubowicza: updatedKarnety
           };
 
-          const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat');
+          const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat') || klient.powodBlokady?.toLowerCase().includes('wplat');
           if (isBlockedForContract || klient.blokadaDo) {
             clientUpdatePayload.blokadaDo = null;
             clientUpdatePayload.powodBlokady = null;
@@ -469,7 +495,7 @@ export async function POST(req: Request) {
             klient_id: klient.id,
             typ_operacji: 'oplata_raty_12m_autopay',
             kwota: transactionAmount,
-            opis: `Opłata raty umowy 12M: ${passName} (Rata ${updatedRataDisplay}, opłacono online Autopay do ${targetPaidUntil})`
+            opis: `Opłata raty umowy 12M: ${passName} (Rata ${updatedRataDisplay}, opłacono online Autopay do ${targetPaidUntil}, Zamówienie: ${orderID})`
           }]);
 
           await supabase.from('booking_logs').insert([{
@@ -492,21 +518,49 @@ export async function POST(req: Request) {
         if (klient) {
           const clientUpdatePayload: Record<string, any> = {};
 
-          if (metadata.updatedKarnetyList) {
-            clientUpdatePayload.karnetyKlubowicza = metadata.updatedKarnetyList;
+          // WYKLUCZENIE Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ
+          const isLowCostPass = transactionAmount <= 150;
+
+          if (metadata.updatedKarnetyList && Array.isArray(metadata.updatedKarnetyList)) {
+            clientUpdatePayload.karnetyKlubowicza = metadata.updatedKarnetyList.map((k: any) => {
+              const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+              if (passPrice <= 150 || isLowCostPass) {
+                if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+                  const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncz'))
+                    ? 'Wykorzystano wejście'
+                    : 'Wykorzystano wejścia';
+                  return {
+                    ...k,
+                    zeroEntriesGraceUntil: null,
+                    statusTekst: labelWejsc
+                  };
+                }
+                return {
+                  ...k,
+                  zeroEntriesGraceUntil: null
+                };
+              }
+              return k;
+            });
           }
+
           if (metadata.urodziny_rabat_rok) {
             clientUpdatePayload.urodziny_rabat_rok = metadata.urodziny_rabat_rok;
           }
-          if (metadata.finalRabatInt !== undefined) {
-            clientUpdatePayload.rabat = metadata.finalRabatInt;
+
+          // Rabat i cykl ciągłości aktualizujemy tylko dla karnetów powyżej 150 zł
+          if (!isLowCostPass) {
+            if (metadata.finalRabatInt !== undefined) {
+              clientUpdatePayload.rabat = metadata.finalRabatInt;
+            }
+            if (metadata.finalCyklInt !== undefined) {
+              clientUpdatePayload.cyklCiaglosci = metadata.finalCyklInt;
+            }
+            if (metadata.hasLostContinuity !== undefined) {
+              clientUpdatePayload.hasLostContinuity = metadata.hasLostContinuity;
+            }
           }
-          if (metadata.finalCyklInt !== undefined) {
-            clientUpdatePayload.cyklCiaglosci = metadata.finalCyklInt;
-          }
-          if (metadata.hasLostContinuity !== undefined) {
-            clientUpdatePayload.hasLostContinuity = metadata.hasLostContinuity;
-          }
+
           if (metadata.cenaStr) {
             clientUpdatePayload.Cena = metadata.cenaStr;
           }
@@ -515,8 +569,8 @@ export async function POST(req: Request) {
           if (metadata.umowa_oplacona_do) {
             clientUpdatePayload.umowa_oplacona_do = metadata.umowa_oplacona_do;
             isContractOperation = true;
-          } else if (metadata.updatedKarnetyList && Array.isArray(metadata.updatedKarnetyList)) {
-            const contractItem = metadata.updatedKarnetyList.find((k: any) => isContractPass(k));
+          } else if (clientUpdatePayload.karnetyKlubowicza && Array.isArray(clientUpdatePayload.karnetyKlubowicza)) {
+            const contractItem = clientUpdatePayload.karnetyKlubowicza.find((k: any) => isContractPass(k));
             if (contractItem) {
               isContractOperation = true;
               clientUpdatePayload.umowa_oplacona_do = contractItem.waznyDo || calculateEndOfMonthDate(klient.umowa_oplacona_do);
@@ -524,7 +578,7 @@ export async function POST(req: Request) {
           }
 
           if (isContractOperation) {
-            const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat');
+            const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat') || klient.powodBlokady?.toLowerCase().includes('wplat');
             if (isBlockedForContract || klient.blokadaDo) {
               clientUpdatePayload.blokadaDo = null;
               clientUpdatePayload.powodBlokady = null;
@@ -563,7 +617,7 @@ export async function POST(req: Request) {
               klient_id: klient.id,
               typ_operacji: typOp,
               kwota: transactionAmount,
-              opis: `${opDescription} (Opłacono online Autopay)`,
+              opis: `${opDescription} (Opłacono online Autopay, Zamówienie: ${orderID})`,
               kod_rabatowy: metadata.kod_rabatowy || null
             }])
             .select('id')
@@ -593,7 +647,6 @@ export async function POST(req: Request) {
               }]);
           }
 
-          // Powiadomienie push dla administratora o zakupie karnetu
           await sendPushToAdmins(
             transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
             `${clientName} opłacił(a) karnet: ${opDescription} (${transactionAmount.toFixed(2)} PLN)`,
@@ -614,7 +667,7 @@ export async function POST(req: Request) {
 
           const clientWalletUpdate: Record<string, any> = { Portfel: formattedNewWallet };
 
-          if (newWalletNum >= 0 && (klient.powodBlokady?.toLowerCase().includes('portfel') || klient.powodBlokady?.toLowerCase().includes('zadłużen'))) {
+          if (newWalletNum >= 0 && (klient.powodBlokady?.toLowerCase().includes('portfel') || klient.powodBlokady?.toLowerCase().includes('zadłużen') || klient.powodBlokady?.toLowerCase().includes('zadluzen'))) {
             clientWalletUpdate.blokadaDo = null;
             clientWalletUpdate.powodBlokady = null;
           }
@@ -629,8 +682,8 @@ export async function POST(req: Request) {
             typ_operacji: transakcja.type === 'wallet_settlement' ? 'splata_zadluzenia_autopay' : 'doladowanie_portfela_autopay',
             kwota: transactionAmount,
             opis: transakcja.type === 'wallet_settlement'
-              ? `Spłata zadłużenia portfela (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN)`
-              : `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN)`
+              ? `Spłata zadłużenia portfela (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN, Zamówienie: ${orderID})`
+              : `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN, Zamówienie: ${orderID})`
           }]);
 
           await sendPushToAdmins(
