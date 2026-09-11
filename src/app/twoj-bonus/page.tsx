@@ -13,23 +13,53 @@ export default function TwojBonusPage() {
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
-  
+
+  // Główny status programu (włączony / wyłączony)
+  const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
+  const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
+
   // Tabele bonusowe (karnety z przypisanymi poziomami)
   const [bonusTables, setBonusTables] = useState<any[]>([]);
 
   // Zakładki widoku
   const [activeTab, setActiveTab] = useState<'poziomy' | 'warunki' | 'rejestr'>('poziomy');
 
-  // Wybrany/podświetlony poziom z roadmapy dla podglądu w danej tabeli
+  // Wybrany/podświetlony poziom z roadmapy
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
 
-  // Modal 1: Dodawanie nowej tabeli
+  // Warunki kwalifikacji (edytowalne przez admina)
+  const [qualificationRules, setQualificationRules] = useState<any[]>([
+    {
+      id: 'umowa',
+      badge: 'Karnety Cykliczne (Umowa)',
+      title: 'Rozliczenie ratalne (1-12)',
+      desc: 'Klubowicz zdobywa kolejne poziomy wraz z kolejnymi opłaconymi ratami. Po 12. racie zyskuje darmowy okres bonusowy za dni zamrożenia.'
+    },
+    {
+      id: 'open',
+      badge: 'Karnety OPEN (Na czas)',
+      title: 'Ciągłość odnowień',
+      desc: 'Każde odnowienie przed wygaśnięciem obecnego karnetu zwiększa licznik cyklu ciągłości w tabeli klubowicza o +1.'
+    },
+    {
+      id: 'wejscia',
+      badge: 'Karnety Ogólnorozwojowe',
+      title: 'Pula wejść treningowych',
+      desc: 'Poziomy są naliczane proporcjonalnie do ilości zrealizowanych treningów w klubie Forma Marzeń.'
+    }
+  ]);
+  const [isEditRuleModalOpen, setIsEditRuleModalOpen] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string>('');
+  const [ruleBadge, setRuleBadge] = useState('');
+  const [ruleTitle, setRuleTitle] = useState('');
+  const [ruleDesc, setRuleDesc] = useState('');
+
+  // Modale: Tabela i Próg
   const [isAddTableModalOpen, setIsAddTableModalOpen] = useState(false);
   const [newTableName, setNewTableName] = useState('');
   const [newTableType, setNewTableType] = useState('Umowa 12 miesięcy');
   const [newTablePrice, setNewTablePrice] = useState('199.00');
 
-  // Modal 2: Dodawanie / edycja progu
   const [isTierModalOpen, setIsTierModalOpen] = useState(false);
   const [targetTableId, setTargetTableId] = useState<string | number>('');
   const [editingTierId, setEditingTierId] = useState<number | null>(null);
@@ -43,7 +73,7 @@ export default function TwojBonusPage() {
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Szablony startowych progów lojalnościowych
+  // Domyślne poziomy
   const defaultTiersUmowa = [
     {
       id: 101,
@@ -158,18 +188,6 @@ export default function TwojBonusPage() {
       secondaryTitle: 'Shake białkowy po treningu w prezencie.',
       secondaryBadge: 'GRATIS',
       active: true
-    },
-    {
-      id: 303,
-      levelName: 'ZŁOTY',
-      threshold: 50,
-      unit: 'wejść',
-      accent: 'yellow',
-      rewardTitle: 'Rabat -20% na kolejny pakiet wejść.',
-      rewardBadge: '-20%',
-      secondaryTitle: 'Klubowa torba treningowa Forma Marzeń.',
-      secondaryBadge: 'VIP',
-      active: true
     }
   ];
 
@@ -179,7 +197,7 @@ export default function TwojBonusPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
-      // Sprawdzenie roli
+      // 1. Sprawdzenie roli
       const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
@@ -192,7 +210,25 @@ export default function TwojBonusPage() {
         }
       }
 
-      // Pobieranie karnetów z katalog_karnetow z uwzględnieniem kolumny kolejnosc
+      // 2. Pobieranie statusu programu oraz zasad z club_booking_rules lub inne_ustawienia
+      const { data: rulesData } = await supabase.from('club_booking_rules').select('*').limit(1).maybeSingle();
+      if (rulesData) {
+        if (rulesData.bonus_program_active !== undefined) {
+          setIsProgramActive(rulesData.bonus_program_active);
+        }
+        if (rulesData.bonus_qualification_rules) {
+          try {
+            const parsedRules = typeof rulesData.bonus_qualification_rules === 'string'
+              ? JSON.parse(rulesData.bonus_qualification_rules)
+              : rulesData.bonus_qualification_rules;
+            if (Array.isArray(parsedRules) && parsedRules.length > 0) {
+              setQualificationRules(parsedRules);
+            }
+          } catch(e) {}
+        }
+      }
+
+      // 3. Pobieranie tabel karnetów
       let { data: karnetyData } = await supabase
         .from('katalog_karnetow')
         .select('*')
@@ -243,7 +279,7 @@ export default function TwojBonusPage() {
         ]);
       }
 
-      // Pobieranie klientów
+      // 4. Pobieranie danych klubowiczów
       const { data: klienciData } = await supabase.from('klienci').select('*');
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -280,7 +316,28 @@ export default function TwojBonusPage() {
     loadData();
   }, []);
 
-  // --- ZMIANA KOLEJNOŚCI TABEL (PRZESUWANIE LEWO / PRAWO) ---
+  // Przełączanie statusu programu przez administratora
+  const handleToggleProgramStatus = async () => {
+    const nextStatus = !isProgramActive;
+    setIsProgramActive(nextStatus);
+    setIsSavingStatus(true);
+
+    try {
+      const { data: existingRule } = await supabase.from('club_booking_rules').select('id').limit(1).maybeSingle();
+      if (existingRule) {
+        await supabase
+          .from('club_booking_rules')
+          .update({ bonus_program_active: nextStatus })
+          .eq('id', existingRule.id);
+      }
+    } catch (e) {
+      console.warn("Błąd zapisu statusu w Supabase:", e);
+    } finally {
+      setIsSavingStatus(false);
+    }
+  };
+
+  // Zmiana kolejności tabel (lewo/prawo)
   const handleMoveTable = async (index: number, direction: 'left' | 'right') => {
     const targetIndex = direction === 'left' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= bonusTables.length) return;
@@ -293,7 +350,6 @@ export default function TwojBonusPage() {
     const updatedWithOrder = newTables.map((t, idx) => ({ ...t, kolejnosc: idx }));
     setBonusTables(updatedWithOrder);
 
-    // Automatyczna synchronizacja kolejności w Supabase
     try {
       await Promise.all(
         updatedWithOrder.map((t) =>
@@ -308,7 +364,7 @@ export default function TwojBonusPage() {
     }
   };
 
-  // --- ZARZĄDZANIE TABELAMI (DODAWANIE I USUWANIE) ---
+  // Dodawanie nowej tabeli
   const handleAddNewTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTableName.trim()) return;
@@ -346,7 +402,7 @@ export default function TwojBonusPage() {
         newTableObj.id = inserted.id;
       }
     } catch (err) {
-      console.warn("Zapisano nową tabelę lokalnie:", err);
+      console.warn("Zapisano lokalnie:", err);
     } finally {
       setBonusTables(prev => [...prev, newTableObj]);
       setIsAddTableModalOpen(false);
@@ -355,6 +411,7 @@ export default function TwojBonusPage() {
     }
   };
 
+  // Usuwanie tabeli
   const handleDeleteTable = async (tableId: string | number, tableName: string) => {
     if (!confirm(`Czy na pewno chcesz usunąć całą tabelę bonusową dla: "${tableName}"?`)) return;
 
@@ -368,7 +425,7 @@ export default function TwojBonusPage() {
     setBonusTables(prev => prev.filter(t => String(t.id) !== String(tableId)));
   };
 
-  // --- ZARZĄDZANIE PROGAMI W TABELI ---
+  // Dodawanie / Edycja progu
   const handleOpenAddTierModal = (tableId: string | number) => {
     setTargetTableId(tableId);
     setEditingTierId(null);
@@ -460,6 +517,7 @@ export default function TwojBonusPage() {
     }));
   };
 
+  // Zapis tabeli do Supabase
   const handleSaveTableToSupabase = async (tableId: string | number) => {
     const tableObj = bonusTables.find(t => String(t.id) === String(tableId));
     if (!tableObj) return;
@@ -486,7 +544,7 @@ export default function TwojBonusPage() {
       }
 
       if (err) throw err;
-      alert(`Pomyślnie zapisano tabelę progów dla: "${tableObj.nazwa}" w Supabase!`);
+      alert(`Pomyślnie zapisano tabelę dla: "${tableObj.nazwa}" w bazie!`);
     } catch (error: any) {
       console.error("Błąd zapisu w Supabase:", error);
       alert("Zapisano lokalnie. Komunikat bazy: " + (error.message || 'Brak'));
@@ -495,15 +553,48 @@ export default function TwojBonusPage() {
     }
   };
 
+  // Edycja warunków kwalifikacji przez administratora
+  const handleOpenEditRuleModal = (rule: any) => {
+    setEditingRuleId(rule.id);
+    setRuleBadge(rule.badge);
+    setRuleTitle(rule.title);
+    setRuleDesc(rule.desc);
+    setIsEditRuleModalOpen(true);
+  };
+
+  const handleSaveRuleModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated = qualificationRules.map(r => {
+      if (r.id === editingRuleId) {
+        return { ...r, badge: ruleBadge, title: ruleTitle, desc: ruleDesc };
+      }
+      return r;
+    });
+    setQualificationRules(updated);
+    setIsEditRuleModalOpen(false);
+
+    try {
+      const { data: existingRule } = await supabase.from('club_booking_rules').select('id').limit(1).maybeSingle();
+      if (existingRule) {
+        await supabase
+          .from('club_booking_rules')
+          .update({ bonus_qualification_rules: JSON.stringify(updated) })
+          .eq('id', existingRule.id);
+      }
+    } catch (e) {
+      console.warn("Błąd zapisu warunków:", e);
+    }
+  };
+
   if (!isMounted || isLoading) {
     return (
       <div className="p-16 text-center text-slate-400 font-black uppercase text-xs tracking-wider">
-        Ładowanie systemu lojalnościowego i roadmapy...
+        Ładowanie systemu lojalnościowego Forma Marzeń...
       </div>
     );
   }
 
-  // Statystyki
+  // Statystyki dla administratora
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
   const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2).length;
   const avgContinuity = allKlienci.length > 0 
@@ -524,6 +615,7 @@ export default function TwojBonusPage() {
   };
 
   const getUserValForTable = (tabela: any) => {
+    if (!isProgramActive) return 0;
     if (tabela.typ_karnetu === 'Umowa 12 miesięcy') {
       return userActivePass?.rata ? parseInt(String(userActivePass.rata).match(/(\d+)/)?.[1] || '1', 10) : userMonths;
     }
@@ -531,86 +623,128 @@ export default function TwojBonusPage() {
   };
 
   return (
-    <div className="max-w-[1700px] mx-auto space-y-6 pb-28 font-sans antialiased text-slate-800">
+    <div className="max-w-[1700px] w-full mx-auto space-y-6 pb-28 px-3 sm:px-6 font-sans antialiased text-slate-800 overflow-x-hidden">
       
-      {/* 1. GÓRNY BANER: PROGRAM BONUSOWY (DESIGN AMBASADOR) */}
-      <div className="bg-white border border-sky-200 p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-5">
-        <div className="space-y-1">
+      {/* 1. GÓRNY BANER PROGRAMU */}
+      {appRole === 'klubowicz' ? (
+        /* WIDOK DLA KLUBOWICZA: TYLKO TYTUŁ I STATUS */
+        <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
-            <span>🏆</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
+            <span>🏆</span> PROGRAM BONUSOWY
           </h1>
-          <p className="text-xs text-slate-500 font-medium">
-            Wizualny pasek roadmapy postępu, 2 karnety na jednej wysokości, sortowanie tabel oraz kompaktowe progi nagród.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 bg-sky-50/70 border border-sky-200 px-3.5 py-2 rounded-2xl">
+          <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-slate-600">Status programu:</span>
-            <span className="bg-emerald-600 text-white text-[11px] font-black px-3 py-1 rounded-xl uppercase tracking-wider shadow-sm">
-              WŁĄCZONY
+            <span className={`text-[11px] font-black px-3.5 py-1 rounded-xl uppercase tracking-wider shadow-sm text-white ${
+              isProgramActive ? 'bg-emerald-600' : 'bg-rose-600'
+            }`}>
+              {isProgramActive ? 'WŁĄCZONY' : 'WYŁĄCZONY'}
             </span>
           </div>
+        </div>
+      ) : (
+        /* WIDOK DLA ADMINISTRATORA / TRENERA: PRZEŁĄCZNIK STATUSU ORAZ PRZYCISKI AKCJI */
+        <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
+              <span>🏆</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
+            </h1>
+            <p className="text-xs text-slate-500 font-medium">
+              Zarządzaj tabelami ciągłości karnetów, włączaj lub wyłączaj program lojalnościowy i twórz nowe progi.
+            </p>
+          </div>
 
-          {(appRole === 'admin' || appRole === 'trener') && (
+          <div className="flex flex-wrap items-center gap-3">
+            {/* PRZEŁĄCZNIK ON / OFF DLA ADMINISTRATORA */}
+            <div className="flex items-center gap-3 bg-sky-50/80 border border-sky-200 px-4 py-2 rounded-2xl">
+              <span className="text-xs font-black text-slate-700 uppercase">
+                {isProgramActive ? 'Program Aktywny' : 'Program Wstrzymany'}
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleProgramStatus}
+                disabled={isSavingStatus}
+                className={`relative inline-flex h-6 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  isProgramActive ? 'bg-emerald-600' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    isProgramActive ? 'translate-x-6' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
             <button
               onClick={() => setIsAddTableModalOpen(true)}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-2.5 rounded-2xl text-xs uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-5 py-2.5 rounded-2xl text-xs uppercase tracking-wider transition-all shadow-sm flex items-center gap-2 cursor-pointer shrink-0"
             >
               <span>+</span> DODAJ NOWĄ TABELĘ
             </button>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* 2. KAFLOWE METRYKI STATYSTYCZNE */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">
-            🥇
-          </div>
-          <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">AKTYWNE POZIOMY</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{totalLevelsCount}</div>
-          </div>
+      {/* INFORMACJA O WYŁĄCZONYM PROGRAMIE */}
+      {!isProgramActive && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-900 px-5 py-3.5 rounded-2xl text-xs font-bold flex items-center gap-3 shadow-sm">
+          <span className="text-lg">⚠️</span>
+          <span>
+            Program bonusowy jest obecnie <strong>wyłączony przez administratora klubu</strong>. Naliczanie ciągłości i odbiór nagród są czasowo wstrzymane.
+          </span>
         </div>
+      )}
 
-        <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-xl shrink-0">
-            🤝
+      {/* 2. 4 KAFELKI STATYSTYCZNE - WIDOCZNE TYLKO DLA ADMINISTRATORA / TRENERA */}
+      {(appRole === 'admin' || appRole === 'trener') && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">
+              🥇
+            </div>
+            <div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">AKTYWNE POZIOMY</div>
+              <div className="text-2xl font-black text-slate-900 mt-0.5">{totalLevelsCount}</div>
+            </div>
           </div>
-          <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">KLUBOWICZE Z CIĄGŁOŚCIĄ</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{countContinuityMembers}</div>
-          </div>
-        </div>
 
-        <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-200 flex items-center justify-center text-xl shrink-0">
-            💰
+          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-xl shrink-0">
+              🤝
+            </div>
+            <div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">KLUBOWICZE Z CIĄGŁOŚCIĄ</div>
+              <div className="text-2xl font-black text-slate-900 mt-0.5">{countContinuityMembers}</div>
+            </div>
           </div>
-          <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI CYKL CIĄGŁOŚCI</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{avgContinuity} MIES.</div>
-          </div>
-        </div>
 
-        <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-center text-xl shrink-0">
-            🛡️
+          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-200 flex items-center justify-center text-xl shrink-0">
+              💰
+            </div>
+            <div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI CYKL CIĄGŁOŚCI</div>
+              <div className="text-2xl font-black text-slate-900 mt-0.5">{avgContinuity} MIES.</div>
+            </div>
           </div>
-          <div>
-            <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">LICZBA KARNETÓW</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{bonusTables.length}</div>
+
+          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-center text-xl shrink-0">
+              🛡️
+            </div>
+            <div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">LICZBA KARNETÓW</div>
+              <div className="text-2xl font-black text-slate-900 mt-0.5">{bonusTables.length}</div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* 3. ZAKŁADKI WIDOKU */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
         <button
           onClick={() => setActiveTab('poziomy')}
-          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm shrink-0 ${
             activeTab === 'poziomy'
               ? 'bg-[#1a385c] text-white shadow-md'
               : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
@@ -621,7 +755,7 @@ export default function TwojBonusPage() {
 
         <button
           onClick={() => setActiveTab('warunki')}
-          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm shrink-0 ${
             activeTab === 'warunki'
               ? 'bg-[#1a385c] text-white shadow-md'
               : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
@@ -630,19 +764,22 @@ export default function TwojBonusPage() {
           <span>🛡️</span> WARUNKI KWALIFIKACJI
         </button>
 
-        <button
-          onClick={() => setActiveTab('rejestr')}
-          className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
-            activeTab === 'rejestr'
-              ? 'bg-[#1a385c] text-white shadow-md'
-              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          <span>👥</span> REJESTR KLUBOWICZÓW ({allKlienci.length})
-        </button>
+        {/* ZAKŁADKA REJESTR KLUBOWICZÓW - WIDOCZNA TYLKO DLA ADMINISTRATORA / TRENERA */}
+        {(appRole === 'admin' || appRole === 'trener') && (
+          <button
+            onClick={() => setActiveTab('rejestr')}
+            className={`px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm shrink-0 ${
+              activeTab === 'rejestr'
+                ? 'bg-[#1a385c] text-white shadow-md'
+                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <span>👥</span> REJESTR KLUBOWICZÓW ({allKlienci.length})
+          </button>
+        )}
       </div>
 
-      {/* 4. GŁÓWNA ZAWARTOŚĆ: DWA KARNETY NA JEDNEJ WYSOKOŚCI (GRID LG:GRID-COLS-2) */}
+      {/* 4. GŁÓWNA ZAWARTOŚĆ: 2 KARNETY NA JEDNEJ WYSOKOŚCI */}
       {activeTab === 'poziomy' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           {bonusTables.map((tabela, tableIndex) => {
@@ -658,34 +795,34 @@ export default function TwojBonusPage() {
             return (
               <div
                 key={tabela.id}
-                className={`bg-slate-50/80 border rounded-3xl p-5 shadow-sm space-y-4 transition-all ${
+                className={`bg-slate-50/80 border rounded-3xl p-4 sm:p-5 shadow-sm space-y-4 transition-all ${
                   isUserPass ? 'border-amber-400 ring-2 ring-amber-300/40 bg-amber-50/20' : 'border-sky-200'
                 }`}
               >
-                {/* A. NAGŁÓWEK TABELI Z PRZYCISKAMI PRZESUWANIA KOLEJNOŚCI */}
-                <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-2.5">
+                {/* A. WYRAZISTY, KONTRASTOWY NAGŁÓWEK DANEGO KARNETU (NOWY STYL) */}
+                <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span className="bg-sky-100 text-sky-950 font-black text-[10px] px-2.5 py-0.5 rounded-md uppercase">
+                      <span className="bg-amber-400 text-slate-950 font-black text-[10px] px-3 py-0.5 rounded-lg uppercase tracking-wider shadow-sm">
                         {tabela.typ_karnetu || 'Karnet cykliczny'}
                       </span>
                       {isUserPass && (
-                        <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black text-[9px] px-2 py-0.5 rounded-md uppercase">
-                          TWÓJ KARNET ✓
+                        <span className="bg-emerald-500 text-white font-black text-[9px] px-2.5 py-0.5 rounded-lg uppercase tracking-wider shadow-sm flex items-center gap-1">
+                          <span>✓</span> TWÓJ KARNET
                         </span>
                       )}
                     </div>
 
-                    {/* PRZYCISKI KOLEJNOŚCI I KASOWANIA DLA ADMINA */}
+                    {/* PRZYCISKI SORTOWANIA I USUWANIA TABELI DLA ADMINA */}
                     {(appRole === 'admin' || appRole === 'trener') && (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <button
                           disabled={tableIndex === 0}
                           onClick={() => handleMoveTable(tableIndex, 'left')}
-                          className={`w-7 h-7 rounded-lg border text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
+                          className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
                             tableIndex === 0
-                              ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
-                              : 'bg-white text-slate-700 border-slate-300 hover:bg-sky-50 hover:text-sky-900 shadow-sm'
+                              ? 'bg-white/10 text-white/30 cursor-not-allowed'
+                              : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
                           }`}
                           title="Przesuń tabelę w lewo / wyżej"
                         >
@@ -694,10 +831,10 @@ export default function TwojBonusPage() {
                         <button
                           disabled={tableIndex === bonusTables.length - 1}
                           onClick={() => handleMoveTable(tableIndex, 'right')}
-                          className={`w-7 h-7 rounded-lg border text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
+                          className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-colors cursor-pointer ${
                             tableIndex === bonusTables.length - 1
-                              ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
-                              : 'bg-white text-slate-700 border-slate-300 hover:bg-sky-50 hover:text-sky-900 shadow-sm'
+                              ? 'bg-white/10 text-white/30 cursor-not-allowed'
+                              : 'bg-white/20 text-white hover:bg-amber-500 hover:text-slate-950'
                           }`}
                           title="Przesuń tabelę w prawo / niżej"
                         >
@@ -705,7 +842,7 @@ export default function TwojBonusPage() {
                         </button>
                         <button
                           onClick={() => handleDeleteTable(tabela.id, tabela.nazwa)}
-                          className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 text-xs flex items-center justify-center cursor-pointer transition-colors ml-1"
+                          className="w-7 h-7 rounded-lg bg-white/10 text-rose-300 hover:bg-rose-600 hover:text-white text-xs flex items-center justify-center cursor-pointer transition-colors ml-1"
                           title="Usuń tę tabelę"
                         >
                           ✕
@@ -714,20 +851,20 @@ export default function TwojBonusPage() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-white/10">
                     <div>
-                      <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">
+                      <h2 className="text-lg sm:text-xl font-black uppercase tracking-tight text-white">
                         {tabela.nazwa}
                       </h2>
-                      <div className="text-[11px] text-slate-500 font-semibold">
-                        Cena bazowa: {Number(tabela.cena || 0).toFixed(2)} PLN
+                      <div className="text-xs text-sky-200 font-bold mt-0.5">
+                        Cena bazowa: <strong className="text-amber-300">{Number(tabela.cena || 0).toFixed(2)} PLN</strong>
                       </div>
                     </div>
 
                     {(appRole === 'admin' || appRole === 'trener') && (
                       <button
                         onClick={() => handleOpenAddTierModal(tabela.id)}
-                        className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 text-[10px] font-black px-3 py-1.5 rounded-xl cursor-pointer transition-colors flex items-center gap-1 shadow-sm"
+                        className="bg-amber-400 hover:bg-amber-300 text-slate-950 text-[10px] font-black px-3.5 py-2 rounded-xl cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm shrink-0 self-start sm:self-auto"
                       >
                         <span>+</span> DODAJ PRÓG
                       </button>
@@ -735,7 +872,7 @@ export default function TwojBonusPage() {
                   </div>
                 </div>
 
-                {/* B. LINIA ROADMAPY (PASEK POSTĘPU POD NAZWĄ) */}
+                {/* B. LINIA ROADMAPY (PASEK POSTĘPU) */}
                 <div className="bg-white border border-sky-200 rounded-2xl p-3.5 shadow-sm space-y-3">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
@@ -746,7 +883,6 @@ export default function TwojBonusPage() {
                     </span>
                   </div>
 
-                  {/* Wizualna oś czasu roadmapy */}
                   <div className="relative pt-4 pb-2 px-3">
                     <div className="absolute top-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full -translate-y-1/2" />
                     <div
@@ -756,7 +892,7 @@ export default function TwojBonusPage() {
 
                     <div className="relative flex justify-between items-center z-10">
                       {tabela.customTiers?.map((tier: any) => {
-                        const isReached = userVal >= Number(tier.threshold);
+                        const isReached = isProgramActive && userVal >= Number(tier.threshold);
                         const isSelected = highlightedTierId === tier.id;
 
                         return (
@@ -796,10 +932,10 @@ export default function TwojBonusPage() {
                   </div>
                 </div>
 
-                {/* C. BARDZIEJ KOMPAKTOWE TABELE Z POZIOMAMI */}
+                {/* C. KOMPAKTOWE POZIOMY NAGRÓD */}
                 <div className="space-y-2.5">
                   {tabela.customTiers?.map((tier: any) => {
-                    const isUnlocked = isUserPass && userVal >= Number(tier.threshold);
+                    const isUnlocked = isProgramActive && isUserPass && userVal >= Number(tier.threshold);
                     const isHighlighted = highlightedTierId === tier.id;
 
                     return (
@@ -809,7 +945,6 @@ export default function TwojBonusPage() {
                           isHighlighted ? 'border-amber-500 ring-2 ring-amber-300' : 'border-sky-200'
                         } ${getAccentBorder(tier.accent)}`}
                       >
-                        {/* Wiersz 1: Etykieta, próg i status */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
                             <span className="border border-amber-300 text-amber-900 bg-amber-50 text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
@@ -848,7 +983,7 @@ export default function TwojBonusPage() {
                           </div>
                         </div>
 
-                        {/* Wiersz 2: Kompaktowy boks nagrody głównej */}
+                        {/* Nagroda główna */}
                         <div className="bg-amber-50/80 border border-amber-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
                           <div className="flex items-center gap-1.5 truncate">
                             <span className="text-[10px]">🎁</span>
@@ -861,7 +996,7 @@ export default function TwojBonusPage() {
                           )}
                         </div>
 
-                        {/* Wiersz 3: Kompaktowy boks bonusu dodatkowego */}
+                        {/* Bonus dodatkowy */}
                         {tier.secondaryTitle && (
                           <div className="bg-sky-50/80 border border-sky-200/80 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs">
                             <div className="flex items-center gap-1.5 truncate">
@@ -881,12 +1016,12 @@ export default function TwojBonusPage() {
 
                   {(!tabela.customTiers || tabela.customTiers.length === 0) && (
                     <div className="text-center py-6 text-xs text-slate-400 font-medium italic bg-white rounded-2xl border border-dashed border-sky-200">
-                      Brak progów w tej tabeli. Kliknij "+ DODAJ PRÓG".
+                      Brak zdefiniowanych progów w tej tabeli.
                     </div>
                   )}
                 </div>
 
-                {/* PRZYCISK ZAPISU DO SUPABASE */}
+                {/* PRZYCISK ZAPISU DO SUPABASE DLA ADMINISTRATORA */}
                 {(appRole === 'admin' || appRole === 'trener') && (
                   <button
                     type="button"
@@ -903,54 +1038,56 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 5. ZAKŁADKA 2: WARUNKI KWALIFIKACJI */}
+      {/* 5. ZAKŁADKA 2: WARUNKI KWALIFIKACJI (SAMODZIELNA EDYCJA PRZEZ ADMINA) */}
       {activeTab === 'warunki' && (
-        <div className="bg-white border border-sky-200 rounded-3xl p-7 shadow-sm space-y-6">
-          <div className="border-b border-sky-100 pb-4">
-            <h3 className="text-base font-black text-sky-950 uppercase tracking-wide flex items-center gap-2">
-              <span>🛡️</span> Warunki kwalifikacji i zasady roadmapy ciągłości
-            </h3>
-            <p className="text-xs text-slate-500 mt-1 font-medium">
-              System przelicza ciągłość automatycznie w profilu każdego klubowicza na podstawie opłaconych rat oraz regularności.
-            </p>
+        <div className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-7 shadow-sm space-y-6">
+          <div className="border-b border-sky-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-black text-sky-950 uppercase tracking-wide flex items-center gap-2">
+                <span>🛡️</span> Warunki kwalifikacji i zasady ciągłości
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 font-medium">
+                Zasady kwalifikacji do progów lojalnościowych w klubie Forma Marzeń.
+              </p>
+            </div>
+            {appRole === 'admin' && (
+              <div className="text-[11px] font-bold text-sky-800 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-xl">
+                ✍️ Kliknij „Edytuj treść”, aby zmodyfikować zasady
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-sky-50/60 border border-sky-200 rounded-2xl p-5 space-y-3">
-              <span className="bg-sky-200 text-sky-950 font-black text-[10px] px-2.5 py-1 rounded-md uppercase">
-                Karnety Cykliczne (Umowa)
-              </span>
-              <h4 className="font-black text-slate-900 text-sm">Rozliczenie ratalne (1-12)</h4>
-              <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Klubowicz zdobywa kolejne poziomy wraz z kolejnymi opłaconymi ratami. Po 12. racie zyskuje darmowy okres bonusowy za dni zamrożenia.
-              </p>
-            </div>
+            {qualificationRules.map((rule) => (
+              <div key={rule.id} className="bg-sky-50/60 border border-sky-200 rounded-2xl p-5 space-y-3 relative flex flex-col justify-between">
+                <div className="space-y-2">
+                  <span className="bg-sky-200 text-sky-950 font-black text-[10px] px-2.5 py-1 rounded-md uppercase">
+                    {rule.badge}
+                  </span>
+                  <h4 className="font-black text-slate-900 text-sm">{rule.title}</h4>
+                  <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                    {rule.desc}
+                  </p>
+                </div>
 
-            <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-5 space-y-3">
-              <span className="bg-amber-200 text-amber-950 font-black text-[10px] px-2.5 py-1 rounded-md uppercase">
-                Karnety OPEN (Na czas)
-              </span>
-              <h4 className="font-black text-slate-900 text-sm">Ciągłość odnowień</h4>
-              <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Każde odnowienie przed wygaśnięciem obecnego karnetu zwiększa licznik cyklu ciągłości w tabeli klubowicza o +1.
-              </p>
-            </div>
-
-            <div className="bg-emerald-50/60 border border-emerald-200 rounded-2xl p-5 space-y-3">
-              <span className="bg-emerald-200 text-emerald-950 font-black text-[10px] px-2.5 py-1 rounded-md uppercase">
-                Karnety Ogólnorozwojowe
-              </span>
-              <h4 className="font-black text-slate-900 text-sm">Pula wejść treningowych</h4>
-              <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Poziomy są naliczane proporcjonalnie do ilości zrealizowanych treningów w klubie Forma Marzeń.
-              </p>
-            </div>
+                {appRole === 'admin' && (
+                  <div className="pt-3 border-t border-sky-100 flex justify-end">
+                    <button
+                      onClick={() => handleOpenEditRuleModal(rule)}
+                      className="bg-white hover:bg-sky-100 border border-sky-300 text-sky-950 font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer shadow-sm transition-colors"
+                    >
+                      ✏️ Edytuj treść
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* 6. ZAKŁADKA 3: REJESTR KLUBOWICZÓW */}
-      {activeTab === 'rejestr' && (
+      {/* 6. ZAKŁADKA 3: REJESTR KLUBOWICZÓW (TYLKO DLA ADMINA) */}
+      {activeTab === 'rejestr' && (appRole === 'admin' || appRole === 'trener') && (
         <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden">
           <div className="p-6 border-b border-sky-100">
             <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
@@ -1001,30 +1138,89 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 7. MODAL: DODAWANIE NOWEJ TABELI */}
-      {isAddTableModalOpen && (
+      {/* 7. MODAL: EDYCJA WARUNKU KWALIFIKACJI (ADMIN) */}
+      {isEditRuleModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-7 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-4">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>➕</span> Dodaj nową tabelę karnetu
+          <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                🛡️ Edytuj treść warunku
               </h3>
-              <button
-                type="button"
-                onClick={() => setIsAddTableModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700 font-bold text-base cursor-pointer"
-              >
-                ✕
-              </button>
+              <button onClick={() => setIsEditRuleModalOpen(false)} className="text-slate-400 font-bold text-base cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={handleAddNewTable} className="space-y-4 text-xs">
+            <form onSubmit={handleSaveRuleModal} className="space-y-3 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Etykieta (Plakietka)</label>
+                <input
+                  type="text"
+                  required
+                  value={ruleBadge}
+                  onChange={(e) => setRuleBadge(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Tytuł zasady</label>
+                <input
+                  type="text"
+                  required
+                  value={ruleTitle}
+                  onChange={(e) => setRuleTitle(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700">Opis szczegółowy</label>
+                <textarea
+                  rows={4}
+                  required
+                  value={ruleDesc}
+                  onChange={(e) => setRuleDesc(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-medium text-slate-800"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-sky-100">
+                <button
+                  type="button"
+                  onClick={() => setIsEditRuleModalOpen(false)}
+                  className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  className="bg-slate-900 text-white font-black px-5 py-2 rounded-xl uppercase tracking-wider cursor-pointer shadow-md"
+                >
+                  Zapisz zmiany
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. MODAL: DODAWANIE NOWEJ TABELI */}
+      {isAddTableModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white border border-sky-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                ➕ Dodaj nową tabelę karnetu
+              </h3>
+              <button onClick={() => setIsAddTableModalOpen(false)} className="text-slate-400 font-bold text-base cursor-pointer">✕</button>
+            </div>
+
+            <form onSubmit={handleAddNewTable} className="space-y-3 text-xs">
               <div className="space-y-1">
                 <label className="font-bold text-slate-700">Nazwa tabeli / karnetu</label>
                 <input
                   type="text"
                   required
-                  placeholder="np. Karnet OPEN Poranny, Pakiet 20 wejść"
+                  placeholder="np. Karnet OPEN Poranny"
                   value={newTableName}
                   onChange={(e) => setNewTableName(e.target.value)}
                   className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900"
@@ -1057,18 +1253,18 @@ export default function TwojBonusPage() {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-sky-100">
+              <div className="flex justify-end gap-2 pt-2 border-t border-sky-100">
                 <button
                   type="button"
                   onClick={() => setIsAddTableModalOpen(false)}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer transition-colors"
+                  className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer"
                 >
                   Anuluj
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="bg-slate-900 hover:bg-slate-800 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer shadow-md transition-colors"
+                  className="bg-slate-900 text-white font-black px-5 py-2 rounded-xl uppercase tracking-wider cursor-pointer shadow-md"
                 >
                   {isSaving ? 'Tworzenie...' : 'Utwórz tabelę'}
                 </button>
@@ -1078,33 +1274,27 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 8. MODAL: DODAWANIE / EDYCJA PROGU */}
+      {/* 9. MODAL: DODAWANIE / EDYCJA PROGU */}
       {isTierModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-7 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-4">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>🏆</span> {editingTierId ? 'Edytuj próg lojalnościowy' : 'Dodaj nowy próg do tabeli'}
+          <div className="bg-white border border-sky-200 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                🏆 {editingTierId ? 'Edytuj próg lojalnościowy' : 'Dodaj nowy próg'}
               </h3>
-              <button
-                type="button"
-                onClick={() => setIsTierModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700 font-bold text-base cursor-pointer"
-              >
-                ✕
-              </button>
+              <button onClick={() => setIsTierModalOpen(false)} className="text-slate-400 font-bold text-base cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={handleSaveTierModal} className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleSaveTierModal} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Nazwa poziomu (np. BRĄZOWY, VIP)</label>
+                  <label className="font-bold text-slate-700">Nazwa poziomu</label>
                   <input
                     type="text"
                     required
                     value={levelName}
                     onChange={(e) => setLevelName(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900"
                   />
                 </div>
 
@@ -1113,7 +1303,7 @@ export default function TwojBonusPage() {
                   <select
                     value={accentColor}
                     onChange={(e: any) => setAccentColor(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900 cursor-pointer"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900 cursor-pointer"
                   >
                     <option value="amber">Brąz / Bursztyn</option>
                     <option value="slate">Srebro / Szary</option>
@@ -1123,16 +1313,16 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Wymagana wartość ciągłości</label>
+                  <label className="font-bold text-slate-700">Wartość ciągłości</label>
                   <input
                     type="number"
                     min="1"
                     required
                     value={thresholdVal}
                     onChange={(e) => setThresholdVal(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900"
                   />
                 </div>
 
@@ -1141,7 +1331,7 @@ export default function TwojBonusPage() {
                   <select
                     value={thresholdUnit}
                     onChange={(e: any) => setThresholdUnit(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-900 cursor-pointer"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900 cursor-pointer"
                   >
                     <option value="miesięcy">miesięcy</option>
                     <option value="cykli">cykli</option>
@@ -1151,69 +1341,69 @@ export default function TwojBonusPage() {
               </div>
 
               {/* Nagroda klubowicza */}
-              <div className="bg-amber-50/60 p-4 rounded-2xl border border-amber-200 space-y-3">
-                <h4 className="font-black text-amber-950 uppercase text-[11px]">🎁 Główna nagroda klubowicza</h4>
-                <div className="grid grid-cols-3 gap-3">
+              <div className="bg-amber-50/70 p-3.5 rounded-2xl border border-amber-200 space-y-2">
+                <h4 className="font-black text-amber-950 uppercase text-[10px]">🎁 Nagroda klubowicza</h4>
+                <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2 space-y-1">
-                    <label className="font-bold text-slate-700">Opis nagrody</label>
                     <input
                       type="text"
                       required
+                      placeholder="Opis nagrody"
                       value={rewardTitle}
                       onChange={(e) => setRewardTitle(e.target.value)}
-                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 font-semibold text-slate-800"
+                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 font-semibold text-slate-800"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="font-bold text-slate-700">Plakietka (Tag)</label>
                     <input
                       type="text"
+                      placeholder="-10%"
                       value={rewardBadge}
                       onChange={(e) => setRewardBadge(e.target.value)}
-                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 font-black text-slate-900 text-center"
+                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 font-black text-slate-900 text-center"
                     />
                   </div>
                 </div>
               </div>
 
               {/* Dodatkowy bonus */}
-              <div className="bg-sky-50/60 p-4 rounded-2xl border border-sky-200 space-y-3">
-                <h4 className="font-black text-sky-950 uppercase text-[11px]">👋 Dodatkowy bonus</h4>
-                <div className="grid grid-cols-3 gap-3">
+              <div className="bg-sky-50/70 p-3.5 rounded-2xl border border-sky-200 space-y-2">
+                <h4 className="font-black text-sky-950 uppercase text-[10px]">👋 Bonus dodatkowy</h4>
+                <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2 space-y-1">
-                    <label className="font-bold text-slate-700">Opis bonusu</label>
                     <input
                       type="text"
+                      placeholder="Opis bonusu"
                       value={secondaryTitle}
                       onChange={(e) => setSecondaryTitle(e.target.value)}
-                      className="w-full bg-white border border-sky-300 rounded-xl px-3 py-2 font-semibold text-slate-800"
+                      className="w-full bg-white border border-sky-300 rounded-xl px-3 py-1.5 font-semibold text-slate-800"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="font-bold text-slate-700">Plakietka (Tag)</label>
                     <input
                       type="text"
+                      placeholder="GRATIS"
                       value={secondaryBadge}
                       onChange={(e) => setSecondaryBadge(e.target.value)}
-                      className="w-full bg-white border border-sky-300 rounded-xl px-3 py-2 font-black text-slate-900 text-center"
+                      className="w-full bg-white border border-sky-300 rounded-xl px-3 py-1.5 font-black text-slate-900 text-center"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-sky-100">
+              <div className="flex justify-end gap-2 pt-2 border-t border-sky-100">
                 <button
                   type="button"
                   onClick={() => setIsTierModalOpen(false)}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-5 py-2.5 rounded-xl cursor-pointer transition-colors"
+                  className="bg-slate-100 text-slate-700 font-bold px-4 py-2 rounded-xl cursor-pointer"
                 >
                   Anuluj
                 </button>
                 <button
                   type="submit"
-                  className="bg-slate-900 hover:bg-slate-800 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider cursor-pointer shadow-md transition-colors"
+                  className="bg-slate-900 text-white font-black px-5 py-2 rounded-xl uppercase tracking-wider cursor-pointer shadow-md"
                 >
-                  {editingTierId ? 'Zaktualizuj próg' : 'Dodaj próg'}
+                  {editingTierId ? 'Zaktualizuj' : 'Dodaj'}
                 </button>
               </div>
             </form>
