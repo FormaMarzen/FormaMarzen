@@ -14,6 +14,10 @@ export default function TwojBonusPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
 
+  // Wyszukiwanie podopiecznego przez administratora
+  const [adminSearchQuery, setAdminSearchQuery] = useState('');
+  const [inspectedClient, setInspectedClient] = useState<any>(null);
+
   // Główny status programu (włączony / wyłączony)
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
@@ -76,7 +80,7 @@ export default function TwojBonusPage() {
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Szablony startowych progów lojalnościowych
+  // Domyślne poziomy
   const defaultTiersUmowa = [
     {
       id: 101,
@@ -200,7 +204,7 @@ export default function TwojBonusPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const userEmail = session?.user?.email;
 
-      // 1. Sprawdzenie uprawnień użytkownika
+      // 1. Sprawdzenie roli
       const { data: trenerzyData } = await supabase.from('trenerzy').select('*');
       if (userEmail === 'maciejklaput@gmail.com') {
         setAppRole('admin');
@@ -637,6 +641,92 @@ export default function TwojBonusPage() {
     }
   };
 
+  // OBLICZANIE POSTĘPU Z UWZGLĘDNIENIEM BRAKU CIĄGŁOŚCI I ZMIANY KARNETU
+  const calculateMemberProgress = (tabela: any, targetUser: any = currentUser) => {
+    if (!isProgramActive || !targetUser) return { value: 0, isReset: false, reason: '' };
+
+    const targetUserPass = targetUser?.karnetyKlubowicza?.[0];
+    const isCurrent = targetUserPass && targetUserPass.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase();
+    if (!isCurrent) {
+      return { value: 0, isReset: false, reason: '' };
+    }
+
+    if (targetUser?.hasLostContinuity) {
+      return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
+    }
+
+    if (targetUserPass.isPassChangedReset || targetUserPass.changedPassReset) {
+      return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
+    }
+
+    if (tabela.typ_karnetu === 'Umowa 12 miesięcy') {
+      const rataMatch = String(targetUserPass.rata || '').match(/(\d+)/);
+      const ratCount = rataMatch ? parseInt(rataMatch[1], 10) : 1;
+      return { value: ratCount, isReset: false, reason: '' };
+    }
+
+    if (tabela.typ_karnetu === 'Na ilość treningów' || tabela.nazwa?.toLowerCase().includes('wejść')) {
+      const poczatkowe = parseInt(targetUserPass.poczatkoweWejsc || targetUserPass.ilosc_wejsc || '10', 10);
+      const pozostalo = parseInt(targetUserPass.pozostaloWejsc !== undefined && targetUserPass.pozostaloWejsc !== null ? targetUserPass.pozostaloWejsc : poczatkowe, 10);
+      const odbyte = Math.max(0, poczatkowe - pozostalo);
+      return { value: odbyte, isReset: false, reason: '' };
+    }
+
+    return { value: targetUser?.cyklCiaglosci || 1, isReset: false, reason: '' };
+  };
+
+  // Obliczenie czy dany klubowicz ma odblokowany poziom do weryfikacji
+  const getUnlockedLevelsForClient = (client: any) => {
+    if (!client || client.hasLostContinuity) return [];
+    const clientPass = client?.karnetyKlubowicza?.[0];
+    if (!clientPass) return [];
+
+    const matchedTable = bonusTables.find(t => t.nazwa?.trim().toLowerCase() === clientPass.nazwa?.trim().toLowerCase());
+    if (!matchedTable || !matchedTable.customTiers) return [];
+
+    const progress = calculateMemberProgress(matchedTable, client);
+    if (progress.isReset) return [];
+
+    return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
+  };
+
+  // Lista klubowiczów którzy zaliczyli jakikolwiek próg (dla admina do weryfikacji)
+  const qualifiedMembersList = allKlienci.map(client => {
+    const unlocked = getUnlockedLevelsForClient(client);
+    const pass = client?.karnetyKlubowicza?.[0];
+    const topLevel = unlocked.length > 0 ? unlocked[unlocked.length - 1] : null;
+    return {
+      ...client,
+      passName: pass?.nazwa || 'Brak',
+      unlockedLevels: unlocked,
+      topLevel
+    };
+  }).filter(c => c.unlockedLevels.length > 0);
+
+  // Filtrowani podopieczni w wyszukiwarce
+  const searchedMembers = adminSearchQuery.trim().length >= 2
+    ? allKlienci.filter(c => {
+        const full = `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase();
+        return full.includes(adminSearchQuery.toLowerCase());
+      })
+    : [];
+
+  // Sprawdzenie czy aktywny klubowicz posiada odblokowany próg (dla czerwonego badge'a z wykrzyknikiem)
+  const currentMemberUnlockedTiers = getUnlockedLevelsForClient(currentUser);
+  const hasMemberUnlockedTier = currentMemberUnlockedTiers.length > 0;
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (hasMemberUnlockedTier && appRole === 'klubowicz') {
+        localStorage.setItem('bonus_has_notification', 'true');
+        window.dispatchEvent(new Event('bonus-notification-update'));
+      } else {
+        localStorage.removeItem('bonus_has_notification');
+        window.dispatchEvent(new Event('bonus-notification-update'));
+      }
+    }
+  }, [hasMemberUnlockedTier, appRole]);
+
   if (!isMounted || isLoading) {
     return (
       <div className="p-16 text-center text-slate-400 font-black uppercase text-xs tracking-wider">
@@ -645,16 +735,16 @@ export default function TwojBonusPage() {
     );
   }
 
+  // Aktywny użytkownik dla widoku tabel (jeśli admin bada kogoś z listy, renderujemy jego konto)
+  const activeViewingUser = inspectedClient || currentUser;
+  const activeViewingPass = activeViewingUser?.karnetyKlubowicza?.[0];
+
   // Statystyki dla administratora
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
   const countContinuityMembers = allKlienci.filter((k: any) => (k.cyklCiaglosci || 1) >= 2 && !k.hasLostContinuity).length;
   const avgContinuity = allKlienci.length > 0 
     ? (allKlienci.reduce((acc, curr) => acc + (curr.hasLostContinuity ? 1 : (curr.cyklCiaglosci || 1)), 0) / allKlienci.length).toFixed(1)
     : '1.0';
-
-  const userActivePass = currentUser?.karnetyKlubowicza?.[0];
-  const userMonths = currentUser?.cyklCiaglosci || 1;
-  const hasContinuityLost = currentUser?.hasLostContinuity === true;
 
   const getAccentBorder = (accent: string) => {
     switch (accent) {
@@ -666,53 +756,18 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Obliczanie postępu z uwzględnieniem braku ciągłości i zmiany karnetu
-  const calculateMemberProgress = (tabela: any) => {
-    if (!isProgramActive || !currentUser) return { value: 0, isReset: false, reason: '' };
-
-    const isCurrent = userActivePass && userActivePass.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase();
-    if (!isCurrent) {
-      return { value: 0, isReset: false, reason: '' };
-    }
-
-    if (hasContinuityLost) {
-      return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
-    }
-
-    if (userActivePass.isPassChangedReset || userActivePass.changedPassReset) {
-      return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
-    }
-
-    if (tabela.typ_karnetu === 'Umowa 12 miesięcy') {
-      const rataMatch = String(userActivePass.rata || '').match(/(\d+)/);
-      const ratCount = rataMatch ? parseInt(rataMatch[1], 10) : 1;
-      return { value: ratCount, isReset: false, reason: '' };
-    }
-
-    if (tabela.typ_karnetu === 'Na ilość treningów' || tabela.nazwa?.toLowerCase().includes('wejść')) {
-      const poczatkowe = parseInt(userActivePass.poczatkoweWejsc || userActivePass.ilosc_wejsc || '10', 10);
-      const pozostalo = parseInt(userActivePass.pozostaloWejsc !== undefined && userActivePass.pozostaloWejsc !== null ? userActivePass.pozostaloWejsc : poczatkowe, 10);
-      const odbyte = Math.max(0, poczatkowe - pozostalo);
-      return { value: odbyte, isReset: false, reason: '' };
-    }
-
-    return { value: userMonths, isReset: false, reason: '' };
-  };
-
-  // Sortowanie tabel: dla klubowicza jego posiadany karnet jest zawsze pierwszy na stronie
+  // Sortowanie tabel: karnet podopiecznego jest zawsze pierwszy na stronie
   const displayedTables = [...bonusTables].sort((a, b) => {
-    if (appRole === 'klubowicz') {
-      const aIsUserPass = currentUser?.karnetyKlubowicza?.some(
-        (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
-      ) || (userActivePass?.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase());
+    const aIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
+      (k: any) => k.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase()
+    ) || (activeViewingPass?.nazwa?.trim().toLowerCase() === a.nazwa?.trim().toLowerCase());
 
-      const bIsUserPass = currentUser?.karnetyKlubowicza?.some(
-        (k: any) => k.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase()
-      ) || (userActivePass?.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase());
+    const bIsUserPass = activeViewingUser?.karnetyKlubowicza?.some(
+      (k: any) => k.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase()
+    ) || (activeViewingPass?.nazwa?.trim().toLowerCase() === b.nazwa?.trim().toLowerCase());
 
-      if (aIsUserPass && !bIsUserPass) return -1;
-      if (!aIsUserPass && bIsUserPass) return 1;
-    }
+    if (aIsUserPass && !bIsUserPass) return -1;
+    if (!aIsUserPass && bIsUserPass) return 1;
     return (a.kolejnosc ?? 0) - (b.kolejnosc ?? 0);
   });
 
@@ -721,10 +776,18 @@ export default function TwojBonusPage() {
       
       {/* 1. GÓRNY BANER PROGRAMU */}
       {appRole === 'klubowicz' ? (
+        /* DLA KLUBOWICZA: TYLKO NAZWA PROGRAMU I STATUS ORAZ CZERWONY BADGE PO ZALICZENIU POZIOMU */
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
-            <span>🏆</span> PROGRAM BONUSOWY
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
+              <span>🏆</span> PROGRAM BONUSOWY
+            </h1>
+            {hasMemberUnlockedTier && (
+              <span className="w-6 h-6 rounded-full bg-rose-600 text-white font-black text-xs flex items-center justify-center animate-pulse shadow-md" title="Masz odblokowany nowy bonus!">
+                !
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-slate-600">Status programu:</span>
             <span className={`text-[11px] font-black px-3.5 py-1 rounded-xl uppercase tracking-wider shadow-sm text-white ${
@@ -735,17 +798,19 @@ export default function TwojBonusPage() {
           </div>
         </div>
       ) : (
+        /* DLA ADMINISTRATORA / TRENERA */
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
               <span>🏆</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
             </h1>
             <p className="text-xs text-slate-500 font-medium">
-              Zarządzaj tabelami ciągłości karnetów, włączaj lub wyłączaj program lojalnościowy i twórz nowe progi.
+              Zarządzaj tabelami ciągłości karnetów, weryfikuj odblokowane poziomy klubowiczów i konfiguruj progi nagród.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* PRZEŁĄCZNIK STATUSU PROGRAMU DLA ADMINA */}
             <div className="flex items-center gap-3 bg-sky-50/80 border border-sky-200 px-4 py-2 rounded-2xl">
               <span className="text-xs font-black text-slate-700 uppercase">
                 {isProgramActive ? 'Program Aktywny' : 'Program Wstrzymany'}
@@ -781,78 +846,153 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* POWIADOMIENIA SYSTEMOWE */}
-      {!isProgramActive && (
-        <div className="bg-rose-50 border border-rose-200 text-rose-900 px-5 py-3.5 rounded-2xl text-xs font-bold flex items-center gap-3 shadow-sm">
-          <span className="text-lg">⚠️</span>
-          <span>
-            Program bonusowy jest obecnie <strong>wyłączony przez administratora klubu</strong>. Naliczanie ciągłości i odbiór nagród są czasowo wstrzymane.
-          </span>
-        </div>
-      )}
-
-      {hasContinuityLost && isProgramActive && appRole === 'klubowicz' && (
-        <div className="bg-amber-50 border border-amber-300 text-amber-950 px-5 py-3.5 rounded-2xl text-xs font-bold flex items-center gap-3 shadow-sm">
-          <span className="text-lg">🔄</span>
-          <span>
-            Wykryto przerwę w ciągłości Twojego karnetu. Zgodnie z regulaminem roadmapa została zresetowana i naliczanie bonusów rozpoczęło się od nowa!
-          </span>
-        </div>
-      )}
-
-      {/* 2. 4 KAFELKI STATYSTYCZNE - WIDOCZNE TYLKO DLA ADMINISTRATORA / TRENERA */}
+      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ LISTA OSÓB DO WERYFIKACJI (WZÓR ZE ZRZUTÓW EKRANU) */}
       {(appRole === 'admin' || appRole === 'trener') && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">
-              🥇
+        <div className="space-y-4">
+          
+          {/* PASEK WYSZUKIWANIA PODOPIECZNEGO */}
+          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2.5">
+            <label className="text-[11px] font-black text-sky-950 uppercase tracking-wider flex items-center gap-2">
+              <span>🔍</span> WYSZUKAJ PODOPIECZNEGO (OPCJONALNIE):
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Wpisz imię, nazwisko lub e-mail (min. 2 znaki), aby przejrzeć podopiecznego..."
+                value={adminSearchQuery}
+                onChange={(e) => setAdminSearchQuery(e.target.value)}
+                className="w-full bg-sky-50/50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors"
+              />
+              {adminSearchQuery && (
+                <button
+                  onClick={() => setAdminSearchQuery('')}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                >
+                  ✕
+                </button>
+              )}
             </div>
-            <div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">AKTYWNE POZIOMY</div>
-              <div className="text-2xl font-black text-slate-900 mt-0.5">{totalLevelsCount}</div>
+
+            {/* WYNIKI SZYBKIEGO WYSZUKIWANIA */}
+            {searchedMembers.length > 0 && (
+              <div className="bg-white border border-sky-200 rounded-2xl p-2 shadow-lg divide-y divide-sky-100 max-h-56 overflow-y-auto mt-2">
+                {searchedMembers.map((client) => (
+                  <div
+                    key={client.id}
+                    onClick={() => {
+                      setInspectedClient(client);
+                      setAdminSearchQuery('');
+                    }}
+                    className="p-3 hover:bg-sky-50/80 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
+                  >
+                    <div>
+                      <div className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</div>
+                      <div className="text-[10px] text-slate-500">{client.email} • Karnet: {client.karnetyKlubowicza?.[0]?.nazwa || 'Brak'}</div>
+                    </div>
+                    <button className="bg-sky-900 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg uppercase">
+                      Pokaż naliczenie →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* BANER INSPEKCJI PODOPIECZNEGO PRZEZ ADMINA */}
+          {inspectedClient && (
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">👁️</span>
+                <div>
+                  <span className="text-xs font-black text-amber-950 uppercase">
+                    Podgląd profilu klubowicza: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
+                  </span>
+                  <p className="text-[11px] text-amber-900 font-medium">
+                    Karnet: {inspectedClient.karnetyKlubowicza?.[0]?.nazwa || 'Brak'} • Ciągłość: {inspectedClient.cyklCiaglosci || 1} mies.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setInspectedClient(null)}
+                className="bg-white hover:bg-amber-100 border border-amber-300 text-amber-950 font-black px-3.5 py-1.5 rounded-xl text-xs uppercase cursor-pointer"
+              >
+                Zamknij podgląd ✕
+              </button>
+            </div>
+          )}
+
+          {/* CZERWONY BOKS: KLUBOWICZE Z ODBLOKOWANYM POZIOMEM DO SPRAWDZENIA */}
+          <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 rounded-full bg-rose-600 animate-pulse inline-block" />
+                <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">
+                  KLUBOWICZE Z ODBLOKOWANYM POZIOMEM DO WERYFIKACJI ({qualifiedMembersList.length})
+                </h3>
+              </div>
+              <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider">
+                Wymagają Twojego sprawdzenia
+              </span>
+            </div>
+
+            <div className="overflow-x-auto bg-white border border-rose-200 rounded-2xl">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider">
+                    <th className="py-3 px-4">KLUBOWICZ</th>
+                    <th className="py-3 px-4">E-MAIL</th>
+                    <th className="py-3 px-4">KARNET</th>
+                    <th className="py-3 px-4">ODBLOKOWANY POZIOM</th>
+                    <th className="py-3 px-4 text-right">AKCJA</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-rose-100 text-xs font-medium">
+                  {qualifiedMembersList.map((client) => (
+                    <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-rose-600" />
+                        {client.firstName} {client.lastName}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600">{client.email}</td>
+                      <td className="py-3.5 px-4 font-bold text-slate-800">{client.passName}</td>
+                      <td className="py-3.5 px-4">
+                        <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-0.5 rounded-md text-[10px] uppercase border border-amber-300">
+                          {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.topLevel?.unit})
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          onClick={() => setInspectedClient(client)}
+                          className="bg-rose-600 hover:bg-rose-700 text-white font-black px-4 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
+                        >
+                          SPRAWDŹ →
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {qualifiedMembersList.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-400 font-medium text-xs italic">
+                        Brak klubowiczów oczekujących na weryfikację odblokowanych poziomów.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-xl shrink-0">
-              🤝
-            </div>
-            <div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">KLUBOWICZE Z CIĄGŁOŚCIĄ</div>
-              <div className="text-2xl font-black text-slate-900 mt-0.5">{countContinuityMembers}</div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-200 flex items-center justify-center text-xl shrink-0">
-              💰
-            </div>
-            <div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">ŚREDNI CYKL CIĄGŁOŚCI</div>
-              <div className="text-2xl font-black text-slate-900 mt-0.5">{avgContinuity} MIES.</div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-center text-xl shrink-0">
-              🛡️
-            </div>
-            <div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">LICZBA KARNETÓW</div>
-              <div className="text-2xl font-black text-slate-900 mt-0.5">{bonusTables.length}</div>
-            </div>
-          </div>
         </div>
       )}
 
       {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY - Z PRIORYTETEM KARNETU KLUBOWICZA NA 1. MIEJSCU) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const isUserPass = currentUser?.karnetyKlubowicza?.some(
+          const isUserPass = activeViewingUser?.karnetyKlubowicza?.some(
             (k: any) => k.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase()
-          ) || (userActivePass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase());
+          ) || (activeViewingPass?.nazwa?.trim().toLowerCase() === tabela.nazwa?.trim().toLowerCase());
 
-          const progressData = calculateMemberProgress(tabela);
+          const progressData = calculateMemberProgress(tabela, activeViewingUser);
           const userVal = progressData.value;
 
           const maxThreshold = tabela.customTiers && tabela.customTiers.length > 0
@@ -872,7 +1012,7 @@ export default function TwojBonusPage() {
               <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   
-                  {/* TYP KARNETU ORAZ PLAKIETKA TWÓJ KARNET */}
+                  {/* TYP KARNETU ORAZ PLAKIETKA TWÓJ KARNET Z WYKRZYKNIKIEM PO OSIĄGNIĘCIU PROGU */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="bg-amber-400 text-slate-950 font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm">
                       {tabela.typ_karnetu || 'Karnet cykliczny'}
@@ -880,6 +1020,11 @@ export default function TwojBonusPage() {
                     {isUserPass && (
                       <span className="bg-emerald-500 text-white font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm flex items-center gap-1.5 border border-emerald-400/40">
                         <span>⭐</span> TWÓJ AKTUALNY KARNET
+                        {hasMemberUnlockedTier && (
+                          <span className="w-4 h-4 rounded-full bg-rose-600 text-white font-black text-[9px] flex items-center justify-center ml-0.5 animate-pulse">
+                            !
+                          </span>
+                        )}
                       </span>
                     )}
                   </div>
@@ -957,7 +1102,7 @@ export default function TwojBonusPage() {
                     <span>🗺️</span> ROADMAPA CIĄGŁOŚCI
                   </span>
                   <span className="text-[10px] font-bold text-slate-500">
-                    Twój staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
+                    Staż: <strong className="text-slate-900">{userVal} {tabela.customTiers?.[0]?.unit || 'mies.'}</strong>
                   </span>
                 </div>
 
@@ -1040,10 +1185,11 @@ export default function TwojBonusPage() {
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-1 ${
                             isUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
-                            {appRole === 'klubowicz' ? (isUnlocked ? 'ODBLOKOWANY ✓' : 'W TRAKCIE') : 'AKTYWNY'}
+                            {isUnlocked && <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block" />}
+                            {isUnlocked ? 'ODBLOKOWANY ✓' : 'W TRAKCIE'}
                           </span>
 
                           {(appRole === 'admin' || appRole === 'trener') && (
@@ -1193,72 +1339,6 @@ export default function TwojBonusPage() {
           </div>
         )}
       </div>
-
-      {/* 5. REJESTR KLUBOWICZÓW (WIDOCZNY TYLKO DLA ADMINISTRATORA I TRENERA NA SAMYM DOLE) */}
-      {(appRole === 'admin' || appRole === 'trener') && (
-        <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden">
-          <div className="p-5 sm:p-6 border-b border-sky-100">
-            <h3 className="text-sm font-black text-sky-950 uppercase tracking-wider">
-              👥 Rejestr ciągłości i statusów klubowiczów
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5 font-medium">
-              Podgląd stażu oraz osiągniętych progów klubowiczów z bazy danych Supabase.
-            </p>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-sky-50/70 border-b border-sky-200 text-[11px] font-black text-sky-950 uppercase tracking-wider">
-                  <th className="py-4 px-6">Klubowicz</th>
-                  <th className="py-4 px-6">E-mail</th>
-                  <th className="py-4 px-6">Cykl ciągłości</th>
-                  <th className="py-4 px-6">Aktywny karnet</th>
-                  <th className="py-4 px-6 text-center">Status / Poziom</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-sky-100 text-xs font-medium">
-                {allKlienci.map((klient) => {
-                  const karnet = klient.karnetyKlubowicza?.[0];
-                  const cykl = klient.cyklCiaglosci || 1;
-                  const lost = klient.hasLostContinuity;
-                  return (
-                    <tr key={klient.id} className="hover:bg-sky-50/40 transition-colors">
-                      <td className="py-4 px-6 font-bold text-slate-900">
-                        {klient.firstName} {klient.lastName}
-                      </td>
-                      <td className="py-4 px-6 text-slate-500">{klient.email}</td>
-                      <td className="py-4 px-6 font-black text-sky-900">
-                        {lost ? (
-                          <span className="text-rose-600 font-bold">0 mies. (reset)</span>
-                        ) : (
-                          `${cykl} ${cykl === 1 ? 'miesiąc' : cykl < 5 ? 'miesiące' : 'miesięcy'}`
-                        )}
-                      </td>
-                      <td className="py-4 px-6 text-slate-700 font-semibold">
-                        {karnet ? karnet.nazwa : 'Brak'}
-                      </td>
-                      <td className="py-4 px-6 text-center">
-                        {lost ? (
-                          <span className="bg-rose-100 text-rose-800 text-[10px] font-black px-2.5 py-1 rounded-xl uppercase">
-                            BRAK CIĄGŁOŚCI
-                          </span>
-                        ) : (
-                          <span className={`text-[10px] font-black px-3 py-1 rounded-xl uppercase ${
-                            cykl >= 3 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {cykl >= 12 ? 'VIP / DIAMENT' : cykl >= 9 ? 'ZŁOTY' : cykl >= 6 ? 'SREBRNY' : cykl >= 3 ? 'BRĄZOWY' : 'START'}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* MODAL 1: EDYCJA WARUNKU KWALIFIKACJI (ADMIN) */}
       {isEditRuleModalOpen && (
@@ -1531,7 +1611,7 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* Nagroda główna */}
+              {/* Nagroda klubowicza */}
               <div className="bg-amber-50/70 p-3.5 rounded-2xl border border-amber-200 space-y-2">
                 <h4 className="font-black text-amber-950 uppercase text-[10px]">🎁 Nagroda klubowicza</h4>
                 <div className="grid grid-cols-3 gap-2">
@@ -1557,7 +1637,7 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* Bonus dodatkowy */}
+              {/* Dodatkowy bonus */}
               <div className="bg-sky-50/70 p-3.5 rounded-2xl border border-sky-200 space-y-2">
                 <h4 className="font-black text-sky-950 uppercase text-[10px]">👋 Bonus dodatkowy</h4>
                 <div className="grid grid-cols-3 gap-2">
