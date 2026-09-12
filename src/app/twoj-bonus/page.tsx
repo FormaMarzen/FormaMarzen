@@ -81,7 +81,7 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   return false;
 };
 
-// Precyzyjny odczyt liczby rat z obiektu karnetu
+// Precyzyjny odczyt liczby rat z obiektu karnetu (np. "9 / 12" -> 9)
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
 
@@ -554,7 +554,7 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // OBLICZANIE POSTĘPU
+  // OBLICZANIE POSTĘPU Z ZABEZPIECZENIEM ODRABIANIA ZAWIESZEŃ
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
@@ -572,11 +572,20 @@ export default function TwojBonusPage() {
 
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
-    // 1. DLA UMÓW 12M: Liczba rat
+    // 1. DLA UMÓW 12M
     if (isContract) {
       const installmentsCount = getInstallmentsFromPass(userPass);
       const effectiveContinuity = getClientEffectiveContinuity(user);
-      const finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
+      let finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
+
+      // --- STRAŻNIK ZAWIESZEŃ (MIESIĄC ODRABIANIA) ---
+      const passHistZaw = safeJsonParse(userPass.historiaZawieszen || userPass.historiazawieszen, []);
+      const totalSuspendedDays = passHistZaw.reduce((sum: number, hz: any) => sum + (parseInt(hz.dni || hz.planowane_dni || '0', 10) || 0), 0);
+
+      if (installmentsCount <= 12 && finalMonths > 12 && totalSuspendedDays > 0) {
+        finalMonths = 12;
+      }
+
       return { value: finalMonths, isReset: false, reason: '' };
     }
 
@@ -591,6 +600,10 @@ export default function TwojBonusPage() {
     }
 
     // 3. DLA KARNETÓW CZASOWYCH (OPEN / 6M)
+    if (user.hasLostContinuity || user.haslostcontinuity) {
+      return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
+    }
+
     const continuity = getClientEffectiveContinuity(user);
     return { value: continuity, isReset: false, reason: '' };
   };
@@ -612,7 +625,6 @@ export default function TwojBonusPage() {
     const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 
     if (isContract) {
-      // Dla umów data wskazuje ZAWSZE pierwszy dzień miesiąca, w którym przypada dana rata
       const currentRata = Math.max(1, progress.value);
       
       const baseDateStr = userPass.waznyDo || user.umowa_oplacona_do || new Date().toISOString().split('T')[0];
@@ -623,13 +635,11 @@ export default function TwojBonusPage() {
         bMonth = now.getMonth() + 1;
       }
 
-      // bMonth odpowiada obecnej racie. Miesiąc dla progu to cofnięcie o (currentRata - thresh) miesięcy
       const targetMonthIndex = (bMonth - 1) - (currentRata - thresh);
       const targetDate = new Date(bYear, targetMonthIndex, 1);
 
       return formatDate(targetDate);
     } else {
-      // Dla karnetów zwykłych / czasowych
       const userTx: any[] = user.transactions || [];
       const cycleTx = userTx.filter((t: any) => {
         const desc = String(t.opis || '').toLowerCase();
@@ -925,7 +935,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: W PEŁNI RESPONSYWNA, BEZ BOCZNEGO PRZEWIJANIA */}
+          {/* TABELA KLUBOWICZÓW: PEŁNA WIDOCZNOŚĆ POZIOMU NA KAŻDYM EKRANIE */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -940,7 +950,7 @@ export default function TwojBonusPage() {
                 </span>
               </div>
 
-              {/* A. WIDOK NA TELEFONY: KARTY 100% SZEROKOŚCI EKRANU (BRAK PRZEWIJANIA W BOK) */}
+              {/* WIDOK DLA SMARTFONÓW */}
               <div className="block sm:hidden space-y-2.5">
                 {qualifiedMembersList.map((client) => (
                   <div key={client.id} className="bg-white border border-rose-200 rounded-2xl p-3.5 shadow-xs space-y-2.5">
@@ -975,7 +985,7 @@ export default function TwojBonusPage() {
                 ))}
               </div>
 
-              {/* B. WIDOK NA TABLETY I KOMPUTERY: ELEGANCKA TABELA MIEJSZCZĄCA SIĘ W OKNIE */}
+              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
                   <table className="w-full text-left border-collapse table-fixed">
@@ -1188,7 +1198,7 @@ export default function TwojBonusPage() {
                           >
                             {isReached ? '✓' : tier.threshold}
                           </div>
-                          {/* Usunięto podpis tier.levelName pod kółkiem dla lepszej czytelności */}
+                          {/* Usunięto podpis z osi dla czystego UX */}
                         </div>
                       );
                     })}
