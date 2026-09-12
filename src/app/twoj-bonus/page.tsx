@@ -115,6 +115,23 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 0;
 };
 
+// Wyliczanie rzeczywistej ciągłości ogólnej (uwzględniając raty umów)
+const getClientEffectiveContinuity = (client: any): number => {
+  if (!client) return 1;
+  const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
+  let maxInstallments = 0;
+
+  passes.forEach((p: any) => {
+    if (isContractPassCheck(p)) {
+      const inst = getInstallmentsFromPass(p);
+      if (inst > maxInstallments) maxInstallments = inst;
+    }
+  });
+
+  const rawContinuity = parseInt(String(client.cyklCiaglosci || client.cyklciaglosci || '1'), 10) || 1;
+  return Math.max(rawContinuity, maxInstallments, 1);
+};
+
 export default function TwojBonusPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -189,7 +206,7 @@ export default function TwojBonusPage() {
 
   // Szablony progów
   const defaultTiersUmowa = [
-    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
+    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesięcy', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
     { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
     { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy po przedłużeniu umowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
     { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1 z wybranym trenerem', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
@@ -201,7 +218,7 @@ export default function TwojBonusPage() {
     { id: 203, levelName: 'ZŁOTY', threshold: 6, unit: 'cykli', accent: 'yellow', rewardTitle: '15% zniżki na kolejny karnet OPEN.', rewardBadge: '-15%', secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis.', secondaryBadge: 'GRATIS', active: true }
   ];
 
-  // Pobieranie danych z Supabase w Promise.all
+  // Pobieranie danych z Supabase
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -281,6 +298,13 @@ export default function TwojBonusPage() {
         const mapped = klienciData.map((c: any) => {
           const rawKarnety = c.karnetyKlubowicza || c.KarnetyKlubowicza || c.karnetyklubowicza;
           const parsedKarnety = safeJsonParse(rawKarnety, []);
+          const effectiveCont = getClientEffectiveContinuity({ ...c, karnetyKlubowicza: parsedKarnety });
+          const rawCont = parseInt(String(c.cyklCiaglosci || c.cyklciaglosci || '1'), 10) || 1;
+
+          // Cicha synchronizacja z bazą jeśli w profilu zapisana była mniejsza ciągłość niż wynikająca z rat
+          if (effectiveCont > rawCont) {
+            supabase.from('klienci').update({ cyklCiaglosci: effectiveCont }).eq('id', c.id).then();
+          }
 
           return {
             ...c,
@@ -288,7 +312,7 @@ export default function TwojBonusPage() {
             lastName: c.Nazwisko || c.lastName || '',
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
-            cyklCiaglosci: Number(c.cyklCiaglosci || c.cyklciaglosci) || 1
+            cyklCiaglosci: effectiveCont
           };
         });
         setAllKlienci(mapped);
@@ -510,7 +534,7 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // OBLICZANIE POSTĘPU Z POLA RATA (UMOWA) LUB CYKLU CIĄGŁOŚCI (OPEN)
+  // OBLICZANIE POSTĘPU
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
@@ -518,23 +542,21 @@ export default function TwojBonusPage() {
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
     const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
 
-    // Jeśli ten karnet nie należy do sprawdzanej tabeli -> 0
     if (!userPass) {
       return { value: 0, isReset: false, reason: '' };
     }
 
-    // Reset ręczny przy zmianie karnetu
     if (userPass.isPassChangedReset || userPass.changedPassReset) {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
     }
 
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
-    // 1. DLA UMÓW 12M: Liczba rat z pola rata (np. "9 / 12" -> 9). Po 12 miesiącach kontynuacja jako 13, 14, 15...
+    // 1. DLA UMÓW 12M: Liczba rat z pola rata (np. "9 / 12" -> 9)
     if (isContract) {
       const installmentsCount = getInstallmentsFromPass(userPass);
-      const continuityCount = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
-      const finalMonths = Math.max(installmentsCount, continuityCount, 1);
+      const effectiveContinuity = getClientEffectiveContinuity(user);
+      const finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
       return { value: finalMonths, isReset: false, reason: '' };
     }
 
@@ -549,8 +571,7 @@ export default function TwojBonusPage() {
     }
 
     // 3. DLA KARNETÓW CZASOWYCH (OPEN / 6M)
-    // Pobieramy staż ciągłości przypisany do profilu (np. 2 miesiące dla Magdaleny)
-    const continuity = parseInt(String(user.cyklCiaglosci || user.cyklciaglosci || '1'), 10) || 1;
+    const continuity = getClientEffectiveContinuity(user);
     return { value: continuity, isReset: false, reason: '' };
   };
 
@@ -585,11 +606,15 @@ export default function TwojBonusPage() {
     const verificationKey = `${client.id}_${topLevel?.id}`;
     const isAlreadyVerified = verifiedMemberTiers.includes(verificationKey);
 
+    const isContract = isContractPassCheck(pass);
+    const displayUnit = isContract ? 'MIESIĘCY' : (topLevel?.unit?.toUpperCase() || 'CYKLI');
+
     return {
       ...client,
       passName: pass?.nazwa || 'Brak',
       unlockedLevels: unlocked,
       topLevel,
+      displayUnit,
       verificationKey,
       isAlreadyVerified
     };
@@ -632,11 +657,12 @@ export default function TwojBonusPage() {
   const activeViewingUser = inspectedClient || currentUser;
   const activeViewingPasses = safeJsonParse(activeViewingUser?.karnetyKlubowicza || activeViewingUser?.KarnetyKlubowicza || activeViewingUser?.karnetyklubowicza, []);
   const activeViewingPass = activeViewingPasses[0];
+  const activeViewingUserContinuity = getClientEffectiveContinuity(activeViewingUser);
 
   const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
-  const countContinuityMembers = allKlienci.filter((k: any) => (Number(k.cyklCiaglosci || k.cyklciaglosci) || 1) >= 2).length;
+  const countContinuityMembers = allKlienci.filter((k: any) => getClientEffectiveContinuity(k) >= 2).length;
   const avgContinuity = allKlienci.length > 0 
-    ? (allKlienci.reduce((acc, curr) => acc + (Number(curr.cyklCiaglosci || curr.cyklciaglosci) || 1), 0) / allKlienci.length).toFixed(1)
+    ? (allKlienci.reduce((acc, curr) => acc + getClientEffectiveContinuity(curr), 0) / allKlienci.length).toFixed(1)
     : '1.0';
 
   const getAccentBorder = (accent: string) => {
@@ -731,7 +757,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ LISTA WERYFIKACJI */}
+      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA BEZ PRZEWIJANIA */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-4">
           <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2.5">
@@ -792,7 +818,7 @@ export default function TwojBonusPage() {
                     Podgląd profilu: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
                   </span>
                   <p className="text-[11px] text-amber-900 font-medium">
-                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość ogólna: {inspectedClient.cyklCiaglosci || inspectedClient.cyklciaglosci || 1} mies.
+                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość ogólna: {activeViewingUserContinuity} mies.
                   </p>
                 </div>
               </div>
@@ -805,13 +831,13 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: UKRYTA GDY PUSTO */}
+          {/* TABELA KLUBOWICZÓW: W PEŁNI RESPONSYWNA, BEZ BOCZNEGO PRZEWIJANIA */}
           {qualifiedMembersList.length > 0 && (
-            <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
+            <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <span className="w-3.5 h-3.5 rounded-full bg-rose-600 animate-pulse inline-block" />
-                  <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">
+                  <h3 className="text-xs sm:text-sm font-black text-rose-950 uppercase tracking-wider">
                     KLUBOWICZE Z ODBLOKOWANYM POZIOMEM DO WERYFIKACJI ({qualifiedMembersList.length})
                   </h3>
                 </div>
@@ -820,52 +846,93 @@ export default function TwojBonusPage() {
                 </span>
               </div>
 
-              <div className="overflow-x-auto bg-white border border-rose-200 rounded-2xl">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider">
-                      <th className="py-3 px-4">KLUBOWICZ</th>
-                      <th className="py-3 px-4">E-MAIL</th>
-                      <th className="py-3 px-4">KARNET</th>
-                      <th className="py-3 px-4">ODBLOKOWANY POZIOM</th>
-                      <th className="py-3 px-4 text-right">AKCJA</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-rose-100 text-xs font-medium">
-                    {qualifiedMembersList.map((client) => (
-                      <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
-                        <td className="py-3.5 px-4 font-bold text-slate-900 flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-rose-600" />
-                          {client.firstName} {client.lastName}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-600">{client.email}</td>
-                        <td className="py-3.5 px-4 font-bold text-slate-800">{client.passName}</td>
-                        <td className="py-3.5 px-4">
-                          <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-0.5 rounded-md text-[10px] uppercase border border-amber-300">
-                            {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.topLevel?.unit})
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => setInspectedClient(client)}
-                              className="bg-rose-600 hover:bg-rose-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-                            >
-                              SPRAWDŹ →
-                            </button>
-                            <button
-                              onClick={() => handleMarkTierAsVerified(client.verificationKey)}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm cursor-pointer"
-                              title="Zatwierdź nagrodę i zdejmij z listy"
-                            >
-                              ✓ ZALICZ
-                            </button>
-                          </div>
-                        </td>
+              {/* A. WIDOK NA TELEFONY: KARTY 100% SZEROKOŚCI EKRANU (BRAK PRZEWIJANIA W BOK) */}
+              <div className="block sm:hidden space-y-2.5">
+                {qualifiedMembersList.map((client) => (
+                  <div key={client.id} className="bg-white border border-rose-200 rounded-2xl p-3.5 shadow-xs space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-black text-slate-900 text-xs flex items-center gap-1.5 truncate">
+                          <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
+                          <span className="truncate">{client.firstName} {client.lastName}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate mt-0.5">{client.email}</div>
+                        <div className="text-[10px] font-bold text-slate-700 truncate mt-0.5">{client.passName}</div>
+                      </div>
+                      <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-md text-[9px] uppercase border border-amber-300 shrink-0 whitespace-nowrap">
+                        {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.displayUnit})
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-rose-100">
+                      <button
+                        onClick={() => setInspectedClient(client)}
+                        className="bg-rose-600 hover:bg-rose-700 text-white font-black py-2 rounded-xl text-[10px] uppercase tracking-wider transition-colors shadow-xs text-center cursor-pointer"
+                      >
+                        SPRAWDŹ →
+                      </button>
+                      <button
+                        onClick={() => handleMarkTierAsVerified(client.verificationKey)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2 rounded-xl text-[10px] uppercase tracking-wider transition-colors shadow-xs text-center cursor-pointer"
+                      >
+                        ✓ ZALICZ
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* B. WIDOK NA TABLETY I KOMPUTERY: ELEGANCKA TABELA MIEJSZCZĄCA SIĘ W OKNIE */}
+              <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="w-full text-left border-collapse table-fixed">
+                    <thead>
+                      <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-10">
+                        <th className="py-3 px-4 w-[25%]">KLUBOWICZ</th>
+                        <th className="py-3 px-4 w-[25%]">E-MAIL</th>
+                        <th className="py-3 px-4 w-[25%]">KARNET</th>
+                        <th className="py-3 px-4 w-[15%]">ODBLOKOWANY POZIOM</th>
+                        <th className="py-3 px-4 text-right w-[10%]">AKCJA</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-rose-100 text-xs font-medium">
+                      {qualifiedMembersList.map((client) => (
+                        <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
+                          <td className="py-3 px-4 font-bold text-slate-900 truncate">
+                            <div className="flex items-center gap-2 truncate">
+                              <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
+                              <span className="truncate">{client.firstName} {client.lastName}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-slate-600 truncate">{client.email}</td>
+                          <td className="py-3 px-4 font-bold text-slate-800 truncate">{client.passName}</td>
+                          <td className="py-3 px-4">
+                            <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap">
+                              {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.displayUnit})
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => setInspectedClient(client)}
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                              >
+                                SPRAWDŹ
+                              </button>
+                              <button
+                                onClick={() => handleMarkTierAsVerified(client.verificationKey)}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                title="Zatwierdź nagrodę i zdejmij z listy"
+                              >
+                                ✓ ZALICZ
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
