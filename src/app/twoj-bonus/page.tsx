@@ -49,7 +49,7 @@ const isContractPassCheck = (item: any): boolean => {
   return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
 };
 
-// Ścisłe, bezbłędne parowanie karnetu klubowicza z tabelą bonusową
+// Ścisłe parowanie karnetu klubowicza z tabelą bonusową
 const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   if (!pass || !tabela) return false;
 
@@ -763,7 +763,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA BEZ ADRESU E-MAIL */}
+      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA (BEZ UCINANIA TEKSTU) */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-4">
           <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2.5">
@@ -837,7 +837,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: BEZ KOLUMNY E-MAIL, IDEALNIE MIESZCZĄCA SIĘ NA EKRANIE */}
+          {/* TABELA KLUBOWICZÓW: PEŁNA WIDOCZNOŚĆ POZIOMU NA KAŻDYM EKRANIE */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -852,7 +852,7 @@ export default function TwojBonusPage() {
                 </span>
               </div>
 
-              {/* A. WIDOK NA TELEFONY: KARTY BEZ E-MAILA */}
+              {/* WIDOK DLA SMARTFONÓW */}
               <div className="block sm:hidden space-y-2.5">
                 {qualifiedMembersList.map((client) => (
                   <div key={client.id} className="bg-white border border-rose-200 rounded-2xl p-3.5 shadow-xs space-y-2.5">
@@ -887,44 +887,44 @@ export default function TwojBonusPage() {
                 ))}
               </div>
 
-              {/* B. WIDOK NA KOMPUTERY I TABLETY: TABELA BEZ KOLUMNY E-MAIL */}
+              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW (DYNAMICZNY ROZMIAR KOLUMN - BRAK UCINANIA) */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
-                  <table className="w-full text-left border-collapse table-fixed">
+                  <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-10">
-                        <th className="py-3 px-4 w-[35%]">KLUBOWICZ</th>
-                        <th className="py-3 px-4 w-[35%]">KARNET</th>
-                        <th className="py-3 px-4 w-[18%]">ODBLOKOWANY POZIOM</th>
-                        <th className="py-3 px-4 text-right w-[12%]">AKCJA</th>
+                        <th className="py-3 px-4">KLUBOWICZ</th>
+                        <th className="py-3 px-4">KARNET</th>
+                        <th className="py-3 px-4 whitespace-nowrap">ODBLOKOWANY POZIOM</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap">AKCJA</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-rose-100 text-xs font-medium">
                       {qualifiedMembersList.map((client) => (
                         <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
-                          <td className="py-3 px-4 font-bold text-slate-900 truncate">
-                            <div className="flex items-center gap-2 truncate">
+                          <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
                               <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
-                              <span className="truncate">{client.firstName} {client.lastName}</span>
+                              <span>{client.firstName} {client.lastName}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 font-bold text-slate-800 truncate">{client.passName}</td>
-                          <td className="py-3 px-4">
-                            <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap">
+                          <td className="py-3 px-4 font-bold text-slate-800">{client.passName}</td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-1 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap shadow-2xs">
                               {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.displayUnit})
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
                               <button
                                 onClick={() => setInspectedClient(client)}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                               >
-                                SPRAWDŹ
+                                SPRAWDŹ →
                               </button>
                               <button
                                 onClick={() => handleMarkTierAsVerified(client.verificationKey, `${client.firstName} ${client.lastName}`, client.topLevel?.levelName)}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                                 title="Zatwierdź nagrodę i zdejmij z listy"
                               >
                                 ✓ ZALICZ
