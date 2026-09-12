@@ -49,7 +49,7 @@ const isContractPassCheck = (item: any): boolean => {
   return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
 };
 
-// Ścisłe parowanie karnetu klubowicza z tabelą bonusową
+// Ścisłe, bezbłędne parowanie karnetu klubowicza z tabelą bonusową
 const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   if (!pass || !tabela) return false;
 
@@ -115,7 +115,7 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 0;
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej (uwzględniając raty umów)
+// Wyliczanie rzeczywistej ciągłości ogólnej
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
@@ -229,12 +229,14 @@ export default function TwojBonusPage() {
         trenerzyResponse,
         rulesResponse,
         katalogResponse,
-        klienciResponse
+        klienciResponse,
+        transakcjeResponse
       ] = await Promise.all([
         supabase.from('trenerzy').select('*'),
         supabase.from('club_booking_rules').select('*').limit(1).maybeSingle(),
         supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).order('id', { ascending: true }),
-        supabase.from('klienci').select('*').order('id', { ascending: false }).range(0, 4999)
+        supabase.from('klienci').select('*').order('id', { ascending: false }).range(0, 4999),
+        supabase.from('transakcje').select('id, klient_id, typ_operacji, opis, created_at').order('id', { ascending: false }).range(0, 4999)
       ]);
 
       const trenerzyData = trenerzyResponse.data;
@@ -293,6 +295,13 @@ export default function TwojBonusPage() {
         ]);
       }
 
+      const transakcjeData = transakcjeResponse.data || [];
+      const txMap = new Map<number, any[]>();
+      transakcjeData.forEach((tx: any) => {
+        if (!txMap.has(tx.klient_id)) txMap.set(tx.klient_id, []);
+        txMap.get(tx.klient_id)?.push(tx);
+      });
+
       const klienciData = klienciResponse.data;
       if (klienciData) {
         const mapped = klienciData.map((c: any) => {
@@ -311,7 +320,8 @@ export default function TwojBonusPage() {
             lastName: c.Nazwisko || c.lastName || '',
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
-            cyklCiaglosci: effectiveCont
+            cyklCiaglosci: effectiveCont,
+            transactions: txMap.get(c.id) || []
           };
         });
         setAllKlienci(mapped);
@@ -574,6 +584,63 @@ export default function TwojBonusPage() {
     return { value: continuity, isReset: false, reason: '' };
   };
 
+  // Wyliczanie daty odblokowania danego progu
+  const getTierUnlockDate = (tier: any, tabela: any, user: any): string | null => {
+    if (!user) return null;
+    const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
+    const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
+    if (!userPass) return null;
+
+    const progress = calculateMemberProgress(tabela, user);
+    const thresh = Number(tier.threshold);
+    if (progress.value < thresh) return null;
+
+    // 1. Sprawdzenie czy w transakcjach jest zapis raty odpowiadającej progowi
+    const userTx: any[] = user.transactions || [];
+    const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
+
+    if (isContract) {
+      const matchingTx = userTx.find((t: any) => {
+        const desc = String(t.opis || '').toLowerCase();
+        return (desc.includes(`rata ${thresh}`) || desc.includes(`rata: ${thresh}`) || desc.includes(`${thresh} / 12`)) && !desc.includes('usunięcie');
+      });
+      if (matchingTx?.created_at) {
+        return new Date(matchingTx.created_at).toLocaleDateString('pl-PL');
+      }
+
+      // Wyliczenie osi czasu umowy: od waznyDo odejmujemy różnicę miesięcy
+      let baseDate = userPass.waznyDo ? new Date(userPass.waznyDo) : new Date();
+      if (isNaN(baseDate.getTime())) baseDate = new Date();
+      const monthsDiff = Math.max(0, progress.value - thresh);
+      const targetDate = new Date(baseDate.getFullYear(), baseDate.getMonth() - monthsDiff, Math.min(baseDate.getDate(), 28));
+      return targetDate.toLocaleDateString('pl-PL');
+    } else {
+      // Dla karnetów cyklicznych (OPEN / 6M)
+      const cycleTx = userTx.filter((t: any) => {
+        const desc = String(t.opis || '').toLowerCase();
+        const typ = String(t.typ_operacji || '').toLowerCase();
+        return (typ.includes('karnet') || desc.includes('karnet') || desc.includes('przedłużenie')) && !desc.includes('usunięcie');
+      });
+
+      if (cycleTx.length >= thresh) {
+        cycleTx.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        const targetTx = cycleTx[thresh - 1];
+        if (targetTx?.created_at) return new Date(targetTx.created_at).toLocaleDateString('pl-PL');
+      }
+
+      const regDateStr = user.registered || user.Zarejestrowany || user.activated;
+      if (regDateStr) {
+        const d = new Date(regDateStr);
+        if (!isNaN(d.getTime())) {
+          d.setMonth(d.getMonth() + Math.max(0, thresh - 1));
+          return d.toLocaleDateString('pl-PL');
+        }
+      }
+    }
+
+    return new Date().toLocaleDateString('pl-PL');
+  };
+
   // Płynne skalowanie paska postępu na osi roadmapy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
@@ -763,7 +830,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA (BEZ UCINANIA TEKSTU) */}
+      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-4">
           <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2.5">
@@ -1122,6 +1189,7 @@ export default function TwojBonusPage() {
                 {tabela.customTiers?.map((tier: any) => {
                   const isUnlocked = isProgramActive && isUserPass && !progressData.isReset && userVal >= Number(tier.threshold);
                   const isHighlighted = highlightedTierId === tier.id;
+                  const unlockDate = isUnlocked ? getTierUnlockDate(tier, tabela, activeViewingUser) : null;
 
                   return (
                     <div
@@ -1141,11 +1209,22 @@ export default function TwojBonusPage() {
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-1 ${
+                          <span className={`text-[9px] font-black px-2.5 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-1 ${
                             isUnlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
                             {isUnlocked && <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block" />}
-                            {isUnlocked ? 'ODBLOKOWANY ✓' : 'W TRAKCIE'}
+                            {isUnlocked ? (
+                              <span className="flex items-center gap-1">
+                                <span>ODBLOKOWANY ✓</span>
+                                {unlockDate && (
+                                  <span className="text-[8px] font-mono opacity-85 font-semibold lowercase">
+                                    ({unlockDate})
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              'W TRAKCIE'
+                            )}
                           </span>
 
                           {(appRole === 'admin' || appRole === 'trener') && (
