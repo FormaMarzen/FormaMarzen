@@ -81,7 +81,7 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   return false;
 };
 
-// Precyzyjny odczyt liczby rat z obiektu karnetu (np. "9 / 12" -> 9, "10 / 12" -> 10)
+// Precyzyjny odczyt liczby rat z obiektu karnetu
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
 
@@ -619,7 +619,14 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  const handleMarkTierAsVerified = (verificationKey: string) => {
+  // Zatwierdzenie poziomu przez administratora z oknem potwierdzenia
+  const handleMarkTierAsVerified = (verificationKey: string, clientName?: string, tierName?: string) => {
+    const confirmMessage = clientName && tierName
+      ? `Czy na pewno chcesz zatwierdzić osiągnięcie poziomu "${tierName}" dla klubowicza ${clientName}?\n\nPo zatwierdzeniu klubowicz zostanie usunięty z listy oczekujących na weryfikację.`
+      : `Czy na pewno chcesz zatwierdzić ten poziom i zdjąć klubowicza z listy oczekujących?`;
+
+    if (!confirm(confirmMessage)) return;
+
     setVerifiedMemberTiers(prev => [...prev, verificationKey]);
   };
 
@@ -870,7 +877,7 @@ export default function TwojBonusPage() {
                         SPRAWDŹ →
                       </button>
                       <button
-                        onClick={() => handleMarkTierAsVerified(client.verificationKey)}
+                        onClick={() => handleMarkTierAsVerified(client.verificationKey, `${client.firstName} ${client.lastName}`, client.topLevel?.levelName)}
                         className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2 rounded-xl text-[10px] uppercase tracking-wider transition-colors shadow-xs text-center cursor-pointer"
                       >
                         ✓ ZALICZ
@@ -916,7 +923,7 @@ export default function TwojBonusPage() {
                                 SPRAWDŹ
                               </button>
                               <button
-                                onClick={() => handleMarkTierAsVerified(client.verificationKey)}
+                                onClick={() => handleMarkTierAsVerified(client.verificationKey, `${client.firstName} ${client.lastName}`, client.topLevel?.levelName)}
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                                 title="Zatwierdź nagrodę i zdejmij z listy"
                               >
