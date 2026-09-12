@@ -301,7 +301,6 @@ export default function TwojBonusPage() {
           const effectiveCont = getClientEffectiveContinuity({ ...c, karnetyKlubowicza: parsedKarnety });
           const rawCont = parseInt(String(c.cyklCiaglosci || c.cyklciaglosci || '1'), 10) || 1;
 
-          // Cicha synchronizacja z bazą jeśli w profilu zapisana była mniejsza ciągłość niż wynikająca z rat
           if (effectiveCont > rawCont) {
             supabase.from('klienci').update({ cyklCiaglosci: effectiveCont }).eq('id', c.id).then();
           }
@@ -757,7 +756,7 @@ export default function TwojBonusPage() {
         </div>
       )}
 
-      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA BEZ PRZEWIJANIA */}
+      {/* 2. SEKCJA ADMINISTRATORA: WYSZUKIWARKA ORAZ WERYFIKACJA BEZ ADRESU E-MAIL */}
       {(appRole === 'admin' || appRole === 'trener') && (
         <div className="space-y-4">
           <div className="bg-white border border-sky-200 rounded-3xl p-5 shadow-sm space-y-2.5">
@@ -831,7 +830,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: W PEŁNI RESPONSYWNA, BEZ BOCZNEGO PRZEWIJANIA */}
+          {/* TABELA KLUBOWICZÓW: BEZ KOLUMNY E-MAIL, IDEALNIE MIESZCZĄCA SIĘ NA EKRANIE */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -846,7 +845,7 @@ export default function TwojBonusPage() {
                 </span>
               </div>
 
-              {/* A. WIDOK NA TELEFONY: KARTY 100% SZEROKOŚCI EKRANU (BRAK PRZEWIJANIA W BOK) */}
+              {/* A. WIDOK NA TELEFONY: KARTY BEZ E-MAILA */}
               <div className="block sm:hidden space-y-2.5">
                 {qualifiedMembersList.map((client) => (
                   <div key={client.id} className="bg-white border border-rose-200 rounded-2xl p-3.5 shadow-xs space-y-2.5">
@@ -856,7 +855,6 @@ export default function TwojBonusPage() {
                           <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
                           <span className="truncate">{client.firstName} {client.lastName}</span>
                         </div>
-                        <div className="text-[10px] text-slate-500 truncate mt-0.5">{client.email}</div>
                         <div className="text-[10px] font-bold text-slate-700 truncate mt-0.5">{client.passName}</div>
                       </div>
                       <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-md text-[9px] uppercase border border-amber-300 shrink-0 whitespace-nowrap">
@@ -882,17 +880,16 @@ export default function TwojBonusPage() {
                 ))}
               </div>
 
-              {/* B. WIDOK NA TABLETY I KOMPUTERY: ELEGANCKA TABELA MIEJSZCZĄCA SIĘ W OKNIE */}
+              {/* B. WIDOK NA KOMPUTERY I TABLETY: TABELA BEZ KOLUMNY E-MAIL */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
                   <table className="w-full text-left border-collapse table-fixed">
                     <thead>
                       <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-10">
-                        <th className="py-3 px-4 w-[25%]">KLUBOWICZ</th>
-                        <th className="py-3 px-4 w-[25%]">E-MAIL</th>
-                        <th className="py-3 px-4 w-[25%]">KARNET</th>
-                        <th className="py-3 px-4 w-[15%]">ODBLOKOWANY POZIOM</th>
-                        <th className="py-3 px-4 text-right w-[10%]">AKCJA</th>
+                        <th className="py-3 px-4 w-[35%]">KLUBOWICZ</th>
+                        <th className="py-3 px-4 w-[35%]">KARNET</th>
+                        <th className="py-3 px-4 w-[18%]">ODBLOKOWANY POZIOM</th>
+                        <th className="py-3 px-4 text-right w-[12%]">AKCJA</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-rose-100 text-xs font-medium">
@@ -904,7 +901,6 @@ export default function TwojBonusPage() {
                               <span className="truncate">{client.firstName} {client.lastName}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 text-slate-600 truncate">{client.email}</td>
                           <td className="py-3 px-4 font-bold text-slate-800 truncate">{client.passName}</td>
                           <td className="py-3 px-4">
                             <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap">
