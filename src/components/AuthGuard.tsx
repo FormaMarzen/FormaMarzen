@@ -24,25 +24,22 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [pendingRegulations, setPendingRegulations] = useState<Regulation[]>([]);
   const [isAccepting, setIsAccepting] = useState(false);
 
-  // Sprawdzanie ścieżek publicznych bez odwoływania się do obiektu window (zapobiega błędom hydratacji)
-  const checkIsPublic = (currentPath: string) => {
-    const lowerPath = (currentPath || '').toLowerCase();
+  // Sprawdzanie ścieżek publicznych bez odwoływania się do obiektu window
+  const isPublicPath = (() => {
+    const lowerPath = pathname.toLowerCase();
     return (
       lowerPath === '/login' || 
       lowerPath.startsWith('/rejestracja') || 
       lowerPath === '/grafik-publiczny' || 
       lowerPath.startsWith('/grafik-publiczny')
     );
-  };
+  })();
 
-  const isPublicPath = checkIsPublic(pathname);
-
-  // Wszystkie Hooki MUSZĄ być wywołane przed jakimkolwiek instrukcją 'return' zwracającą komponent
   useEffect(() => {
     let isMounted = true;
 
     const checkAuthAndRegulations = async () => {
-      // Jeśli ścieżka jest publiczna, zwalniamy blokadę isChecking, ale nie przerywamy cyklu Hooka
+      // Dla ścieżek publicznych od razu zwalniamy blokadę
       if (isPublicPath) {
         if (isMounted) {
           setIsChecking(false);
@@ -56,7 +53,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       if (!session) {
         if (isMounted) {
           setIsChecking(false);
-          router.push('/login');
+          router.replace('/login'); // Używamy replace, aby użytkownik nie mógł cofnąć się wstecz do chronionej strony
         }
         return;
       } 
@@ -67,14 +64,17 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       }
       
       let isAdmin = false;
-      if (session.user.email?.toLowerCase() === 'maciejklaput@gmail.com') {
+      const email = session.user.email?.toLowerCase();
+      
+      if (email === 'maciejklaput@gmail.com') {
         isAdmin = true;
       } else {
         const { data: clientData } = await supabase
           .from('klienci')
           .select('rola, role')
-          .ilike('E-mail', (session.user.email || '').trim())
+          .ilike('E-mail', (email || '').trim())
           .maybeSingle();
+          
         const role = clientData?.rola || clientData?.role || session.user.user_metadata?.role;
         isAdmin = (role === 'admin' || role === 'administrator');
       }
@@ -115,9 +115,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     
     checkAuthAndRegulations();
 
+    // Nasłuchiwanie zmian sesji (np. wylogowanie w innej zakładce)
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session && !checkIsPublic(pathname)) {
-        router.push('/login');
+      if (!session && !isPublicPath) {
+        router.replace('/login');
       }
     });
 
@@ -149,7 +150,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     setIsAccepting(false);
   };
 
-  // Dopiero tutaj, po wszystkich Hookach, możemy warunkowo zwracać widoki
+  // Warunkowe renderowanie
   if (isPublicPath) {
     return <>{children}</>;
   }
@@ -160,6 +161,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         Weryfikacja dostępu...
       </div>
     );
+  }
+
+  // Jeśli użytkownik nie ma sesji, a nie jest to publiczna ścieżka (zabezpieczenie na wypadek mignięcia renderu)
+  if (!isAuthorized) {
+    return null; 
   }
 
   if (pendingRegulations.length > 0) {
