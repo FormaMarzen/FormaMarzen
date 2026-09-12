@@ -49,7 +49,7 @@ const isContractPassCheck = (item: any): boolean => {
   return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
 };
 
-// Ścisłe, bezbłędne parowanie karnetu klubowicza z tabelą bonusową
+// Ścisłe parowanie karnetu klubowicza z tabelą bonusową
 const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   if (!pass || !tabela) return false;
 
@@ -115,7 +115,7 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 0;
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej
+// Wyliczanie rzeczywistej ciągłości ogólnej (uwzględniając raty umów)
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
@@ -130,6 +130,17 @@ const getClientEffectiveContinuity = (client: any): number => {
 
   const rawContinuity = parseInt(String(client.cyklCiaglosci || client.cyklciaglosci || '1'), 10) || 1;
   return Math.max(rawContinuity, maxInstallments, 1);
+};
+
+// Odmiana jednostki dla umów lub zwykłych karnetów
+const getTierUnitLabel = (tier: any, tabela: any) => {
+  if (isContractPassCheck(tabela)) {
+    const val = Number(tier.threshold) || 1;
+    if (val === 1) return 'miesiąc';
+    if (val >= 2 && val <= 4) return 'miesiące';
+    return 'miesięcy';
+  }
+  return tier.unit || 'cykli';
 };
 
 export default function TwojBonusPage() {
@@ -206,7 +217,7 @@ export default function TwojBonusPage() {
 
   // Szablony progów
   const defaultTiersUmowa = [
-    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesięcy', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
+    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
     { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
     { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy po przedłużeniu umowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
     { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1 z wybranym trenerem', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
@@ -584,7 +595,7 @@ export default function TwojBonusPage() {
     return { value: continuity, isReset: false, reason: '' };
   };
 
-  // Wyliczanie daty odblokowania danego progu
+  // Precyzyjne wyliczanie daty odblokowania (zawsze 01.MM.YYYY dla umów)
   const getTierUnlockDate = (tier: any, tabela: any, user: any): string | null => {
     if (!user) return null;
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
@@ -595,27 +606,31 @@ export default function TwojBonusPage() {
     const thresh = Number(tier.threshold);
     if (progress.value < thresh) return null;
 
-    // 1. Sprawdzenie czy w transakcjach jest zapis raty odpowiadającej progowi
-    const userTx: any[] = user.transactions || [];
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+
     if (isContract) {
-      const matchingTx = userTx.find((t: any) => {
-        const desc = String(t.opis || '').toLowerCase();
-        return (desc.includes(`rata ${thresh}`) || desc.includes(`rata: ${thresh}`) || desc.includes(`${thresh} / 12`)) && !desc.includes('usunięcie');
-      });
-      if (matchingTx?.created_at) {
-        return new Date(matchingTx.created_at).toLocaleDateString('pl-PL');
+      // Dla umów data wskazuje ZAWSZE pierwszy dzień miesiąca, w którym przypada dana rata
+      const currentRata = Math.max(1, progress.value);
+      
+      const baseDateStr = userPass.waznyDo || user.umowa_oplacona_do || new Date().toISOString().split('T')[0];
+      let [bYear, bMonth] = baseDateStr.split('-').map(Number);
+      if (!bYear || !bMonth) {
+        const now = new Date();
+        bYear = now.getFullYear();
+        bMonth = now.getMonth() + 1;
       }
 
-      // Wyliczenie osi czasu umowy: od waznyDo odejmujemy różnicę miesięcy
-      let baseDate = userPass.waznyDo ? new Date(userPass.waznyDo) : new Date();
-      if (isNaN(baseDate.getTime())) baseDate = new Date();
-      const monthsDiff = Math.max(0, progress.value - thresh);
-      const targetDate = new Date(baseDate.getFullYear(), baseDate.getMonth() - monthsDiff, Math.min(baseDate.getDate(), 28));
-      return targetDate.toLocaleDateString('pl-PL');
+      // bMonth odpowiada obecnej racie. Miesiąc dla progu to cofnięcie o (currentRata - thresh) miesięcy
+      const targetMonthIndex = (bMonth - 1) - (currentRata - thresh);
+      const targetDate = new Date(bYear, targetMonthIndex, 1);
+
+      return formatDate(targetDate);
     } else {
-      // Dla karnetów cyklicznych (OPEN / 6M)
+      // Dla karnetów zwykłych / czasowych
+      const userTx: any[] = user.transactions || [];
       const cycleTx = userTx.filter((t: any) => {
         const desc = String(t.opis || '').toLowerCase();
         const typ = String(t.typ_operacji || '').toLowerCase();
@@ -625,7 +640,10 @@ export default function TwojBonusPage() {
       if (cycleTx.length >= thresh) {
         cycleTx.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         const targetTx = cycleTx[thresh - 1];
-        if (targetTx?.created_at) return new Date(targetTx.created_at).toLocaleDateString('pl-PL');
+        if (targetTx?.created_at) {
+          const d = new Date(targetTx.created_at);
+          if (!isNaN(d.getTime())) return formatDate(d);
+        }
       }
 
       const regDateStr = user.registered || user.Zarejestrowany || user.activated;
@@ -633,12 +651,15 @@ export default function TwojBonusPage() {
         const d = new Date(regDateStr);
         if (!isNaN(d.getTime())) {
           d.setMonth(d.getMonth() + Math.max(0, thresh - 1));
-          return d.toLocaleDateString('pl-PL');
+          d.setDate(1);
+          return formatDate(d);
         }
       }
+      
+      const now = new Date();
+      now.setDate(1);
+      return formatDate(now);
     }
-
-    return new Date().toLocaleDateString('pl-PL');
   };
 
   // Płynne skalowanie paska postępu na osi roadmapy
@@ -954,7 +975,7 @@ export default function TwojBonusPage() {
                 ))}
               </div>
 
-              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW (DYNAMICZNY ROZMIAR KOLUMN - BRAK UCINANIA) */}
+              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
                   <table className="w-full text-left border-collapse">
@@ -1156,7 +1177,7 @@ export default function TwojBonusPage() {
                             ...prev,
                             [tabela.id]: prev[tabela.id] === tier.id ? null : tier.id
                           }))}
-                          title={`Próg: ${tier.levelName} (${tier.threshold} ${tier.unit})`}
+                          title={`Próg: ${tier.levelName} (${tier.threshold} ${getTierUnitLabel(tier, tabela)})`}
                         >
                           <div
                             className={`w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-black transition-all shadow-sm ${
@@ -1204,7 +1225,7 @@ export default function TwojBonusPage() {
                             {tier.levelName}
                           </span>
                           <span className="text-xs font-black text-slate-900">
-                            {tier.threshold} {tier.unit}
+                            {tier.threshold} {getTierUnitLabel(tier, tabela)}
                           </span>
                         </div>
 
