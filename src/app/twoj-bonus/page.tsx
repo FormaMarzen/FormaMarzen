@@ -115,26 +115,63 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 0;
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej (uwzględniając raty umów)
+// Wyliczanie upływu miesięcy dla karnetów okresowych płaconych z góry (np. 6M)
+const getElapsedMonthsForPass = (pass: any): number => {
+  if (!pass || !pass.waznyDo) return 0;
+  const pName = cleanStr(pass.nazwa || pass.pass || '');
+
+  let totalMonths = 0;
+  if (pName.includes('6 m') || pName.includes('6m') || pName.includes('pol roku') || pName.includes('pół roku')) {
+    totalMonths = 6;
+  } else if (pName.includes('3 m') || pName.includes('3m')) {
+    totalMonths = 3;
+  } else if (pName.includes('rok') || pName.includes('12 m') || pName.includes('12m')) {
+    totalMonths = 12;
+  }
+
+  if (totalMonths <= 0) return 0;
+
+  const now = new Date();
+  const expDate = new Date(pass.waznyDo);
+  if (isNaN(expDate.getTime())) return 0;
+
+  // Różnica w dniach do wygaśnięcia karnetu
+  const diffTime = expDate.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  // Ile pełnych 30-dniowych miesięcy pozostało
+  const remainingMonths = Math.max(0, Math.ceil(diffDays / 30));
+  const elapsed = Math.max(1, totalMonths - remainingMonths);
+
+  return Math.min(totalMonths, elapsed);
+};
+
+// Wyliczanie rzeczywistej ciągłości ogólnej (uwzględniając raty umów i staż w karnetach długoterminowych)
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
   let maxInstallments = 0;
+  let maxLongPassMonths = 0;
 
   passes.forEach((p: any) => {
     if (isContractPassCheck(p)) {
       const inst = getInstallmentsFromPass(p);
       if (inst > maxInstallments) maxInstallments = inst;
+    } else {
+      const elapsed = getElapsedMonthsForPass(p);
+      if (elapsed > maxLongPassMonths) maxLongPassMonths = elapsed;
     }
   });
 
   const rawContinuity = parseInt(String(client.cyklCiaglosci || client.cyklciaglosci || '1'), 10) || 1;
-  return Math.max(rawContinuity, maxInstallments, 1);
+  return Math.max(rawContinuity, maxInstallments, maxLongPassMonths, 1);
 };
 
 // Odmiana jednostki dla umów lub zwykłych karnetów
 const getTierUnitLabel = (tier: any, tabela: any) => {
-  if (isContractPassCheck(tabela)) {
+  const tName = cleanStr(tabela.nazwa || '');
+  const isTimeOrContract = isContractPassCheck(tabela) || tName.includes('6 m') || tName.includes('6m') || tName.includes('open');
+  if (isTimeOrContract) {
     const val = Number(tier.threshold) || 1;
     if (val === 1) return 'miesiąc';
     if (val >= 2 && val <= 4) return 'miesiące';
@@ -332,7 +369,8 @@ export default function TwojBonusPage() {
       } else {
         setBonusTables([
           { id: 1, nazwa: 'OPEN - UMOWA 12 MIESIĘCY', typ_karnetu: 'Umowa 12 miesięcy', cena: 289, kolejnosc: 0, customTiers: defaultTiersUmowa },
-          { id: 2, nazwa: 'OPEN', typ_karnetu: 'Na czas', cena: 319, kolejnosc: 1, customTiers: defaultTiersOpen }
+          { id: 2, nazwa: 'OPEN - 6 MIESIĘCY', typ_karnetu: 'Na czas', cena: 1720, kolejnosc: 1, customTiers: defaultTiersOpen },
+          { id: 3, nazwa: 'OPEN', typ_karnetu: 'Na czas', cena: 319, kolejnosc: 2, customTiers: defaultTiersOpen }
         ]);
       }
 
@@ -584,7 +622,7 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // OBLICZANIE POSTĘPU Z ZABEZPIECZENIEM ODRABIANIA ZAWIESZEŃ
+  // OBLICZANIE POSTĘPU
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
@@ -630,12 +668,11 @@ export default function TwojBonusPage() {
     }
 
     // 3. DLA KARNETÓW CZASOWYCH (OPEN / 6M)
-    if (user.hasLostContinuity || user.haslostcontinuity) {
-      return { value: 0, isReset: true, reason: 'Brak ciągłości opłat – roadmapa zresetowana' };
-    }
-
+    const elapsedMonths = getElapsedMonthsForPass(userPass);
     const continuity = getClientEffectiveContinuity(user);
-    return { value: continuity, isReset: false, reason: '' };
+    const finalVal = Math.max(elapsedMonths, continuity, 1);
+
+    return { value: finalVal, isReset: false, reason: '' };
   };
 
   // Precyzyjne wyliczanie daty odblokowania (zawsze 01.MM.YYYY dla umów)
@@ -1177,7 +1214,7 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* B. LINIA ROADMAPY Z IDEALNIE POŁĄCZONYMI LINIAMI GÓRA/DÓŁ */}
+              {/* B. LINIA ROADMAPY Z PASKIEM POSTĘPU I ZYGZAKOWATYMI WĘZŁAMI */}
               <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-4">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
@@ -1236,7 +1273,7 @@ export default function TwojBonusPage() {
                               >
                                 {isReached ? '✓' : tier.threshold}
                               </div>
-                              {/* Pionowa linia łącząca kółko bezpośrednio z osią (do samej linii poziomej) */}
+                              {/* Pionowa linia łącząca kółko bezpośrednio z osią */}
                               <div className={`w-0.5 h-3.5 ${accentStyles.line}`} />
                             </div>
                           ) : (
