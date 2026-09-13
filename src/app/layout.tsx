@@ -150,7 +150,7 @@ export default function RootLayout({
     }
   };
 
-  // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego oraz wysyłająca komunikaty na czacie
+  // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego
   const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
     if (typeof window === "undefined") return;
 
@@ -704,6 +704,7 @@ export default function RootLayout({
         { href: '/wydarzenia', label: 'Wydarzenia', icon: '🎯' },
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
+        { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/odziez', label: 'Odzież', icon: '👕' },
       ]
@@ -737,7 +738,6 @@ export default function RootLayout({
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
         { href: '/ustawienia/kody-rabatowe', label: 'Kody rabatowe', icon: '🏷️' },
         { href: '/ustawienia/program-ambasador', label: 'Program ambasador', icon: '⭐' },
-        { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
         { href: '/ustawienia/zespol', label: 'Zespół', icon: '👨‍👧‍👦' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
