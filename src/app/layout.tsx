@@ -9,7 +9,6 @@ import AuthGuard from "../components/AuthGuard";
 import { supabase } from "./raporty/klienci/supabase";
 import ClubChat from "../components/ClubChat";
 
-// Pomocnicza funkcja konwertująca klucz VAPID Base64URL na Uint8Array
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
@@ -33,7 +32,6 @@ export default function RootLayout({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
-  // Stany dla obsługi kalendarza w profilu klubowicza
   const [showCalendarSettings, setShowCalendarSettings] = useState(false);
   const [calendarAutoSync, setCalendarAutoSync] = useState(false);
 
@@ -50,7 +48,6 @@ export default function RootLayout({
   const [profileHeight, setProfileHeight] = useState('');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
-  // Stany powiadomień dla poszczególnych sekcji
   const [hasUnreadInterpretation, setHasUnreadInterpretation] = useState<boolean>(false);
   const [hasUnreadRedukcja, setHasUnreadRedukcja] = useState<boolean>(false);
   const [hasUnreadWydarzenia, setHasUnreadWydarzenia] = useState<boolean>(false);
@@ -61,7 +58,6 @@ export default function RootLayout({
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
-  // Stany dla mechanizmu Pull-to-Refresh
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const touchStartY = useRef(0);
@@ -82,8 +78,7 @@ export default function RootLayout({
     );
   })();
 
-  // Funkcja sprawdzająca powiadomienia dla programu bonusowego
-  const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz') => {
+  const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz', clientId?: number | string | null) => {
     if (typeof window === "undefined") return;
 
     if (role === 'klubowicz') {
@@ -94,7 +89,7 @@ export default function RootLayout({
 
     try {
       const [rulesRes, catalogRes, clientsRes] = await Promise.all([
-        supabase.from('club_booking_rules').select('bonus_program_active').limit(1).maybeSingle(),
+        supabase.from('club_booking_rules').select('id, bonus_program_active, bonus_verified_tiers').limit(1).maybeSingle(),
         supabase.from('katalog_karnetow').select('*').limit(100),
         supabase.from('klienci').select('id, karnetyKlubowicza, cyklCiaglosci').range(0, 4999)
       ]);
@@ -104,7 +99,23 @@ export default function RootLayout({
         return;
       }
 
-      let bonusCount = 0;
+      let verifiedTiers: string[] = [];
+      if (rulesRes.data?.bonus_verified_tiers) {
+        try {
+          verifiedTiers = typeof rulesRes.data.bonus_verified_tiers === 'string'
+            ? JSON.parse(rulesRes.data.bonus_verified_tiers)
+            : rulesRes.data.bonus_verified_tiers;
+        } catch(e) {}
+      }
+
+      let localVerified: string[] = [];
+      try {
+        localVerified = JSON.parse(localStorage.getItem('fm_verified_member_tiers') || '[]');
+      } catch(e) {}
+
+      const allVerifiedKeys = new Set([...verifiedTiers, ...localVerified]);
+
+      let pendingCount = 0;
       const tables = catalogRes.data || [];
       const clients = clientsRes.data || [];
 
@@ -125,6 +136,7 @@ export default function RootLayout({
             if (pName.includes('open') && tName.includes('open')) return true;
             if (pName.includes('ogolno') && tName.includes('ogolno')) return true;
           }
+          if ((pName.includes('6 m') || pName.includes('6m')) && (tName.includes('6 m') || tName.includes('6m'))) return true;
           return false;
         });
 
@@ -140,22 +152,26 @@ export default function RootLayout({
           if (slashMatch) currentProg = Math.max(currentProg, parseInt(slashMatch[1], 10));
         }
 
-        const hasUnlocked = tiers.some((tier: any) => currentProg >= Number(tier.threshold));
-        if (hasUnlocked) bonusCount++;
+        const unlockedTiers = tiers.filter((tier: any) => currentProg >= Number(tier.threshold));
+        if (unlockedTiers.length > 0) {
+          const topTier = unlockedTiers[unlockedTiers.length - 1];
+          const verificationKey = `${c.id}_${topTier.id}`;
+          if (!allVerifiedKeys.has(verificationKey)) {
+            pendingCount++;
+          }
+        }
       }
 
-      setHasUnreadBonus(bonusCount > 0);
+      setHasUnreadBonus(pendingCount > 0);
     } catch (e) {
       console.error("Błąd sprawdzania powiadomień bonusu:", e);
     }
   };
 
-  // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego
   const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
     if (typeof window === "undefined") return;
 
     try {
-      // 1. Badania Krwi
       let bloodUnread = false;
       if (role === 'admin' || role === 'trener') {
         const { count } = await supabase
@@ -173,7 +189,6 @@ export default function RootLayout({
       }
       setHasUnreadInterpretation(bloodUnread);
 
-      // 2. Wyzwania Redukcji
       const { data: redukcjeData } = await supabase
         .from('klub_redukcja_edycje')
         .select('id, status, nazwa, data_koniec')
@@ -239,7 +254,6 @@ export default function RootLayout({
         setHasUnreadRedukcja(false);
       }
 
-      // 3. Wydarzenia Klubowe
       const dzisiajStr = new Date().toISOString().split("T")[0];
       const { data: eventsData } = await supabase
         .from('wydarzenia')
@@ -256,7 +270,6 @@ export default function RootLayout({
         setHasUnreadWydarzenia(false);
       }
 
-      // 4. Baza Wiedzy
       let unreadBaza = false;
       if (role === 'admin') {
         const { data: sugData } = await supabase
@@ -285,7 +298,6 @@ export default function RootLayout({
       }
       setHasUnreadBazaWiedzy(unreadBaza);
 
-      // 5. Odzież
       let unreadOdziez = false;
       if (role === 'admin') {
         const { data: unreadOrders } = await supabase
@@ -322,7 +334,6 @@ export default function RootLayout({
       }
       setHasUnreadOdziez(unreadOdziez);
 
-      // 6. Wyzwania i Odznaki
       let unreadWyzwania = false;
       if (role === 'admin') {
         const { data: adminChallenges } = await supabase
@@ -353,24 +364,21 @@ export default function RootLayout({
       }
       setHasUnreadWyzwania(unreadWyzwania);
 
-      // 7. Mój bonus
-      await checkBonusAdminNotifications(role);
+      await checkBonusAdminNotifications(role, cId);
 
     } catch (err) {
       console.error("Błąd sprawdzania powiadomień w menu:", err);
     }
   };
 
-  // Nasłuchiwanie zmian powiadomień o bonusach
   useEffect(() => {
     const handleBonusUpdate = () => {
-      checkBonusAdminNotifications(appRole);
+      checkBonusAdminNotifications(appRole, currentClientId);
     };
     window.addEventListener('bonus-notification-update', handleBonusUpdate);
     return () => window.removeEventListener('bonus-notification-update', handleBonusUpdate);
-  }, [appRole]);
+  }, [appRole, currentClientId]);
 
-  // Pobieranie ID klienta dla kalendarza
   useEffect(() => {
     if (showCalendarSettings && !currentClientId) {
       const fetchClientIdInstantly = async () => {
@@ -410,7 +418,6 @@ export default function RootLayout({
     }
   }, [showCalendarSettings, currentClientId, profileEmail]);
 
-  // Funkcja Web Push
   const subscribeToPushNotifications = async (clientId: string | number) => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
@@ -441,7 +448,6 @@ export default function RootLayout({
     }
   };
 
-  // Synchronizacja kalendarza
   const handleToggleCalendarSync = async (enabled: boolean) => {
     setCalendarAutoSync(enabled);
     if (!currentClientId) return;
@@ -452,7 +458,6 @@ export default function RootLayout({
       .eq('id', currentClientId);
   };
 
-  // Obsługa Pull-to-Refresh
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1 && window.scrollY <= 0) {
@@ -497,7 +502,6 @@ export default function RootLayout({
     };
   }, [pullDistance, isRefreshing]);
 
-  // Blokada skalowania i pinch-to-zoom
   useEffect(() => {
     const handleGesture = (e: Event) => e.preventDefault();
     const handleTouchStart = (e: TouchEvent) => { if (e.touches.length > 1) e.preventDefault(); };
@@ -691,7 +695,6 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
-  // 1. MENU DLA ADMINISTRATORA
   const adminMenuSections = [
     {
       title: "Główne",
@@ -744,7 +747,6 @@ export default function RootLayout({
     }
   ];
 
-  // 2. MENU DLA KLUBOWICZA
   const klientMenuSections = [
     {
       title: "Główne",
@@ -779,7 +781,6 @@ export default function RootLayout({
     }
   ];
 
-  // 3. MENU DLA TRENERA
   const trenerMenuSections = [
     {
       title: "Strefa Trenera",
@@ -967,7 +968,6 @@ export default function RootLayout({
       </head>
       <body className="min-h-[100dvh] bg-sky-50/50 text-slate-800 flex font-sans antialiased h-[100dvh] overflow-hidden w-full">
         
-        {/* Wskaźnik gestu Pull-to-Refresh */}
         <div 
           className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out pt-[env(safe-area-inset-top)]"
           style={{
@@ -998,7 +998,6 @@ export default function RootLayout({
               )}
 
               <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white flex flex-col justify-between shrink-0 z-50 transition-transform duration-300 ease-in-out h-[100dvh] overflow-hidden pt-[env(safe-area-inset-top)] ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
-                {/* Wewnętrzny kontener scrollowalny menu */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-6">
                   <div className="flex items-center justify-between pb-2 px-1 pt-1">
                     <span className="text-sm font-black text-sky-950 uppercase tracking-wider flex items-center flex-wrap">
@@ -1079,7 +1078,6 @@ export default function RootLayout({
                   </nav>
                 </div>
 
-                {/* Stała stopka profilu użytkownika */}
                 <div className="border-t border-sky-100 p-4 shrink-0 bg-white/95 backdrop-blur-sm pb-[max(1rem,env(safe-area-inset-bottom))]">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500 shadow-sm">
@@ -1100,9 +1098,7 @@ export default function RootLayout({
               </aside>
 
               <div className="flex-1 flex flex-col h-[100dvh] overflow-hidden w-full">
-                
                 <header className="bg-white border-b border-sky-200 flex items-center justify-between px-4 md:px-6 shrink-0 shadow-sm relative pt-[env(safe-area-inset-top)] min-h-[calc(4rem+env(safe-area-inset-top))]">
-                  
                   <div className="flex items-center gap-3 py-3">
                     <button 
                       className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer relative"
@@ -1127,7 +1123,6 @@ export default function RootLayout({
                   </div>
 
                   <div className="flex items-center gap-3 py-3">
-                    
                     {appRole === 'admin' && (
                       <button 
                         onClick={() => setIsAddClientModalOpen(true)}
@@ -1192,9 +1187,7 @@ export default function RootLayout({
                         </div>
                       )}
                     </div>
-
                   </div>
-
                 </header>
 
                 <main className="flex-1 p-4 md:p-8 overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]">
@@ -1205,10 +1198,8 @@ export default function RootLayout({
           )}
         </AuthGuard>
 
-        {/* KOMPONENT CZATU KLUBOWICZÓW */}
         {!isPublicPage && <ClubChat />}
 
-        {/* MODAL DODAJ KLUBOWICZA */}
         {isAddClientModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
@@ -1329,11 +1320,9 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* MODAL MÓJ PROFIL */}
         {isProfileModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
-              
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
                   {profileName}
@@ -1513,12 +1502,10 @@ export default function RootLayout({
                   Zapisz
                 </button>
               </div>
-
             </div>
           </div>
         )}
 
-        {/* MODAL USTAWIENIA KALENDARZA (ICS) */}
         {showCalendarSettings && (
           <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
@@ -1554,7 +1541,6 @@ export default function RootLayout({
                   <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-top-2">
                     {currentClientId ? (
                       <div className="space-y-3">
-                        {/* Apple Calendar / iOS */}
                         <div className="space-y-1">
                           <label className="font-bold text-slate-900 text-[11px]"> Apple Calendar / iPhone / iPad (webcal):</label>
                           <div className="flex items-center gap-2">
@@ -1577,7 +1563,6 @@ export default function RootLayout({
                           </div>
                         </div>
 
-                        {/* Google Calendar / Inne */}
                         <div className="space-y-1">
                           <label className="font-bold text-slate-900 text-[11px]">🌐 Google Calendar / Outlook / Inne (https):</label>
                           <div className="flex items-center gap-2">
