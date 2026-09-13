@@ -57,6 +57,7 @@ export default function RootLayout({
   const [hasUnreadBazaWiedzy, setHasUnreadBazaWiedzy] = useState<boolean>(false);
   const [hasUnreadOdziez, setHasUnreadOdziez] = useState<boolean>(false);
   const [hasUnreadWyzwania, setHasUnreadWyzwania] = useState<boolean>(false);
+  const [hasUnreadBonus, setHasUnreadBonus] = useState<boolean>(false);
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
@@ -81,12 +82,80 @@ export default function RootLayout({
     );
   })();
 
+  // Funkcja sprawdzająca powiadomienia dla programu bonusowego
+  const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz') => {
+    if (typeof window === "undefined") return;
+
+    if (role === 'klubowicz') {
+      const isBonusNotif = localStorage.getItem('bonus_has_notification') === 'true';
+      setHasUnreadBonus(isBonusNotif);
+      return;
+    }
+
+    try {
+      const [rulesRes, catalogRes, clientsRes] = await Promise.all([
+        supabase.from('club_booking_rules').select('bonus_program_active').limit(1).maybeSingle(),
+        supabase.from('katalog_karnetow').select('*').limit(100),
+        supabase.from('klienci').select('id, karnetyKlubowicza, cyklCiaglosci').range(0, 4999)
+      ]);
+
+      if (rulesRes.data?.bonus_program_active === false) {
+        setHasUnreadBonus(false);
+        return;
+      }
+
+      let bonusCount = 0;
+      const tables = catalogRes.data || [];
+      const clients = clientsRes.data || [];
+
+      for (const c of clients) {
+        let passes: any[] = [];
+        try {
+          passes = typeof c.karnetyKlubowicza === 'string' ? JSON.parse(c.karnetyKlubowicza) : (c.karnetyKlubowicza || []);
+        } catch(e) { passes = []; }
+
+        if (!passes || passes.length === 0) continue;
+        const pass = passes[0];
+        const pName = (pass.nazwa || pass.pass || '').toLowerCase();
+
+        const matchedTable = tables.find((t: any) => {
+          const tName = (t.nazwa || '').toLowerCase();
+          if (pName === tName) return true;
+          if (pName.includes('umow') && tName.includes('umow')) {
+            if (pName.includes('open') && tName.includes('open')) return true;
+            if (pName.includes('ogolno') && tName.includes('ogolno')) return true;
+          }
+          return false;
+        });
+
+        if (!matchedTable) continue;
+
+        let meta: any = {};
+        try { meta = JSON.parse(matchedTable.inne_ustawienia || '{}'); } catch(e) {}
+        const tiers = meta.customTiers || [];
+
+        let currentProg = parseInt(String(c.cyklCiaglosci || '1'), 10) || 1;
+        if (pass.rata) {
+          const slashMatch = String(pass.rata).match(/(\d+)\s*\/\s*\d+/);
+          if (slashMatch) currentProg = Math.max(currentProg, parseInt(slashMatch[1], 10));
+        }
+
+        const hasUnlocked = tiers.some((tier: any) => currentProg >= Number(tier.threshold));
+        if (hasUnlocked) bonusCount++;
+      }
+
+      setHasUnreadBonus(bonusCount > 0);
+    } catch (e) {
+      console.error("Błąd sprawdzania powiadomień bonusu:", e);
+    }
+  };
+
   // Funkcja sprawdzająca wszystkie powiadomienia do menu bocznego oraz wysyłająca komunikaty na czacie
   const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
     if (typeof window === "undefined") return;
 
     try {
-      // 1. Badania Krwi (Interpretacje dla klubowicza lub oczekujące dla admina/trenera)
+      // 1. Badania Krwi
       let bloodUnread = false;
       if (role === 'admin' || role === 'trener') {
         const { count } = await supabase
@@ -104,7 +173,7 @@ export default function RootLayout({
       }
       setHasUnreadInterpretation(bloodUnread);
 
-      // 2. Wyzwania Redukcji + Globalne alerty systemowe na czacie na 10 i 5 dni przed finałem
+      // 2. Wyzwania Redukcji
       const { data: redukcjeData } = await supabase
         .from('klub_redukcja_edycje')
         .select('id, status, nazwa, data_koniec')
@@ -114,7 +183,6 @@ export default function RootLayout({
         const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
         setHasUnreadRedukcja(hasUnseenRedukcja);
 
-        // GLOBALNY SYSTEM ALERTIW REDUKCJI NA CZACIE
         const dzisiaj = new Date();
         dzisiaj.setHours(0, 0, 0, 0);
 
@@ -129,7 +197,6 @@ export default function RootLayout({
               if (!localStorage.getItem(alertKey)) {
                 const chatAlertMsg = `📢 [KOMUNIKAT SYSTEMOWY] Przypomnienie dla uczestników wyzwania "${ed.nazwa}": Do wielkiego finału pozostało już tylko ${diffDays} dni! Pamiętajcie o wcześniejszym umówieniu się z trenerem na finałową analizę składu ciała na maszynie. Powodzenia w walce o podium i nagrody! 🔥💪`;
 
-                // Wysłanie wiadomości na czat
                 try {
                   await supabase.from('czat_wiadomosci').insert([{
                     autor: 'System Forma Marzeń',
@@ -148,7 +215,6 @@ export default function RootLayout({
                   }]);
                 } catch (e) {}
 
-                // Wysłanie powiadomień prywatnych (dzwoneczek)
                 const { data: partData } = await supabase
                   .from('klub_redukcja_uczestnicy')
                   .select('klient_id')
@@ -256,7 +322,7 @@ export default function RootLayout({
       }
       setHasUnreadOdziez(unreadOdziez);
 
-      // 6. Wyzwania i Odznaki (Pojedynki)
+      // 6. Wyzwania i Odznaki
       let unreadWyzwania = false;
       if (role === 'admin') {
         const { data: adminChallenges } = await supabase
@@ -287,10 +353,22 @@ export default function RootLayout({
       }
       setHasUnreadWyzwania(unreadWyzwania);
 
+      // 7. Mój bonus
+      await checkBonusAdminNotifications(role);
+
     } catch (err) {
       console.error("Błąd sprawdzania powiadomień w menu:", err);
     }
   };
+
+  // Nasłuchiwanie zmian powiadomień o bonusach
+  useEffect(() => {
+    const handleBonusUpdate = () => {
+      checkBonusAdminNotifications(appRole);
+    };
+    window.addEventListener('bonus-notification-update', handleBonusUpdate);
+    return () => window.removeEventListener('bonus-notification-update', handleBonusUpdate);
+  }, [appRole]);
 
   // Pobieranie ID klienta dla kalendarza
   useEffect(() => {
@@ -659,6 +737,7 @@ export default function RootLayout({
         { href: '/ustawienia/magazyn', label: 'Magazyn', icon: '🏬' },
         { href: '/ustawienia/kody-rabatowe', label: 'Kody rabatowe', icon: '🏷️' },
         { href: '/ustawienia/program-ambasador', label: 'Program ambasador', icon: '⭐' },
+        { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
         { href: '/ustawienia/zespol', label: 'Zespół', icon: '👨‍👧‍👦' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
@@ -672,6 +751,7 @@ export default function RootLayout({
       items: [
         { href: '/', label: 'Strona główna', icon: '🏠' },
         { href: '/karnet', label: 'Mój Karnet', icon: '🎟️' },
+        { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
         { href: '/moje-zapisy', label: 'Moje zapisy', icon: '📅' },
       ]
     },
@@ -720,6 +800,7 @@ export default function RootLayout({
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
+        { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
         { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
@@ -734,8 +815,8 @@ export default function RootLayout({
       : klientMenuSections;
 
   const hasAnyBadgeInMenu = useMemo(() => {
-    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez || hasUnreadWyzwania;
-  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez, hasUnreadWyzwania]);
+    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez || hasUnreadWyzwania || hasUnreadBonus;
+  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez, hasUnreadWyzwania, hasUnreadBonus]);
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -962,6 +1043,8 @@ export default function RootLayout({
                               showBadge = hasUnreadOdziez;
                             } else if (item.href === '/wyzwania') {
                               showBadge = hasUnreadWyzwania;
+                            } else if (item.href === '/twoj-bonus') {
+                              showBadge = hasUnreadBonus;
                             }
 
                             return (
