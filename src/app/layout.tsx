@@ -96,6 +96,7 @@ export default function RootLayout({
 
       if (rulesRes.data?.bonus_program_active === false) {
         setHasUnreadBonus(false);
+        localStorage.removeItem('bonus_has_notification');
         return;
       }
 
@@ -152,6 +153,22 @@ export default function RootLayout({
           if (slashMatch) currentProg = Math.max(currentProg, parseInt(slashMatch[1], 10));
         }
 
+        // Długie karnety okresowe (np. 6M)
+        if (!pass.rata && (pName.includes('6 m') || pName.includes('6m')) && pass.waznyDo) {
+          const [eY, eM, eD] = String(pass.waznyDo).split('-').map(Number);
+          if (eY && eM) {
+            const rawHist = pass.historiaZawieszen || pass.historiazawieszen;
+            const hist = typeof rawHist === 'string' ? JSON.parse(rawHist || '[]') : (rawHist || []);
+            const suspensionDays = hist.reduce((sum: number, h: any) => sum + (parseInt(h.dni || h.planowane_dni || '0', 10) || 0), 0);
+            
+            const expDate = new Date(eY, eM - 1, eD || 1);
+            const startDateMs = expDate.getTime() - (6 * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
+            const activeDays = Math.floor(Math.max(0, (Date.now() - startDateMs) - (suspensionDays * 24 * 60 * 60 * 1000)) / (1000 * 60 * 60 * 24));
+            const elapsed = Math.min(6, Math.max(1, Math.floor(activeDays / 30)));
+            currentProg = Math.max(currentProg, elapsed);
+          }
+        }
+
         const unlockedTiers = tiers.filter((tier: any) => currentProg >= Number(tier.threshold));
         if (unlockedTiers.length > 0) {
           const topTier = unlockedTiers[unlockedTiers.length - 1];
@@ -162,7 +179,11 @@ export default function RootLayout({
         }
       }
 
-      setHasUnreadBonus(pendingCount > 0);
+      const hasPending = pendingCount > 0;
+      setHasUnreadBonus(hasPending);
+      if (!hasPending) {
+        localStorage.removeItem('bonus_has_notification');
+      }
     } catch (e) {
       console.error("Błąd sprawdzania powiadomień bonusu:", e);
     }
