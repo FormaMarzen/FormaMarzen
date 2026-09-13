@@ -216,22 +216,18 @@ export default function TwojBonusPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
 
-  // Wyszukiwanie podopiecznego
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
   const [rulesRecordId, setRulesRecordId] = useState<number | null>(null);
 
-  // Główny status programu
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
   const [isSavingStatus, setIsSavingStatus] = useState<boolean>(false);
 
-  // Tabele bonusowe
   const [bonusTables, setBonusTables] = useState<any[]>([]);
   const [selectedRoadmapTier, setSelectedRoadmapTier] = useState<Record<string | number, number | null>>({});
   const [isRulesExpanded, setIsRulesExpanded] = useState<boolean>(false);
 
-  // Warunki kwalifikacji
   const [qualificationRules, setQualificationRules] = useState<any[]>([
     {
       id: 'umowa',
@@ -258,7 +254,6 @@ export default function TwojBonusPage() {
   const [ruleTitle, setRuleTitle] = useState('');
   const [ruleDesc, setRuleDesc] = useState('');
 
-  // Modale tabel
   const [isAddTableModalOpen, setIsAddTableModalOpen] = useState(false);
   const [isEditTableModalOpen, setIsEditTableModalOpen] = useState(false);
   const [editingTableId, setEditingTableId] = useState<string | number>('');
@@ -266,7 +261,6 @@ export default function TwojBonusPage() {
   const [tableTypeInput, setTableTypeInput] = useState('Umowa 12 miesięcy');
   const [tablePriceInput, setTablePriceInput] = useState('199.00');
 
-  // Modale progów
   const [isTierModalOpen, setIsTierModalOpen] = useState(false);
   const [targetTableId, setTargetTableId] = useState<string | number>('');
   const [editingTierId, setEditingTierId] = useState<number | null>(null);
@@ -280,7 +274,6 @@ export default function TwojBonusPage() {
   const [accentColor, setAccentColor] = useState<'amber' | 'slate' | 'yellow' | 'purple'>('amber');
   const [isSaving, setIsSaving] = useState(false);
 
-  // Szablony progów
   const defaultTiersUmowa = [
     { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
     { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
@@ -294,7 +287,6 @@ export default function TwojBonusPage() {
     { id: 203, levelName: 'ZŁOTY', threshold: 6, unit: 'cykli', accent: 'yellow', rewardTitle: '15% zniżki na kolejny karnet OPEN.', rewardBadge: '-15%', secondaryTitle: 'Konsultacja dietetyczno-treningowa gratis.', secondaryBadge: 'GRATIS', active: true }
   ];
 
-  // Pobieranie danych z Supabase
   const loadData = async () => {
     setIsLoading(true);
     try {
@@ -329,7 +321,6 @@ export default function TwojBonusPage() {
         setRulesRecordId(rulesData.id);
         if (rulesData.bonus_program_active !== undefined) setIsProgramActive(rulesData.bonus_program_active);
         
-        // Odczyt listy trwale zweryfikowanych progów
         let dbVerified: string[] = [];
         if (rulesData.bonus_verified_tiers) {
           try {
@@ -339,7 +330,6 @@ export default function TwojBonusPage() {
           } catch(e) {}
         }
         
-        // Zabezpieczenie z localStorage
         let localVerified: string[] = [];
         try {
           localVerified = JSON.parse(localStorage.getItem('fm_verified_member_tiers') || '[]');
@@ -635,7 +625,6 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // OBLICZANIE POSTĘPU Z ZABEZPIECZENIEM ODRABIANIA ZAWIESZEŃ
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
@@ -651,7 +640,6 @@ export default function TwojBonusPage() {
 
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
-    // 1. DLA UMÓW 12M
     if (isContract) {
       const installmentsCount = getInstallmentsFromPass(userPass);
       const effectiveContinuity = getClientEffectiveContinuity(user);
@@ -667,7 +655,6 @@ export default function TwojBonusPage() {
       return { value: finalMonths, isReset: false, reason: '' };
     }
 
-    // 2. DLA KARNETÓW NA WEJŚCIA
     const pName = cleanStr(userPass.nazwa || '');
     const tName = cleanStr(tabela.nazwa || '');
     const isEntries = pName.includes('wejs') || tName.includes('wejs') || tName.includes('ilosc');
@@ -677,7 +664,6 @@ export default function TwojBonusPage() {
       return { value: Math.max(0, pocz - poz), isReset: false, reason: '' };
     }
 
-    // 3. DLA KARNETÓW CZASOWYCH (OPEN / 6M)
     const elapsedMonths = getElapsedMonthsForPass(userPass);
     const continuity = getClientEffectiveContinuity(user);
     const finalVal = Math.max(elapsedMonths, continuity, 1);
@@ -685,7 +671,6 @@ export default function TwojBonusPage() {
     return { value: finalVal, isReset: false, reason: '' };
   };
 
-  // Wyliczanie dokładnej daty odblokowania progu uwzględniające pauzy/zawieszenia
   const getTierUnlockDate = (tier: any, tabela: any, user: any): string | null => {
     if (!user) return null;
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
@@ -700,7 +685,6 @@ export default function TwojBonusPage() {
     const pad = (n: number) => String(n).padStart(2, '0');
     const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 
-    // A. DLA UMÓW 12M: Pierwszy dzień miesiąca danej raty
     if (isContract) {
       const currentRata = Math.max(1, progress.value);
       const baseDateStr = userPass.waznyDo || user.umowa_oplacona_do || new Date().toISOString().split('T')[0];
@@ -716,7 +700,6 @@ export default function TwojBonusPage() {
       return formatDate(targetDate);
     }
 
-    // B. DLA KARNETÓW OKRESOWYCH (np. 6 MIESIĘCY): Data startu + próg + dni zawieszenia
     const totalDurationMonths = getPassTotalDurationMonths(userPass);
     if (totalDurationMonths > 1 && userPass.waznyDo) {
       const [eY, eM, eD] = String(userPass.waznyDo).split('-').map(Number);
@@ -730,7 +713,6 @@ export default function TwojBonusPage() {
       }
     }
 
-    // C. DLA ZWYKŁYCH KARNETÓW CZASOWYCH (OPEN 1M)
     const userTx: any[] = user.transactions || [];
     const cycleTx = userTx.filter((t: any) => {
       const desc = String(t.opis || '').toLowerCase();
@@ -759,13 +741,11 @@ export default function TwojBonusPage() {
     return formatDate(new Date());
   };
 
-  // Płynne skalowanie paska postępu na osi roadmapy
   const getProportionalLeftPercent = (val: number, maxThreshold: number) => {
     if (maxThreshold <= 0) return 0;
     return Math.min(100, Math.max(0, (val / maxThreshold) * 100));
   };
 
-  // Odblokowane poziomy
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client) return [];
     const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
@@ -781,7 +761,6 @@ export default function TwojBonusPage() {
     return matchedTable.customTiers.filter((tier: any) => progress.value >= Number(tier.threshold));
   };
 
-  // Lista oczekujących na weryfikację
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
@@ -804,7 +783,7 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  // Trwałe zatwierdzenie poziomu przez administratora
+  // Trwałe zatwierdzenie poziomu przez administratora wraz z natychmiastowym czyszczeniem wykrzyknika
   const handleMarkTierAsVerified = async (verificationKey: string, clientName?: string, tierName?: string) => {
     const confirmMessage = clientName && tierName
       ? `Czy na pewno chcesz zatwierdzić osiągnięcie poziomu "${tierName}" dla klubowicza ${clientName}?\n\nPo zatwierdzeniu klubowicz zostanie trwale usunięty z listy oczekujących na weryfikację.`
@@ -837,6 +816,16 @@ export default function TwojBonusPage() {
     } catch (err) {
       console.error("Błąd trwałego zapisu weryfikacji progu:", err);
     }
+
+    // Jeśli po odhaczeniu lista jest pusta, bezwzględnie czyścimy flagę i wysyłamy zdarzenie do menu
+    const remainingCount = qualifiedMembersList.filter(c => c.verificationKey !== verificationKey).length;
+    if (remainingCount <= 0) {
+      localStorage.removeItem('bonus_has_notification');
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('bonus-notification-update'));
+    }
   };
 
   const searchedMembers = adminSearchQuery.trim().length >= 2
@@ -847,19 +836,48 @@ export default function TwojBonusPage() {
     : [];
 
   const currentMemberUnlockedTiers = getUnlockedLevelsForClient(currentUser);
-  const hasMemberUnlockedTier = currentMemberUnlockedTiers.length > 0;
+  const highestMemberUnlockedTier = currentMemberUnlockedTiers.length > 0 
+    ? currentMemberUnlockedTiers[currentMemberUnlockedTiers.length - 1] 
+    : null;
 
+  // Obsługa powiadomień dla klubowicza
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (hasMemberUnlockedTier && appRole === 'klubowicz') {
-        localStorage.setItem('bonus_has_notification', 'true');
-        window.dispatchEvent(new Event('bonus-notification-update'));
+    if (typeof window !== 'undefined' && appRole === 'klubowicz' && currentUser) {
+      if (highestMemberUnlockedTier) {
+        const seenKey = `fm_seen_bonus_tier_${currentUser.id}`;
+        const lastSeenThreshold = parseInt(localStorage.getItem(seenKey) || '0', 10);
+        
+        if (highestMemberUnlockedTier.threshold > lastSeenThreshold) {
+          localStorage.setItem('bonus_has_notification', 'true');
+        } else {
+          localStorage.removeItem('bonus_has_notification');
+        }
       } else {
+        localStorage.removeItem('bonus_has_notification');
+      }
+      window.dispatchEvent(new Event('bonus-notification-update'));
+    }
+  }, [highestMemberUnlockedTier, appRole, currentUser]);
+
+  // Wygaszenie wykrzyknika u klubowicza po wejściu w zakładkę Mój bonus
+  useEffect(() => {
+    if (typeof window !== 'undefined' && appRole === 'klubowicz' && currentUser && highestMemberUnlockedTier) {
+      const seenKey = `fm_seen_bonus_tier_${currentUser.id}`;
+      localStorage.setItem(seenKey, String(highestMemberUnlockedTier.threshold));
+      localStorage.removeItem('bonus_has_notification');
+      window.dispatchEvent(new Event('bonus-notification-update'));
+    }
+  }, [isMounted, appRole, currentUser, highestMemberUnlockedTier]);
+
+  // Dodatkowe auto-czyszczenie flagi dla administratora, jeśli brak oczekujących
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (appRole === 'admin' || appRole === 'trener')) {
+      if (qualifiedMembersList.length === 0) {
         localStorage.removeItem('bonus_has_notification');
         window.dispatchEvent(new Event('bonus-notification-update'));
       }
     }
-  }, [hasMemberUnlockedTier, appRole]);
+  }, [qualifiedMembersList.length, appRole]);
 
   if (!isMounted || isLoading) {
     return (
@@ -903,11 +921,6 @@ export default function TwojBonusPage() {
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
               <span>🎖️</span> PROGRAM BONUSOWY
             </h1>
-            {hasMemberUnlockedTier && (
-              <span className="w-6 h-6 rounded-full bg-rose-600 text-white font-black text-xs flex items-center justify-center animate-pulse shadow-md" title="Masz odblokowany nowy bonus!">
-                !
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-slate-600">Status programu:</span>
@@ -1039,7 +1052,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW Z DYNAMICZNYM DOPASOWANIEM SZEROKOŚCI BEZ UCINANIA */}
+          {/* TABELA KLUBOWICZÓW Z DYNAMICZNYM DOPASOWANIEM SZEROKOŚCI */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1054,7 +1067,7 @@ export default function TwojBonusPage() {
                 </span>
               </div>
 
-              {/* WIDOK DLA SMARTFONÓW */}
+              {/* Widok na telefony */}
               <div className="block sm:hidden space-y-2.5">
                 {qualifiedMembersList.map((client) => (
                   <div key={client.id} className="bg-white border border-rose-200 rounded-2xl p-3.5 shadow-xs space-y-2.5">
@@ -1089,7 +1102,7 @@ export default function TwojBonusPage() {
                 ))}
               </div>
 
-              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW (PEŁNA SZEROKOŚĆ PLAKIETKI I PRZYCISKÓW) */}
+              {/* Widok na komputery i tablety */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
                   <table className="w-full text-left border-collapse">
@@ -1167,7 +1180,6 @@ export default function TwojBonusPage() {
                 isUserPass ? 'border-emerald-500 ring-2 ring-emerald-400/40 bg-emerald-50/15' : 'border-sky-200'
               }`}
             >
-              {/* A. NAGŁÓWEK TABELI KARNETU */}
               <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1177,11 +1189,6 @@ export default function TwojBonusPage() {
                     {isUserPass && (
                       <span className="bg-emerald-500 text-white font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-wider shadow-sm flex items-center gap-1.5 border border-emerald-400/40">
                         <span>⭐</span> TWÓJ AKTUALNY KARNET
-                        {hasMemberUnlockedTier && (
-                          <span className="w-4 h-4 rounded-full bg-rose-600 text-white font-black text-[9px] flex items-center justify-center ml-0.5 animate-pulse">
-                            !
-                          </span>
-                        )}
                       </span>
                     )}
                   </div>
