@@ -56,20 +56,16 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   const pName = cleanStr(pass.nazwa || pass.pass || '');
   const tName = cleanStr(tabela.nazwa || '');
 
-  // 1. Dokładne dopasowanie nazwy
   if (pName === tName) return true;
 
-  // 2. Umowa pasuje TYLKO do tabeli umowy
   const pIsContract = pName.includes('umow') || isContractPassCheck(pass);
   const tIsContract = tName.includes('umow') || isContractPassCheck(tabela);
   if (pIsContract !== tIsContract) return false;
 
-  // 3. Karnet 6-miesięczny pasuje TYLKO do tabeli 6-miesięcznej
   const pIs6M = pName.includes('6 m') || pName.includes('6m') || pName.includes('pol roku') || pName.includes('pół roku');
   const tIs6M = tName.includes('6 m') || tName.includes('6m') || tName.includes('pol roku') || tName.includes('pół roku');
   if (pIs6M !== tIs6M) return false;
 
-  // 4. Dopasowanie tematyczne
   const pIsOpen = pName.includes('open');
   const tIsOpen = tName.includes('open');
   if (pIsOpen && tIsOpen) return true;
@@ -88,20 +84,14 @@ const getInstallmentsFromPass = (pass: any): number => {
   if (pass.rata !== undefined && pass.rata !== null) {
     const raw = String(pass.rata).trim();
     const slashMatch = raw.match(/(\d+)\s*\/\s*(\d+)/);
-    if (slashMatch && parseInt(slashMatch[1], 10) > 0) {
-      return parseInt(slashMatch[1], 10);
-    }
+    if (slashMatch && parseInt(slashMatch[1], 10) > 0) return parseInt(slashMatch[1], 10);
     const singleMatch = raw.match(/(\d+)/);
-    if (singleMatch && parseInt(singleMatch[1], 10) > 0) {
-      return parseInt(singleMatch[1], 10);
-    }
+    if (singleMatch && parseInt(singleMatch[1], 10) > 0) return parseInt(singleMatch[1], 10);
   }
 
   if (pass.statusTekst) {
     const m = String(pass.statusTekst).match(/rata\s*(\d+)/i) || String(pass.statusTekst).match(/(\d+)\s*\/\s*12/);
-    if (m && parseInt(m[1], 10) > 0) {
-      return parseInt(m[1], 10);
-    }
+    if (m && parseInt(m[1], 10) > 0) return parseInt(m[1], 10);
   }
 
   const altKeys = ['oplaconeRaty', 'oplacone_raty', 'raty', 'ratyOplacone', 'numerRaty', 'liczbaRat'];
@@ -115,7 +105,7 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 0;
 };
 
-// Precyzyjne wyliczenie długości karnetu w miesiącach
+// Długość karnetu w miesiącach
 const getPassTotalDurationMonths = (pass: any): number => {
   if (!pass) return 1;
   const pName = cleanStr(pass.nazwa || pass.pass || '');
@@ -125,7 +115,15 @@ const getPassTotalDurationMonths = (pass: any): number => {
   return 1;
 };
 
-// Wyliczanie upływu miesięcy dla karnetów okresowych płaconych z góry (np. 6M)
+// Suma dni zawieszenia przypisana do danego karnetu
+const getPassSuspensionDays = (pass: any): number => {
+  if (!pass) return 0;
+  const rawHist = pass.historiaZawieszen || pass.historiazawieszen;
+  const hist = safeJsonParse(rawHist, []);
+  return hist.reduce((sum: number, h: any) => sum + (parseInt(h.dni || h.planowane_dni || '0', 10) || 0), 0);
+};
+
+// Wyliczanie upływu miesięcy dla karnetów okresowych z uwzględnieniem zawieszenia
 const getElapsedMonthsForPass = (pass: any): number => {
   if (!pass || !pass.waznyDo) return 0;
   const totalMonths = getPassTotalDurationMonths(pass);
@@ -135,17 +133,22 @@ const getElapsedMonthsForPass = (pass: any): number => {
   const [eY, eM, eD] = String(pass.waznyDo).split('-').map(Number);
   if (!eY || !eM) return 1;
 
+  const suspensionDays = getPassSuspensionDays(pass);
+  
+  // Data startu = waznyDo minus pełny okres trwania minus doliczone dni zawieszenia
   const expDate = new Date(eY, eM - 1, eD || 1);
-  const startDate = new Date(eY, (eM - 1) - totalMonths, eD || 1);
+  const startDateMs = expDate.getTime() - (totalMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
+  const startDate = new Date(startDateMs);
 
-  // Ile pełnych miesięcy upłynęło od startDate do now
-  const monthsDiff = (now.getFullYear() - startDate.getFullYear()) * 12 + (now.getMonth() - startDate.getMonth());
-  const elapsed = Math.max(1, monthsDiff);
-
+  // Efektywny czas aktywny w milisekundach (czas od startu minus dni pauzy)
+  const activeTimeMs = Math.max(0, (now.getTime() - startDate.getTime()) - (suspensionDays * 24 * 60 * 60 * 1000));
+  const activeDays = Math.floor(activeTimeMs / (1000 * 60 * 60 * 24));
+  
+  const elapsed = Math.max(1, Math.floor(activeDays / 30));
   return Math.min(totalMonths, elapsed);
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej (uwzględniając raty umów i staż w karnetach długoterminowych)
+// Wyliczanie rzeczywistej ciągłości ogólnej
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
@@ -216,11 +219,9 @@ export default function TwojBonusPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [allKlienci, setAllKlienci] = useState<any[]>([]);
 
-  // Wyszukiwanie podopiecznego przez administratora
+  // Wyszukiwanie podopiecznego
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
-
-  // Zweryfikowani klubowicze przez administratora
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
 
   // Główny status programu
@@ -365,12 +366,6 @@ export default function TwojBonusPage() {
         parsed.sort((a: any, b: any) => (a.kolejnosc ?? 0) - (b.kolejnosc ?? 0));
         setBonusTables(parsed);
         if (parsed[0]) setTargetTableId(parsed[0].id);
-      } else {
-        setBonusTables([
-          { id: 1, nazwa: 'OPEN - UMOWA 12 MIESIĘCY', typ_karnetu: 'Umowa 12 miesięcy', cena: 289, kolejnosc: 0, customTiers: defaultTiersUmowa },
-          { id: 2, nazwa: 'OPEN - 6 MIESIĘCY', typ_karnetu: 'Na czas', cena: 1720, kolejnosc: 1, customTiers: defaultTiersOpen },
-          { id: 3, nazwa: 'OPEN', typ_karnetu: 'Na czas', cena: 319, kolejnosc: 2, customTiers: defaultTiersOpen }
-        ]);
       }
 
       const transakcjeData = transakcjeResponse.data || [];
@@ -629,9 +624,7 @@ export default function TwojBonusPage() {
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
     const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
 
-    if (!userPass) {
-      return { value: 0, isReset: false, reason: '' };
-    }
+    if (!userPass) return { value: 0, isReset: false, reason: '' };
 
     if (userPass.isPassChangedReset || userPass.changedPassReset) {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
@@ -645,7 +638,6 @@ export default function TwojBonusPage() {
       const effectiveContinuity = getClientEffectiveContinuity(user);
       let finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
 
-      // --- STRAŻNIK ZAWIESZEŃ (MIESIĄC ODRABIANIA) ---
       const passHistZaw = safeJsonParse(userPass.historiaZawieszen || userPass.historiazawieszen, []);
       const totalSuspendedDays = passHistZaw.reduce((sum: number, hz: any) => sum + (parseInt(hz.dni || hz.planowane_dni || '0', 10) || 0), 0);
 
@@ -674,7 +666,7 @@ export default function TwojBonusPage() {
     return { value: finalVal, isReset: false, reason: '' };
   };
 
-  // Precyzyjne wyliczanie daty odblokowania (zawsze 01.MM.YYYY dla umów i karnetów okresowych)
+  // Wyliczanie dokładnej daty odblokowania progu uwzględniające pauzy/zawieszenia
   const getTierUnlockDate = (tier: any, tabela: any, user: any): string | null => {
     if (!user) return null;
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
@@ -686,11 +678,10 @@ export default function TwojBonusPage() {
     if (progress.value < thresh) return null;
 
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
-
     const pad = (n: number) => String(n).padStart(2, '0');
     const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 
-    // 1. DLA UMÓW 12M
+    // A. DLA UMÓW 12M: Pierwszy dzień miesiąca danej raty
     if (isContract) {
       const currentRata = Math.max(1, progress.value);
       const baseDateStr = userPass.waznyDo || user.umowa_oplacona_do || new Date().toISOString().split('T')[0];
@@ -703,25 +694,27 @@ export default function TwojBonusPage() {
 
       const targetMonthIndex = (bMonth - 1) - (currentRata - thresh);
       const targetDate = new Date(bYear, targetMonthIndex, 1);
-
       return formatDate(targetDate);
     }
 
-    // 2. DLA KARNETÓW OKRESOWYCH PŁACONYCH Z GÓRY (np. 6 MIESIĘCY)
+    // B. DLA KARNETÓW OKRESOWYCH (np. 6 MIESIĘCY): Data startu + próg + dni zawieszenia
     const totalDurationMonths = getPassTotalDurationMonths(userPass);
     if (totalDurationMonths > 1 && userPass.waznyDo) {
-      const [eY, eM] = String(userPass.waznyDo).split('-').map(Number);
+      const [eY, eM, eD] = String(userPass.waznyDo).split('-').map(Number);
       if (eY && eM) {
-        // Obliczamy miesiąc rozpoczęcia karnetu
-        const startMonthIndex = (eM - 1) - totalDurationMonths;
-        // Miesiąc odblokowania to startMonth + próg (odblokowanie z 1. dniem danego miesiąca)
-        const unlockMonthIndex = startMonthIndex + (thresh - 1);
-        const targetDate = new Date(eY, unlockMonthIndex, 1);
-        return formatDate(targetDate);
+        const suspensionDays = getPassSuspensionDays(userPass);
+        const expDate = new Date(eY, eM - 1, eD || 1);
+        
+        // Obliczenie dokładnej daty startu karnetu
+        const startDateMs = expDate.getTime() - (totalDurationMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
+        
+        // Data odblokowania = data startu + próg miesięcy + dni zawieszenia
+        const unlockDateMs = startDateMs + (thresh * 30 * 24 * 60 * 60 * 1000) + (suspensionDays * 24 * 60 * 60 * 1000);
+        return formatDate(new Date(unlockDateMs));
       }
     }
 
-    // 3. DLA KARNETÓW 1-MIESIĘCZNYCH (Z TRANSAKCJI LUB REJESTRACJI)
+    // C. DLA ZWYKŁYCH KARNETÓW CZASOWYCH (OPEN 1M)
     const userTx: any[] = user.transactions || [];
     const cycleTx = userTx.filter((t: any) => {
       const desc = String(t.opis || '').toLowerCase();
@@ -734,7 +727,7 @@ export default function TwojBonusPage() {
       const targetTx = cycleTx[thresh - 1];
       if (targetTx?.created_at) {
         const d = new Date(targetTx.created_at);
-        if (!isNaN(d.getTime())) return formatDate(new Date(d.getFullYear(), d.getMonth(), 1));
+        if (!isNaN(d.getTime())) return formatDate(d);
       }
     }
 
@@ -743,14 +736,11 @@ export default function TwojBonusPage() {
       const d = new Date(regDateStr);
       if (!isNaN(d.getTime())) {
         d.setMonth(d.getMonth() + Math.max(0, thresh - 1));
-        d.setDate(1);
         return formatDate(d);
       }
     }
 
-    const now = new Date();
-    now.setDate(1);
-    return formatDate(now);
+    return formatDate(new Date());
   };
 
   // Płynne skalowanie paska postępu na osi roadmapy
@@ -844,12 +834,6 @@ export default function TwojBonusPage() {
   const activeViewingPass = activeViewingPasses[0];
   const activeViewingUserContinuity = getClientEffectiveContinuity(activeViewingUser);
 
-  const totalLevelsCount = bonusTables.reduce((acc, t) => acc + (t.customTiers?.length || 0), 0);
-  const countContinuityMembers = allKlienci.filter((k: any) => getClientEffectiveContinuity(k) >= 2).length;
-  const avgContinuity = allKlienci.length > 0 
-    ? (allKlienci.reduce((acc, curr) => acc + getClientEffectiveContinuity(curr), 0) / allKlienci.length).toFixed(1)
-    : '1.0';
-
   const getAccentBorder = (accent: string) => {
     switch (accent) {
       case 'amber': return 'border-l-4 border-l-amber-500';
@@ -860,7 +844,6 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Sortowanie tabel: aktywny karnet na pierwszym miejscu
   const displayedTables = [...bonusTables].sort((a, b) => {
     const aIsUserPass = activeViewingPasses.some((k: any) => isPassMatchingTable(k, a));
     const bIsUserPass = activeViewingPasses.some((k: any) => isPassMatchingTable(k, b));
@@ -1069,41 +1052,41 @@ export default function TwojBonusPage() {
               {/* WIDOK DLA TABLETÓW I KOMPUTERÓW */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
-                  <table className="w-full text-left border-collapse">
+                  <table className="w-full text-left border-collapse table-fixed">
                     <thead>
                       <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-10">
-                        <th className="py-3 px-4">KLUBOWICZ</th>
-                        <th className="py-3 px-4">KARNET</th>
-                        <th className="py-3 px-4 whitespace-nowrap">ODBLOKOWANY POZIOM</th>
-                        <th className="py-3 px-4 text-right whitespace-nowrap">AKCJA</th>
+                        <th className="py-3 px-4 w-[35%]">KLUBOWICZ</th>
+                        <th className="py-3 px-4 w-[35%]">KARNET</th>
+                        <th className="py-3 px-4 w-[18%]">ODBLOKOWANY POZIOM</th>
+                        <th className="py-3 px-4 text-right w-[12%]">AKCJA</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-rose-100 text-xs font-medium">
                       {qualifiedMembersList.map((client) => (
                         <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
-                          <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">
+                          <td className="py-3 px-4 font-bold text-slate-900 truncate">
                             <div className="flex items-center gap-2">
                               <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
-                              <span>{client.firstName} {client.lastName}</span>
+                              <span className="truncate">{client.firstName} {client.lastName}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 font-bold text-slate-800">{client.passName}</td>
-                          <td className="py-3 px-4 whitespace-nowrap">
+                          <td className="py-3 px-4 font-bold text-slate-800 truncate">{client.passName}</td>
+                          <td className="py-3 px-4">
                             <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-1 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap shadow-2xs">
                               {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.displayUnit})
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-right whitespace-nowrap">
-                            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
                               <button
                                 onClick={() => setInspectedClient(client)}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                               >
-                                SPRAWDŹ →
+                                SPRAWDŹ
                               </button>
                               <button
                                 onClick={() => handleMarkTierAsVerified(client.verificationKey, `${client.firstName} ${client.lastName}`, client.topLevel?.levelName)}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                                 title="Zatwierdź nagrodę i zdejmij z listy"
                               >
                                 ✓ ZALICZ
@@ -1245,16 +1228,13 @@ export default function TwojBonusPage() {
                   </div>
                 )}
 
-                {/* Kontener osi o stałej wysokości */}
                 <div className="relative h-28 px-4 flex items-center">
-                  {/* Główny poziomy pasek osi */}
                   <div className="absolute left-4 right-4 h-2 bg-slate-100 rounded-full" />
                   <div
                     className="absolute left-4 h-2 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full transition-all duration-500"
                     style={{ width: `calc((100% - 32px) * ${fillProgressPercent / 100})` }}
                   />
 
-                  {/* Warstwa węzłów osi */}
                   <div className="relative w-full h-full">
                     {tabela.customTiers?.map((tier: any, tierIdx: number) => {
                       const tierVal = Number(tier.threshold) || 1;
@@ -1262,7 +1242,6 @@ export default function TwojBonusPage() {
                       const isReached = isProgramActive && !progressData.isReset && userVal >= tierVal;
                       const isSelected = highlightedTierId === tier.id;
 
-                      // Naprzemienny układ: parzyste u góry, nieparzyste na dole
                       const isTop = tierIdx % 2 === 0;
                       const accentStyles = getNodeAccentStyles(tier.accent || 'amber', isReached, isSelected);
 
@@ -1279,7 +1258,6 @@ export default function TwojBonusPage() {
                         >
                           {isTop ? (
                             <div className="flex flex-col items-center -translate-y-full">
-                              {/* Kółko u góry */}
                               <div
                                 className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${
                                   accentStyles.node
@@ -1287,14 +1265,11 @@ export default function TwojBonusPage() {
                               >
                                 {isReached ? '✓' : tier.threshold}
                               </div>
-                              {/* Pionowa linia łącząca kółko bezpośrednio z osią */}
                               <div className={`w-0.5 h-3.5 ${accentStyles.line}`} />
                             </div>
                           ) : (
                             <div className="flex flex-col items-center">
-                              {/* Pionowa linia łącząca oś bezpośrednio z dolnym kółkiem */}
                               <div className={`w-0.5 h-3.5 ${accentStyles.line}`} />
-                              {/* Kółko na dole */}
                               <div
                                 className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${
                                   accentStyles.node
