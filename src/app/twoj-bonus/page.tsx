@@ -115,33 +115,32 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 0;
 };
 
+// Precyzyjne wyliczenie długości karnetu w miesiącach
+const getPassTotalDurationMonths = (pass: any): number => {
+  if (!pass) return 1;
+  const pName = cleanStr(pass.nazwa || pass.pass || '');
+  if (pName.includes('6 m') || pName.includes('6m') || pName.includes('pol roku') || pName.includes('pół roku')) return 6;
+  if (pName.includes('3 m') || pName.includes('3m')) return 3;
+  if (pName.includes('rok') || pName.includes('12 m') || pName.includes('12m')) return 12;
+  return 1;
+};
+
 // Wyliczanie upływu miesięcy dla karnetów okresowych płaconych z góry (np. 6M)
 const getElapsedMonthsForPass = (pass: any): number => {
   if (!pass || !pass.waznyDo) return 0;
-  const pName = cleanStr(pass.nazwa || pass.pass || '');
-
-  let totalMonths = 0;
-  if (pName.includes('6 m') || pName.includes('6m') || pName.includes('pol roku') || pName.includes('pół roku')) {
-    totalMonths = 6;
-  } else if (pName.includes('3 m') || pName.includes('3m')) {
-    totalMonths = 3;
-  } else if (pName.includes('rok') || pName.includes('12 m') || pName.includes('12m')) {
-    totalMonths = 12;
-  }
-
-  if (totalMonths <= 0) return 0;
+  const totalMonths = getPassTotalDurationMonths(pass);
+  if (totalMonths <= 1) return 1;
 
   const now = new Date();
-  const expDate = new Date(pass.waznyDo);
-  if (isNaN(expDate.getTime())) return 0;
+  const [eY, eM, eD] = String(pass.waznyDo).split('-').map(Number);
+  if (!eY || !eM) return 1;
 
-  // Różnica w dniach do wygaśnięcia karnetu
-  const diffTime = expDate.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const expDate = new Date(eY, eM - 1, eD || 1);
+  const startDate = new Date(eY, (eM - 1) - totalMonths, eD || 1);
 
-  // Ile pełnych 30-dniowych miesięcy pozostało
-  const remainingMonths = Math.max(0, Math.ceil(diffDays / 30));
-  const elapsed = Math.max(1, totalMonths - remainingMonths);
+  // Ile pełnych miesięcy upłynęło od startDate do now
+  const monthsDiff = (now.getFullYear() - startDate.getFullYear()) * 12 + (now.getMonth() - startDate.getMonth());
+  const elapsed = Math.max(1, monthsDiff);
 
   return Math.min(totalMonths, elapsed);
 };
@@ -622,7 +621,7 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
-  // OBLICZANIE POSTĘPU
+  // OBLICZANIE POSTĘPU Z ZABEZPIECZENIEM ODRABIANIA ZAWIESZEŃ
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
@@ -675,7 +674,7 @@ export default function TwojBonusPage() {
     return { value: finalVal, isReset: false, reason: '' };
   };
 
-  // Precyzyjne wyliczanie daty odblokowania (zawsze 01.MM.YYYY dla umów)
+  // Precyzyjne wyliczanie daty odblokowania (zawsze 01.MM.YYYY dla umów i karnetów okresowych)
   const getTierUnlockDate = (tier: any, tabela: any, user: any): string | null => {
     if (!user) return null;
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
@@ -691,9 +690,9 @@ export default function TwojBonusPage() {
     const pad = (n: number) => String(n).padStart(2, '0');
     const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 
+    // 1. DLA UMÓW 12M
     if (isContract) {
       const currentRata = Math.max(1, progress.value);
-      
       const baseDateStr = userPass.waznyDo || user.umowa_oplacona_do || new Date().toISOString().split('T')[0];
       let [bYear, bMonth] = baseDateStr.split('-').map(Number);
       if (!bYear || !bMonth) {
@@ -706,37 +705,52 @@ export default function TwojBonusPage() {
       const targetDate = new Date(bYear, targetMonthIndex, 1);
 
       return formatDate(targetDate);
-    } else {
-      const userTx: any[] = user.transactions || [];
-      const cycleTx = userTx.filter((t: any) => {
-        const desc = String(t.opis || '').toLowerCase();
-        const typ = String(t.typ_operacji || '').toLowerCase();
-        return (typ.includes('karnet') || desc.includes('karnet') || desc.includes('przedłużenie')) && !desc.includes('usunięcie');
-      });
-
-      if (cycleTx.length >= thresh) {
-        cycleTx.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-        const targetTx = cycleTx[thresh - 1];
-        if (targetTx?.created_at) {
-          const d = new Date(targetTx.created_at);
-          if (!isNaN(d.getTime())) return formatDate(d);
-        }
-      }
-
-      const regDateStr = user.registered || user.Zarejestrowany || user.activated;
-      if (regDateStr) {
-        const d = new Date(regDateStr);
-        if (!isNaN(d.getTime())) {
-          d.setMonth(d.getMonth() + Math.max(0, thresh - 1));
-          d.setDate(1);
-          return formatDate(d);
-        }
-      }
-      
-      const now = new Date();
-      now.setDate(1);
-      return formatDate(now);
     }
+
+    // 2. DLA KARNETÓW OKRESOWYCH PŁACONYCH Z GÓRY (np. 6 MIESIĘCY)
+    const totalDurationMonths = getPassTotalDurationMonths(userPass);
+    if (totalDurationMonths > 1 && userPass.waznyDo) {
+      const [eY, eM] = String(userPass.waznyDo).split('-').map(Number);
+      if (eY && eM) {
+        // Obliczamy miesiąc rozpoczęcia karnetu
+        const startMonthIndex = (eM - 1) - totalDurationMonths;
+        // Miesiąc odblokowania to startMonth + próg (odblokowanie z 1. dniem danego miesiąca)
+        const unlockMonthIndex = startMonthIndex + (thresh - 1);
+        const targetDate = new Date(eY, unlockMonthIndex, 1);
+        return formatDate(targetDate);
+      }
+    }
+
+    // 3. DLA KARNETÓW 1-MIESIĘCZNYCH (Z TRANSAKCJI LUB REJESTRACJI)
+    const userTx: any[] = user.transactions || [];
+    const cycleTx = userTx.filter((t: any) => {
+      const desc = String(t.opis || '').toLowerCase();
+      const typ = String(t.typ_operacji || '').toLowerCase();
+      return (typ.includes('karnet') || desc.includes('karnet') || desc.includes('przedłużenie')) && !desc.includes('usunięcie');
+    });
+
+    if (cycleTx.length >= thresh) {
+      cycleTx.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      const targetTx = cycleTx[thresh - 1];
+      if (targetTx?.created_at) {
+        const d = new Date(targetTx.created_at);
+        if (!isNaN(d.getTime())) return formatDate(new Date(d.getFullYear(), d.getMonth(), 1));
+      }
+    }
+
+    const regDateStr = user.registered || user.Zarejestrowany || user.activated;
+    if (regDateStr) {
+      const d = new Date(regDateStr);
+      if (!isNaN(d.getTime())) {
+        d.setMonth(d.getMonth() + Math.max(0, thresh - 1));
+        d.setDate(1);
+        return formatDate(d);
+      }
+    }
+
+    const now = new Date();
+    now.setDate(1);
+    return formatDate(now);
   };
 
   // Płynne skalowanie paska postępu na osi roadmapy
