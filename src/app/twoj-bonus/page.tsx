@@ -134,13 +134,10 @@ const getElapsedMonthsForPass = (pass: any): number => {
   if (!eY || !eM) return 1;
 
   const suspensionDays = getPassSuspensionDays(pass);
-  
-  // Data startu = waznyDo minus pełny okres trwania minus doliczone dni zawieszenia
   const expDate = new Date(eY, eM - 1, eD || 1);
   const startDateMs = expDate.getTime() - (totalMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
   const startDate = new Date(startDateMs);
 
-  // Efektywny czas aktywny w milisekundach (czas od startu minus dni pauzy)
   const activeTimeMs = Math.max(0, (now.getTime() - startDate.getTime()) - (suspensionDays * 24 * 60 * 60 * 1000));
   const activeDays = Math.floor(activeTimeMs / (1000 * 60 * 60 * 24));
   
@@ -223,6 +220,7 @@ export default function TwojBonusPage() {
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [inspectedClient, setInspectedClient] = useState<any>(null);
   const [verifiedMemberTiers, setVerifiedMemberTiers] = useState<string[]>([]);
+  const [rulesRecordId, setRulesRecordId] = useState<number | null>(null);
 
   // Główny status programu
   const [isProgramActive, setIsProgramActive] = useState<boolean>(true);
@@ -328,7 +326,28 @@ export default function TwojBonusPage() {
 
       const rulesData = rulesResponse.data;
       if (rulesData) {
+        setRulesRecordId(rulesData.id);
         if (rulesData.bonus_program_active !== undefined) setIsProgramActive(rulesData.bonus_program_active);
+        
+        // Odczyt listy trwale zweryfikowanych progów
+        let dbVerified: string[] = [];
+        if (rulesData.bonus_verified_tiers) {
+          try {
+            dbVerified = typeof rulesData.bonus_verified_tiers === 'string'
+              ? JSON.parse(rulesData.bonus_verified_tiers)
+              : rulesData.bonus_verified_tiers;
+          } catch(e) {}
+        }
+        
+        // Zabezpieczenie z localStorage
+        let localVerified: string[] = [];
+        try {
+          localVerified = JSON.parse(localStorage.getItem('fm_verified_member_tiers') || '[]');
+        } catch(e) {}
+
+        const mergedVerified = Array.from(new Set([...dbVerified, ...localVerified]));
+        setVerifiedMemberTiers(mergedVerified);
+
         if (rulesData.bonus_qualification_rules) {
           try {
             const parsedRules = typeof rulesData.bonus_qualification_rules === 'string'
@@ -705,10 +724,7 @@ export default function TwojBonusPage() {
         const suspensionDays = getPassSuspensionDays(userPass);
         const expDate = new Date(eY, eM - 1, eD || 1);
         
-        // Obliczenie dokładnej daty startu karnetu
         const startDateMs = expDate.getTime() - (totalDurationMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
-        
-        // Data odblokowania = data startu + próg miesięcy + dni zawieszenia
         const unlockDateMs = startDateMs + (thresh * 30 * 24 * 60 * 60 * 1000) + (suspensionDays * 24 * 60 * 60 * 1000);
         return formatDate(new Date(unlockDateMs));
       }
@@ -788,15 +804,39 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  // Zatwierdzenie poziomu przez administratora z oknem potwierdzenia
-  const handleMarkTierAsVerified = (verificationKey: string, clientName?: string, tierName?: string) => {
+  // Trwałe zatwierdzenie poziomu przez administratora
+  const handleMarkTierAsVerified = async (verificationKey: string, clientName?: string, tierName?: string) => {
     const confirmMessage = clientName && tierName
-      ? `Czy na pewno chcesz zatwierdzić osiągnięcie poziomu "${tierName}" dla klubowicza ${clientName}?\n\nPo zatwierdzeniu klubowicz zostanie usunięty z listy oczekujących na weryfikację.`
+      ? `Czy na pewno chcesz zatwierdzić osiągnięcie poziomu "${tierName}" dla klubowicza ${clientName}?\n\nPo zatwierdzeniu klubowicz zostanie trwale usunięty z listy oczekujących na weryfikację.`
       : `Czy na pewno chcesz zatwierdzić ten poziom i zdjąć klubowicza z listy oczekujących?`;
 
     if (!confirm(confirmMessage)) return;
 
-    setVerifiedMemberTiers(prev => [...prev, verificationKey]);
+    const nextVerified = Array.from(new Set([...verifiedMemberTiers, verificationKey]));
+    setVerifiedMemberTiers(nextVerified);
+
+    try {
+      localStorage.setItem('fm_verified_member_tiers', JSON.stringify(nextVerified));
+    } catch(e) {}
+
+    try {
+      if (rulesRecordId) {
+        await supabase
+          .from('club_booking_rules')
+          .update({ bonus_verified_tiers: JSON.stringify(nextVerified) })
+          .eq('id', rulesRecordId);
+      } else {
+        const { data: existingRule } = await supabase.from('club_booking_rules').select('id').limit(1).maybeSingle();
+        if (existingRule) {
+          await supabase
+            .from('club_booking_rules')
+            .update({ bonus_verified_tiers: JSON.stringify(nextVerified) })
+            .eq('id', existingRule.id);
+        }
+      }
+    } catch (err) {
+      console.error("Błąd trwałego zapisu weryfikacji progu:", err);
+    }
   };
 
   const searchedMembers = adminSearchQuery.trim().length >= 2
@@ -861,7 +901,7 @@ export default function TwojBonusPage() {
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
-              <span>🏆</span> PROGRAM BONUSOWY
+              <span>🎖️</span> PROGRAM BONUSOWY
             </h1>
             {hasMemberUnlockedTier && (
               <span className="w-6 h-6 rounded-full bg-rose-600 text-white font-black text-xs flex items-center justify-center animate-pulse shadow-md" title="Masz odblokowany nowy bonus!">
@@ -882,7 +922,7 @@ export default function TwojBonusPage() {
         <div className="bg-white border border-sky-200 p-5 sm:p-6 rounded-3xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-xl font-black uppercase tracking-wide text-sky-950 flex items-center gap-2.5">
-              <span>🏆</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
+              <span>🎖️</span> PROGRAM BONUSOWY I TABELE CIĄGŁOŚCI
             </h1>
             <p className="text-xs text-slate-500 font-medium">
               Zarządzaj tabelami ciągłości karnetów, weryfikuj odblokowane poziomy klubowiczów i konfiguruj progi nagród.
@@ -999,7 +1039,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW */}
+          {/* TABELA KLUBOWICZÓW Z DYNAMICZNYM DOPASOWANIEM SZEROKOŚCI BEZ UCINANIA */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1049,45 +1089,45 @@ export default function TwojBonusPage() {
                 ))}
               </div>
 
-              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW */}
+              {/* WIDOK DLA TABLETÓW I KOMPUTERÓW (PEŁNA SZEROKOŚĆ PLAKIETKI I PRZYCISKÓW) */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
-                  <table className="w-full text-left border-collapse table-fixed">
+                  <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-10">
-                        <th className="py-3 px-4 w-[35%]">KLUBOWICZ</th>
-                        <th className="py-3 px-4 w-[35%]">KARNET</th>
-                        <th className="py-3 px-4 w-[18%]">ODBLOKOWANY POZIOM</th>
-                        <th className="py-3 px-4 text-right w-[12%]">AKCJA</th>
+                        <th className="py-3 px-4">KLUBOWICZ</th>
+                        <th className="py-3 px-4">KARNET</th>
+                        <th className="py-3 px-4 text-center whitespace-nowrap w-[240px]">ODBLOKOWANY POZIOM</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap w-[200px]">AKCJA</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-rose-100 text-xs font-medium">
                       {qualifiedMembersList.map((client) => (
                         <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
-                          <td className="py-3 px-4 font-bold text-slate-900 truncate">
+                          <td className="py-3 px-4 font-bold text-slate-900">
                             <div className="flex items-center gap-2">
                               <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
                               <span className="truncate">{client.firstName} {client.lastName}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 font-bold text-slate-800 truncate">{client.passName}</td>
-                          <td className="py-3 px-4">
-                            <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-1 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap shadow-2xs">
+                          <td className="py-3 px-4 font-bold text-slate-800">{client.passName}</td>
+                          <td className="py-3 px-4 text-center whitespace-nowrap">
+                            <span className="bg-amber-100 text-amber-900 font-black px-3 py-1 rounded-md text-[10px] uppercase border border-amber-300 inline-block shadow-2xs whitespace-nowrap">
                               {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.displayUnit})
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-2">
                               <button
                                 onClick={() => setInspectedClient(client)}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                               >
-                                SPRAWDŹ
+                                SPRAWDŹ →
                               </button>
                               <button
                                 onClick={() => handleMarkTierAsVerified(client.verificationKey, `${client.firstName} ${client.lastName}`, client.topLevel?.levelName)}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
-                                title="Zatwierdź nagrodę i zdejmij z listy"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                title="Zatwierdź nagrodę i zdejmij z listy na stałe"
                               >
                                 ✓ ZALICZ
                               </button>
