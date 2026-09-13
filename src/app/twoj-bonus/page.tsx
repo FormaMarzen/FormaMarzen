@@ -49,7 +49,7 @@ const isContractPassCheck = (item: any): boolean => {
   return typ.includes('umow') || typ.includes('12') || nazwa.includes('umow') || nazwa.includes('12m') || rata.includes('/ 12') || rata.includes('/12');
 };
 
-// Ścisłe, bezbłędne parowanie karnetu klubowicza z tabelą bonusową
+// Ścisłe parowanie karnetu klubowicza z tabelą bonusową
 const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   if (!pass || !tabela) return false;
 
@@ -81,7 +81,7 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   return false;
 };
 
-// Precyzyjny odczyt liczby rat z obiektu karnetu (np. "9 / 12" -> 9)
+// Precyzyjny odczyt liczby rat z obiektu karnetu
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
 
@@ -141,6 +141,33 @@ const getTierUnitLabel = (tier: any, tabela: any) => {
     return 'miesięcy';
   }
   return tier.unit || 'cykli';
+};
+
+// Zwracanie palety barw węzła dla danego akcentu
+const getNodeAccentStyles = (accent: string, isReached: boolean, isSelected: boolean) => {
+  if (isReached) {
+    return 'bg-emerald-500 text-white border-2 border-emerald-600 shadow-md ring-4 ring-emerald-100';
+  }
+
+  let borderCol = 'border-amber-400 text-amber-900 hover:border-amber-500';
+  let lineCol = 'bg-amber-400';
+
+  if (accent === 'slate') {
+    borderCol = 'border-slate-400 text-slate-800 hover:border-slate-500';
+    lineCol = 'bg-slate-400';
+  } else if (accent === 'yellow') {
+    borderCol = 'border-amber-500 text-amber-950 hover:border-amber-600';
+    lineCol = 'bg-amber-500';
+  } else if (accent === 'purple') {
+    borderCol = 'border-purple-500 text-purple-950 hover:border-purple-600';
+    lineCol = 'bg-purple-500';
+  }
+
+  const selectRing = isSelected ? 'ring-4 ring-amber-300 scale-110' : '';
+  return {
+    node: `bg-white border-2 ${borderCol} ${selectRing} shadow-sm`,
+    line: lineCol
+  };
 };
 
 export default function TwojBonusPage() {
@@ -217,7 +244,7 @@ export default function TwojBonusPage() {
 
   // Szablony progów
   const defaultTiersUmowa = [
-    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
+    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesięcy', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
     { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
     { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy po przedłużeniu umowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
     { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1 z wybranym trenerem', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
@@ -1147,7 +1174,7 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* B. LINIA ROADMAPY Z PASKIEM POSTĘPU */}
+              {/* B. LINIA ROADMAPY Z PASKIEM POSTĘPU I ZYGZAKOWATYMI WĘZŁAMI */}
               <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-4">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
@@ -1164,24 +1191,30 @@ export default function TwojBonusPage() {
                   </div>
                 )}
 
-                <div className="relative pt-6 pb-6 px-4">
-                  <div className="absolute top-1/2 left-4 right-4 h-2 bg-slate-100 rounded-full -translate-y-1/2" />
+                {/* Zwiększona wysokość kontenera, aby kółka u góry i u dołu nie wychodziły poza oś */}
+                <div className="relative h-28 px-4 flex items-center">
+                  <div className="absolute left-4 right-4 h-2 bg-slate-100 rounded-full" />
                   <div
-                    className="absolute top-1/2 left-4 h-2 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full -translate-y-1/2 transition-all duration-500"
+                    className="absolute left-4 h-2 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full transition-all duration-500"
                     style={{ width: `calc((100% - 32px) * ${fillProgressPercent / 100})` }}
                   />
 
-                  <div className="relative h-7" style={{ margin: '0 2px' }}>
-                    {tabela.customTiers?.map((tier: any) => {
+                  <div className="relative w-full h-full">
+                    {tabela.customTiers?.map((tier: any, tierIdx: number) => {
                       const tierVal = Number(tier.threshold) || 1;
                       const nodePosPercent = getProportionalLeftPercent(tierVal, maxThreshold);
                       const isReached = isProgramActive && !progressData.isReset && userVal >= tierVal;
                       const isSelected = highlightedTierId === tier.id;
 
+                      // Naprzemienny układ: parzyste u góry, nieparzyste na dole
+                      const isTop = tierIdx % 2 === 0;
+
+                      const accentStyles = getNodeAccentStyles(tier.accent || 'amber', isReached, isSelected);
+
                       return (
                         <div
                           key={tier.id}
-                          className="absolute -translate-x-1/2 top-1/2 -translate-y-1/2 flex flex-col items-center cursor-pointer z-10"
+                          className="absolute -translate-x-1/2 top-1/2 flex flex-col items-center cursor-pointer z-10"
                           style={{ left: `${nodePosPercent}%` }}
                           onClick={() => setSelectedRoadmapTier(prev => ({
                             ...prev,
@@ -1189,16 +1222,33 @@ export default function TwojBonusPage() {
                           }))}
                           title={`Próg: ${tier.levelName} (${tier.threshold} ${getTierUnitLabel(tier, tabela)})`}
                         >
-                          <div
-                            className={`w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-black transition-all shadow-sm ${
-                              isReached
-                                ? 'bg-emerald-500 text-white ring-4 ring-emerald-100'
-                                : 'bg-white text-slate-600 border-2 border-slate-300 hover:border-amber-400'
-                            } ${isSelected ? 'ring-4 ring-amber-400 scale-110' : ''}`}
-                          >
-                            {isReached ? '✓' : tier.threshold}
-                          </div>
-                          {/* Usunięto podpis z osi dla czystego UX */}
+                          {isTop ? (
+                            <>
+                              {/* Kółko u góry */}
+                              <div
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all -translate-y-8 ${
+                                  typeof accentStyles === 'string' ? accentStyles : accentStyles.node
+                                }`}
+                              >
+                                {isReached ? '✓' : tier.threshold}
+                              </div>
+                              {/* Linia łącząca kółko z osią */}
+                              <div className={`w-0.5 h-3 -translate-y-8 ${isReached ? 'bg-emerald-500' : typeof accentStyles === 'string' ? 'bg-slate-300' : accentStyles.line}`} />
+                            </>
+                          ) : (
+                            <>
+                              {/* Linia łącząca oś z kółkiem na dole */}
+                              <div className={`w-0.5 h-3 translate-y-1 ${isReached ? 'bg-emerald-500' : typeof accentStyles === 'string' ? 'bg-slate-300' : accentStyles.line}`} />
+                              {/* Kółko na dole */}
+                              <div
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all translate-y-1 ${
+                                  typeof accentStyles === 'string' ? accentStyles : accentStyles.node
+                                }`}
+                              >
+                                {isReached ? '✓' : tier.threshold}
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })}
