@@ -146,10 +146,13 @@ const getTierUnitLabel = (tier: any, tabela: any) => {
 // Zwracanie palety barw węzła dla danego akcentu
 const getNodeAccentStyles = (accent: string, isReached: boolean, isSelected: boolean) => {
   if (isReached) {
-    return 'bg-emerald-500 text-white border-2 border-emerald-600 shadow-md ring-4 ring-emerald-100';
+    return {
+      node: 'bg-emerald-500 text-white border-2 border-emerald-600 shadow-md ring-4 ring-emerald-100',
+      line: 'bg-emerald-500'
+    };
   }
 
-  let borderCol = 'border-amber-400 text-amber-900 hover:border-amber-500';
+  let borderCol = 'border-amber-500 text-amber-950 hover:border-amber-600';
   let lineCol = 'bg-amber-400';
 
   if (accent === 'slate') {
@@ -157,10 +160,10 @@ const getNodeAccentStyles = (accent: string, isReached: boolean, isSelected: boo
     lineCol = 'bg-slate-400';
   } else if (accent === 'yellow') {
     borderCol = 'border-amber-500 text-amber-950 hover:border-amber-600';
-    lineCol = 'bg-amber-500';
+    lineCol = 'bg-amber-400';
   } else if (accent === 'purple') {
     borderCol = 'border-purple-500 text-purple-950 hover:border-purple-600';
-    lineCol = 'bg-purple-500';
+    lineCol = 'bg-purple-400';
   }
 
   const selectRing = isSelected ? 'ring-4 ring-amber-300 scale-110' : '';
@@ -244,7 +247,7 @@ export default function TwojBonusPage() {
 
   // Szablony progów
   const defaultTiersUmowa = [
-    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesięcy', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
+    { id: 101, levelName: 'BRĄZOWY', threshold: 2, unit: 'miesiące', accent: 'amber', rewardTitle: 'Niezmienna cena na przedłużenie umowy w kolejnym okresie', rewardBadge: 'GRATIS', secondaryTitle: '10% zniżki na barze i suplementy', secondaryBadge: '-10%', active: true },
     { id: 102, levelName: 'ZŁOTY', threshold: 6, unit: 'miesięcy', accent: 'yellow', rewardTitle: '+14 dni bezpłatnego zamrożenia do puli karnetu', rewardBadge: '+14 DNI', secondaryTitle: 'Darmowa analiza składu ciała InBody', secondaryBadge: 'GRATIS', active: true },
     { id: 103, levelName: 'TRZYNASTY', threshold: 13, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Darmowy miesiąc bonusowy po przedłużeniu umowy', rewardBadge: '-100%', secondaryTitle: 'Limitowana koszulka klubowa Forma Marzeń', secondaryBadge: 'PREZENT', active: true },
     { id: 104, levelName: 'OSIEMNASTY', threshold: 18, unit: 'miesięcy', accent: 'purple', rewardTitle: 'Trening personalny 1:1 z wybranym trenerem', rewardBadge: 'VIP', secondaryTitle: 'Stały status Ambasadora Klubu', secondaryBadge: 'VIP', active: true }
@@ -962,7 +965,7 @@ export default function TwojBonusPage() {
             </div>
           )}
 
-          {/* TABELA KLUBOWICZÓW: PEŁNA WIDOCZNOŚĆ POZIOMU NA KAŻDYM EKRANIE */}
+          {/* TABELA KLUBOWICZÓW */}
           {qualifiedMembersList.length > 0 && (
             <div className="bg-rose-50/30 border border-rose-200 rounded-3xl p-4 sm:p-6 shadow-sm space-y-4 animate-in fade-in">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1015,41 +1018,41 @@ export default function TwojBonusPage() {
               {/* WIDOK DLA TABLETÓW I KOMPUTERÓW */}
               <div className="hidden sm:block overflow-hidden bg-white border border-rose-200 rounded-2xl">
                 <div className="max-h-96 overflow-y-auto">
-                  <table className="w-full text-left border-collapse table-fixed">
+                  <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-rose-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-10">
-                        <th className="py-3 px-4 w-[35%]">KLUBOWICZ</th>
-                        <th className="py-3 px-4 w-[35%]">KARNET</th>
-                        <th className="py-3 px-4 w-[18%]">ODBLOKOWANY POZIOM</th>
-                        <th className="py-3 px-4 text-right w-[12%]">AKCJA</th>
+                        <th className="py-3 px-4">KLUBOWICZ</th>
+                        <th className="py-3 px-4">KARNET</th>
+                        <th className="py-3 px-4 whitespace-nowrap">ODBLOKOWANY POZIOM</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap">AKCJA</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-rose-100 text-xs font-medium">
                       {qualifiedMembersList.map((client) => (
                         <tr key={client.id} className="hover:bg-rose-50/50 transition-colors">
-                          <td className="py-3 px-4 font-bold text-slate-900 truncate">
-                            <div className="flex items-center gap-2 truncate">
+                          <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
                               <span className="w-2 h-2 rounded-full bg-rose-600 shrink-0" />
-                              <span className="truncate">{client.firstName} {client.lastName}</span>
+                              <span>{client.firstName} {client.lastName}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 font-bold text-slate-800 truncate">{client.passName}</td>
-                          <td className="py-3 px-4">
-                            <span className="bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap">
+                          <td className="py-3 px-4 font-bold text-slate-800">{client.passName}</td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className="bg-amber-100 text-amber-900 font-black px-2.5 py-1 rounded-md text-[10px] uppercase border border-amber-300 inline-block whitespace-nowrap shadow-2xs">
                               {client.topLevel?.levelName} ({client.topLevel?.threshold} {client.displayUnit})
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
                               <button
                                 onClick={() => setInspectedClient(client)}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                               >
-                                SPRAWDŹ
+                                SPRAWDŹ →
                               </button>
                               <button
                                 onClick={() => handleMarkTierAsVerified(client.verificationKey, `${client.firstName} ${client.lastName}`, client.topLevel?.levelName)}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                                 title="Zatwierdź nagrodę i zdejmij z listy"
                               >
                                 ✓ ZALICZ
@@ -1174,7 +1177,7 @@ export default function TwojBonusPage() {
                 </div>
               </div>
 
-              {/* B. LINIA ROADMAPY Z PASKIEM POSTĘPU I ZYGZAKOWATYMI WĘZŁAMI */}
+              {/* B. LINIA ROADMAPY Z IDEALNIE POŁĄCZONYMI LINIAMI GÓRA/DÓŁ */}
               <div className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm space-y-4">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-black text-sky-950 uppercase tracking-wider flex items-center gap-1.5">
@@ -1191,14 +1194,16 @@ export default function TwojBonusPage() {
                   </div>
                 )}
 
-                {/* Zwiększona wysokość kontenera, aby kółka u góry i u dołu nie wychodziły poza oś */}
+                {/* Kontener osi o stałej wysokości */}
                 <div className="relative h-28 px-4 flex items-center">
+                  {/* Główny poziomy pasek osi */}
                   <div className="absolute left-4 right-4 h-2 bg-slate-100 rounded-full" />
                   <div
                     className="absolute left-4 h-2 bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full transition-all duration-500"
                     style={{ width: `calc((100% - 32px) * ${fillProgressPercent / 100})` }}
                   />
 
+                  {/* Warstwa węzłów osi */}
                   <div className="relative w-full h-full">
                     {tabela.customTiers?.map((tier: any, tierIdx: number) => {
                       const tierVal = Number(tier.threshold) || 1;
@@ -1208,7 +1213,6 @@ export default function TwojBonusPage() {
 
                       // Naprzemienny układ: parzyste u góry, nieparzyste na dole
                       const isTop = tierIdx % 2 === 0;
-
                       const accentStyles = getNodeAccentStyles(tier.accent || 'amber', isReached, isSelected);
 
                       return (
@@ -1223,31 +1227,31 @@ export default function TwojBonusPage() {
                           title={`Próg: ${tier.levelName} (${tier.threshold} ${getTierUnitLabel(tier, tabela)})`}
                         >
                           {isTop ? (
-                            <>
+                            <div className="flex flex-col items-center -translate-y-full">
                               {/* Kółko u góry */}
                               <div
-                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all -translate-y-8 ${
-                                  typeof accentStyles === 'string' ? accentStyles : accentStyles.node
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${
+                                  accentStyles.node
                                 }`}
                               >
                                 {isReached ? '✓' : tier.threshold}
                               </div>
-                              {/* Linia łącząca kółko z osią */}
-                              <div className={`w-0.5 h-3 -translate-y-8 ${isReached ? 'bg-emerald-500' : typeof accentStyles === 'string' ? 'bg-slate-300' : accentStyles.line}`} />
-                            </>
+                              {/* Pionowa linia łącząca kółko bezpośrednio z osią (do samej linii poziomej) */}
+                              <div className={`w-0.5 h-3.5 ${accentStyles.line}`} />
+                            </div>
                           ) : (
-                            <>
-                              {/* Linia łącząca oś z kółkiem na dole */}
-                              <div className={`w-0.5 h-3 translate-y-1 ${isReached ? 'bg-emerald-500' : typeof accentStyles === 'string' ? 'bg-slate-300' : accentStyles.line}`} />
+                            <div className="flex flex-col items-center">
+                              {/* Pionowa linia łącząca oś bezpośrednio z dolnym kółkiem */}
+                              <div className={`w-0.5 h-3.5 ${accentStyles.line}`} />
                               {/* Kółko na dole */}
                               <div
-                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all translate-y-1 ${
-                                  typeof accentStyles === 'string' ? accentStyles : accentStyles.node
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${
+                                  accentStyles.node
                                 }`}
                               >
                                 {isReached ? '✓' : tier.threshold}
                               </div>
-                            </>
+                            </div>
                           )}
                         </div>
                       );
