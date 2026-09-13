@@ -166,16 +166,39 @@ const getClientEffectiveContinuity = (client: any): number => {
   return Math.max(rawContinuity, maxInstallments, maxLongPassMonths, 1);
 };
 
-// Odmiana jednostki dla umów lub zwykłych karnetów
+// Prawidłowa, dynamiczna odmiana jednostki w zależności od wyboru w progu
 const getTierUnitLabel = (tier: any, tabela: any) => {
-  const tName = cleanStr(tabela.nazwa || '');
-  const isTimeOrContract = isContractPassCheck(tabela) || tName.includes('6 m') || tName.includes('6m') || tName.includes('open');
-  if (isTimeOrContract) {
-    const val = Number(tier.threshold) || 1;
+  const val = Number(tier.threshold) || 1;
+  
+  // 1. Jeśli to umowa 12-miesięczna -> zawsze miesiące
+  if (isContractPassCheck(tabela)) {
     if (val === 1) return 'miesiąc';
     if (val >= 2 && val <= 4) return 'miesiące';
     return 'miesięcy';
   }
+
+  // 2. Jeśli jednostka progu to 'cykli' lub 'cykle'
+  const rawUnit = (tier.unit || '').toLowerCase().trim();
+  if (rawUnit.includes('cykl')) {
+    if (val === 1) return 'cykl';
+    if (val >= 2 && val <= 4) return 'cykle';
+    return 'cykli';
+  }
+
+  // 3. Jeśli jednostka progu to 'wejść' lub 'wejścia'
+  if (rawUnit.includes('wejs')) {
+    if (val === 1) return 'wejście';
+    if (val >= 2 && val <= 4) return 'wejścia';
+    return 'wejść';
+  }
+
+  // 4. Jeśli jednostka progu to 'miesięcy' / 'miesiące'
+  if (rawUnit.includes('mies')) {
+    if (val === 1) return 'miesiąc';
+    if (val >= 2 && val <= 4) return 'miesiące';
+    return 'miesięcy';
+  }
+
   return tier.unit || 'cykli';
 };
 
@@ -266,7 +289,7 @@ export default function TwojBonusPage() {
   const [editingTierId, setEditingTierId] = useState<number | null>(null);
   const [levelName, setLevelName] = useState('BRĄZOWY');
   const [thresholdVal, setThresholdVal] = useState('3');
-  const [thresholdUnit, setThresholdUnit] = useState<'miesięcy' | 'wejść' | 'cykli'>('miesięcy');
+  const [thresholdUnit, setThresholdUnit] = useState<'miesięcy' | 'wejść' | 'cykli'>('cykli');
   const [rewardTitle, setRewardTitle] = useState('');
   const [rewardBadge, setRewardBadge] = useState('-10%');
   const [secondaryTitle, setSecondaryTitle] = useState('');
@@ -534,7 +557,7 @@ export default function TwojBonusPage() {
     setEditingTierId(null);
     setLevelName('NOWY POZIOM');
     setThresholdVal('3');
-    setThresholdUnit('miesięcy');
+    setThresholdUnit('cykli');
     setRewardTitle('10% rabatu na kolejny karnet');
     setRewardBadge('-10%');
     setSecondaryTitle('Darmowy shake białkowy po treningu');
@@ -548,7 +571,7 @@ export default function TwojBonusPage() {
     setEditingTierId(tier.id);
     setLevelName(tier.levelName || 'POZIOM');
     setThresholdVal(String(tier.threshold || '1'));
-    setThresholdUnit(tier.unit || 'miesięcy');
+    setThresholdUnit(tier.unit || 'cykli');
     setRewardTitle(tier.rewardTitle || '');
     setRewardBadge(tier.rewardBadge || '-10%');
     setSecondaryTitle(tier.secondaryTitle || '');
@@ -783,7 +806,6 @@ export default function TwojBonusPage() {
     };
   }).filter(c => c.unlockedLevels.length > 0 && !c.isAlreadyVerified);
 
-  // Trwałe zatwierdzenie poziomu przez administratora wraz z natychmiastowym czyszczeniem wykrzyknika
   const handleMarkTierAsVerified = async (verificationKey: string, clientName?: string, tierName?: string) => {
     const confirmMessage = clientName && tierName
       ? `Czy na pewno chcesz zatwierdzić osiągnięcie poziomu "${tierName}" dla klubowicza ${clientName}?\n\nPo zatwierdzeniu klubowicz zostanie trwale usunięty z listy oczekujących na weryfikację.`
@@ -817,7 +839,6 @@ export default function TwojBonusPage() {
       console.error("Błąd trwałego zapisu weryfikacji progu:", err);
     }
 
-    // Jeśli po odhaczeniu lista jest pusta, bezwzględnie czyścimy flagę i wysyłamy zdarzenie do menu
     const remainingCount = qualifiedMembersList.filter(c => c.verificationKey !== verificationKey).length;
     if (remainingCount <= 0) {
       localStorage.removeItem('bonus_has_notification');
@@ -840,7 +861,6 @@ export default function TwojBonusPage() {
     ? currentMemberUnlockedTiers[currentMemberUnlockedTiers.length - 1] 
     : null;
 
-  // Obsługa powiadomień dla klubowicza
   useEffect(() => {
     if (typeof window !== 'undefined' && appRole === 'klubowicz' && currentUser) {
       if (highestMemberUnlockedTier) {
@@ -859,7 +879,6 @@ export default function TwojBonusPage() {
     }
   }, [highestMemberUnlockedTier, appRole, currentUser]);
 
-  // Wygaszenie wykrzyknika u klubowicza po wejściu w zakładkę Mój bonus
   useEffect(() => {
     if (typeof window !== 'undefined' && appRole === 'klubowicz' && currentUser && highestMemberUnlockedTier) {
       const seenKey = `fm_seen_bonus_tier_${currentUser.id}`;
@@ -869,7 +888,6 @@ export default function TwojBonusPage() {
     }
   }, [isMounted, appRole, currentUser, highestMemberUnlockedTier]);
 
-  // Dodatkowe auto-czyszczenie flagi dla administratora, jeśli brak oczekujących
   useEffect(() => {
     if (typeof window !== 'undefined' && (appRole === 'admin' || appRole === 'trener')) {
       if (qualifiedMembersList.length === 0) {
@@ -1180,6 +1198,7 @@ export default function TwojBonusPage() {
                 isUserPass ? 'border-emerald-500 ring-2 ring-emerald-400/40 bg-emerald-50/15' : 'border-sky-200'
               }`}
             >
+              {/* A. NAGŁÓWEK TABELI KARNETU */}
               <div className="bg-gradient-to-br from-slate-950 via-sky-950 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md space-y-3 border border-sky-900/60">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1789,8 +1808,8 @@ export default function TwojBonusPage() {
                     onChange={(e: any) => setThresholdUnit(e.target.value)}
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-slate-900 cursor-pointer"
                   >
-                    <option value="miesięcy">miesięcy</option>
                     <option value="cykli">cykli</option>
+                    <option value="miesięcy">miesięcy</option>
                     <option value="wejść">wejść</option>
                   </select>
                 </div>
