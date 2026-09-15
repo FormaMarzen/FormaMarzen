@@ -603,7 +603,6 @@ export default function KlienciPage() {
       if (!isPassPurchase) return false;
       if (t.opis && t.opis.toLowerCase().includes('usunięcie')) return false;
 
-      // Wykluczamy transakcje o wartości <= 150 zł z budowania poziomu rabatowego ciągłości
       const kwotaTransakcji = Math.abs(parseFloat(String(t.kwota || '0').replace(/[^0-9.-]/g, '')) || 0);
       if (kwotaTransakcji > 0 && kwotaTransakcji <= 150) return false;
       if (t.opis && (t.opis.toLowerCase().includes('1 wejście') || t.opis.toLowerCase().includes('pojedyncz'))) return false;
@@ -1023,15 +1022,23 @@ export default function KlienciPage() {
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
-      // Zmapowanie liczby przyszłych rezerwacji dla każdego klienta
+      // Zmapowanie liczby i dat przyszłych rezerwacji dla każdego klienta
       const clientFutureBookingsMap = new Map<number, number>();
+      const clientFutureBookingDatesMap = new Map<number, string[]>();
+
       if (zapisyData && zapisyData.length > 0) {
         zapisyData.forEach((s: any) => {
           if (!s.klient_id) return;
           const classDate = parseDateFromClassKey(s.class_key);
+          const classDateIso = `${classDate.getFullYear()}-${String(classDate.getMonth() + 1).padStart(2, '0')}-${String(classDate.getDate()).padStart(2, '0')}`;
+          
           if (classDate >= todayBeginning) {
-            const currentCount = clientFutureBookingsMap.get(Number(s.klient_id)) || 0;
-            clientFutureBookingsMap.set(Number(s.klient_id), currentCount + 1);
+            const kId = Number(s.klient_id);
+            clientFutureBookingsMap.set(kId, (clientFutureBookingsMap.get(kId) || 0) + 1);
+
+            const prevDates = clientFutureBookingDatesMap.get(kId) || [];
+            prevDates.push(classDateIso);
+            clientFutureBookingDatesMap.set(kId, prevDates);
           }
         });
       }
@@ -1039,11 +1046,25 @@ export default function KlienciPage() {
       const enrichedPromises = klienciData.map(async (c: any) => {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => String(t.klient_id) === String(c.id)) : [];
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
-        const hasFutureBookings = (clientFutureBookingsMap.get(Number(c.id)) || 0) > 0;
+        const futureBookingDates = clientFutureBookingDatesMap.get(Number(c.id)) || [];
+        const hasFutureBookings = futureBookingDates.length > 0;
         
         let parsedKarnety = safeJsonParse(c.karnetyKlubowicza || c.karnetyklubowicza, []);
 
+        let continuityNotice = c.continuityBreakNotice || c.continuity_break_notice || null;
+        if (typeof continuityNotice === 'string') {
+          try { continuityNotice = JSON.parse(continuityNotice); } catch(e) {}
+        }
+        if (continuityNotice?.expiresAt && continuityNotice.expiresAt < todayDateOnly) {
+          continuityNotice = null;
+        }
+
+        let currentWalletNum = getWalletNumber(c.Portfel ?? c.portfel ?? c.wallet);
+        let walletChanged = false;
         let karnetyZmienione = false;
+        let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
+
+        // 1. ZEROWANIE WEJŚĆ PO DACIE WYGAŚNIĘCIA I WERYFIKACJA STANU
         parsedKarnety = parsedKarnety.map((k: any) => {
           const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
           const isContract = isContractPassCheck(k, pasujacyDef);
@@ -1076,13 +1097,20 @@ export default function KlienciPage() {
             }
           }
 
+          // ZASADA 1: W dniu po wygaśnięciu zerujemy wejścia ilościowe
+          const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
+          if (!isContract && isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
+            k.pozostaloWejsc = 0;
+            k.statusTekst = 'Karnet wygasł (wejścia wyzerowane)';
+            karnetyZmienione = true;
+          }
+
           // OBSŁUGA WYCZERPANIA WEJŚĆ
           if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
             const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
             const isLowPrice = passPriceNum <= 150;
 
             if (isLowPrice) {
-              // Karnety <= 150 zł bez bufora ciągłości
               const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncz'))
                 ? 'Wykorzystano wejście'
                 : 'Wykorzystano wejścia';
@@ -1093,7 +1121,6 @@ export default function KlienciPage() {
                 k.statusTekst = labelWejsc;
               }
             } else {
-              // Dla karnetów powyżej 150 zł nadajemy bufor ciągłości
               const tomorrowDate = new Date();
               tomorrowDate.setDate(tomorrowDate.getDate() + 1);
               const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
@@ -1112,7 +1139,78 @@ export default function KlienciPage() {
           return k;
         });
 
-        let hasChanges = karnetyZmienione;
+        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE
+        const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
+          idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
+        );
+
+        let primaryPass = parsedKarnety[0];
+        if (primaryPass && !isContractPassCheck(primaryPass)) {
+          const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
+                                   (primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+
+          // ZASADA 2: Rotacja na kolejny zakupiony karnet
+          if (isPrimaryFinished && waitingPassIndex !== -1) {
+            const nextPass = parsedKarnety[waitingPassIndex];
+            const defNext = ustrukturyzowaneKarnety.find(dk => dk.nazwa === nextPass.nazwa);
+            const nextNewExpiry = getCalendarExpiryDate(todayDateOnly, defNext?.limitCzasowy || nextPass.limitCzasowy || '1 miesiąc');
+
+            parsedKarnety = parsedKarnety.filter((_: any, idx: number) => idx !== 0);
+            parsedKarnety[waitingPassIndex - 1] = {
+              ...nextPass,
+              waznyDo: nextNewExpiry,
+              statusTekst: `Ważny do: ${nextNewExpiry}`
+            };
+            karnetyZmienione = true;
+            primaryPass = parsedKarnety[0];
+          }
+          // ZASADA 3: Jeśli brak kolejnego karnetu, ale istnieją przyszłe zapisy w grafiku -> auto-przedłużenie
+          else if (isPrimaryFinished && waitingPassIndex === -1) {
+            const hasBookingsAfterExpiry = futureBookingDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
+
+            if (hasBookingsAfterExpiry) {
+              const defKarnetu = ustrukturyzowaneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
+              const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : (parseFloat(String(primaryPass.cena).replace(/[^0-9.-]/g, '')) || 0);
+
+              const currentDiscountPercent = getEffectiveDiscount(c, false, basePrice);
+              const priceAfterDiscount = basePrice * (1 - currentDiscountPercent / 100);
+
+              const extendedExpiry = getCalendarExpiryDate(todayDateOnly, defKarnetu?.limitCzasowy || primaryPass.limitCzasowy || '1 miesiąc');
+
+              currentWalletNum -= priceAfterDiscount;
+              walletChanged = true;
+              continuityBroken = true;
+
+              const noticeExpiry = new Date();
+              noticeExpiry.setDate(noticeExpiry.getDate() + 21);
+
+              continuityNotice = {
+                brokenAt: todayDateOnly,
+                expiresAt: noticeExpiry.toISOString().split('T')[0],
+                extendedPassName: primaryPass.nazwa,
+                reason: `Karnet ${primaryPass.nazwa} wygasł w dniu ${primaryPass.waznyDo}, lecz klubowicz posiadał aktywne zapisy w grafiku. Karnet został automatycznie przedłużony o kolejny okres, a ciągłość została przerwana.`
+              };
+
+              parsedKarnety[0] = {
+                ...primaryPass,
+                waznyDo: extendedExpiry,
+                pozostaloWejsc: primaryPass.poczatkoweWejsc || primaryPass.pozostaloWejsc,
+                statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
+              };
+
+              karnetyZmienione = true;
+
+              await supabase.from('transakcje').insert([{
+                klient_id: c.id,
+                typ_operacji: 'auto_przedluzenie_karnetu',
+                kwota: -priceAfterDiscount,
+                opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
+              }]);
+            }
+          }
+        }
+
+        let hasChanges = karnetyZmienione || walletChanged;
         let utrataCiaglosci = false;
         let finalKarnety = [];
 
@@ -1122,7 +1220,6 @@ export default function KlienciPage() {
             continue;
           }
 
-          // BLOKADA KASOWANIA: Jeśli klubowicz ma przyszłe rezerwacje w grafiku, karnet nie jest usuwany
           if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
             finalKarnety.push(k);
             continue;
@@ -1146,7 +1243,7 @@ export default function KlienciPage() {
 
         let currentDiscount = c.discount;
         let currentOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
-        let hasLostContinuity = c.hasLostContinuity || false;
+        let hasLostContinuity = continuityBroken || c.hasLostContinuity || false;
         let currentRabat = c.rabat !== undefined ? c.rabat : null;
 
         if (utrataCiaglosci || finalKarnety.length === 0) {
@@ -1178,15 +1275,23 @@ export default function KlienciPage() {
         const cenaAktywnegoKarnetu = getPassPrice(finalKarnety);
 
         if (hasChanges || c.Wygasa !== calculatedExpiry || c.Cena !== cenaAktywnegoKarnetu) {
-           await supabase.from('klienci').update({ 
+           const updatePayload: any = { 
                karnetyKlubowicza: finalKarnety,
                Wygasa: calculatedExpiry,
                Cena: cenaAktywnegoKarnetu,
                discount: currentDiscount,
                rabat: currentRabat,
                system_discount_offset: currentOffset,
-               hasLostContinuity: hasLostContinuity
-           }).eq('id', c.id);
+               hasLostContinuity: hasLostContinuity,
+               continuityBreakNotice: continuityNotice
+           };
+
+           if (walletChanged) {
+             updatePayload.Portfel = `${currentWalletNum.toFixed(2)} PLN`;
+             updatePayload.portfel = currentWalletNum;
+           }
+
+           await supabase.from('klienci').update(updatePayload).eq('id', c.id);
         }
 
         const effectiveBanDate = c.blokadaDo || c.blokada_do || (finalKarnety[0]?.blokadaDo) || null;
@@ -1204,6 +1309,7 @@ export default function KlienciPage() {
           rabat: c.rabat,
           systemDiscountOffset: currentOffset,
           hasLostContinuity: hasLostContinuity,
+          continuityBreakNotice: continuityNotice,
           firstName: c.Imię || c.firstName || '',
           lastName: c.Nazwisko || c.lastName || '',
           registered: c.Zarejestrowany || c.registered || '2026-06-01',
@@ -1212,7 +1318,7 @@ export default function KlienciPage() {
           Wygasa: calculatedExpiry,
           price: cenaAktywnegoKarnetu,
           discount: currentDiscount || '',
-          wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+          wallet: `${currentWalletNum.toFixed(2)} PLN`,
           avatarUrl: c.avatarUrl || null,
           gender: c.płeć || c.gender || '',
           phone: c['Numer tel.'] || c.telefon || c.phone || '',
@@ -1538,6 +1644,7 @@ export default function KlienciPage() {
       isSubmittingRef.current = false;
     }
   };
+
   const handleDeleteClient = async (id: number) => {
     if (isSubmittingRef.current) return;
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto i wszystkie powiązane z nim logi operacji?")) {
@@ -1625,7 +1732,6 @@ export default function KlienciPage() {
     };
     reader.readAsDataURL(file);
   };
-
   // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ ZAWSZE DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget || isSubmittingRef.current) return;
@@ -2835,7 +2941,6 @@ export default function KlienciPage() {
           </div>
         </>
       )}
-
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM Z TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3081,6 +3186,29 @@ export default function KlienciPage() {
                   >
                     <span>🔓</span> ODBLOKUJ KONTO TERAZ
                   </button>
+                </div>
+              )}
+
+              {/* BANER PRZERWANIA CIĄGŁOŚCI DLA PROFILU KLIENTA (21 DNI) */}
+              {profileClient.continuityBreakNotice && profileClient.continuityBreakNotice.expiresAt >= todayStr && (
+                <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 rounded-2xl p-4 sm:p-5 shadow-sm flex items-start gap-3.5 animate-in fade-in">
+                  <span className="text-2xl shrink-0">⚠️</span>
+                  <div className="space-y-1 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap justify-between">
+                      <span className="font-black text-xs sm:text-sm uppercase tracking-wider text-amber-900">
+                        Przerwanie ciągłości karnetu (Automatyczne przedłużenie)
+                      </span>
+                      <span className="bg-amber-200 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full">
+                        Ważny do: {profileClient.continuityBreakNotice.expiresAt}
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-900 font-medium leading-relaxed">
+                      {profileClient.continuityBreakNotice.reason}
+                    </p>
+                    <div className="text-[11px] text-amber-800 font-semibold pt-0.5 border-t border-amber-200/60">
+                      Kwota przedłużenia została naliczona w portfelu. Rabat zachowany na dotychczasowym poziomie, ale ciągłość i punkty w programie bonusowym zostały zresetowane.
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -3990,7 +4118,6 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
-
       {/* MODAL: PRZEDŁUŻ KARNET */}
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
