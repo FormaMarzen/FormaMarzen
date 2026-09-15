@@ -20,6 +20,192 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
+// Bezpieczny parser JSON
+const safeJsonParse = (val: any, fallback: any = []) => {
+  if (!val) return fallback;
+  if (Array.isArray(val)) return val;
+  if (typeof val === "object") return val;
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      return parsed !== null ? parsed : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+  return fallback;
+};
+
+// Normalizacja tekstu do porównań
+const cleanStr = (s: string) =>
+  (s || "")
+    .toLowerCase()
+    .replace(/[ę]/g, "e")
+    .replace(/[ą]/g, "a")
+    .replace(/[ó]/g, "o")
+    .replace(/[ś]/g, "s")
+    .replace(/[ł]/g, "l")
+    .replace(/[żź]/g, "z")
+    .replace(/[ć]/g, "c")
+    .replace(/[ń]/g, "n")
+    .replace(/[\u2010-\u2015\u2212\-_/.]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+// Rozpoznawanie umów 12M
+const isContractPassCheck = (item: any): boolean => {
+  if (!item) return false;
+  if (item?.isContract12M === true || item?.isContract12M === "true") return true;
+  const typ = cleanStr(item?.typ_karnetu || item?.typKarnetu || item?.typ || "");
+  const nazwa = cleanStr(item?.nazwa || item?.pass || "");
+  const rata = String(item?.rata || "");
+  return (
+    typ.includes("umow") ||
+    typ.includes("12") ||
+    nazwa.includes("umow") ||
+    nazwa.includes("12m") ||
+    rata.includes("/ 12") ||
+    rata.includes("/12")
+  );
+};
+
+// Ścisłe parowanie karnetu klubowicza z tabelą bonusową
+const isPassMatchingTable = (pass: any, tabela: any): boolean => {
+  if (!pass || !tabela) return false;
+
+  const pName = cleanStr(pass.nazwa || pass.pass || "");
+  const tName = cleanStr(tabela.nazwa || "");
+
+  if (pName === tName) return true;
+
+  const pIsContract = pName.includes("umow") || isContractPassCheck(pass);
+  const tIsContract = tName.includes("umow") || isContractPassCheck(tabela);
+  if (pIsContract !== tIsContract) return false;
+
+  const pIs6M =
+    pName.includes("6 m") ||
+    pName.includes("6m") ||
+    pName.includes("pol roku") ||
+    pName.includes("pół roku");
+  const tIs6M =
+    tName.includes("6 m") ||
+    tName.includes("6m") ||
+    tName.includes("pol roku") ||
+    tName.includes("pół roku");
+  if (pIs6M !== tIs6M) return false;
+
+  const pIsOpen = pName.includes("open");
+  const tIsOpen = tName.includes("open");
+  if (pIsOpen && tIsOpen) return true;
+
+  const pIsOgolno = pName.includes("ogolno") || pName.includes("rozciag");
+  const tIsOgolno = tName.includes("ogolno") || tName.includes("rozciag");
+  if (pIsOgolno && tIsOgolno) return true;
+
+  return false;
+};
+
+// Odczyt liczby rat z obiektu karnetu
+const getInstallmentsFromPass = (pass: any): number => {
+  if (!pass) return 0;
+  if (pass.rata !== undefined && pass.rata !== null) {
+    const raw = String(pass.rata).trim();
+    const slashMatch = raw.match(/(\d+)\s*\/\s*(\d+)/);
+    if (slashMatch && parseInt(slashMatch[1], 10) > 0) return parseInt(slashMatch[1], 10);
+    const singleMatch = raw.match(/(\d+)/);
+    if (singleMatch && parseInt(singleMatch[1], 10) > 0) return parseInt(singleMatch[1], 10);
+  }
+
+  if (pass.statusTekst) {
+    const m = String(pass.statusTekst).match(/rata\s*(\d+)/i) || String(pass.statusTekst).match(/(\d+)\s*\/\s*12/);
+    if (m && parseInt(m[1], 10) > 0) return parseInt(m[1], 10);
+  }
+
+  const altKeys = ["oplaconeRaty", "oplacone_raty", "raty", "ratyOplacone", "numerRaty", "liczbaRat"];
+  for (const k of altKeys) {
+    if (pass[k] !== undefined && pass[k] !== null) {
+      const val = parseInt(String(pass[k]), 10);
+      if (!isNaN(val) && val > 0) return val;
+    }
+  }
+
+  return 0;
+};
+
+// Długość karnetu w miesiącach
+const getPassTotalDurationMonths = (pass: any): number => {
+  if (!pass) return 1;
+  const pName = cleanStr(pass.nazwa || pass.pass || "");
+  if (pName.includes("6 m") || pName.includes("6m") || pName.includes("pol roku") || pName.includes("pół roku")) return 6;
+  if (pName.includes("3 m") || pName.includes("3m")) return 3;
+  if (pName.includes("rok") || pName.includes("12 m") || pName.includes("12m")) return 12;
+  return 1;
+};
+
+// Suma dni zawieszenia karnetu
+const getPassSuspensionDays = (pass: any): number => {
+  if (!pass) return 0;
+  const rawHist = pass.historiaZawieszen || pass.historiazawieszen;
+  const hist = safeJsonParse(rawHist, []);
+  return hist.reduce((sum: number, h: any) => sum + (parseInt(h.dni || h.planowane_dni || "0", 10) || 0), 0);
+};
+
+// Obliczanie upływu miesięcy karnetu
+const getElapsedMonthsForPass = (pass: any): number => {
+  if (!pass || !pass.waznyDo) return 0;
+  const totalMonths = getPassTotalDurationMonths(pass);
+  if (totalMonths <= 1) return 1;
+
+  const now = new Date();
+  const [eY, eM, eD] = String(pass.waznyDo).split("-").map(Number);
+  if (!eY || !eM) return 1;
+
+  const suspensionDays = getPassSuspensionDays(pass);
+  const expDate = new Date(eY, eM - 1, eD || 1);
+  const startDateMs = expDate.getTime() - (totalMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
+  const startDate = new Date(startDateMs);
+
+  const activeTimeMs = Math.max(0, (now.getTime() - startDate.getTime()) - (suspensionDays * 24 * 60 * 60 * 1000));
+  const activeDays = Math.floor(activeTimeMs / (1000 * 60 * 60 * 24));
+  
+  const elapsed = Math.max(1, Math.floor(activeDays / 30));
+  return Math.min(totalMonths, elapsed);
+};
+
+// Ciągłość ogólna klienta
+const getClientEffectiveContinuity = (client: any): number => {
+  if (!client) return 1;
+  const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
+  let maxInstallments = 0;
+  let maxLongPassMonths = 0;
+
+  passes.forEach((p: any) => {
+    if (isContractPassCheck(p)) {
+      const inst = getInstallmentsFromPass(p);
+      if (inst > maxInstallments) maxInstallments = inst;
+    } else {
+      const elapsed = getElapsedMonthsForPass(p);
+      if (elapsed > maxLongPassMonths) maxLongPassMonths = elapsed;
+    }
+  });
+
+  const rawContinuity = parseInt(String(client.cyklCiaglosci || client.cyklciaglosci || "1"), 10) || 1;
+  return Math.max(rawContinuity, maxInstallments, maxLongPassMonths, 1);
+};
+
+const defaultTiersUmowa = [
+  { id: 101, levelName: "BRĄZOWY", threshold: 2, unit: "miesiące" },
+  { id: 102, levelName: "ZŁOTY", threshold: 6, unit: "miesięcy" },
+  { id: 103, levelName: "TRZYNASTY", threshold: 13, unit: "miesięcy" },
+  { id: 104, levelName: "OSIEMNASTY", threshold: 18, unit: "miesięcy" }
+];
+
+const defaultTiersOpen = [
+  { id: 201, levelName: "BRĄZOWY", threshold: 2, unit: "cykle" },
+  { id: 202, levelName: "SREBRNY", threshold: 4, unit: "cykle" },
+  { id: 203, levelName: "ZŁOTY", threshold: 6, unit: "cykli" }
+];
+
 export default function RootLayout({
   children,
 }: {
@@ -87,16 +273,23 @@ export default function RootLayout({
       return;
     }
 
+    const localPendingCount = localStorage.getItem('bonus_pending_count');
+    if (localPendingCount === '0') {
+      setHasUnreadBonus(false);
+      return;
+    }
+
     try {
       const [rulesRes, catalogRes, clientsRes] = await Promise.all([
         supabase.from('club_booking_rules').select('id, bonus_program_active, bonus_verified_tiers').limit(1).maybeSingle(),
-        supabase.from('katalog_karnetow').select('*').limit(100),
-        supabase.from('klienci').select('id, karnetyKlubowicza, cyklCiaglosci').range(0, 4999)
+        supabase.from('katalog_karnetow').select('*').order('kolejnosc', { ascending: true }).order('id', { ascending: true }),
+        supabase.from('klienci').select('*').range(0, 4999)
       ]);
 
       if (rulesRes.data?.bonus_program_active === false) {
         setHasUnreadBonus(false);
         localStorage.removeItem('bonus_has_notification');
+        localStorage.setItem('bonus_pending_count', '0');
         return;
       }
 
@@ -114,62 +307,81 @@ export default function RootLayout({
         localVerified = JSON.parse(localStorage.getItem('fm_verified_member_tiers') || '[]');
       } catch(e) {}
 
-      const allVerifiedKeys = new Set([...verifiedTiers, ...localVerified]);
+      const allVerifiedKeys = new Set([...verifiedTiers.map(String), ...localVerified.map(String)]);
+
+      let karnetyData = catalogRes.data;
+      if (!karnetyData || karnetyData.length === 0) {
+        const fallback = await supabase.from('karnety').select('*').order('id', { ascending: true });
+        karnetyData = fallback.data;
+      }
+
+      const activeTables = (karnetyData || [])
+        .filter((k: any) => {
+          let meta: any = {};
+          try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
+          return meta.bonus_disabled !== true;
+        })
+        .map((k: any) => {
+          let meta: any = {};
+          try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
+          const isContract = isContractPassCheck(k);
+          const rawTiers = meta.customTiers && meta.customTiers.length > 0
+            ? [...meta.customTiers]
+            : (isContract ? defaultTiersUmowa : defaultTiersOpen);
+          
+          rawTiers.sort((a: any, b: any) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0));
+
+          return {
+            id: k.id,
+            nazwa: k.nazwa,
+            typ_karnetu: k.typ_karnetu,
+            customTiers: rawTiers
+          };
+        });
 
       let pendingCount = 0;
-      const tables = catalogRes.data || [];
       const clients = clientsRes.data || [];
 
       for (const c of clients) {
-        let passes: any[] = [];
-        try {
-          passes = typeof c.karnetyKlubowicza === 'string' ? JSON.parse(c.karnetyKlubowicza) : (c.karnetyKlubowicza || []);
-        } catch(e) { passes = []; }
-
+        const rawKarnety = c.karnetyKlubowicza || c.KarnetyKlubowicza || c.karnetyklubowicza;
+        const passes = safeJsonParse(rawKarnety, []);
         if (!passes || passes.length === 0) continue;
-        const pass = passes[0];
-        const pName = (pass.nazwa || pass.pass || '').toLowerCase();
 
-        const matchedTable = tables.find((t: any) => {
-          const tName = (t.nazwa || '').toLowerCase();
-          if (pName === tName) return true;
-          if (pName.includes('umow') && tName.includes('umow')) {
-            if (pName.includes('open') && tName.includes('open')) return true;
-            if (pName.includes('ogolno') && tName.includes('ogolno')) return true;
+        const clientPass = passes[0];
+        const matchedTable = activeTables.find((t: any) => isPassMatchingTable(clientPass, t));
+        if (!matchedTable || !matchedTable.customTiers || matchedTable.customTiers.length === 0) continue;
+
+        if (clientPass.isPassChangedReset || clientPass.changedPassReset) continue;
+
+        const isContract = isContractPassCheck(matchedTable) || isContractPassCheck(clientPass);
+        let userVal = 1;
+
+        if (isContract) {
+          const installmentsCount = getInstallmentsFromPass(clientPass);
+          const effectiveContinuity = getClientEffectiveContinuity(c);
+          let finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
+          const passHistZaw = safeJsonParse(clientPass.historiaZawieszen || clientPass.historiazawieszen, []);
+          const totalSuspendedDays = passHistZaw.reduce((sum: number, hz: any) => sum + (parseInt(hz.dni || hz.planowane_dni || "0", 10) || 0), 0);
+          if (installmentsCount <= 12 && finalMonths > 12 && totalSuspendedDays > 0) {
+            finalMonths = 12;
           }
-          if ((pName.includes('6 m') || pName.includes('6m')) && (tName.includes('6 m') || tName.includes('6m'))) return true;
-          return false;
-        });
-
-        if (!matchedTable) continue;
-
-        let meta: any = {};
-        try { meta = JSON.parse(matchedTable.inne_ustawienia || '{}'); } catch(e) {}
-        const tiers = meta.customTiers || [];
-
-        let currentProg = parseInt(String(c.cyklCiaglosci || '1'), 10) || 1;
-        if (pass.rata) {
-          const slashMatch = String(pass.rata).match(/(\d+)\s*\/\s*\d+/);
-          if (slashMatch) currentProg = Math.max(currentProg, parseInt(slashMatch[1], 10));
-        }
-
-        // Długie karnety okresowe (np. 6M)
-        if (!pass.rata && (pName.includes('6 m') || pName.includes('6m')) && pass.waznyDo) {
-          const [eY, eM, eD] = String(pass.waznyDo).split('-').map(Number);
-          if (eY && eM) {
-            const rawHist = pass.historiaZawieszen || pass.historiazawieszen;
-            const hist = typeof rawHist === 'string' ? JSON.parse(rawHist || '[]') : (rawHist || []);
-            const suspensionDays = hist.reduce((sum: number, h: any) => sum + (parseInt(h.dni || h.planowane_dni || '0', 10) || 0), 0);
-            
-            const expDate = new Date(eY, eM - 1, eD || 1);
-            const startDateMs = expDate.getTime() - (6 * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
-            const activeDays = Math.floor(Math.max(0, (Date.now() - startDateMs) - (suspensionDays * 24 * 60 * 60 * 1000)) / (1000 * 60 * 60 * 24));
-            const elapsed = Math.min(6, Math.max(1, Math.floor(activeDays / 30)));
-            currentProg = Math.max(currentProg, elapsed);
+          userVal = finalMonths;
+        } else {
+          const pName = cleanStr(clientPass.nazwa || '');
+          const tName = cleanStr(matchedTable.nazwa || '');
+          const isEntries = pName.includes('wejs') || tName.includes('wejs') || tName.includes('ilosc');
+          if (isEntries) {
+            const pocz = parseInt(clientPass.poczatkoweWejsc || clientPass.ilosc_wejsc || '10', 10);
+            const poz = parseInt(clientPass.pozostaloWejsc ?? pocz, 10);
+            userVal = Math.max(0, pocz - poz);
+          } else {
+            const elapsedMonths = getElapsedMonthsForPass(clientPass);
+            const continuity = getClientEffectiveContinuity(c);
+            userVal = Math.max(elapsedMonths, continuity, 1);
           }
         }
 
-        const unlockedTiers = tiers.filter((tier: any) => currentProg >= Number(tier.threshold));
+        const unlockedTiers = matchedTable.customTiers.filter((tier: any) => userVal >= Number(tier.threshold));
         if (unlockedTiers.length > 0) {
           const topTier = unlockedTiers[unlockedTiers.length - 1];
           const verificationKey = `${c.id}_${topTier.id}`;
@@ -183,221 +395,25 @@ export default function RootLayout({
       setHasUnreadBonus(hasPending);
       if (!hasPending) {
         localStorage.removeItem('bonus_has_notification');
+        localStorage.setItem('bonus_pending_count', '0');
+      } else {
+        localStorage.setItem('bonus_pending_count', String(pendingCount));
       }
     } catch (e) {
       console.error("Błąd sprawdzania powiadomień bonusu:", e);
     }
   };
 
-  const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
-    if (typeof window === "undefined") return;
-
-    try {
-      let bloodUnread = false;
-      if (role === 'admin' || role === 'trener') {
-        const { count } = await supabase
-          .from('klub_badania_krwi')
-          .select('*', { count: 'exact', head: true })
-          .or('interpretacja.is.null,interpretacja.eq.""');
-        if (count && count > 0) bloodUnread = true;
-      } else if (email || cId) {
-        let query = supabase.from('klub_badania_krwi').select('id, nowa_interpretacja').eq('nowa_interpretacja', true);
-        if (cId) query = query.or(`klient_id.eq.${cId},email_klienta.ilike.${email.trim()}`);
-        else query = query.ilike('email_klienta', email.trim());
-
-        const { data: bloodData } = await query;
-        if (bloodData && bloodData.length > 0) bloodUnread = true;
-      }
-      setHasUnreadInterpretation(bloodUnread);
-
-      const { data: redukcjeData } = await supabase
-        .from('klub_redukcja_edycje')
-        .select('id, status, nazwa, data_koniec')
-        .in('status', ['zapisy', 'aktywne']);
-
-      if (redukcjeData && redukcjeData.length > 0) {
-        const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
-        setHasUnreadRedukcja(hasUnseenRedukcja);
-
-        const dzisiaj = new Date();
-        dzisiaj.setHours(0, 0, 0, 0);
-
-        for (const ed of redukcjeData) {
-          if (ed.status === 'aktywne' && ed.data_koniec) {
-            const endDate = new Date(ed.data_koniec);
-            endDate.setHours(0, 0, 0, 0);
-            const diffDays = Math.round((endDate.getTime() - dzisiaj.getTime()) / (1000 * 60 * 60 * 24));
-
-            if (diffDays === 10 || diffDays === 5) {
-              const alertKey = `redukcja_alert_${ed.id}_${diffDays}d_sent`;
-              if (!localStorage.getItem(alertKey)) {
-                const chatAlertMsg = `📢 [KOMUNIKAT SYSTEMOWY] Przypomnienie dla uczestników wyzwania "${ed.nazwa}": Do wielkiego finału pozostało już tylko ${diffDays} dni! Pamiętajcie o wcześniejszym umówieniu się z trenerem na finałową analizę składu ciała na maszynie. Powodzenia w walce o podium i nagrody! 🔥💪`;
-
-                try {
-                  await supabase.from('czat_wiadomosci').insert([{
-                    autor: 'System Forma Marzeń',
-                    tresc: chatAlertMsg,
-                    is_system: true,
-                    created_at: new Date().toISOString()
-                  }]);
-                } catch (e) {}
-
-                try {
-                  await supabase.from('czat').insert([{
-                    autor: 'System Forma Marzeń',
-                    tresc: chatAlertMsg,
-                    is_system: true,
-                    created_at: new Date().toISOString()
-                  }]);
-                } catch (e) {}
-
-                const { data: partData } = await supabase
-                  .from('klub_redukcja_uczestnicy')
-                  .select('klient_id')
-                  .eq('edycja_id', ed.id);
-
-                if (partData && partData.length > 0) {
-                  const notifications = partData.map((p: any) => ({
-                    klient_id: p.klient_id,
-                    tytul: `Wyzwanie Redukcji: Zostało ${diffDays} dni!`,
-                    tresc: `Przypomnienie: Do finału wyzwania "${ed.nazwa}" pozostało już tylko ${diffDays} dni! Umów się z trenerem na finałową analizę składu ciała.`,
-                    przeczytane: false
-                  }));
-                  await supabase.from('powiadomienia').insert(notifications);
-                }
-
-                localStorage.setItem(alertKey, 'true');
-              }
-            }
-          }
-        }
-      } else {
-        setHasUnreadRedukcja(false);
-      }
-
-      const dzisiajStr = new Date().toISOString().split("T")[0];
-      const { data: eventsData } = await supabase
-        .from('wydarzenia')
-        .select('id, data_od, data_do');
-
-      if (eventsData && eventsData.length > 0) {
-        const futureEvents = eventsData.filter((w: any) => {
-          const dataKoniec = w.data_do || w.data_od;
-          return dataKoniec >= dzisiajStr;
-        });
-        const hasUnseenEvent = futureEvents.some((w: any) => !localStorage.getItem(`seen_event_${w.id}`));
-        setHasUnreadWydarzenia(hasUnseenEvent);
-      } else {
-        setHasUnreadWydarzenia(false);
-      }
-
-      let unreadBaza = false;
-      if (role === 'admin') {
-        const { data: sugData } = await supabase
-          .from('sugestie_suplementow')
-          .select('id')
-          .eq('status', 'oczekujace');
-        if (sugData && sugData.length > 0) unreadBaza = true;
-      }
-
-      if (!unreadBaza) {
-        const [suplRes, sportRes, odzRes, przRes] = await Promise.all([
-          supabase.from('suplementy').select('id'),
-          supabase.from('baza_sport').select('id'),
-          supabase.from('baza_odzywianie').select('id'),
-          supabase.from('baza_przepisow').select('id')
-        ]);
-
-        const hasUnreadSupl = (suplRes.data || []).some((item: any) => !localStorage.getItem(`seen_supl_${item.id}`));
-        const hasUnreadSport = (sportRes.data || []).some((item: any) => !localStorage.getItem(`seen_sport_${item.id}`));
-        const hasUnreadOdz = (odzRes.data || []).some((item: any) => !localStorage.getItem(`seen_odz_${item.id}`));
-        const hasUnreadPrzepis = (przRes.data || []).some((item: any) => !localStorage.getItem(`seen_przepis_${item.id}`));
-
-        if (hasUnreadSupl || hasUnreadSport || hasUnreadOdz || hasUnreadPrzepis) {
-          unreadBaza = true;
-        }
-      }
-      setHasUnreadBazaWiedzy(unreadBaza);
-
-      let unreadOdziez = false;
-      if (role === 'admin') {
-        const { data: unreadOrders } = await supabase
-          .from('odziez_zamowienia')
-          .select('id')
-          .eq('status_platnosci', 'oplacone')
-          .eq('admin_odczytane', false)
-          .limit(1);
-
-        if (unreadOrders && unreadOrders.length > 0) {
-          unreadOdziez = true;
-        }
-      } else if (cId) {
-        const { data: latestCamp } = await supabase
-          .from('odziez_kampanie')
-          .select('id')
-          .in('status', ['aktywny', 'w_realizacji'])
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (latestCamp && latestCamp.length > 0) {
-          const campId = latestCamp[0].id;
-          const { data: viewData } = await supabase
-            .from('odziez_wyswietlenia')
-            .select('kampania_id')
-            .eq('klient_id', cId)
-            .eq('kampania_id', campId)
-            .maybeSingle();
-
-          if (!viewData) {
-            unreadOdziez = true;
-          }
-        }
-      }
-      setHasUnreadOdziez(unreadOdziez);
-
-      let unreadWyzwania = false;
-      if (role === 'admin') {
-        const { data: adminChallenges } = await supabase
-          .from('klub_wyzwania')
-          .select('id')
-          .eq('status', 'oczekujace')
-          .limit(1);
-        if (adminChallenges && adminChallenges.length > 0) {
-          unreadWyzwania = true;
-        }
-      } else if (cId) {
-        const { data: userChallenges } = await supabase
-          .from('klub_wyzwania')
-          .select('id, tworca_id, przeciwnik_id, status, termin_status, data_zaproponowana_przez')
-          .or(`tworca_id.eq.${cId},przeciwnik_id.eq.${cId}`)
-          .in('status', ['oczekujace', 'aktywne']);
-
-        if (userChallenges && userChallenges.length > 0) {
-          const needsAction = userChallenges.some((w: any) => {
-            const isOpponentPending = String(w.przeciwnik_id) === String(cId) && w.status === 'oczekujace';
-            const isDateProposedByOther = w.status === 'aktywne' && 
-              w.termin_status === 'oczekuje' && 
-              String(w.data_zaproponowana_przez) !== String(cId);
-            return isOpponentPending || isDateProposedByOther;
-          });
-          if (needsAction) unreadWyzwania = true;
-        }
-      }
-      setHasUnreadWyzwania(unreadWyzwania);
-
-      await checkBonusAdminNotifications(role, cId);
-
-    } catch (err) {
-      console.error("Błąd sprawdzania powiadomień w menu:", err);
-    }
-  };
-
   useEffect(() => {
-    const handleBonusUpdate = () => {
-      checkBonusAdminNotifications(appRole, currentClientId);
+    const handleBonusUpdate = (e: any) => {
+      if (e?.detail && typeof e.detail.count === "number") {
+        setHasUnreadBonus(e.detail.count > 0);
+      } else {
+        checkBonusAdminNotifications(appRole, currentClientId);
+      }
     };
-    window.addEventListener('bonus-notification-update', handleBonusUpdate);
-    return () => window.removeEventListener('bonus-notification-update', handleBonusUpdate);
+    window.addEventListener('bonus-notification-update', handleBonusUpdate as EventListener);
+    return () => window.removeEventListener('bonus-notification-update', handleBonusUpdate as EventListener);
   }, [appRole, currentClientId]);
 
   useEffect(() => {
@@ -839,6 +855,208 @@ export default function RootLayout({
   const hasAnyBadgeInMenu = useMemo(() => {
     return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez || hasUnreadWyzwania || hasUnreadBonus;
   }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez, hasUnreadWyzwania, hasUnreadBonus]);
+
+  const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
+    if (typeof window === "undefined") return;
+
+    try {
+      let bloodUnread = false;
+      if (role === 'admin' || role === 'trener') {
+        const { count } = await supabase
+          .from('klub_badania_krwi')
+          .select('*', { count: 'exact', head: true })
+          .or('interpretacja.is.null,interpretacja.eq.""');
+        if (count && count > 0) bloodUnread = true;
+      } else if (email || cId) {
+        let query = supabase.from('klub_badania_krwi').select('id, nowa_interpretacja').eq('nowa_interpretacja', true);
+        if (cId) query = query.or(`klient_id.eq.${cId},email_klienta.ilike.${email.trim()}`);
+        else query = query.ilike('email_klienta', email.trim());
+
+        const { data: bloodData } = await query;
+        if (bloodData && bloodData.length > 0) bloodUnread = true;
+      }
+      setHasUnreadInterpretation(bloodUnread);
+
+      const { data: redukcjeData } = await supabase
+        .from('klub_redukcja_edycje')
+        .select('id, status, nazwa, data_koniec')
+        .in('status', ['zapisy', 'aktywne']);
+
+      if (redukcjeData && redukcjeData.length > 0) {
+        const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
+        setHasUnreadRedukcja(hasUnseenRedukcja);
+
+        const dzisiaj = new Date();
+        dzisiaj.setHours(0, 0, 0, 0);
+
+        for (const ed of redukcjeData) {
+          if (ed.status === 'aktywne' && ed.data_koniec) {
+            const endDate = new Date(ed.data_koniec);
+            endDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.round((endDate.getTime() - dzisiaj.getTime()) / (1000 * 60 * 60 * 24));
+
+            if (diffDays === 10 || diffDays === 5) {
+              const alertKey = `redukcja_alert_${ed.id}_${diffDays}d_sent`;
+              if (!localStorage.getItem(alertKey)) {
+                const chatAlertMsg = `📢 [KOMUNIKAT SYSTEMOWY] Przypomnienie dla uczestników wyzwania "${ed.nazwa}": Do wielkiego finału pozostało już tylko ${diffDays} dni! Pamiętajcie o wcześniejszym umówieniu się z trenerem na finałową analizę składu ciała na maszynie. Powodzenia w walce o podium i nagrody! 🔥💪`;
+
+                try {
+                  await supabase.from('czat_wiadomosci').insert([{
+                    autor: 'System Forma Marzeń',
+                    tresc: chatAlertMsg,
+                    is_system: true,
+                    created_at: new Date().toISOString()
+                  }]);
+                } catch (e) {}
+
+                try {
+                  await supabase.from('czat').insert([{
+                    autor: 'System Forma Marzeń',
+                    tresc: chatAlertMsg,
+                    is_system: true,
+                    created_at: new Date().toISOString()
+                  }]);
+                } catch (e) {}
+
+                const { data: partData } = await supabase
+                  .from('klub_redukcja_uczestnicy')
+                  .select('klient_id')
+                  .eq('edycja_id', ed.id);
+
+                if (partData && partData.length > 0) {
+                  const notifications = partData.map((p: any) => ({
+                    klient_id: p.klient_id,
+                    tytul: `Wyzwanie Redukcji: Zostało ${diffDays} dni!`,
+                    tresc: `Przypomnienie: Do finału wyzwania "${ed.nazwa}" pozostało już tylko ${diffDays} dni! Umów się z trenerem na finałową analizę składu ciała.`,
+                    przeczytane: false
+                  }));
+                  await supabase.from('powiadomienia').insert(notifications);
+                }
+
+                localStorage.setItem(alertKey, 'true');
+              }
+            }
+          }
+        }
+      } else {
+        setHasUnreadRedukcja(false);
+      }
+
+      const dzisiajStr = new Date().toISOString().split("T")[0];
+      const { data: eventsData } = await supabase
+        .from('wydarzenia')
+        .select('id, data_od, data_do');
+
+      if (eventsData && eventsData.length > 0) {
+        const futureEvents = eventsData.filter((w: any) => {
+          const dataKoniec = w.data_do || w.data_od;
+          return dataKoniec >= dzisiajStr;
+        });
+        const hasUnseenEvent = futureEvents.some((w: any) => !localStorage.getItem(`seen_event_${w.id}`));
+        setHasUnreadWydarzenia(hasUnseenEvent);
+      } else {
+        setHasUnreadWydarzenia(false);
+      }
+
+      let unreadBaza = false;
+      if (role === 'admin') {
+        const { data: sugData } = await supabase
+          .from('sugestie_suplementow')
+          .select('id')
+          .eq('status', 'oczekujace');
+        if (sugData && sugData.length > 0) unreadBaza = true;
+      }
+
+      if (!unreadBaza) {
+        const [suplRes, sportRes, odzRes, przRes] = await Promise.all([
+          supabase.from('suplementy').select('id'),
+          supabase.from('baza_sport').select('id'),
+          supabase.from('baza_odzywianie').select('id'),
+          supabase.from('baza_przepisow').select('id')
+        ]);
+
+        const hasUnreadSupl = (suplRes.data || []).some((item: any) => !localStorage.getItem(`seen_supl_${item.id}`));
+        const hasUnreadSport = (sportRes.data || []).some((item: any) => !localStorage.getItem(`seen_sport_${item.id}`));
+        const hasUnreadOdz = (odzRes.data || []).some((item: any) => !localStorage.getItem(`seen_odz_${item.id}`));
+        const hasUnreadPrzepis = (przRes.data || []).some((item: any) => !localStorage.getItem(`seen_przepis_${item.id}`));
+
+        if (hasUnreadSupl || hasUnreadSport || hasUnreadOdz || hasUnreadPrzepis) {
+          unreadBaza = true;
+        }
+      }
+      setHasUnreadBazaWiedzy(unreadBaza);
+
+      let unreadOdziez = false;
+      if (role === 'admin') {
+        const { data: unreadOrders } = await supabase
+          .from('odziez_zamowienia')
+          .select('id')
+          .eq('status_platnosci', 'oplacone')
+          .eq('admin_odczytane', false)
+          .limit(1);
+
+        if (unreadOrders && unreadOrders.length > 0) {
+          unreadOdziez = true;
+        }
+      } else if (cId) {
+        const { data: latestCamp } = await supabase
+          .from('odziez_kampanie')
+          .select('id')
+          .in('status', ['aktywny', 'w_realizacji'])
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (latestCamp && latestCamp.length > 0) {
+          const campId = latestCamp[0].id;
+          const { data: viewData } = await supabase
+            .from('odziez_wyswietlenia')
+            .select('kampania_id')
+            .eq('klient_id', cId)
+            .eq('kampania_id', campId)
+            .maybeSingle();
+
+          if (!viewData) {
+            unreadOdziez = true;
+          }
+        }
+      }
+      setHasUnreadOdziez(unreadOdziez);
+
+      let unreadWyzwania = false;
+      if (role === 'admin') {
+        const { data: adminChallenges } = await supabase
+          .from('klub_wyzwania')
+          .select('id')
+          .eq('status', 'oczekujace')
+          .limit(1);
+        if (adminChallenges && adminChallenges.length > 0) {
+          unreadWyzwania = true;
+        }
+      } else if (cId) {
+        const { data: userChallenges } = await supabase
+          .from('klub_wyzwania')
+          .select('id, tworca_id, przeciwnik_id, status, termin_status, data_zaproponowana_przez')
+          .or(`tworca_id.eq.${cId},przeciwnik_id.eq.${cId}`)
+          .in('status', ['oczekujace', 'aktywne']);
+
+        if (userChallenges && userChallenges.length > 0) {
+          const needsAction = userChallenges.some((w: any) => {
+            const isOpponentPending = String(w.przeciwnik_id) === String(cId) && w.status === 'oczekujace';
+            const isDateProposedByOther = w.status === 'aktywne' && 
+              w.termin_status === 'oczekuje' && 
+              String(w.data_zaproponowana_przez) !== String(cId);
+            return isOpponentPending || isDateProposedByOther;
+          });
+          if (needsAction) unreadWyzwania = true;
+        }
+      }
+      setHasUnreadWyzwania(unreadWyzwania);
+
+      await checkBonusAdminNotifications(role, cId);
+    } catch (err) {
+      console.error("Błąd sprawdzania powiadomień w menu:", err);
+    }
+  };
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1323,7 +1541,7 @@ export default function RootLayout({
 
                 <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
                   <button 
-                    type="button"
+                    type="button" 
                     onClick={() => setIsAddClientModalOpen(false)}
                     className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
                   >
