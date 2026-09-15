@@ -45,6 +45,8 @@ const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
 };
 
 export default function PortfelPage() {
+  const todayStr = new Date().toISOString().split('T')[0];
+
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [historiaWszystkichOperacji, setHistoriaWszystkichOperacji] = useState<any[]>([]);
   const [activeFilter, setActiveFilter] = useState<'all' | 'autopay' | 'wallet'>('all');
@@ -98,6 +100,8 @@ export default function PortfelPage() {
             "Numer tel.": '-',
             Portfel: '0.00 PLN',
             portfel: 0.00,
+            hasLostContinuity: false,
+            continuityBreakNotice: null,
             Zarejestrowany: new Date().toISOString().split('T')[0],
             karnetyKlubowicza: []
           };
@@ -141,8 +145,10 @@ export default function PortfelPage() {
                 typ.includes('oplata_umowa') || 
                 typ.includes('oplata_raty_12m') || 
                 typ.includes('zakup_umowy') || 
+                typ.includes('auto_przedluzenie') ||
                 opis.includes('umow') || 
-                opis.includes('rata');
+                opis.includes('rata') ||
+                opis.includes('automatyczne przedłużenie');
 
               const isNonFinancialLog = 
                 (typ.includes('zajecia') ||
@@ -257,6 +263,15 @@ export default function PortfelPage() {
             parsedKarnety = rawClient.karnetyklubowicza;
           }
 
+          let continuityNotice = rawClient.continuityBreakNotice || rawClient.continuity_break_notice || null;
+          if (typeof continuityNotice === 'string') {
+            try { continuityNotice = JSON.parse(continuityNotice); } catch(e) {}
+          }
+          const todayDateOnly = new Date().toISOString().split('T')[0];
+          if (continuityNotice?.expiresAt && continuityNotice.expiresAt < todayDateOnly) {
+            continuityNotice = null;
+          }
+
           setCurrentUser({
             ...rawClient,
             firstName: rawClient.Imię || rawClient.firstName || '',
@@ -264,6 +279,8 @@ export default function PortfelPage() {
             wallet: `${parsedWalletNum.toFixed(2)} PLN`,
             rawWalletNum: parsedWalletNum,
             karnetyKlubowicza: parsedKarnety,
+            hasLostContinuity: rawClient.hasLostContinuity === true || rawClient.hasLostContinuity === 'true',
+            continuityBreakNotice: continuityNotice,
             umowa_oplacona_do: rawClient.umowa_oplacona_do || rawClient.umowa_oplacona || null
           });
         }
@@ -561,6 +578,29 @@ export default function PortfelPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in pb-20 font-sans antialiased text-slate-800">
       
+      {/* BANER PRZERWANIA CIĄGŁOŚCI PRZY REZERWACJACH W PRZYSZŁOŚCI (21 DNI) */}
+      {currentUser?.continuityBreakNotice && currentUser.continuityBreakNotice.expiresAt >= todayStr && (
+        <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 rounded-2xl p-4 sm:p-5 shadow-md flex items-start gap-3.5 animate-in fade-in">
+          <span className="text-2xl sm:text-3xl shrink-0">⚠️</span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-black text-xs sm:text-sm uppercase tracking-wider text-amber-900">
+                Przerwanie ciągłości karnetu (Automatyczne przedłużenie)
+              </span>
+              <span className="bg-amber-200 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full">
+                Komunikat ważny do: {currentUser.continuityBreakNotice.expiresAt}
+              </span>
+            </div>
+            <p className="text-xs text-amber-900 font-medium leading-relaxed">
+              {currentUser.continuityBreakNotice.reason}
+            </p>
+            <div className="text-[11px] text-amber-800 font-semibold pt-0.5">
+              Kwota za automatyczne przedłużenie karnetu została naliczona w saldzie Twojego portfela (jeśli saldo było niewystarczające, powstało ujemne zadłużenie). Twój dotychczasowy procent rabatu został zachowany, ale ciągłość i staż w programie bonusowym zostały wyzerowane.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SEKCJA 1: MÓJ PORTFEL */}
       <div className="space-y-4">
         <h2 className="text-[12px] font-black text-slate-400 uppercase tracking-widest">MÓJ PORTFEL</h2>
