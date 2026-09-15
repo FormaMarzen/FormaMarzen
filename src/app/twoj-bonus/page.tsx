@@ -145,9 +145,13 @@ const getElapsedMonthsForPass = (pass: any): number => {
   return Math.min(totalMonths, elapsed);
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej
+// Wyliczanie rzeczywistej ciągłości ogólnej (z uwzględnieniem zerwania ciągłości)
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
+  if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
+    return 1;
+  }
+
   const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
   let maxInstallments = 0;
   let maxLongPassMonths = 0;
@@ -229,6 +233,8 @@ const getNodeAccentStyles = (accent: string, isReached: boolean, isSelected: boo
 };
 
 export default function TwojBonusPage() {
+  const todayStr = new Date().toISOString().split('T')[0];
+
   const [isMounted, setIsMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
@@ -411,13 +417,25 @@ export default function TwojBonusPage() {
 
       const klienciData = klienciResponse.data;
       if (klienciData) {
+        const todayDateOnly = new Date().toISOString().split('T')[0];
+
         const mapped = klienciData.map((c: any) => {
           const rawKarnety = c.karnetyKlubowicza || c.KarnetyKlubowicza || c.karnetyklubowicza;
           const parsedKarnety = safeJsonParse(rawKarnety, []);
-          const effectiveCont = getClientEffectiveContinuity({ ...c, karnetyKlubowicza: parsedKarnety });
+
+          let continuityNotice = c.continuityBreakNotice || c.continuity_break_notice || null;
+          if (typeof continuityNotice === 'string') {
+            try { continuityNotice = JSON.parse(continuityNotice); } catch(e) {}
+          }
+          if (continuityNotice?.expiresAt && continuityNotice.expiresAt < todayDateOnly) {
+            continuityNotice = null;
+          }
+
+          const isLostCont = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
+          const effectiveCont = isLostCont ? 1 : getClientEffectiveContinuity({ ...c, karnetyKlubowicza: parsedKarnety });
           const rawCont = parseInt(String(c.cyklCiaglosci || c.cyklciaglosci || '1'), 10) || 1;
 
-          if (effectiveCont > rawCont) {
+          if (!isLostCont && effectiveCont > rawCont) {
             supabase.from('klienci').update({ cyklCiaglosci: effectiveCont }).eq('id', c.id).then();
           }
 
@@ -427,7 +445,9 @@ export default function TwojBonusPage() {
             lastName: c.Nazwisko || c.lastName || '',
             email: c['E-mail'] || c.email || '',
             karnetyKlubowicza: parsedKarnety,
-            cyklCiaglosci: effectiveCont,
+            hasLostContinuity: isLostCont,
+            continuityBreakNotice: continuityNotice,
+            cyklCiaglosci: isLostCont ? 1 : effectiveCont,
             transactions: txMap.get(c.id) || []
           };
         });
@@ -564,7 +584,6 @@ export default function TwojBonusPage() {
     }
   };
 
-  // Bezpieczne odpięcie programu bonusowego bez usuwania karnetu ze sklepu i bazy
   const handleDeleteTable = async (tableId: string | number, tableName: string) => {
     if (!confirm(`Czy na pewno chcesz usunąć tabelę programu bonusowego dla: "${tableName}"?\n\n(Uwaga: Sam karnet pozostanie nienaruszony w ofercie i w sklepie do zakupu – wyłączona zostanie wyłącznie jego konfiguracja bonusowa).`)) return;
     
@@ -687,6 +706,15 @@ export default function TwojBonusPage() {
     const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
 
     if (!userPass) return { value: 0, isReset: false, reason: '' };
+
+    // WERYFIKACJA PRZERWANIA CIĄGŁOŚCI (AUTO-PRZEDŁUŻENIE LUB UTRATA CIĄGŁOŚCI)
+    if (user.hasLostContinuity === true || user.hasLostContinuity === 'true') {
+      return { 
+        value: 0, 
+        isReset: true, 
+        reason: user.continuityBreakNotice?.reason || 'Ciągłość została przerwana (brak terminowego przedłużenia karnetu) – staż w programie nalicza się od nowa.' 
+      };
+    }
 
     if (userPass.isPassChangedReset || userPass.changedPassReset) {
       return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
@@ -1023,6 +1051,29 @@ export default function TwojBonusPage() {
             >
               <span>+</span> DODAJ NOWĄ TABELĘ
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* BANER PRZERWANIA CIĄGŁOŚCI DLA KLUBOWICZA (21 DNI) */}
+      {activeViewingUser?.continuityBreakNotice && activeViewingUser.continuityBreakNotice.expiresAt >= todayStr && (
+        <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 rounded-3xl p-5 sm:p-6 shadow-md flex items-start gap-4 animate-in fade-in">
+          <span className="text-3xl shrink-0">⚠️</span>
+          <div className="space-y-1.5 flex-1">
+            <div className="flex items-center gap-2 flex-wrap justify-between">
+              <span className="font-black text-sm uppercase tracking-wider text-amber-900">
+                Przerwanie ciągłości karnetu (Automatyczne przedłużenie)
+              </span>
+              <span className="bg-amber-200 text-amber-900 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider">
+                Komunikat ważny do: {activeViewingUser.continuityBreakNotice.expiresAt}
+              </span>
+            </div>
+            <p className="text-xs text-amber-900 font-medium leading-relaxed">
+              {activeViewingUser.continuityBreakNotice.reason}
+            </p>
+            <div className="text-[11px] text-amber-800 font-semibold pt-1 border-t border-amber-200">
+              Twój karnet wygasł w dniu {activeViewingUser.continuityBreakNotice.brokenAt || 'wcześniejszym'}, ale posiadałeś aktywne rezerwacje w grafiku. System dokonał automatycznego przedłużenia karnetu z obciążeniem portfela. Twój dotychczasowy rabat został zachowany, ale ciągłość i staż w programie bonusowym zostały wyzerowane.
+            </div>
           </div>
         </div>
       )}
