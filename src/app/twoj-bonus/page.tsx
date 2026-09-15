@@ -166,18 +166,16 @@ const getClientEffectiveContinuity = (client: any): number => {
   return Math.max(rawContinuity, maxInstallments, maxLongPassMonths, 1);
 };
 
-// Prawidłowa, dynamiczna odmiana jednostki w zależności od wyboru w progu
+// Prawidłowa dynamiczna odmiana jednostki w zależności od wyboru w progu
 const getTierUnitLabel = (tier: any, tabela: any) => {
   const val = Number(tier.threshold) || 1;
   
-  // 1. Jeśli to umowa 12-miesięczna -> zawsze miesiące
   if (isContractPassCheck(tabela)) {
     if (val === 1) return 'miesiąc';
     if (val >= 2 && val <= 4) return 'miesiące';
     return 'miesięcy';
   }
 
-  // 2. Jeśli jednostka progu to 'cykli' lub 'cykle'
   const rawUnit = (tier.unit || '').toLowerCase().trim();
   if (rawUnit.includes('cykl')) {
     if (val === 1) return 'cykl';
@@ -185,14 +183,12 @@ const getTierUnitLabel = (tier: any, tabela: any) => {
     return 'cykli';
   }
 
-  // 3. Jeśli jednostka progu to 'wejść' lub 'wejścia'
   if (rawUnit.includes('wejs')) {
     if (val === 1) return 'wejście';
     if (val >= 2 && val <= 4) return 'wejścia';
     return 'wejść';
   }
 
-  // 4. Jeśli jednostka progu to 'miesięcy' / 'miesiące'
   if (rawUnit.includes('mies')) {
     if (val === 1) return 'miesiąc';
     if (val >= 2 && val <= 4) return 'miesiące';
@@ -378,22 +374,28 @@ export default function TwojBonusPage() {
       }
 
       if (karnetyData && karnetyData.length > 0) {
-        const parsed = karnetyData.map((k: any, index: number) => {
-          let meta: any = {};
-          try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
+        const parsed = karnetyData
+          .filter((k: any) => {
+            let meta: any = {};
+            try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
+            return meta.bonus_disabled !== true;
+          })
+          .map((k: any, index: number) => {
+            let meta: any = {};
+            try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
 
-          const isContract = isContractPassCheck(k);
+            const isContract = isContractPassCheck(k);
 
-          return {
-            id: k.id,
-            nazwa: k.nazwa,
-            typ_karnetu: k.typ_karnetu || (isContract ? 'Umowa 12 miesięcy' : 'Na czas'),
-            cena: k.cena_brutto || k.cena || 0,
-            kolejnosc: k.kolejnosc !== null && k.kolejnosc !== undefined ? k.kolejnosc : index,
-            inne_ustawienia: meta,
-            customTiers: meta.customTiers && meta.customTiers.length > 0 ? meta.customTiers : (isContract ? defaultTiersUmowa : defaultTiersOpen)
-          };
-        });
+            return {
+              id: k.id,
+              nazwa: k.nazwa,
+              typ_karnetu: k.typ_karnetu || (isContract ? 'Umowa 12 miesięcy' : 'Na czas'),
+              cena: k.cena_brutto || k.cena || 0,
+              kolejnosc: k.kolejnosc !== null && k.kolejnosc !== undefined ? k.kolejnosc : index,
+              inne_ustawienia: meta,
+              customTiers: meta.customTiers && meta.customTiers.length > 0 ? meta.customTiers : (isContract ? defaultTiersUmowa : defaultTiersOpen)
+            };
+          });
 
         parsed.sort((a: any, b: any) => (a.kolejnosc ?? 0) - (b.kolejnosc ?? 0));
         setBonusTables(parsed);
@@ -491,23 +493,41 @@ export default function TwojBonusPage() {
       typ_karnetu: tableTypeInput,
       cena: parseFloat(tablePriceInput) || 0,
       kolejnosc: bonusTables.length,
-      inne_ustawienia: { customTiers: defaultNewTiers },
+      inne_ustawienia: { customTiers: defaultNewTiers, bonus_disabled: false },
       customTiers: defaultNewTiers
     };
 
     setIsSaving(true);
     try {
+      const metaStr = JSON.stringify({ customTiers: defaultNewTiers, bonus_disabled: false });
       const payload = {
         nazwa: newTableObj.nazwa,
         typ_karnetu: newTableObj.typ_karnetu,
+        cena: newTableObj.cena,
         cena_brutto: newTableObj.cena,
         kolejnosc: newTableObj.kolejnosc,
         dlugosc: tableTypeInput === 'Umowa 12 miesięcy' ? '12 miesięcy' : '1 miesiąc',
-        inne_ustawienia: JSON.stringify({ customTiers: defaultNewTiers })
+        inne_ustawienia: metaStr,
+        aktywny: true
       };
       const { data: inserted, error } = await supabase.from('katalog_karnetow').insert([payload]).select().single();
-      if (!error && inserted) newTableObj.id = inserted.id;
-    } catch (err) {} finally {
+      if (!error && inserted) {
+        newTableObj.id = inserted.id;
+        await supabase.from('karnety').insert([{
+          nazwa: newTableObj.nazwa,
+          typ_karnetu: newTableObj.typ_karnetu,
+          cena: newTableObj.cena,
+          cena_brutto: newTableObj.cena,
+          kolejnosc: newTableObj.kolejnosc,
+          dlugosc: tableTypeInput === 'Umowa 12 miesięcy' ? '12 miesięcy' : '1 miesiąc',
+          inne_ustawienia: metaStr,
+          sprzedaz_online: true,
+          aktywny: true
+        }]);
+      }
+    } catch (err) {
+      console.error("Błąd podczas dodawania tabeli:", err);
+    } finally {
       setBonusTables(prev => [...prev, newTableObj]);
       setIsAddTableModalOpen(false);
       setTableNameInput('');
@@ -536,19 +556,29 @@ export default function TwojBonusPage() {
     }));
 
     try {
-      await supabase.from('katalog_karnetow').update({ nazwa: updatedName, typ_karnetu: tableTypeInput, cena_brutto: updatedPrice }).eq('id', editingTableId);
+      await supabase.from('katalog_karnetow').update({ nazwa: updatedName, typ_karnetu: tableTypeInput, cena: updatedPrice, cena_brutto: updatedPrice }).eq('id', editingTableId);
+      await supabase.from('karnety').update({ nazwa: updatedName, typ_karnetu: tableTypeInput, cena: updatedPrice, cena_brutto: updatedPrice }).eq('id', editingTableId);
     } catch (err) {} finally {
       setIsEditTableModalOpen(false);
       setIsSaving(false);
     }
   };
 
+  // Bezpieczne odpięcie programu bonusowego bez usuwania karnetu ze sklepu i bazy
   const handleDeleteTable = async (tableId: string | number, tableName: string) => {
-    if (!confirm(`Czy na pewno chcesz usunąć całą tabelę bonusową dla: "${tableName}"?`)) return;
+    if (!confirm(`Czy na pewno chcesz usunąć tabelę programu bonusowego dla: "${tableName}"?\n\n(Uwaga: Sam karnet pozostanie nienaruszony w ofercie i w sklepie do zakupu – wyłączona zostanie wyłącznie jego konfiguracja bonusowa).`)) return;
+    
     try {
-      await supabase.from('katalog_karnetow').delete().eq('id', tableId);
-      await supabase.from('karnety').delete().eq('id', tableId);
-    } catch (err) {}
+      const tableObj = bonusTables.find(t => String(t.id) === String(tableId));
+      const existingMeta = tableObj?.inne_ustawienia || {};
+      const updatedMeta = { ...existingMeta, bonus_disabled: true, customTiers: [] };
+      const metaStr = JSON.stringify(updatedMeta);
+
+      await supabase.from('katalog_karnetow').update({ inne_ustawienia: metaStr }).eq('id', tableId);
+      await supabase.from('karnety').update({ inne_ustawienia: metaStr }).eq('id', tableId);
+    } catch (err) {
+      console.error("Błąd podczas odpinania tabeli bonusowej:", err);
+    }
     setBonusTables(prev => prev.filter(t => String(t.id) !== String(tableId)));
   };
 
@@ -618,9 +648,10 @@ export default function TwojBonusPage() {
     if (!tableObj) return;
     setIsSaving(true);
     try {
-      const meta = { ...(tableObj.inne_ustawienia || {}), customTiers: tableObj.customTiers };
-      const res1 = await supabase.from('katalog_karnetow').update({ inne_ustawienia: JSON.stringify(meta), kolejnosc: tableObj.kolejnosc }).eq('id', tableId);
-      if (res1.error) await supabase.from('karnety').update({ inne_ustawienia: JSON.stringify(meta) }).eq('id', tableId);
+      const meta = { ...(tableObj.inne_ustawienia || {}), customTiers: tableObj.customTiers, bonus_disabled: false };
+      const metaStr = JSON.stringify(meta);
+      await supabase.from('katalog_karnetow').update({ inne_ustawienia: metaStr, kolejnosc: tableObj.kolejnosc }).eq('id', tableId);
+      await supabase.from('karnety').update({ inne_ustawienia: metaStr, kolejnosc: tableObj.kolejnosc }).eq('id', tableId);
       alert(`Pomyślnie zapisano konfigurację tabeli w bazie!`);
     } catch (error: any) {
       alert("Zapisano lokalnie.");
@@ -1248,7 +1279,7 @@ export default function TwojBonusPage() {
                       <button
                         onClick={() => handleDeleteTable(tabela.id, tabela.nazwa)}
                         className="w-7 h-7 rounded-lg bg-white/10 text-rose-300 hover:bg-rose-600 hover:text-white text-xs flex items-center justify-center cursor-pointer transition-colors"
-                        title="Usuń tę tabelę"
+                        title="Usuń tę tabelę bonusową"
                       >
                         ✕
                       </button>
