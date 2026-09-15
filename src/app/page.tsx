@@ -21,7 +21,7 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
-// ROZWIĄZANIE PROBLEMU LIMITU REKORDÓW SUPABASE - POBIERANIE PEŁNE I OD NAJNOWSZYCH
+// POBIERANIE PEŁNE I OD NAJNOWSZYCH (BEZ LIMITU 1000 REKORDÓW SUPABASE)
 const fetchAllFromSupabase = async (
   table: string,
   orderBy: string = 'created_at',
@@ -105,6 +105,210 @@ const parseDateFromClassKey = (classKey: string): Date => {
     }
   }
   return new Date();
+};
+
+// POWIADOMIENIA NA CZACIE DLA TRENERÓW (5 MIN PRZED ORAZ PO OSTATNIM TRENINGU DNIA, BEZ ADMINA)
+const checkAndSendTrainerReminders = async (
+  classes: any[],
+  jednorazowe: any[],
+  overridesMap: { [key: string]: any },
+  trenerzyList: any[],
+  allClientsList: any[]
+) => {
+  try {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTotalMinutes = currentHour * 60 + currentMinute;
+
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const todayDisplay = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}`;
+    const dayKeys = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sob'];
+    const dayKey = dayKeys[now.getDay()];
+
+    if (dayKey === 'nd' || dayKey === 'sob') return;
+
+    // Pobieramy wszystkie dzisiejsze zajęcia
+    const todaysClasses: any[] = [];
+
+    classes
+      .filter((item: any) => item.days && item.days[dayKey])
+      .forEach((item: any) => {
+        const classKey = `${item.id}_${todayDisplay}`;
+        const override = overridesMap[classKey];
+        const cls = override ? { ...item, ...override, classKey } : { ...item, classKey };
+        if (!cls.isOdwołane && !cls.isUsunięte && cls.start && cls.trainer) {
+          todaysClasses.push(cls);
+        }
+      });
+
+    jednorazowe
+      .filter((item: any) => item.displayDate === todayDisplay || item.fullDateStr === todayIso)
+      .forEach((item: any) => {
+        const classKey = `${item.id}_${todayDisplay}`;
+        const override = overridesMap[classKey];
+        const cls = override ? { ...item, ...override, classKey } : { ...item, classKey };
+        if (!cls.isOdwołane && !cls.isUsunięte && cls.start && cls.trainer) {
+          todaysClasses.push(cls);
+        }
+      });
+
+    if (todaysClasses.length === 0) return;
+
+    // Grupowanie zajęć według trenera
+    const trainerClassesMap = new Map<string, any[]>();
+    todaysClasses.forEach(cls => {
+      const tName = (cls.trainer || '').trim();
+      if (!tName) return;
+      if (!trainerClassesMap.has(tName)) trainerClassesMap.set(tName, []);
+      trainerClassesMap.get(tName)?.push(cls);
+    });
+
+    for (const [trainerName, trainerClassList] of trainerClassesMap.entries()) {
+      const trainerObj = (trenerzyList || []).find((t: any) => 
+        (t.imie_nazwisko || t.nazwa || '').trim().toLowerCase() === trainerName.toLowerCase() ||
+        trainerName.toLowerCase().includes((t.imie_nazwisko || '').toLowerCase())
+      );
+
+      const trainerEmail = (trainerObj?.email || '').trim().toLowerCase();
+
+      // WYKLUCZENIE ADMINISTRATORA (NIE DOSTAJE POWIADOMIEŃ)
+      if (!trainerEmail || trainerEmail === 'maciejklaput@gmail.com') {
+        continue;
+      }
+
+      const trainerClientObj = (allClientsList || []).find((c: any) => 
+        (c.email || c['E-mail'] || '').trim().toLowerCase() === trainerEmail
+      );
+
+      // A. PRZYPOMNIENIE 5 MINUT PRZED KAŻDYM TRENINGIEM
+      for (const cls of trainerClassList) {
+        const [sh = '00', sm = '00'] = cls.start.split(':').map(Number);
+        const classStartMinutes = sh * 60 + sm;
+        const diffMinutes = classStartMinutes - currentTotalMinutes;
+
+        // Okno czasowe: od 5 minut przed do 1 minuty po rozpoczęciu
+        if (diffMinutes <= 5 && diffMinutes >= -1) {
+          const tag5min = `[REMINDER_5MIN_${cls.classKey}_${todayIso}]`;
+          const storageKey = `fm_trainer_rem_5min_${cls.classKey}_${todayIso}`;
+
+          if (typeof window !== 'undefined' && localStorage.getItem(storageKey)) {
+            continue;
+          }
+
+          const { data: existingChat } = await supabase
+            .from('czat_wiadomosci')
+            .select('id')
+            .eq('odbiorca_email', trainerEmail)
+            .ilike('tresc', `%${tag5min}%`)
+            .limit(1);
+
+          if (!existingChat || existingChat.length === 0) {
+            const messageContent = `Cześć ${trainerObj.imie_nazwisko || trainerName}! Za 5 minut rozpoczyna się Twój trening: ${cls.title} (${cls.start} - ${cls.end || ''}). Pamiętaj o sprawdzeniu listy obecności uczestników w aplikacji! ${tag5min}`;
+
+            await supabase.from('czat_wiadomosci').insert([{
+              nadawca: 'Aplikacja FORMA MARZEŃ',
+              nadawca_email: 'system@formamarzen.pl',
+              nadawca_rola: 'system',
+              odbiorca: trainerObj.imie_nazwisko || trainerName,
+              odbiorca_email: trainerEmail,
+              odbiorca_rola: 'trener',
+              tresc: messageContent,
+              created_at: new Date().toISOString()
+            }]);
+
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(storageKey, 'true');
+            }
+
+            if (trainerClientObj?.id) {
+              try {
+                await fetch('/api/push/send', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    clientIds: [trainerClientObj.id],
+                    payload: {
+                      title: `Sprawdź obecność: ${cls.title}`,
+                      body: `Twój trening rozpoczyna się za 5 minut (${cls.start}). Pamiętaj o sprawdzeniu obecności!`,
+                      url: '/',
+                      typ: 'TRAINER_ATTENDANCE_REMINDER'
+                    }
+                  })
+                });
+              } catch (e) {}
+            }
+          }
+        }
+      }
+
+      // B. PRZYPOMNIENIE NA KONIEC WSZYSTKICH TRENINGÓW DNIA DANEGO TRENERA
+      let latestEndMinutes = 0;
+      trainerClassList.forEach(cls => {
+        const [eh = '00', em = '00'] = (cls.end || cls.start).split(':').map(Number);
+        const endMin = eh * 60 + em;
+        if (endMin > latestEndMinutes) {
+          latestEndMinutes = endMin;
+        }
+      });
+
+      if (currentTotalMinutes >= latestEndMinutes) {
+        const tagEndOfDay = `[REMINDER_END_OF_DAY_${trainerEmail}_${todayIso}]`;
+        const storageKeyEnd = `fm_trainer_rem_end_${trainerEmail}_${todayIso}`;
+
+        if (typeof window !== 'undefined' && localStorage.getItem(storageKeyEnd)) {
+          continue;
+        }
+
+        const { data: existingEndChat } = await supabase
+          .from('czat_wiadomosci')
+          .select('id')
+          .eq('odbiorca_email', trainerEmail)
+          .ilike('tresc', `%${tagEndOfDay}%`)
+          .limit(1);
+
+        if (!existingEndChat || existingEndChat.length === 0) {
+          const messageContent = `Cześć ${trainerObj.imie_nazwisko || trainerName}! Zakończyłeś już wszystkie swoje dzisiejsze treningi (${trainerClassList.length} ${trainerClassList.length === 1 ? 'trening' : 'treningi'}). Czy sprawdziłeś i oznaczyłeś wszystkie obecności na dzisiejszych zajęciach? Prosimy o weryfikację list w grafiku. Dziękujemy za wykonaną pracę! ${tagEndOfDay}`;
+
+          await supabase.from('czat_wiadomosci').insert([{
+            nadawca: 'Aplikacja FORMA MARZEŃ',
+            nadawca_email: 'system@formamarzen.pl',
+            nadawca_rola: 'system',
+            odbiorca: trainerObj.imie_nazwisko || trainerName,
+            odbiorca_email: trainerEmail,
+            odbiorca_rola: 'trener',
+            tresc: messageContent,
+            created_at: new Date().toISOString()
+          }]);
+
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(storageKeyEnd, 'true');
+          }
+
+          if (trainerClientObj?.id) {
+            try {
+              await fetch('/api/push/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  clientIds: [trainerClientObj.id],
+                  payload: {
+                    title: 'Weryfikacja obecności z dzisiejszego dnia',
+                    body: `Zakończyłeś dzisiejsze treningi. Upewnij się, że uzupełniłeś obecności na wszystkich swoich zajęciach!`,
+                    url: '/',
+                    typ: 'TRAINER_DAY_COMPLETION'
+                  }
+                })
+              });
+            } catch (e) {}
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Błąd w module przypomnień dla trenerów:', err);
+  }
 };
 
 export default function DashboardPage() {
@@ -389,7 +593,6 @@ export default function DashboardPage() {
 
     return false;
   };
-
   // STANY DANYCH I WIDOKU
   const [adminViewTab, setAdminViewTab] = useState<'grafik' | 'operacje'>('grafik');
   const [clientSearch, setClientSearch] = useState('');
@@ -711,6 +914,7 @@ export default function DashboardPage() {
       workout: list[workoutIndex]
     };
   };
+
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -1181,6 +1385,9 @@ export default function DashboardPage() {
   // NALICZANIE CIĄGŁOŚCI: WYKLUCZAMY KARNETY <= 150 ZŁ
   const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
+      return { hasContinuity: false, percent: 0, label: '0% (Ciągłość przerwana)' };
+    }
     if (basePriceToCheck !== undefined && basePriceToCheck <= 150) {
       return { hasContinuity: false, percent: 0, label: '0% (Karnet ≤ 150 zł - brak rabatu ciągłości)' };
     }
@@ -1194,7 +1401,7 @@ export default function DashboardPage() {
     let isContinuous = false;
     for (const k of karnety) {
       const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
-      if (passPrice <= 150) continue; // Karnety <= 150 zł nie biorą udziału w ciągłości
+      if (passPrice <= 150) continue;
 
       if (k.waznyDo) {
         const expDate = new Date(k.waznyDo);
@@ -1492,21 +1699,30 @@ export default function DashboardPage() {
         yesterdayDate.setDate(yesterdayDate.getDate() - 1);
         const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
-        // Zmapowanie liczby przyszłych rezerwacji dla każdego klienta w celu ochrony wyzerowanych karnetów
+        // Zmapowanie liczby i dat przyszłych rezerwacji dla każdego klienta w celu ochrony i auto-przedłużenia
         const nowBeginning = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
         const clientFutureBookingsMap = new Map<number, number>();
+        const clientFutureDatesMap = new Map<number, string[]>();
+
         if (zapisyData && zapisyData.length > 0) {
           zapisyData.forEach((s: any) => {
             if (!s.klient_id) return;
             const classDate = parseDateFromClassKey(s.class_key);
+            const classDateIso = `${classDate.getFullYear()}-${String(classDate.getMonth() + 1).padStart(2, '0')}-${String(classDate.getDate()).padStart(2, '0')}`;
+            
             if (classDate >= nowBeginning) {
-              const prev = clientFutureBookingsMap.get(Number(s.klient_id)) || 0;
-              clientFutureBookingsMap.set(Number(s.klient_id), prev + 1);
+              const kId = Number(s.klient_id);
+              const prevCount = clientFutureBookingsMap.get(kId) || 0;
+              clientFutureBookingsMap.set(kId, prevCount + 1);
+
+              const prevDates = clientFutureDatesMap.get(kId) || [];
+              prevDates.push(classDateIso);
+              clientFutureDatesMap.set(kId, prevDates);
             }
           });
         }
 
-        const enriched = klienciData.map((c: any) => {
+        const enriched = await Promise.all(klienciData.map(async (c: any) => {
           let parsedKarnety = [];
           if (Array.isArray(c.karnetyKlubowicza)) {
             parsedKarnety = c.karnetyKlubowicza;
@@ -1514,9 +1730,23 @@ export default function DashboardPage() {
             try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
           }
 
-          const hasFutureBookings = (clientFutureBookingsMap.get(Number(c.id)) || 0) > 0;
+          const futureDates = clientFutureDatesMap.get(Number(c.id)) || [];
+          const hasFutureBookings = futureDates.length > 0;
           let karnetyZmienione = false;
+          let walletChanged = false;
 
+          let currentWalletNum = parseFloat(String(c.Portfel ?? c.portfel ?? c.wallet ?? '0').replace(/[^0-9.-]+/g, '')) || 0;
+          let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
+
+          let continuityNotice = c.continuityBreakNotice || c.continuity_break_notice || null;
+          if (typeof continuityNotice === 'string') {
+            try { continuityNotice = JSON.parse(continuityNotice); } catch(e) {}
+          }
+          if (continuityNotice?.expiresAt && continuityNotice.expiresAt < todayDateOnly) {
+            continuityNotice = null;
+          }
+
+          // 1. ZEROWANIE WEJŚĆ PO TERMINIE
           parsedKarnety = parsedKarnety.map((k: any) => {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
             const isContract = isContractPass(k) || (pasujacyDef && isContractPass(pasujacyDef));
@@ -1535,6 +1765,14 @@ export default function DashboardPage() {
                 k.pozostaloWejsc = isNaN(valWejsc) ? null : valWejsc;
                 k.poczatkoweWejsc = isNaN(valWejsc) ? null : valWejsc;
               }
+            }
+
+            // Zerowanie wejść w dniu po terminie wygaśnięcia
+            const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
+            if (!isContract && isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
+              k.pozostaloWejsc = 0;
+              k.statusTekst = 'Karnet wygasł (wejścia wyzerowane)';
+              karnetyZmienione = true;
             }
 
             // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ (REGUŁA <= 150 ZŁ)
@@ -1572,10 +1810,93 @@ export default function DashboardPage() {
             k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || pasujacyDef?.zaznaczoneZajecia || [];
 
             return k;
-          }).filter((k: any) => {
+          });
+
+          // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE
+          const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
+            idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
+          );
+
+          let primaryPass = parsedKarnety[0];
+          if (primaryPass && !isContractPass(primaryPass)) {
+            const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
+                                     (primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+
+            // Rotacja na kolejny zakupiony karnet
+            if (isPrimaryFinished && waitingPassIndex !== -1) {
+              const nextPass = parsedKarnety[waitingPassIndex];
+              const defNext = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (nextPass.nazwa || '').trim().toLowerCase());
+              
+              let dniWaznosciNext = 30;
+              if (defNext && defNext.dlugosc) {
+                const dlugoscStr = defNext.dlugosc.toLowerCase();
+                if (dlugoscStr.includes('3 miesiące')) dniWaznosciNext = 90;
+                else if (dlugoscStr.includes('6 miesięcy')) dniWaznosciNext = 180;
+                else if (dlugoscStr.includes('1 rok')) dniWaznosciNext = 365;
+                else if (dlugoscStr.includes('14 dni')) dniWaznosciNext = 14;
+                else if (dlugoscStr.includes('7 dni')) dniWaznosciNext = 7;
+              }
+              const nextExpDate = new Date();
+              nextExpDate.setDate(nextExpDate.getDate() + dniWaznosciNext);
+              const nextNewExpiry = nextExpDate.toISOString().split('T')[0];
+
+              parsedKarnety = parsedKarnety.filter((_: any, idx: number) => idx !== 0);
+              parsedKarnety[waitingPassIndex - 1] = {
+                ...nextPass,
+                waznyDo: nextNewExpiry,
+                statusTekst: `Ważny do: ${nextNewExpiry}`
+              };
+              karnetyZmienione = true;
+              primaryPass = parsedKarnety[0];
+            }
+            // Auto-przedłużenie przy przyszłych rezerwacjach w grafiku
+            else if (isPrimaryFinished && waitingPassIndex === -1) {
+              const hasBookingsAfterExpiry = futureDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
+              if (hasBookingsAfterExpiry) {
+                const defKarnetu = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (primaryPass.nazwa || '').trim().toLowerCase());
+                const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : (parseFloat(String(primaryPass.cena).replace(/[^0-9.-]/g, '')) || 0);
+
+                const effDisc = getEffectiveDiscount(c, false, basePrice);
+                const priceAfterDiscount = basePrice * (1 - effDisc.percent / 100);
+
+                const extExpDate = new Date();
+                extExpDate.setDate(extExpDate.getDate() + 30);
+                const extendedExpiry = extExpDate.toISOString().split('T')[0];
+
+                currentWalletNum -= priceAfterDiscount;
+                walletChanged = true;
+                continuityBroken = true;
+
+                const noticeExpiry = new Date();
+                noticeExpiry.setDate(noticeExpiry.getDate() + 21);
+
+                continuityNotice = {
+                  brokenAt: todayDateOnly,
+                  expiresAt: noticeExpiry.toISOString().split('T')[0],
+                  extendedPassName: primaryPass.nazwa,
+                  reason: `Karnet ${primaryPass.nazwa} wygasł w dniu ${primaryPass.waznyDo}, lecz klubowicz posiadał aktywne zapisy w grafiku. Karnet został automatycznie przedłużony, naliczono zadłużenie w portfelu (${priceAfterDiscount.toFixed(2)} PLN), a ciągłość została przerwana.`
+                };
+
+                parsedKarnety[0] = {
+                  ...primaryPass,
+                  waznyDo: extendedExpiry,
+                  pozostaloWejsc: primaryPass.poczatkoweWejsc || primaryPass.pozostaloWejsc,
+                  statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
+                };
+                karnetyZmienione = true;
+
+                await supabase.from('transakcje').insert([{
+                  klient_id: c.id,
+                  typ_operacji: 'auto_przedluzenie_karnetu',
+                  kwota: -priceAfterDiscount,
+                  opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
+                }]);
+              }
+            }
+          }
+
+          parsedKarnety = parsedKarnety.filter((k: any) => {
             if (isContractPass(k)) return true;
-            
-            // OCHRONA: Jeśli klubowicz ma aktywne/przyszłe rezerwacje w grafiku, karnet NIE jest usuwany
             if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
               return true;
             }
@@ -1596,8 +1917,17 @@ export default function DashboardPage() {
             return true;
           });
 
-          if (karnetyZmienione) {
-            supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', c.id).then();
+          if (karnetyZmienione || walletChanged) {
+            const updatePayload: any = { 
+              karnetyKlubowicza: parsedKarnety,
+              hasLostContinuity: continuityBroken,
+              continuityBreakNotice: continuityNotice
+            };
+            if (walletChanged) {
+              updatePayload.Portfel = `${currentWalletNum.toFixed(2)} PLN`;
+              updatePayload.portfel = currentWalletNum;
+            }
+            await supabase.from('klienci').update(updatePayload).eq('id', c.id);
           }
 
           const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
@@ -1615,7 +1945,7 @@ export default function DashboardPage() {
             pass: c.pass || (parsedKarnety.length > 0 ? parsedKarnety[0].nazwa : 'Brak karnetu'),
             price: c.Cena || c.cena || c.price || '0.00 PLN',
             discount: c.discount || '',
-            wallet: c.Portfel || c.portfel || c.wallet || '0.00 PLN',
+            wallet: `${currentWalletNum.toFixed(2)} PLN`,
             avatarUrl: c.avatarUrl || c.avatar || null,
             gender: c.płeć || c.gender || '',
             phone: c['Numer tel.'] || c.telefon || c.phone || '',
@@ -1624,6 +1954,8 @@ export default function DashboardPage() {
             blokadaDo: c.blokadaDo || c.blokada_do || (parsedKarnety[0]?.blokadaDo) || null,
             powodBlokady: c.powodBlokady || c.powod_blokady || (parsedKarnety[0]?.powodBlokady) || null,
             umowa_oplacona_do: c.umowa_oplacona_do || null,
+            hasLostContinuity: continuityBroken,
+            continuityBreakNotice: continuityNotice,
             karnetyKlubowicza: parsedKarnety,
             walletHistory: c.walletHistory || [],
             transakcje: clientTransakcje,
@@ -1632,7 +1964,7 @@ export default function DashboardPage() {
             zapisyPrzeszle: c.zapisyPrzeszle || [],
             zapisyWypisy: c.zapisyWypisy || []
           };
-        });
+        }));
 
         setKlienciList(enriched);
         checkContractPaymentEnforcement(enriched);
@@ -1842,6 +2174,7 @@ export default function DashboardPage() {
           fullDate: dayDate 
         };
       });
+
       await processWaitlistCutoffs(
         mappedSzablony,
         mappedJednorazowe,
@@ -1857,6 +2190,15 @@ export default function DashboardPage() {
         nadpisaniaMap,
         parsedRules,
         activeDashboardDays
+      );
+
+      // CYKLICZNE SPRAWDZENIE I WYSYŁKA WIADOMOŚCI CZAT DLA TRENERÓW (5 MIN PRZED I PO TRENINGACH DNIA)
+      await checkAndSendTrainerReminders(
+        mappedSzablony,
+        mappedJednorazowe,
+        nadpisaniaMap,
+        trenerzyData || [],
+        klienciData || []
       );
 
       if (rodzajeData) {
@@ -1915,10 +2257,17 @@ export default function DashboardPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wydarzenia_kilkudniowe' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'indywidualne_limity_zapisow' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'czat_wiadomosci' }, () => loadData())
       .subscribe();
+
+    // Minutowy interwał sprawdzania powiadomień przedtreningowych dla trenerów
+    const reminderInterval = setInterval(() => {
+      loadData();
+    }, 60000);
 
     window.addEventListener('storage', loadData);
     return () => {
+      clearInterval(reminderInterval);
       supabase.removeChannel(channel);
       window.removeEventListener('storage', loadData);
     };
@@ -2058,7 +2407,6 @@ export default function DashboardPage() {
       showToast("Wydarzenie zostało usunięte.");
     }
   };
-
   const handleSaveClassEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editClassModalData) return;
@@ -2369,6 +2717,7 @@ export default function DashboardPage() {
     loadData();
     return true;
   };
+
   const handleAutoWypiszPoZablokowaniu = async (klientId: number, targetClientObj: any, powodBlokadyText: string, excludeClassKey?: string) => {
     const now = new Date();
     let cancelledCount = 0;
@@ -3077,7 +3426,6 @@ export default function DashboardPage() {
     const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
     const now = new Date();
     let cancelledCount = 0;
-
     const { data: userSignups } = await supabase
       .from('zapisy_zajec')
       .select('*')
@@ -3345,10 +3693,6 @@ export default function DashboardPage() {
       karnetyKlubowicza: updatedClientKarnety
     }).eq('id', klient.id);
 
-    let d = 1, m = 1;
-    if (selectedClass.displayDate.includes('/')) {
-      [d, m] = selectedClass.displayDate.split('/').map(Number);
-    }
     const durationText = calculateDuration(selectedClass.start, selectedClass.end);
 
     await supabase.from('transakcje').insert([{
@@ -3371,6 +3715,7 @@ export default function DashboardPage() {
     showToast(`Oznaczono nieobecność. Nałożono 3 dni blokady zapisów na ${klient.firstName} ${klient.lastName}.`);
     loadData();
   };
+
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3379,18 +3724,23 @@ export default function DashboardPage() {
     setIsSubmittingBooking(true);
     
     try {
+      // 1. WERYFIKACJA ZADŁUŻENIA PORTFELA
+      const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
+      if (walletVal < 0) { 
+        showToast(`Posiadasz zadłużenie na koncie (${currentUser.wallet || currentUser.Portfel})! Ureguluj portfel, aby móc się zapisywać.`, 'error'); 
+        return; 
+      }
+
       const karnetyUzytkownika = currentUser.karnetyKlubowicza || [];
       const dzisiajDateObj = new Date();
       dzisiajDateObj.setHours(0, 0, 0, 0);
+      const todayDateOnly = dzisiajDateObj.toISOString().split('T')[0];
 
+      // 2. BEZWZGLĘDNA BLOKADA PO WYGAŚNIĘCIU (BUFOR 1 DNIA NIE UPRAWNIA DO ZAPISU)
       const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
         if (isContractPass(k)) return true;
-        if (k.waznyDo) {
-          const expDate = new Date(k.waznyDo);
-          expDate.setHours(23, 59, 59, 999);
-          if (expDate < dzisiajDateObj) return false;
-        }
+        if (k.waznyDo && k.waznyDo < todayDateOnly) return false;
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
         }
@@ -3401,21 +3751,17 @@ export default function DashboardPage() {
         await supabase.from('booking_logs').insert([{
           action_type: 'BOOKING_BLOCKED',
           status: 'BLOCKED',
-          reason: `${currentUser.firstName || 'Klubowicz'}: Brak aktywnego karnetu na koncie.`,
+          reason: `${currentUser.firstName || 'Klubowicz'}: Brak aktywnego karnetu na koncie lub karnet wygasł.`,
           rule_applied: 'no_active_pass',
           payload: { klient_id: currentUser.id, class_id: selectedClass.id }
         }]);
-        showToast("Nie możesz zapisać się na zajęcia! Nie posiadasz aktywnego karnetu. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
+        showToast("Nie możesz zapisać się na zajęcia! Twój karnet wygasł lub wyczerpałeś wejścia. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
         return;
       }
       
       const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
-        if (!isContractPass(k) && k.waznyDo) {
-          const expDate = new Date(k.waznyDo);
-          expDate.setHours(23, 59, 59, 999);
-          if (expDate < dzisiajDateObj) return false;
-        }
+        if (!isContractPass(k) && k.waznyDo && k.waznyDo < todayDateOnly) return false;
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
         }
@@ -3440,12 +3786,6 @@ export default function DashboardPage() {
       
       if (selectedClass.isOdwołane || selectedClass.isUsunięte || autoCancelStatus.isAutoCancelled) { 
         showToast(autoCancelStatus.isAutoCancelled ? autoCancelStatus.reason : "Nie można zapisać się na odwołane lub usunięte zajęcia!", 'error'); 
-        return; 
-      }
-      
-      const walletVal = parseFloat(String(currentUser.wallet || currentUser.Portfel || '0').replace(/[^0-9.-]+/g, "")) || 0;
-      if (walletVal < 0) { 
-        showToast("Posiadasz zadłużenie na koncie! Ureguluj portfel, aby móc się zapisywać.", 'error'); 
         return; 
       }
       
@@ -3574,32 +3914,6 @@ export default function DashboardPage() {
         }
       }
 
-      const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
-        ? currentUser.karnetyKlubowicza[0].nazwa
-        : (currentUser.pass || 'OPEN');
-
-      const isContract = isContractPass({ nazwa: passName }) || (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.some((k: any) => isContractPass(k)));
-
-      if (currentUser.expiresDate && !isContract) {
-        const graceDays = bookingRules.expired_pass_grace_per_pass?.[passName] ?? bookingRules.expired_pass_grace_days ?? 0;
-        const expDate = new Date(currentUser.expiresDate);
-        expDate.setDate(expDate.getDate() + graceDays);
-        expDate.setHours(23, 59, 59, 999);
-
-        if (classStartDateTime > expDate) {
-          const reason = `Karnet "${passName}" wygasł. Okres karencji wynosił ${graceDays} dni.`;
-          await supabase.from('booking_logs').insert([{
-            action_type: 'BOOKING_BLOCKED',
-            status: 'BLOCKED',
-            reason: `${currentUser.firstName || 'Klubowicz'}: ${reason}`,
-            rule_applied: 'expired_pass_grace_per_pass',
-            payload: { klient_id: currentUser.id, class_key: classKey, pass: passName, grace_days: graceDays }
-          }]);
-          showToast(`Nie możesz się zapisać! ${reason}`, 'error');
-          return;
-        }
-      }
-
       const maxSameType = bookingRules.max_daily_same_type_bookings ?? 1;
       if (maxSameType < 999) {
         let sameTypeCount = 0;
@@ -3722,6 +4036,7 @@ export default function DashboardPage() {
         return; 
       }
 
+      // Automatyczne pobranie wejścia z karnetu ilościowego
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -4005,7 +4320,6 @@ export default function DashboardPage() {
     const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
     if (passIndex !== -1) {
       const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-      // Zwracamy wejście bez sztucznego ucinania limitem początkowym (np. 2/1)
       updatedKarnety[passIndex] = {
         ...updatedKarnety[passIndex],
         pozostaloWejsc: currentRemaining + 1,
@@ -4434,7 +4748,6 @@ export default function DashboardPage() {
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-        // Bezstratne powiększenie puli wejść
         updatedKarnety[passIndex] = {
           ...updatedKarnety[passIndex],
           pozostaloWejsc: currentRemaining + 1,
@@ -4742,7 +5055,6 @@ export default function DashboardPage() {
 
     return opisText.includes(q) || opTypeText.includes(q) || clientName.includes(q) || clientEmail.includes(q);
   });
-
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       {/* SYSTEM POWIADOMIEŃ TOAST */}
@@ -5871,6 +6183,7 @@ export default function DashboardPage() {
           </section>
         </div>
       )}
+
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
@@ -6234,7 +6547,6 @@ export default function DashboardPage() {
                               </label>
                             )}
 
-                            {/* REGUŁA: PRZYCISK WYPISZ ZNIKA DLA TRENERA PO ROZPOCZĘCIU TRENINGU */}
                             {(!osobaZapisana.obecny && !osobaZapisana.nieobecny && canUnregister) && (
                               <button
                                 onClick={() => { setBlokadaZapisow(false); setClientToUnregister(osoba); }}
