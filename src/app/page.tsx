@@ -107,15 +107,20 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
-// POWIADOMIENIA NA CZACIE DLA TRENERÓW (5 MIN PRZED ORAZ PO OSTATNIM TRENINGU DNIA, BEZ ADMINA)
+// POWIADOMIENIA DLA TRENERÓW (ŚCIŚLE 1X NA 5 MIN PRZED I 1X PO OSTATNIM TRENINGU, BEZ DUBLETIW)
 const checkAndSendTrainerReminders = async (
   classes: any[],
   jednorazowe: any[],
   overridesMap: { [key: string]: any },
   trenerzyList: any[],
-  allClientsList: any[]
+  allClientsList: any[],
+  currentRole: string,
+  currentUserEmail?: string
 ) => {
   try {
+    // BLOKADA: Zwykli klubowicze przeglądający grafik nie mogą triggerować alertów trenera
+    if (currentRole === 'klubowicz') return;
+
     const now = new Date();
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
@@ -129,7 +134,6 @@ const checkAndSendTrainerReminders = async (
 
     if (dayKey === 'nd' || dayKey === 'sob') return;
 
-    // Pobieramy wszystkie dzisiejsze zajęcia
     const todaysClasses: any[] = [];
 
     classes
@@ -156,7 +160,6 @@ const checkAndSendTrainerReminders = async (
 
     if (todaysClasses.length === 0) return;
 
-    // Grupowanie zajęć według trenera
     const trainerClassesMap = new Map<string, any[]>();
     todaysClasses.forEach(cls => {
       const tName = (cls.trainer || '').trim();
@@ -173,8 +176,13 @@ const checkAndSendTrainerReminders = async (
 
       const trainerEmail = (trainerObj?.email || '').trim().toLowerCase();
 
-      // WYKLUCZENIE ADMINISTRATORA (NIE DOSTAJE POWIADOMIEŃ)
+      // Wykluczenie administratora z powiadomień
       if (!trainerEmail || trainerEmail === 'maciejklaput@gmail.com') {
+        continue;
+      }
+
+      // Trener sprawdza i wysyła powiadomienia wyłącznie dla samego siebie
+      if (currentRole === 'trener' && currentUserEmail && trainerEmail !== currentUserEmail.toLowerCase().trim()) {
         continue;
       }
 
@@ -182,30 +190,40 @@ const checkAndSendTrainerReminders = async (
         (c.email || c['E-mail'] || '').trim().toLowerCase() === trainerEmail
       );
 
-      // A. PRZYPOMNIENIE 5 MINUT PRZED KAŻDYM TRENINGIEM
+      // A. POWIADOMIENIE DOKŁADNIE 5 MINUT PRZED KAŻDYM TRENINGIEM
       for (const cls of trainerClassList) {
         const [sh = '00', sm = '00'] = cls.start.split(':').map(Number);
         const classStartMinutes = sh * 60 + sm;
         const diffMinutes = classStartMinutes - currentTotalMinutes;
 
-        // Okno czasowe: od 5 minut przed do 1 minuty po rozpoczęciu
-        if (diffMinutes <= 5 && diffMinutes >= -1) {
-          const tag5min = `[REMINDER_5MIN_${cls.classKey}_${todayIso}]`;
+        // Okno czasowe: od 5 minut przed startem do momentu rozpoczęcia (0 min)
+        if (diffMinutes <= 5 && diffMinutes >= 0) {
+          const tag5min = `REMINDER_5MIN_${cls.classKey}_${todayIso}`;
           const storageKey = `fm_trainer_rem_5min_${cls.classKey}_${todayIso}`;
 
           if (typeof window !== 'undefined' && localStorage.getItem(storageKey)) {
             continue;
           }
 
-          const { data: existingChat } = await supabase
-            .from('czat_wiadomosci')
+          // Weryfikacja bazy danych zapobiegająca duplikacji
+          const { data: existingLog } = await supabase
+            .from('booking_logs')
             .select('id')
-            .eq('odbiorca_email', trainerEmail)
-            .ilike('tresc', `%${tag5min}%`)
+            .eq('action_type', 'TRAINER_REMINDER_5MIN')
+            .eq('rule_applied', tag5min)
             .limit(1);
 
-          if (!existingChat || existingChat.length === 0) {
-            const messageContent = `Cześć ${trainerObj.imie_nazwisko || trainerName}! Za 5 minut rozpoczyna się Twój trening: ${cls.title} (${cls.start} - ${cls.end || ''}). Pamiętaj o sprawdzeniu listy obecności uczestników w aplikacji! ${tag5min}`;
+          if (!existingLog || existingLog.length === 0) {
+            // Natychmiastowa rezerwacja w logach
+            await supabase.from('booking_logs').insert([{
+              action_type: 'TRAINER_REMINDER_5MIN',
+              status: 'SUCCESS',
+              reason: `Wysłano przypomnienie 5 min przed zajęciami do trenera ${trainerEmail}`,
+              rule_applied: tag5min,
+              payload: { class_key: cls.classKey, trainer_email: trainerEmail }
+            }]);
+
+            const messageContent = `Cześć ${trainerObj.imie_nazwisko || trainerName}! Za 5 minut rozpoczyna się Twój trening: ${cls.title} (${cls.start} - ${cls.end || ''}). Pamiętaj o sprawdzeniu listy obecności uczestników w aplikacji! [${tag5min}]`;
 
             await supabase.from('czat_wiadomosci').insert([{
               nadawca: 'Aplikacja FORMA MARZEŃ',
@@ -243,7 +261,7 @@ const checkAndSendTrainerReminders = async (
         }
       }
 
-      // B. PRZYPOMNIENIE NA KONIEC WSZYSTKICH TRENINGÓW DNIA DANEGO TRENERA
+      // B. POWIADOMIENIE PO ZAKOŃCZENIU OSTATNIEGO TRENINGU DNIA
       let latestEndMinutes = 0;
       trainerClassList.forEach(cls => {
         const [eh = '00', em = '00'] = (cls.end || cls.start).split(':').map(Number);
@@ -253,23 +271,34 @@ const checkAndSendTrainerReminders = async (
         }
       });
 
-      if (currentTotalMinutes >= latestEndMinutes) {
-        const tagEndOfDay = `[REMINDER_END_OF_DAY_${trainerEmail}_${todayIso}]`;
+      // Okno: od razu po zakończeniu ostatniego treningu (do 120 minut po)
+      const minutesAfterLastClass = currentTotalMinutes - latestEndMinutes;
+      if (minutesAfterLastClass >= 0 && minutesAfterLastClass <= 120) {
+        const tagEndOfDay = `REMINDER_END_OF_DAY_${trainerEmail}_${todayIso}`;
         const storageKeyEnd = `fm_trainer_rem_end_${trainerEmail}_${todayIso}`;
 
         if (typeof window !== 'undefined' && localStorage.getItem(storageKeyEnd)) {
           continue;
         }
 
-        const { data: existingEndChat } = await supabase
-          .from('czat_wiadomosci')
+        const { data: existingEndLog } = await supabase
+          .from('booking_logs')
           .select('id')
-          .eq('odbiorca_email', trainerEmail)
-          .ilike('tresc', `%${tagEndOfDay}%`)
+          .eq('action_type', 'TRAINER_REMINDER_END_OF_DAY')
+          .eq('rule_applied', tagEndOfDay)
           .limit(1);
 
-        if (!existingEndChat || existingEndChat.length === 0) {
-          const messageContent = `Cześć ${trainerObj.imie_nazwisko || trainerName}! Zakończyłeś już wszystkie swoje dzisiejsze treningi (${trainerClassList.length} ${trainerClassList.length === 1 ? 'trening' : 'treningi'}). Czy sprawdziłeś i oznaczyłeś wszystkie obecności na dzisiejszych zajęciach? Prosimy o weryfikację list w grafiku. Dziękujemy za wykonaną pracę! ${tagEndOfDay}`;
+        if (!existingEndLog || existingEndLog.length === 0) {
+          // Natychmiastowa rezerwacja w logach
+          await supabase.from('booking_logs').insert([{
+            action_type: 'TRAINER_REMINDER_END_OF_DAY',
+            status: 'SUCCESS',
+            reason: `Wysłano podsumowanie dnia do trenera ${trainerEmail}`,
+            rule_applied: tagEndOfDay,
+            payload: { trainer_email: trainerEmail, classes_count: trainerClassList.length }
+          }]);
+
+          const messageContent = `Cześć ${trainerObj.imie_nazwisko || trainerName}! Zakończyłeś już wszystkie swoje dzisiejsze treningi (${trainerClassList.length} ${trainerClassList.length === 1 ? 'trening' : 'treningi'}). Czy sprawdziłeś i oznaczyłeś wszystkie obecności na dzisiejszych zajęciach? Prosimy o weryfikację list w grafiku. Dziękujemy za wykonaną pracę! [${tagEndOfDay}]`;
 
           await supabase.from('czat_wiadomosci').insert([{
             nadawca: 'Aplikacja FORMA MARZEŃ',
@@ -314,6 +343,7 @@ const checkAndSendTrainerReminders = async (
 export default function DashboardPage() {
   const nowLocal = new Date();
   const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
+  const todayDateOnly = todayStr;
   const currentTimeStr = `${String(nowLocal.getHours()).padStart(2, '0')}:${String(nowLocal.getMinutes()).padStart(2, '0')}`;
   
   // SYSTEM POWIADOMIEŃ TOAST
@@ -1746,11 +1776,12 @@ export default function DashboardPage() {
             continuityNotice = null;
           }
 
-          // 1. ZEROWANIE WEJŚĆ PO TERMINIE
+          // 1. ZEROWANIE WEJŚĆ PO TERMINIE I KOREKTA BUFORA
           parsedKarnety = parsedKarnety.map((k: any) => {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
             const isContract = isContractPass(k) || (pasujacyDef && isContractPass(pasujacyDef));
             const isTime = isTimePass(k) || (pasujacyDef && isTimePass(pasujacyDef));
+            const isQuantity = isQuantityPass(k) || (pasujacyDef && isQuantityPass(pasujacyDef));
 
             if (isContract) {
               k.isContract12M = true;
@@ -1775,8 +1806,8 @@ export default function DashboardPage() {
               karnetyZmienione = true;
             }
 
-            // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ (REGUŁA <= 150 ZŁ)
-            if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+            // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ
+            if (isQuantity && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
               const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
               const isLowPrice = passPriceNum <= 150;
 
@@ -1790,7 +1821,15 @@ export default function DashboardPage() {
                   k.zeroEntriesGraceUntil = null;
                   k.statusTekst = labelWejsc;
                 }
+              } else if (hasFutureBookings) {
+                // Jeśli wejścia zostały zarezerwowane w grafiku na przyszłość, bufor 24h NIE MOŻE się włączyć!
+                if (k.zeroEntriesGraceUntil !== null) {
+                  k.zeroEntriesGraceUntil = null;
+                  karnetyZmienione = true;
+                }
+                k.statusTekst = `Zarezerwowano wejścia (wygasa ${k.waznyDo})`;
               } else {
+                // Bufor 24h włącza się tylko przy faktycznym braku wejść i braku przyszłych rezerwacji
                 const tomorrowDate = new Date();
                 tomorrowDate.setDate(tomorrowDate.getDate() + 1);
                 const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
@@ -1801,7 +1840,7 @@ export default function DashboardPage() {
                   if (!k.waznyDo || k.waznyDo < tomorrowStr) {
                     k.waznyDo = tomorrowStr;
                   }
-                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`;
+                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
                 }
               }
             }
@@ -1812,15 +1851,18 @@ export default function DashboardPage() {
             return k;
           });
 
-          // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE
+          // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (TYLKO DLA KARNETÓW CZASOWYCH!)
           const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
             idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
           );
 
           let primaryPass = parsedKarnety[0];
           if (primaryPass && !isContractPass(primaryPass)) {
+            const defPrimary = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (primaryPass.nazwa || '').trim().toLowerCase());
+            const isTimeBased = defPrimary?.typ_karnetu === 'Na czas' || isTimePass(primaryPass);
+
             const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
-                                     (primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+                                       (isTimeBased && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
 
             // Rotacja na kolejny zakupiony karnet
             if (isPrimaryFinished && waitingPassIndex !== -1) {
@@ -1849,8 +1891,8 @@ export default function DashboardPage() {
               karnetyZmienione = true;
               primaryPass = parsedKarnety[0];
             }
-            // Auto-przedłużenie przy przyszłych rezerwacjach w grafiku
-            else if (isPrimaryFinished && waitingPassIndex === -1) {
+            // Auto-przedłużenie: WYŁĄCZNIE dla karnetów czasowych (OPEN)! Karnety ilościowe NIGDY nie są auto-przedłużane do debetu!
+            else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
               const hasBookingsAfterExpiry = futureDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
               if (hasBookingsAfterExpiry) {
                 const defKarnetu = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (primaryPass.nazwa || '').trim().toLowerCase());
@@ -1880,7 +1922,7 @@ export default function DashboardPage() {
                 parsedKarnety[0] = {
                   ...primaryPass,
                   waznyDo: extendedExpiry,
-                  pozostaloWejsc: primaryPass.poczatkoweWejsc || primaryPass.pozostaloWejsc,
+                  pozostaloWejsc: null,
                   statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
                 };
                 karnetyZmienione = true;
@@ -2192,13 +2234,15 @@ export default function DashboardPage() {
         activeDashboardDays
       );
 
-      // CYKLICZNE SPRAWDZENIE I WYSYŁKA WIADOMOŚCI CZAT DLA TRENERÓW (5 MIN PRZED I PO TRENINGACH DNIA)
+      // CYKLICZNE SPRAWDZENIE I WYSYŁKA POWIADOMIEŃ DO TRENERÓW (ŚCIŚLE 1X PRZED I 1X PO OSTATNIM TRENINGU DNIA)
       await checkAndSendTrainerReminders(
         mappedSzablony,
         mappedJednorazowe,
         nadpisaniaMap,
         trenerzyData || [],
-        klienciData || []
+        klienciData || [],
+        determinedRole,
+        userEmail
       );
 
       if (rodzajeData) {
@@ -2249,6 +2293,7 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
 
+    // Wykluczenie tabeli czat_wiadomosci zapobiega nieskończonej pętli i wielokrotnym powiadomieniom
     const channel = supabase
       .channel('realtime-dashboard')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
@@ -2257,10 +2302,8 @@ export default function DashboardPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wydarzenia_kilkudniowe' }, () => loadData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'indywidualne_limity_zapisow' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'czat_wiadomosci' }, () => loadData())
       .subscribe();
 
-    // Minutowy interwał sprawdzania powiadomień przedtreningowych dla trenerów
     const reminderInterval = setInterval(() => {
       loadData();
     }, 60000);
@@ -2272,7 +2315,6 @@ export default function DashboardPage() {
       window.removeEventListener('storage', loadData);
     };
   }, [selectedWeekDate]);
-
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
     setModalHistoryData([]); 
@@ -2407,6 +2449,7 @@ export default function DashboardPage() {
       showToast("Wydarzenie zostało usunięte.");
     }
   };
+
   const handleSaveClassEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editClassModalData) return;
@@ -3098,7 +3141,7 @@ export default function DashboardPage() {
     const updatedClient = { 
       ...currentUser, 
       karnetyKlubowicza: updatedKarnety, 
-      pass: updatedKarnety.map((k: any) => k.nazwa).join(', '),
+      pass: updatedKarnety.map((k: any) => k.nazwa).join(', '), 
       price: cenaStr, 
       expiresDate: ostatecznaDataWygasniecia, 
       wallet: nowyStanPortfelaStr, 
@@ -3292,7 +3335,7 @@ export default function DashboardPage() {
     const updatedClient = { 
       ...profileClient, 
       karnetyKlubowicza: uaktualnioneKarnety, 
-      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') || 'Brak karnetu',
+      pass: uaktualnioneKarnety.map((k: any) => k.nazwa).join(', ') || 'Brak karnetu', 
       zapisyNadchodzace: updatedNadchodzace
     };
     
@@ -3390,7 +3433,7 @@ export default function DashboardPage() {
           ...k, 
           waznyDo: newExpDateStr, 
           statusTekst: isContract 
-            ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${newExpDateStr})`
+            ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${newExpDateStr})` 
             : `Ważny do: ${newExpDateStr}`, 
           zawieszonyOd: null, 
           zawieszonyDo: null,
@@ -3517,6 +3560,7 @@ export default function DashboardPage() {
       }
       return k;
     });
+
     const updatedClient = { 
       ...profileClient, 
       karnetyKlubowicza: uaktualnioneKarnety, 
@@ -4036,7 +4080,7 @@ export default function DashboardPage() {
         return; 
       }
 
-      // Automatyczne pobranie wejścia z karnetu ilościowego
+      // KOREKTA BUFORA: Jeśli klient rezerwuje wejście na przyszłe zajęcia, bufor 24h NIE MOŻE się włączyć!
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -4056,10 +4100,8 @@ export default function DashboardPage() {
                 ? 'Wykorzystano wejście'
                 : 'Wykorzystano wejścia';
             } else {
-              const tomorrow = new Date();
-              tomorrow.setDate(tomorrow.getDate() + 1);
-              graceDate = tomorrow.toISOString().split('T')[0];
-              statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+              graceDate = null;
+              statusText = `Zarezerwowano wejścia (wygasa ${updatedKarnety[passIndex].waznyDo || todayDateOnly})`;
             }
           }
 
@@ -4179,10 +4221,8 @@ export default function DashboardPage() {
                 ? 'Wykorzystano wejście'
                 : 'Wykorzystano wejścia';
             } else {
-              const tomorrow = new Date();
-              tomorrow.setDate(tomorrow.getDate() + 1);
-              graceDate = tomorrow.toISOString().split('T')[0];
-              statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+              graceDate = null;
+              statusText = `Zarezerwowano wejścia (wygasa ${updatedKarnety[passIndex].waznyDo || todayDateOnly})`;
             }
           }
 
@@ -4642,6 +4682,7 @@ export default function DashboardPage() {
         return; 
       }
 
+      // KOREKTA BUFORA: Jeśli administrator/trener zapisuje klienta na zajęcia w przód, bufor 24h nie włącza się!
       let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -4661,10 +4702,8 @@ export default function DashboardPage() {
                 ? 'Wykorzystano wejście'
                 : 'Wykorzystano wejścia';
             } else {
-              const tomorrow = new Date();
-              tomorrow.setDate(tomorrow.getDate() + 1);
-              graceDate = tomorrow.toISOString().split('T')[0];
-              statusText = `Wykorzystano wejścia (wygasa ${graceDate} - bufor ciągłości)`;
+              graceDate = null;
+              statusText = `Zarezerwowano wejścia (wygasa ${updatedKarnety[passIndex].waznyDo || todayDateOnly})`;
             }
           }
 
@@ -6918,7 +6957,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
       {/* MODAL: EDYCJA CZASU WYPISU Z LISTY REZERWOWEJ */}
       {isEditWaitlistModalOpen && editWaitlistTarget && (
         <div className="fixed inset-0 bg-slate-950/70 z-[70] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
@@ -7273,7 +7311,7 @@ export default function DashboardPage() {
                                       <span>🎟️ Wejścia:</span> 
                                       <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
                                       {karnet.transferredEntries > 0 && (
-                                        <span className="text-emerald-700 text-[9px] font-extrabold">(+{karnet.transferredEntries} przeniesione)</span>
+                                        <span className="text-emerald-700 text-[9px] font-extrabold">(+{karnet.transferredEntries})</span>
                                       )}
                                     </span>
                                   )}
