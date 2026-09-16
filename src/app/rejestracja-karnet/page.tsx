@@ -56,7 +56,7 @@ function RegistrationPassContent() {
   });
   const [refereeDiscountPercent, setRefereeDiscountPercent] = useState<number>(0);
 
-  // Status, walidacja i modal potwierdzenia e-mail
+  // Status, walidacja i modal sukcesu rejestracji
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
@@ -912,33 +912,30 @@ function RegistrationPassContent() {
         </div>
       )}
 
+      {/* Modal potwierdzenia udanej rejestracji i zakupu */}
       {isSuccessModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-md p-4 animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 text-center space-y-5 shadow-2xl border border-sky-200">
-            <div className="w-16 h-16 bg-sky-100 text-sky-700 border-2 border-sky-300 rounded-full flex items-center justify-center text-3xl mx-auto shadow-inner">
-              ✉️
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-700 border-2 border-emerald-300 rounded-full flex items-center justify-center text-3xl mx-auto shadow-inner">
+              ✓
             </div>
             <div className="space-y-2">
               <h3 className="text-xl font-black text-slate-900 uppercase tracking-wide">
-                Potwierdź swój adres e-mail!
+                Rejestracja udana!
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Twoje konto zostało pomyślnie utworzone. Przed pierwszym zalogowaniem <strong className="text-slate-900">musisz potwierdzić swój adres e-mail</strong>, klikając w link aktywacyjny, który właśnie wysłaliśmy na:
+                Twoje konto zostało utworzone, a karnet (<strong className="text-slate-900">{selectedPass?.nazwa}</strong>) został pomyślnie przypisany. Możesz się teraz zalogować i korzystać z aplikacji.
               </p>
               <div className="bg-sky-50 border border-sky-200 rounded-xl p-2.5 font-mono font-bold text-sky-950 text-xs break-all">
                 {email}
               </div>
             </div>
 
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-900 font-medium text-left">
-              ℹ️ Sprawdź także folder <strong>SPAM</strong> lub <strong>Oferty</strong>, jeśli wiadomość nie pojawi się w skrzynce odbiorczej w ciągu minuty.
-            </div>
-
             <button
               onClick={handleModalConfirmRedirect}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3.5 rounded-xl uppercase text-xs tracking-wider transition-colors shadow-md cursor-pointer"
             >
-              Rozumiem, przejdź do logowania →
+              Przejdź do logowania →
             </button>
           </div>
         </div>
