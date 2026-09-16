@@ -797,7 +797,6 @@ export default function KlienciPage() {
       }]);
     }
   };
-
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
@@ -1064,11 +1063,12 @@ export default function KlienciPage() {
         let karnetyZmienione = false;
         let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
 
-        // 1. ZEROWANIE WEJŚĆ PO DACIE WYGAŚNIĘCIA I WERYFIKACJA STANU
+        // 1. WERYFIKACJA STANU KARNETU I POPRAWNA OBSŁUGA BUFORA
         parsedKarnety = parsedKarnety.map((k: any) => {
           const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
           const isContract = isContractPassCheck(k, pasujacyDef);
           const isTimeBased = pasujacyDef?.typ_karnetu === 'Na czas';
+          const isQuantityPass = !isContract && !isTimeBased && (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
 
           if (isContract) {
             if (!k.isContract12M) {
@@ -1097,41 +1097,59 @@ export default function KlienciPage() {
             }
           }
 
-          // ZASADA 1: W dniu po wygaśnięciu zerujemy wejścia ilościowe
-          const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
-          if (!isContract && isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
-            k.pozostaloWejsc = 0;
-            k.statusTekst = 'Karnet wygasł (wejścia wyzerowane)';
-            karnetyZmienione = true;
-          }
+          // KARNETY ILOŚCIOWE: Korekta błędnego bufora i obsługa wejść
+          if (isQuantityPass) {
+            // Jeśli klubowicz zarezerwował wejścia na przyszłe zajęcia, bufor NIE MOŻE się włączyć!
+            if (hasFutureBookings && k.zeroEntriesGraceUntil) {
+              k.zeroEntriesGraceUntil = null;
+              k.statusTekst = k.waznyDo ? `Ważny do: ${k.waznyDo}` : 'Aktywny';
+              karnetyZmienione = true;
+            }
 
-          // OBSŁUGA WYCZERPANIA WEJŚĆ
-          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
-            const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
-            const isLowPrice = passPriceNum <= 150;
+            // Zerowanie wejść po dacie wygaśnięcia
+            const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
+            if (isExpiredDate && k.pozostaloWejsc > 0) {
+              k.pozostaloWejsc = 0;
+              k.statusTekst = 'Karnet wygasł (wejścia wyzerowane)';
+              karnetyZmienione = true;
+            }
 
-            if (isLowPrice) {
-              const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncz'))
-                ? 'Wykorzystano wejście'
-                : 'Wykorzystano wejścia';
+            // Obsługa wykorzystania wejść
+            if (k.pozostaloWejsc <= 0) {
+              const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+              const isLowPrice = passPriceNum <= 150;
 
-              if (k.zeroEntriesGraceUntil !== null || k.statusTekst !== labelWejsc) {
-                karnetyZmienione = true;
-                k.zeroEntriesGraceUntil = null;
-                k.statusTekst = labelWejsc;
-              }
-            } else {
-              const tomorrowDate = new Date();
-              tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-              const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+              if (isLowPrice) {
+                const labelWejsc = (k.poczatkoweWejsc === 1 || (k.nazwa || '').toLowerCase().includes('1 wejście') || (k.nazwa || '').toLowerCase().includes('pojedyncz'))
+                  ? 'Wykorzystano wejście'
+                  : 'Wykorzystano wejścia';
 
-              if (!k.zeroEntriesGraceUntil) {
-                karnetyZmienione = true;
-                k.zeroEntriesGraceUntil = tomorrowStr;
-                if (!k.waznyDo || k.waznyDo < tomorrowStr) {
-                  k.waznyDo = tomorrowStr;
+                if (k.zeroEntriesGraceUntil !== null || k.statusTekst !== labelWejsc) {
+                  karnetyZmienione = true;
+                  k.zeroEntriesGraceUntil = null;
+                  k.statusTekst = labelWejsc;
                 }
-                k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+              } else if (hasFutureBookings) {
+                // Wejścia zarezerwowane na przyszłe zajęcia – bufor nie startuje dopóki nie zostaną one odbyte!
+                if (k.zeroEntriesGraceUntil !== null) {
+                  k.zeroEntriesGraceUntil = null;
+                  karnetyZmienione = true;
+                }
+                k.statusTekst = `Zarezerwowano wejścia (wygasa ${k.waznyDo})`;
+              } else {
+                // Faktyczny brak wejść i brak przyszłych rezerwacji – bufor 24h na zakup kolejnego karnetu
+                const tomorrowDate = new Date();
+                tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+                const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+
+                if (!k.zeroEntriesGraceUntil) {
+                  karnetyZmienione = true;
+                  k.zeroEntriesGraceUntil = tomorrowStr;
+                  if (!k.waznyDo || k.waznyDo < tomorrowStr) {
+                    k.waznyDo = tomorrowStr;
+                  }
+                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+                }
               }
             }
           }
@@ -1139,17 +1157,20 @@ export default function KlienciPage() {
           return k;
         });
 
-        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE
+        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (TYLKO DLA KARNETÓW CZASOWYCH!)
         const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
           idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
         );
 
         let primaryPass = parsedKarnety[0];
         if (primaryPass && !isContractPassCheck(primaryPass)) {
-          const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
-                                   (primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+          const defPrimary = ustrukturyzowaneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
+          const isTimeBasedPass = defPrimary?.typ_karnetu === 'Na czas' || (!primaryPass.pozostaloWejsc && primaryPass.pozostaloWejsc !== 0);
 
-          // ZASADA 2: Rotacja na kolejny zakupiony karnet
+          const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
+                                     (!isTimeBasedPass && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0 && !hasFutureBookings);
+
+          // Rotacja na kolejny zakupiony karnet w kolejce
           if (isPrimaryFinished && waitingPassIndex !== -1) {
             const nextPass = parsedKarnety[waitingPassIndex];
             const defNext = ustrukturyzowaneKarnety.find(dk => dk.nazwa === nextPass.nazwa);
@@ -1164,8 +1185,8 @@ export default function KlienciPage() {
             karnetyZmienione = true;
             primaryPass = parsedKarnety[0];
           }
-          // ZASADA 3: Jeśli brak kolejnego karnetu, ale istnieją przyszłe zapisy w grafiku -> auto-przedłużenie
-          else if (isPrimaryFinished && waitingPassIndex === -1) {
+          // Auto-przedłużenie: WYŁĄCZNIE dla karnetów czasowych (OPEN)! Karnety ilościowe NIGDY nie są auto-przedłużane do debetu!
+          else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBasedPass) {
             const hasBookingsAfterExpiry = futureBookingDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
 
             if (hasBookingsAfterExpiry) {
@@ -1194,7 +1215,7 @@ export default function KlienciPage() {
               parsedKarnety[0] = {
                 ...primaryPass,
                 waznyDo: extendedExpiry,
-                pozostaloWejsc: primaryPass.poczatkoweWejsc || primaryPass.pozostaloWejsc,
+                pozostaloWejsc: null,
                 statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
               };
 
@@ -1220,6 +1241,7 @@ export default function KlienciPage() {
             continue;
           }
 
+          // Karnety z zarezerwowanymi wejściami w przyszłości bezwzględnie zostają na liście
           if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
             finalKarnety.push(k);
             continue;
@@ -2941,6 +2963,7 @@ export default function KlienciPage() {
           </div>
         </>
       )}
+
       {/* MODAL SZYBKIEGO MENU ZARZĄDZANIA KLUBOWICZEM Z TABELI */}
       {tableActionClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3076,7 +3099,6 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
-
       {/* MODAL PROFILU KLIENTA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
@@ -4118,6 +4140,7 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
+
       {/* MODAL: PRZEDŁUŻ KARNET */}
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -4364,7 +4387,7 @@ export default function KlienciPage() {
                   type="date" 
                   value={profileClient.birthDate || ''} 
                   onChange={(e) => setProfileClient({...profileClient, birthDate: e.target.value})} 
-                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 cursor-pointer" 
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold cursor-pointer text-slate-800" 
                 />
               </div>
 
