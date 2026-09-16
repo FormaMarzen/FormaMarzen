@@ -7,6 +7,9 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Stała określająca maksymalne okno stałych rezerwacji w przód
+const MAX_AUTO_BOOKING_DAYS = 90;
+
 // Typy zasad zapisów spójne z club_booking_rules
 interface BookingRules {
   id?: string;
@@ -59,10 +62,10 @@ const safeJsonParse = (val: any, fallback: any = []) => {
   return fallback;
 };
 
-// KULOODPORNY PARSER DATY Z CLASS_KEY
+// Bezpieczny parser daty z formatów class_key i zapisów
 const parseDateFromClassKey = (classKey: string): Date => {
   const parts = classKey ? String(classKey).split('_') : [];
-  const datePart = parts[1] || '';
+  const datePart = parts[1] || parts[0] || '';
   const currentYear = new Date().getFullYear();
 
   if (!datePart) return new Date();
@@ -95,7 +98,6 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
-// Normalizacja dowolnego zapisu daty do formatu YYYY-MM-DD
 const normalizeDateToIsoDay = (dateStr: string): string => {
   if (!dateStr) return '';
   const str = String(dateStr).trim();
@@ -113,7 +115,6 @@ const normalizeDateToIsoDay = (dateStr: string): string => {
   return str;
 };
 
-// Generowanie unikalnego klucza kanonicznego do ochrony przed dublami
 const getCanonicalClassSignature = (classId: string | number, dateObj: Date): string => {
   const y = dateObj.getFullYear();
   const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -151,20 +152,21 @@ const fetchAllFromSupabase = async (
   return result;
 };
 
-// Wyciąganie dni tygodnia z dowolnej struktury tabeli grafik_zajec
+// Precyzyjne wyciąganie dni tygodnia z obiektu days w tabeli grafik_zajec
 const getTargetDayIndices = (classObj: any): number[] => {
   if (!classObj) return [];
   const rawDays = classObj.days || classObj.dzien_tygodnia || classObj.dni;
   if (!rawDays) return [];
 
+  // Wyłącznie właściwe nazwy dni (Poniedziałek = 1 ... Sobota = 6, Niedziela = 0 w standardzie JS)
   const dayMap: Record<string, number> = {
-    nd: 0, niedziela: 0, sun: 0, sunday: 0, '0': 0, '7': 0,
-    pon: 1, poniedziałek: 1, poniedzialek: 1, mon: 1, monday: 1, '1': 1,
-    wt: 2, wtorek: 2, wto: 2, tue: 2, tuesday: 2, '2': 2,
-    sr: 3, śr: 3, środa: 3, sroda: 3, wed: 3, wednesday: 3, '3': 3,
-    czw: 4, czwartek: 4, thu: 4, thursday: 4, '4': 4,
-    pt: 5, piątek: 5, piatek: 5, pia: 5, fri: 5, friday: 5, '5': 5,
-    sb: 6, sobota: 6, sat: 6, saturday: 6, '6': 6
+    nd: 0, niedziela: 0, sun: 0, sunday: 0,
+    pon: 1, poniedziałek: 1, poniedzialek: 1, mon: 1, monday: 1,
+    wt: 2, wtorek: 2, wto: 2, tue: 2, tuesday: 2,
+    sr: 3, śr: 3, środa: 3, sroda: 3, wed: 3, wednesday: 3,
+    czw: 4, czwartek: 4, thu: 4, thursday: 4,
+    pt: 5, piątek: 5, piatek: 5, pia: 5, fri: 5, friday: 5,
+    sb: 6, sobota: 6, sat: 6, saturday: 6
   };
 
   const parsed = safeJsonParse(rawDays, rawDays);
@@ -172,7 +174,7 @@ const getTargetDayIndices = (classObj: any): number[] => {
   if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
     const indices: number[] = [];
     Object.entries(parsed).forEach(([key, val]) => {
-      if (val === true || String(val).toLowerCase() === 'true') {
+      if (val === true || String(val).toLowerCase() === 'true' || val === 1 || val === '1') {
         const cleanKey = key.trim().toLowerCase();
         if (dayMap[cleanKey] !== undefined && !indices.includes(dayMap[cleanKey])) {
           indices.push(dayMap[cleanKey]);
@@ -214,7 +216,6 @@ const getClientEmail = (client: any): string => {
   return client['E-mail'] || client.email || client.Email || client.mail || 'Brak e-maila';
 };
 
-// Sprawdzenie czy dany dzień przypada na zawieszenie LUB blokadę konta
 const isClientSuspendedOrBlockedOnDate = (client: any, date: Date): boolean => {
   if (!client) return false;
   const y = date.getFullYear();
@@ -222,11 +223,9 @@ const isClientSuspendedOrBlockedOnDate = (client: any, date: Date): boolean => {
   const d = String(date.getDate()).padStart(2, '0');
   const dateStr = `${y}-${m}-${d}`;
 
-  // 1. Sprawdzenie blokady ogólnej konta
   const directBlock = client.blokadaDo || client.blokada_do;
   if (directBlock && dateStr <= directBlock) return true;
 
-  // 2. Sprawdzenie w aktywnych karnetach
   let passes: any[] = safeJsonParse(client.karnetyKlubowicza || client.karnety_klubowicza || client.karnety, []);
   for (const pass of passes) {
     if (pass?.blokadaDo && dateStr <= pass.blokadaDo) return true;
@@ -237,7 +236,6 @@ const isClientSuspendedOrBlockedOnDate = (client: any, date: Date): boolean => {
     }
   }
 
-  // 3. Sprawdzenie w globalnej historii zawieszeń
   let suspensions: any[] = safeJsonParse(client.historiaZawieszenGlobalna || client.historia_zawieszen, []);
   for (const susp of suspensions) {
     const start = susp.od;
@@ -391,7 +389,7 @@ export default function AutomatyczneZapisyPage() {
     return { effectiveDate, rawExpiry, passName, graceDays, hasActiveOrGracePass };
   }, [getClientPassDetails]);
 
-  // Kalkulacja liczby wyłącznie przyszłych treningów dla danej reguły
+  // Kalkulacja liczby wyłącznie przyszłych treningów dla danej reguły (do 90 dni)
   const getFutureBookingsCount = useCallback((rule: any, bookings: any[], grafik: any[]): number => {
     const nowTime = new Date().getTime();
     const classObj = grafik.find(c => String(c.id) === String(rule.grafik_id));
@@ -417,7 +415,7 @@ export default function AutomatyczneZapisyPage() {
     }).length;
   }, []);
 
-  // Automatyczna synchronizacja reguł z deduplikacją i obsługą zawieszeń/blokad
+  // Synchronizacja reguł: limit 90 dni, czyszczenie błędnych dni i deduplikacja
   const syncAutoBookings = useCallback(async (
     rules: any[], 
     clients: any[], 
@@ -432,7 +430,11 @@ export default function AutomatyczneZapisyPage() {
       const now = new Date();
       const nowTime = now.getTime();
 
-      // Mapa odwołanych terminów z nadpisań
+      // Maksymalna granica generowania rezerwacji: 90 dni od dziś
+      const maxAllowedFutureDate = new Date();
+      maxAllowedFutureDate.setDate(maxAllowedFutureDate.getDate() + MAX_AUTO_BOOKING_DAYS);
+      maxAllowedFutureDate.setHours(23, 59, 59, 999);
+
       const cancelledOverrides = new Set<string>();
       nadpisaniaData.forEach((n: any) => {
         if (n.is_odwolane || n.is_usuniete) {
@@ -455,16 +457,52 @@ export default function AutomatyczneZapisyPage() {
           rule.pass_expiry = livePassExpiry || 'Brak';
         }
 
-        // Pobieramy rezerwacje klienta
         const { data: existingBookings } = await supabase
           .from('zapisy_zajec')
           .select('id, class_key')
           .eq('klient_id', Number(rule.klient_id))
           .limit(5000);
 
-        // Zbiory chroniące przed duplikacją (zapisujemy różne warianty formatowania)
+        const targetDayIndices = getTargetDayIndices(classObj);
+        const { effectiveDate } = getEffectivePassExpiry(clientObj, clubRuleObj);
+        
+        // Granica zapisu: mniejsza z dat (karnet z karencją vs 90 dni)
+        let targetEndDate: Date | null = null;
+        if (effectiveDate) {
+          targetEndDate = effectiveDate < maxAllowedFutureDate ? effectiveDate : maxAllowedFutureDate;
+        }
+
+        const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || classObj?.godzina || '00:00').split(':');
+
+        // 1. AUTO-NAPRAWA: Usunięcie błędnych rezerwacji z bazy zapisy_zajec
+        const invalidKeysToRemove: string[] = [];
         const bookedSignatures = new Set<string>();
-        (existingBookings || []).forEach(b => {
+
+        (existingBookings || []).forEach((b: any) => {
+          if (b.class_key && b.class_key.startsWith(`${classObj.id}_`)) {
+            const bookingDate = parseDateFromClassKey(b.class_key);
+            const classDateTime = new Date(
+              bookingDate.getFullYear(),
+              bookingDate.getMonth(),
+              bookingDate.getDate(),
+              parseInt(sh, 10),
+              parseInt(sm, 10),
+              0
+            );
+
+            if (classDateTime.getTime() > nowTime) {
+              const dayIndex = bookingDate.getDay();
+              const isWrongDay = !targetDayIndices.includes(dayIndex);
+              const isBeyondLimit = !targetEndDate || classDateTime > targetEndDate;
+              const isSuspended = isClientSuspendedOrBlockedOnDate(clientObj, bookingDate);
+
+              if (isWrongDay || isBeyondLimit || isSuspended) {
+                invalidKeysToRemove.push(b.class_key);
+                return;
+              }
+            }
+          }
+
           if (b.class_key) {
             bookedSignatures.add(b.class_key);
             const d = parseDateFromClassKey(b.class_key);
@@ -472,7 +510,19 @@ export default function AutomatyczneZapisyPage() {
           }
         });
 
-        // Pobieramy wypisane zajęcia z transakcji
+        if (invalidKeysToRemove.length > 0) {
+          await supabase
+            .from('zapisy_zajec')
+            .delete()
+            .in('class_key', invalidKeysToRemove)
+            .eq('klient_id', Number(rule.klient_id));
+        }
+
+        if (!targetEndDate || targetEndDate < now || targetDayIndices.length === 0) {
+          continue;
+        }
+
+        // 2. Pobranie ręcznych wypisów klienta
         const { data: cancelledT } = await supabase
           .from('transakcje')
           .select('class_key')
@@ -489,70 +539,38 @@ export default function AutomatyczneZapisyPage() {
           }
         });
 
-        const targetDayIndices = getTargetDayIndices(classObj);
-        if (targetDayIndices.length === 0) continue;
-
-        const startDate = new Date();
-        const { effectiveDate } = getEffectivePassExpiry(clientObj, clubRuleObj);
-        const endDate = effectiveDate;
-
-        const [sh = '00', sm = '00'] = (classObj?.time || classObj?.start || classObj?.godzina || '00:00').split(':');
-
-        // 1. Czyszczenie zapisów jeśli karnet wygasł
-        if (!endDate || endDate < startDate) {
-          const keysToRemove: string[] = [];
-          (existingBookings || []).forEach((b: any) => {
-            if (b.class_key && b.class_key.startsWith(`${classObj.id}_`)) {
-              const d = parseDateFromClassKey(b.class_key);
-              const classDateTime = new Date(d.getFullYear(), d.getMonth(), d.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
-              if (classDateTime.getTime() > nowTime) {
-                keysToRemove.push(b.class_key);
-              }
-            }
-          });
-
-          if (keysToRemove.length > 0) {
-            await supabase
-              .from('zapisy_zajec')
-              .delete()
-              .in('class_key', keysToRemove)
-              .eq('klient_id', Number(rule.klient_id));
-          }
-          continue;
-        }
-
-        // 2. Czyszczenie przyszłych zapisów przypadających na zawieszenie lub blokadę
-        const suspendedKeysToRemove: string[] = [];
-        (existingBookings || []).forEach((b: any) => {
-          if (b.class_key && b.class_key.startsWith(`${classObj.id}_`)) {
-            const bookingDate = parseDateFromClassKey(b.class_key);
-            const classDateTime = new Date(bookingDate.getFullYear(), bookingDate.getMonth(), bookingDate.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
-
-            if (classDateTime.getTime() > nowTime && isClientSuspendedOrBlockedOnDate(clientObj, bookingDate)) {
-              suspendedKeysToRemove.push(b.class_key);
-              bookedSignatures.delete(b.class_key);
-              bookedSignatures.delete(getCanonicalClassSignature(classObj.id, bookingDate));
-            }
-          }
-        });
-
-        if (suspendedKeysToRemove.length > 0) {
-          await supabase
-            .from('zapisy_zajec')
-            .delete()
-            .in('class_key', suspendedKeysToRemove)
-            .eq('klient_id', Number(rule.klient_id));
-        }
-
+        // 3. Oczyszczenie tablicy zapisyNadchodzace w profilu klubowicza
         let rawNadchodzace = safeJsonParse(clientObj.zapisyNadchodzace, []);
         let newZapisyNadchodzace = Array.isArray(rawNadchodzace) ? [...rawNadchodzace] : [];
         let hasUpdates = false;
 
-        // 3. Generowanie stałych rezerwacji bez dubli
-        let curr = new Date(startDate);
-        while (curr <= endDate) {
+        const filteredNadchodzace = newZapisyNadchodzace.filter((z: any) => {
+          const itemTitle = (z.zajecia || '').trim().toLowerCase();
+          const zajeciaTitle = (classObj.title || classObj.nazwa || '').trim().toLowerCase();
+          if (!itemTitle.includes(zajeciaTitle)) return true;
+
+          const itemDate = parseDateFromClassKey(z.data);
+          const itemDateTime = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate(), 23, 59, 59);
+          if (itemDateTime.getTime() <= nowTime) return true;
+
+          const dayIndex = itemDate.getDay();
+          const isWrongDay = !targetDayIndices.includes(dayIndex);
+          const isBeyondLimit = !targetEndDate || itemDateTime > targetEndDate;
+          const isSuspended = isClientSuspendedOrBlockedOnDate(clientObj, itemDate);
+
+          if (isWrongDay || isBeyondLimit || isSuspended) {
+            hasUpdates = true;
+            return false;
+          }
+          return true;
+        });
+
+        newZapisyNadchodzace = filteredNadchodzace;
+
+        // 4. Generowanie wyłącznie właściwych rezerwacji do 90 dni
+        let curr = new Date(now);
+        while (curr <= targetEndDate) {
           if (targetDayIndices.includes(curr.getDay())) {
-            // Pomijamy jeśli zawieszony lub zablokowany
             if (isClientSuspendedOrBlockedOnDate(clientObj, curr)) {
               curr.setDate(curr.getDate() + 1);
               continue;
@@ -566,7 +584,6 @@ export default function AutomatyczneZapisyPage() {
             const classKeyIso = `${classObj.id}_${year}-${month}-${day}`;
             const canonicalSig = getCanonicalClassSignature(classObj.id, curr);
 
-            // Pomijamy jeśli odwołane w nadpisaniach
             if (cancelledOverrides.has(classKeyDisplay) || cancelledOverrides.has(classKeyIso)) {
               curr.setDate(curr.getDate() + 1);
               continue;
@@ -592,7 +609,6 @@ export default function AutomatyczneZapisyPage() {
               const dateStr = `${year}-${month}-${day}`;
               const zajeciaTitle = classObj.title || classObj.nazwa;
               
-              // Zabezpieczenie przed dublowaniem w profilu (porównanie po ISO day)
               const alreadyInArray = newZapisyNadchodzace.some((z: any) => {
                 const itemDateIso = normalizeDateToIsoDay(z.data);
                 const itemTitle = (z.zajecia || '').trim().toLowerCase();
@@ -627,7 +643,7 @@ export default function AutomatyczneZapisyPage() {
     }
   }, [getEffectivePassExpiry]);
 
-  // Zoptymalizowane pobieranie danych
+  // Pobieranie danych
   const loadData = useCallback(async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -716,7 +732,7 @@ export default function AutomatyczneZapisyPage() {
     }
   }, [getEffectivePassExpiry, syncAutoBookings]);
 
-  // Subskrypcja Realtime
+  // Realtime subscription z debounce
   useEffect(() => {
     loadData();
 
@@ -793,7 +809,7 @@ export default function AutomatyczneZapisyPage() {
 
       if (insertErr) throw insertErr;
 
-      showToast(`Ustawiono regułę automatycznego zapisu dla: ${clientName}!`);
+      showToast(`Ustawiono regułę automatycznego zapisu (do 90 dni) dla: ${clientName}!`);
       setSelectedClientId('');
       setClientSearchQuery('');
       setSelectedClassId('');
@@ -865,7 +881,7 @@ export default function AutomatyczneZapisyPage() {
         
         const filteredNadchodzace = (currentNadchodzace || []).filter((z: any) => {
           const zTitle = (z.zajecia || '').trim().toLowerCase();
-          if (zTitle !== classTitleToMatch) return true;
+          if (!zTitle.includes(classTitleToMatch)) return true;
           
           if (!z.data) return false;
           const d = parseDateFromClassKey(z.data);
@@ -975,7 +991,7 @@ export default function AutomatyczneZapisyPage() {
             ⚡ AUTOMATYCZNE ZAPISY NA CZAS KARNETU
           </h1>
           <p className="text-xs text-sky-200/80 font-medium">
-            System integruje reguły z tabeli <strong>club_booking_rules</strong> (karencja: {clubRules.expired_pass_grace_days ?? 15} dni) oraz <strong>automatycznie respektuje zawieszenia i blokady karnetów</strong>.
+            System generuje rezerwacje <strong>maksymalnie na 90 dni w przód</strong> wyłącznie w wyznaczone dni grafiku, respektując karencję ({clubRules.expired_pass_grace_days ?? 15} dni) oraz zawieszenia karnetów.
           </p>
         </div>
       </div>
@@ -1110,7 +1126,7 @@ export default function AutomatyczneZapisyPage() {
               📋 Aktywne Reguły Automatycznych Zapisów
             </h2>
             <p className="text-xs text-slate-400 font-medium">
-              Lista osób posiadających stałe przypisanie do zajęć cyklicznych wraz z aktualnym statusem karnetu oraz liczbą zaplanowanych przyszłych treningów.
+              Lista osób posiadających stałe przypisanie do zajęć (rezerwacje do 90 dni w przód z automatyczną weryfikacją grafiku).
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -1161,7 +1177,7 @@ export default function AutomatyczneZapisyPage() {
                   <div className="space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase bg-emerald-100 text-emerald-900">
-                        Stała Rezerwacja
+                        Stała Rezerwacja (do 90 dni)
                       </span>
                       <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
                         hasActiveOrGrace ? 'bg-sky-50 text-sky-900 border-sky-200' : 'bg-rose-50 text-rose-800 border-rose-200'
