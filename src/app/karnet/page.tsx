@@ -521,7 +521,6 @@ export default function KarnetyPage() {
       message: `Zastosowano rabat: ${data.wartosc_znizki}${data.typ_znizki === 'procentowa' ? '%' : ' PLN'}` 
     });
   };
-
   const calculateFinalPrice = (basePriceNum: number, userEffectiveDiscount: any, appliedCode: any) => {
     let finalPrice = basePriceNum;
     let appliedLabel = '';
@@ -799,6 +798,7 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
+
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -890,20 +890,22 @@ export default function KarnetyPage() {
             }
 
             const futureBookingDates = clientFutureBookingDatesMap.get(Number(c.id)) || [];
+            const hasFutureBookings = futureBookingDates.length > 0;
             let karnetyChanged = false;
             let walletChanged = false;
             let currentWalletAmount = parseFloat(String(c.Portfel ?? c.portfel ?? c.wallet ?? 0).replace(/[^0-9.-]/g, '')) || 0;
             let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
 
-            // 1. ZEROWANIE WEJŚĆ PO DACIE WYGAŚNIĘCIA I OBSŁUGA ZAPISÓW
+            // 1. POPRAWNA OBSŁUGA WEJŚĆ I ZATRZYMANIE BŁĘDNEGO BUFOROWANIA
             let tempKarnety = parsedKarnety.map((k: any) => {
               if (isContractPassCheck(k)) {
                 return { ...k, isContract12M: true };
               }
 
               const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
+              const isQuantityPass = isQuantityPassCheck(k);
 
-              // ZASADA 1: W dniu po wygaśnięciu zerujemy wejścia ilościowe
+              // Zerowanie wejść po nominalnej dacie wygaśnięcia
               if (isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
                 karnetyChanged = true;
                 return {
@@ -913,7 +915,7 @@ export default function KarnetyPage() {
                 };
               }
 
-              // Obsługa wyczerpania puli wejść
+              // Obsługa wyczerpania wejść
               if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
                 const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
                 const isLowPrice = passPriceNum <= 150;
@@ -931,7 +933,18 @@ export default function KarnetyPage() {
                       statusTekst: labelWejsc
                     };
                   }
+                } else if (hasFutureBookings) {
+                  // Jeśli wejścia zostały zarezerwowane na przyszłe zajęcia, bufor 24h NIE MOŻE się włączyć!
+                  if (k.zeroEntriesGraceUntil !== null) {
+                    karnetyChanged = true;
+                  }
+                  return {
+                    ...k,
+                    zeroEntriesGraceUntil: null,
+                    statusTekst: `Zarezerwowano wejścia (wygasa ${k.waznyDo})`
+                  };
                 } else {
+                  // Faktyczny brak wejść i brak przyszłych rezerwacji - bufor 24h na zachowanie ciągłości
                   const tomorrowDate = new Date();
                   tomorrowDate.setDate(tomorrowDate.getDate() + 1);
                   const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
@@ -949,20 +962,22 @@ export default function KarnetyPage() {
               return k;
             });
 
-            // 2. SPRAWDZENIE CZY ISTNIEJE KOLEJNY KARNET DO AUTOMATYCZNEJ ROTACJI (ZASADA 2)
-            const waitingPassIndex = tempKarnety.findIndex((k: any) => 
-              k.statusTekst?.includes('Oczekujący') || 
-              (k.waznyDo && k.waznyDo >= todayDateOnly && tempKarnety.indexOf(k) > 0)
+            // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (WYŁĄCZNIE DLA KARNETÓW CZASOWYCH)
+            const waitingPassIndex = tempKarnety.findIndex((k: any, idx: number) => 
+              idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
             );
 
             let primaryPass = tempKarnety[0];
 
             if (primaryPass && !isContractPassCheck(primaryPass)) {
-              const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) || 
-                                       (primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+              const defPrimary = dostepneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
+              const isTimeBased = defPrimary?.typ_karnetu === 'Na czas' || (!isQuantityPassCheck(primaryPass) && !isContractPassCheck(primaryPass));
 
+              const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) || 
+                                       (isTimeBased && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+
+              // ZASADA 2: Rotacja na kolejny zakupiony karnet w kolejce
               if (isPrimaryFinished && waitingPassIndex !== -1) {
-                // Zdejmujemy wygasły karnet i natychmiast uaktywniamy kolejny
                 const nextPass = tempKarnety[waitingPassIndex];
                 const defNext = dostepneKarnety.find(dk => dk.nazwa === nextPass.nazwa);
                 const nextNewExpiry = getCalendarExpiryDate(todayDateOnly, defNext?.limitCzasowy || defNext?.dlugosc || nextPass.dlugosc || '1 miesiąc');
@@ -975,21 +990,19 @@ export default function KarnetyPage() {
                 };
                 karnetyChanged = true;
               }
-              // ZASADA 3: JEŚLI BRAK NASTĘPNEGO KARNETU, A ISTNIEJĄ REZERWACJE W PRZYSZŁOŚCI -> AUTO-PRZEDŁUŻENIE I 21 DNI BANER
-              else if (isPrimaryFinished && waitingPassIndex === -1) {
+              // ZASADA 3: Auto-przedłużenie WYŁĄCZNIE dla karnetów czasowych! Karnety ilościowe NIGDY nie zadłużają konta!
+              else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
                 const hasBookingsAfterExpiry = futureBookingDates.some(bookingDate => bookingDate > (primaryPass.waznyDo || todayDateOnly));
                 
                 if (hasBookingsAfterExpiry) {
                   const defKarnetu = dostepneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
                   const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : (parseFloat(String(primaryPass.cena).replace(/[^0-9.-]/g, '')) || 0);
                   
-                  // Pobieramy obecny rabat bez zwiększania poziomu ciągłości
                   const currentDiscountPercent = typeof c.rabat === 'number' ? c.rabat : (parseFloat(String(c.discount || '0').replace(/[^0-9.]/g, '')) || 0);
                   const priceAfterDiscount = basePrice * (1 - currentDiscountPercent / 100);
 
                   const extendedExpiry = getCalendarExpiryDate(todayDateOnly, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || primaryPass.dlugosc || '1 miesiąc');
                   
-                  // Obciążenie portfela (może wejść na minus)
                   currentWalletAmount -= priceAfterDiscount;
                   walletChanged = true;
                   continuityBroken = true;
@@ -1007,7 +1020,7 @@ export default function KarnetyPage() {
                   tempKarnety[0] = {
                     ...primaryPass,
                     waznyDo: extendedExpiry,
-                    pozostaloWejsc: primaryPass.poczatkoweWejsc || primaryPass.pozostaloWejsc,
+                    pozostaloWejsc: null,
                     statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
                   };
 
@@ -1033,7 +1046,6 @@ export default function KarnetyPage() {
             const verifiedKarnety = tempKarnety.filter((k: any) => {
               if (isContractPassCheck(k)) return true;
               if (k.waznyDo && k.waznyDo < yesterdayStr) {
-                const hasFutureBookings = futureBookingDates.length > 0;
                 if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
                   return true;
                 }
@@ -1534,6 +1546,7 @@ export default function KarnetyPage() {
       }
       return k;
     });
+
     const currentYear = new Date().getFullYear();
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
@@ -1713,7 +1726,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2107,7 +2119,6 @@ export default function KarnetyPage() {
         });
       }
 
-      // Zwrot wejść do aktywnego karnetu ilościowego (również po zakupie nowego karnetu, np. 2/1)
       if (cancelledCount > 0) {
         const passIndex = updatedKarnety.findIndex((k: any) => k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
         if (passIndex !== -1) {
@@ -3434,14 +3445,14 @@ export default function KarnetyPage() {
                         />
                         {!appliedDiscountCode ? (
                           <button 
-                            onClick={handleApplyDiscountCode}
+                            onClick={handleApplyDiscountCode} 
                             className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
                           >
                             Zastosuj
                           </button>
                         ) : (
                           <button 
-                            onClick={(e) => { e.preventDefault(); resetDiscountState(); }}
+                            onClick={(e) => { e.preventDefault(); resetDiscountState(); }} 
                             className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
                           >
                             Usuń
@@ -3664,14 +3675,14 @@ export default function KarnetyPage() {
                         />
                         {!appliedDiscountCode ? (
                           <button 
-                            onClick={handleApplyDiscountCode}
+                            onClick={handleApplyDiscountCode} 
                             className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
                           >
                             Zastosuj
                           </button>
                         ) : (
                           <button 
-                            onClick={(e) => { e.preventDefault(); resetDiscountState(); }}
+                            onClick={(e) => { e.preventDefault(); resetDiscountState(); }} 
                             className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer text-xs"
                           >
                             Usuń
