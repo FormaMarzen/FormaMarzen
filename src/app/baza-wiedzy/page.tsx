@@ -634,6 +634,66 @@ export default function BazaWiedzyPage() {
     }
   };
 
+  const notifyKlubowiczJuzWBazie = async (targetEmail: string, supplementName: string) => {
+    try {
+      const cleanEmail = targetEmail.toLowerCase().trim();
+      const recipientName = klienciMap[cleanEmail] || "Klubowicz";
+      const recipientId = klienciIdMap[cleanEmail] || null;
+
+      const trescWiadomosci = `Cześć ${recipientName}! Dziękujemy za przesłanie propozycji. Suplement "${supplementName}" znajduje się już w naszej Bazie Wiedzy! 💊 Możesz w każdej chwili sprawdzić jego opis, dawkowanie oraz wskazówki w zakładce Baza Wiedzy.`;
+
+      if (recipientId) {
+        await supabase.from("czat_wiadomosci").insert([
+          {
+            nadawca_id: SYSTEM_ID,
+            nadawca_nazwa: "Maciej Kłaput (Admin)",
+            nadawca_avatar: null,
+            odbiorca_id: recipientId,
+            grupa_id: null,
+            tresc: trescWiadomosci,
+            przeczytana: false,
+            przeczytana_at: null,
+            przypinana: false,
+            reakcje: {},
+          },
+        ]);
+      }
+
+      await supabase.from("powiadomienia").insert([
+        {
+          odbiorca_email: cleanEmail,
+          odbiorca: recipientName,
+          tytul: "Suplement jest już w bazie! 📚",
+          tresc: `Proponowany suplement "${supplementName}" znajduje się już w Bazie Wiedzy.`,
+          przeczytane: false,
+          typ: "suplement_istnieje",
+          link: "/baza-wiedzy",
+        },
+      ]);
+
+      const pushPayload = {
+        targetEmail: cleanEmail,
+        email: cleanEmail,
+        targetName: recipientName,
+        payload: {
+          title: "Suplement jest już w bazie! 📚",
+          body: `Proponowany suplement "${supplementName}" znajduje się już w Bazie Wiedzy.`,
+          url: "/baza-wiedzy",
+          typ: "suplement_istnieje",
+          odbiorca: recipientName,
+        },
+      };
+
+      await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pushPayload),
+      }).catch(() => {});
+    } catch (e) {
+      console.error("Błąd wysyłania powiadomienia o istniejącym suplemencie:", e);
+    }
+  };
+
   const handleWyslijSugestie = async (e: React.FormEvent) => {
     e.preventDefault();
     const nazwaWpisu = nowaSugestiaNazwa.trim();
@@ -670,6 +730,35 @@ export default function BazaWiedzyPage() {
     if (!window.confirm("Czy na pewno chcesz usunąć tę propozycję?")) return;
     await supabase.from("sugestie_suplementow").delete().eq("id", id);
     setSugestie((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const handleJuzWBazie = async (sugestia: Sugestia) => {
+    const zglaszajacy = getKlientDisplayFromSugestia(sugestia);
+    const potwierdzenie = window.confirm(
+      `Czy na pewno chcesz oznaczyć suplement "${sugestia.nazwa}" jako już obecny w bazie?\n\nKlubowicz (${zglaszajacy}) otrzyma wiadomość systemową na czacie, a propozycja zostanie usunięta z listy oczekujących.`
+    );
+    if (!potwierdzenie) return;
+
+    try {
+      const { error } = await supabase
+        .from("sugestie_suplementow")
+        .update({ status: "juz_w_bazie" })
+        .eq("id", sugestia.id);
+
+      if (error) {
+        alert("Błąd podczas aktualizacji: " + error.message);
+        return;
+      }
+
+      setSugestie((prev) => prev.filter((s) => s.id !== sugestia.id));
+
+      if (sugestia.klient_email) {
+        await notifyKlubowiczJuzWBazie(sugestia.klient_email, sugestia.nazwa);
+      }
+    } catch (err: any) {
+      console.error("Błąd podczas oznaczania jako już w bazie:", err);
+      alert("Wystąpił błąd: " + err.message);
+    }
   };
 
   const handleQuickAddFromSugestia = (sugestia: Sugestia) => {
@@ -1222,7 +1311,7 @@ export default function BazaWiedzyPage() {
                       Oczekujące propozycje suplementów od Klubowiczów ({sugestie.length})
                     </h3>
                   </div>
-                  <span className="text-xs text-slate-300">Po kliknięciu „Dodaj” klubowicz otrzyma wiadomość na czacie!</span>
+                  <span className="text-xs text-slate-300">Zarządzaj zgłoszeniami klubowiczów</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {sugestie.map((sug) => {
@@ -1238,12 +1327,19 @@ export default function BazaWiedzyPage() {
                             Zgłosił: <span className="text-slate-200 font-bold">{zglaszajacy}</span>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 pt-2 border-t border-sky-900">
+                        <div className="flex items-center gap-1.5 pt-2 border-t border-sky-900 flex-wrap">
                           <button
                             onClick={() => handleQuickAddFromSugestia(sug)}
-                            className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs py-2 px-3 rounded-xl transition-all shadow-sm cursor-pointer text-center"
+                            className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs py-2 px-2.5 rounded-xl transition-all shadow-sm cursor-pointer text-center whitespace-nowrap"
                           >
-                            + Dodaj do bazy
+                            + Dodaj
+                          </button>
+                          <button
+                            onClick={() => handleJuzWBazie(sug)}
+                            className="bg-sky-700 hover:bg-sky-600 text-white font-bold text-xs py-2 px-2.5 rounded-xl transition-all shadow-sm cursor-pointer text-center whitespace-nowrap"
+                            title="Oznacz, że suplement jest już w bazie i wyślij informację na czacie"
+                          >
+                            ✓ Już w bazie
                           </button>
                           <button
                             onClick={() => handleUsunSugestie(sug.id)}
@@ -1654,7 +1750,7 @@ export default function BazaWiedzyPage() {
                           <span className="text-slate-500 font-normal">({r.count} opinii)</span>
                         </div>
                       ) : (
-                        <div className="text-[11px] text-slate-400 ten-przepis">Ten przepis nie ma jeszcze ocen – bądź pierwszy!</div>
+                        <div className="text-[11px] text-slate-400">Ten przepis nie ma jeszcze ocen – bądź pierwszy!</div>
                       );
                     })()}
                   </div>
