@@ -2933,7 +2933,7 @@ export default function KarnetyPage() {
                     ? `Zniżka z Programu Ambasador została naliczona i łączy się z Twoimi rabatami klubowicza.` 
                     : effectiveDiscount.type === 'manual' 
                     ? 'Przypisano indywidualny rabat stały do Twojego konta.' 
-                    : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów (od 150 zł).`} Ceny zakupu i przedłużeń karnetów uwzględniają tę zniżkę.
+                    : `Rabat lojalnościowy naliczany za zachowanie ciągłości karnetów (od 150 zł).`} Ceny zakupu karnetów uwzględniają tę zniżkę.
                 </div>
               </div>
             </div>
