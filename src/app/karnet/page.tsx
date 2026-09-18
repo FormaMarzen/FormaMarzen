@@ -43,7 +43,7 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
     }
   }
   const targetYear = base.getFullYear();
-  const targetMonth = base.getMonth() + 1; // kolejny miesiąc (1-indexed)
+  const targetMonth = base.getMonth() + 1;
   const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
   const resMonth = String(targetMonth + 1).padStart(2, '0');
   return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
@@ -448,6 +448,59 @@ export default function KarnetyPage() {
     }
   };
 
+  // AUTOMATYCZNA WERYFIKACJA PIERWSZEGO KARNETU DLA PROGRAMU AMBASADOR
+  const checkAndEvaluateAmbassadorReferral = async (klientId: number, passName: string, passPrice: number) => {
+    try {
+      const { data: pendingRef } = await supabase
+        .from('referrals')
+        .select('id, referrer_id')
+        .eq('referred_client_id', klientId)
+        .eq('status', 'oczekuje_na_pierwszy_karnet')
+        .maybeSingle();
+
+      if (!pendingRef) return;
+
+      let minPrice = 200;
+      try {
+        const { data: settingsData } = await supabase
+          .from('ambassador_settings')
+          .select('min_pass_price')
+          .eq('id', 1)
+          .maybeSingle();
+        if (settingsData?.min_pass_price) {
+          minPrice = Number(settingsData.min_pass_price);
+        }
+      } catch(e) {}
+
+      const isQualified = passPrice >= minPrice;
+      const newStatus = isQualified ? 'confirmed' : 'disqualified';
+
+      await supabase
+        .from('referrals')
+        .update({
+          pass_name: passName,
+          pass_price: passPrice,
+          is_qualified: isQualified,
+          status: newStatus
+        })
+        .eq('id', pendingRef.id);
+
+      if (isQualified && pendingRef.referrer_id) {
+        const clientName = `${currentUser?.firstName || currentUser?.Imię || 'Twój polecony znajomy'} ${currentUser?.lastName || currentUser?.Nazwisko || ''}`.trim();
+        await supabase.from('czat_wiadomosci').insert([{
+          nadawca_id: SYSTEM_CHAT_ID,
+          nadawca_nazwa: 'Program Ambasador',
+          odbiorca_id: pendingRef.referrer_id,
+          tresc: `🎉 Świetna wiadomość! Twój polecony znajomy (${clientName}) zakupił swój pierwszy karnet: "${passName}" za ${passPrice.toFixed(2)} PLN. Polecenie zostało pomyślnie zaliczone do Twoich nagród Ambasadora!`,
+          przeczytana: false,
+          created_at: new Date().toISOString()
+        }]);
+      }
+    } catch (err) {
+      console.error("Błąd weryfikacji polecenia ambasadora:", err);
+    }
+  };
+
   const handleApplyDiscountCode = async (e: React.MouseEvent) => {
     e.preventDefault();
     setDiscountCodeStatus({ type: 'loading', message: 'Sprawdzanie kodu...' });
@@ -521,6 +574,7 @@ export default function KarnetyPage() {
       message: `Zastosowano rabat: ${data.wartosc_znizki}${data.typ_znizki === 'procentowa' ? '%' : ' PLN'}` 
     });
   };
+
   const calculateFinalPrice = (basePriceNum: number, userEffectiveDiscount: any, appliedCode: any) => {
     let finalPrice = basePriceNum;
     let appliedLabel = '';
@@ -603,7 +657,6 @@ export default function KarnetyPage() {
         exp.setHours(0, 0, 0, 0);
         const diffDays = Math.floor((today.getTime() - exp.getTime()) / (1000 * 60 * 60 * 24));
         
-        // Zapas 1 dnia na zachowanie ciągłości
         if (diffDays <= 1) {
           isContinuous = true;
         }
@@ -648,7 +701,6 @@ export default function KarnetyPage() {
     const birthdayDiscountVal = (bStatus.isBirthdayWindow && !bStatus.alreadyUsedThisYear) ? 20 : 0;
     const manualDiscountVal = client.discount ? parseFloat(String(client.discount).replace(/[^0-9.]/g, '')) : 0;
     
-    // Wykluczenie karnetów <= 150 zł z ciągłości
     const continuityInfo = (!isTargetContract && (basePriceToCheck === undefined || basePriceToCheck > 150))
       ? calculateContinuityDiscount(client, basePriceToCheck) 
       : { hasContinuity: false, percent: 0, label: '' };
@@ -727,7 +779,6 @@ export default function KarnetyPage() {
       isPassQualifiedForAmbassador
     };
   };
-
   const calculateContractProRata = (baseMonthlyPrice: number) => {
     const today = new Date();
     const currentYear = today.getFullYear();
@@ -829,7 +880,6 @@ export default function KarnetyPage() {
           const now = new Date();
           const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
           
-          // Pobieramy wszystkie zapisy na zajęcia dla weryfikacji przyszłych treningów
           const { data: allSignups } = await supabase
             .from('zapisy_zajec')
             .select('id, class_key, klient_id');
@@ -896,16 +946,13 @@ export default function KarnetyPage() {
             let currentWalletAmount = parseFloat(String(c.Portfel ?? c.portfel ?? c.wallet ?? 0).replace(/[^0-9.-]/g, '')) || 0;
             let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
 
-            // 1. POPRAWNA OBSŁUGA WEJŚĆ I ZATRZYMANIE BŁĘDNEGO BUFOROWANIA
             let tempKarnety = parsedKarnety.map((k: any) => {
               if (isContractPassCheck(k)) {
                 return { ...k, isContract12M: true };
               }
 
               const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
-              const isQuantityPass = isQuantityPassCheck(k);
 
-              // Zerowanie wejść po nominalnej dacie wygaśnięcia
               if (isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
                 karnetyChanged = true;
                 return {
@@ -915,7 +962,6 @@ export default function KarnetyPage() {
                 };
               }
 
-              // Obsługa wyczerpania wejść
               if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
                 const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
                 const isLowPrice = passPriceNum <= 150;
@@ -934,7 +980,6 @@ export default function KarnetyPage() {
                     };
                   }
                 } else if (hasFutureBookings) {
-                  // Jeśli wejścia zostały zarezerwowane na przyszłe zajęcia, bufor 24h NIE MOŻE się włączyć!
                   if (k.zeroEntriesGraceUntil !== null) {
                     karnetyChanged = true;
                   }
@@ -944,7 +989,6 @@ export default function KarnetyPage() {
                     statusTekst: `Zarezerwowano wejścia (wygasa ${k.waznyDo})`
                   };
                 } else {
-                  // Faktyczny brak wejść i brak przyszłych rezerwacji - bufor 24h na zachowanie ciągłości
                   const tomorrowDate = new Date();
                   tomorrowDate.setDate(tomorrowDate.getDate() + 1);
                   const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
@@ -962,7 +1006,6 @@ export default function KarnetyPage() {
               return k;
             });
 
-            // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (WYŁĄCZNIE DLA KARNETÓW CZASOWYCH)
             const waitingPassIndex = tempKarnety.findIndex((k: any, idx: number) => 
               idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
             );
@@ -976,7 +1019,6 @@ export default function KarnetyPage() {
               const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) || 
                                        (isTimeBased && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
 
-              // ZASADA 2: Rotacja na kolejny zakupiony karnet w kolejce
               if (isPrimaryFinished && waitingPassIndex !== -1) {
                 const nextPass = tempKarnety[waitingPassIndex];
                 const defNext = dostepneKarnety.find(dk => dk.nazwa === nextPass.nazwa);
@@ -989,9 +1031,7 @@ export default function KarnetyPage() {
                   statusTekst: `Ważny do: ${nextNewExpiry}`
                 };
                 karnetyChanged = true;
-              }
-              // ZASADA 3: Auto-przedłużenie WYŁĄCZNIE dla karnetów czasowych! Karnety ilościowe NIGDY nie zadłużają konta!
-              else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
+              } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
                 const hasBookingsAfterExpiry = futureBookingDates.some(bookingDate => bookingDate > (primaryPass.waznyDo || todayDateOnly));
                 
                 if (hasBookingsAfterExpiry) {
@@ -1036,13 +1076,11 @@ export default function KarnetyPage() {
               }
             }
 
-            // Czyszczenie wygasłego banera 21-dniowego
             if (continuityNotice && continuityNotice.expiresAt && continuityNotice.expiresAt < todayDateOnly) {
               continuityNotice = null;
               karnetyChanged = true;
             }
 
-            // Sprawdzenie czy wygasły karnet powinien zostać usunięty
             const verifiedKarnety = tempKarnety.filter((k: any) => {
               if (isContractPassCheck(k)) return true;
               if (k.waznyDo && k.waznyDo < yesterdayStr) {
@@ -1436,7 +1474,6 @@ export default function KarnetyPage() {
     e.preventDefault();
     if (!currentUser || !passToExtend || isProcessingPayment || isSubmittingRef.current) return;
 
-    // KARNETY ILOŚCIOWE NIE MAJĄ PRZEDŁUŻANIA - WYMAGAJĄ ZAKUPU NOWEGO
     if (isQuantityPassCheck(passToExtend)) {
       showToast('Karnety na ilość wejść nie mają opcji przedłużania. Wybierz zakup nowego karnetu, a pozostałe wejścia zostaną doliczone!', 'info');
       setIsExtendModalOpen(false);
@@ -1500,7 +1537,7 @@ export default function KarnetyPage() {
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
-    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]/g, "")) || 0);
+    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
     const walletDeduction = (!isBonus13thPeriod && useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
     const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
@@ -1551,7 +1588,6 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    // TYLKO KARNETY POWYŻEJ 150 ZŁ PODNOSZĄ CYKL I RABAT ZA CIĄGŁOŚĆ
     if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
@@ -1607,7 +1643,6 @@ export default function KarnetyPage() {
       dbPayload.hasLostContinuity = false;
     }
 
-    // ROZLICZENIE UMOWY DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
     if (isContract) {
       dbPayload.umowa_oplacona_do = nowaDataWygasnieciaStr;
 
@@ -1692,7 +1727,9 @@ export default function KarnetyPage() {
       );
     }
     
-    // POWIADOMIENIE PUSH DLA ADMINA PRZY OPŁACIE Z PORTFELA / BEZPŁATNIE
+    // Ewaluacja polecenia dla programu ambasador
+    await checkAndEvaluateAmbassadorReferral(currentUser.id, passToExtend.nazwa, cenaPoRabacie);
+
     await triggerPushNotificationToAdmin(
       'Opłata / Przedłużenie karnetu',
       `${currentUser.firstName} ${currentUser.lastName} opłacił karnet: ${passToExtend.nazwa} (${cenaStr}).`
@@ -1735,14 +1772,12 @@ export default function KarnetyPage() {
     const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
     const isNewQuantityPass = isQuantityPassCheck(defKarnetu);
     
-    // Pobieramy aktualne karnety usuwając te, które wygasły i nie mają już racji bytu
     let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) 
       ? [...currentUser.karnetyKlubowicza].filter(isPassActive) 
       : [];
     
     const existingQuantityPass = updatedKarnetyList.find(k => isQuantityPassCheck(k));
 
-    // OSTRZEŻENIE I AKCEPTACJA PRZENIESIENIA WEJŚĆ PRZY KARNECIE ILOŚCIOWYM
     if (isNewQuantityPass && existingQuantityPass && !pendingQuantityPassData?.confirmed) {
       const leftover = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
       setPendingQuantityPassData({
@@ -1765,12 +1800,11 @@ export default function KarnetyPage() {
       calculatedFirstPayment = contractInfo.proRataFirstMonth;
     }
     
-    // Przekazanie kwoty bazowej do weryfikacji progu > 150 zł dla rabatu ciągłości
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
     const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
     const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
 
-    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]/g, "")) || 0);
+    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
     const walletDeduction = (useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
     const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
@@ -1788,7 +1822,6 @@ export default function KarnetyPage() {
     let nextCykl = isContract ? 1 : (appliedDiscountCode ? baseCykl : (updatedKarnetyList.length === 0 ? 1 : baseCykl + 1));
     let statusTekst = '';
 
-    // PRZY ZAKUPIE NOWEGO KARNETU USUŃ STARY WYZEROWANY KARNET (KTÓRY BYŁ CHRONIONY PRZEZ ZAPISY)
     updatedKarnetyList = updatedKarnetyList.filter((k: any) => {
       if (isContractPassCheck(k)) return true;
       if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) return false;
@@ -1828,14 +1861,12 @@ export default function KarnetyPage() {
       let leftoverTransferred = 0;
       if (existingQuantityPass) {
         leftoverTransferred = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
-        // Usunięcie poprzedniego karnetu ilościowego
         updatedKarnetyList = updatedKarnetyList.filter(k => k.id !== existingQuantityPass.id);
       }
 
       const parsedLimit = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 10;
       const totalPoolEntries = parsedLimit + leftoverTransferred;
 
-      // Ważność nowego karnetu ilościowego liczona bezwzględnie od dnia zakupu
       nowaDataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
       statusTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
 
@@ -1895,7 +1926,6 @@ export default function KarnetyPage() {
     let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
     let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    // WYKLUCZENIE Z CIĄGŁOŚCI DLA KWOT <= 150 PLN
     if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
@@ -2020,7 +2050,9 @@ export default function KarnetyPage() {
       );
     }
 
-    // POWIADOMIENIE PUSH DLA ADMINA PRZY OPŁACIE Z PORTFELA / BEZPŁATNIE
+    // Ewaluacja polecenia dla programu ambasador
+    await checkAndEvaluateAmbassadorReferral(currentUser.id, selectedBuyPass, cenaPoRabacie);
+
     await triggerPushNotificationToAdmin(
       'Nowy karnet',
       `${currentUser.firstName} ${currentUser.lastName} zakupił karnet: ${selectedBuyPass} (${cenaStr}).`
@@ -2972,7 +3004,6 @@ export default function KarnetyPage() {
                           </button>
                         ) : null
                       ) : isQuantity ? (
-                        /* DLA KARNETÓW ILOŚCIOWYCH TYLKO KUPNO NOWEGO Z PRZENIESIENIEM */
                         <button 
                           onClick={() => {
                             resetDiscountState();
@@ -3120,7 +3151,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
-
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3617,7 +3647,6 @@ export default function KarnetyPage() {
                           kDisplayPrice = kProRata.proRataFirstMonth;
                         }
 
-                        // Karnety <= 150 PLN nie otrzymują zniżki ciągłości
                         const kEffectiveDisc = getEffectiveDiscount(currentUser, kIsContract, kDisplayPrice, k.nazwa);
                         
                         const kFinalPrice = kEffectiveDisc.percent > 0 
@@ -4253,7 +4282,7 @@ export default function KarnetyPage() {
                           min="1"
                           value={niestandardowyDziennyIlosc}
                           onChange={(e) => setNiestandardowyDziennyIlosc(e.target.value)}
-                          className="w-full bg-white border border-sky-200 rounded-xl px-3 py-2 text-slate-800 font-bold"
+                          className="w-full bg-white border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 font-bold"
                         />
                       </div>
                     )}
