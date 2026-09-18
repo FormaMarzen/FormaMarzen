@@ -265,7 +265,7 @@ export default function RootLayout({
     );
   })();
 
-  // Ochrona bezpośredniego wejścia pod adres /sklep dla osób innych niż admin
+  // Ochrona bezpośredniego wejścia pod adres /sklep dla osób innych niż administrator
   useEffect(() => {
     if (!isAuthLoading && appRole !== 'admin' && pathname === '/sklep') {
       router.push('/');
@@ -390,7 +390,7 @@ export default function RootLayout({
         }
 
         const unlockedTiers = matchedTable.customTiers.filter((tier: any) => userVal >= Number(tier.threshold));
-        if (unlockedTiers > 0) {
+        if (unlockedTiers.length > 0) {
           const topTier = unlockedTiers[unlockedTiers.length - 1];
           const verificationKey = `${c.id}_${topTier.id}`;
           if (!allVerifiedKeys.has(verificationKey)) {
