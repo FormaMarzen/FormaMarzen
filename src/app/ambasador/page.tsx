@@ -82,7 +82,8 @@ export default function AmbasadorKlubowiczPage() {
         setReferralCode(code);
 
         const origin = typeof window !== 'undefined' ? window.location.origin : 'https://forma-marzen.vercel.app';
-        setReferralLink(`${origin}/rejestracja-karnet?ref=${code}`);
+        // Link kieruje prosto do zapisu na pierwszy bezpłatny trening z grafiku
+        setReferralLink(`${origin}/rejestracja-ogolna?ref=${code}`);
 
         // 3. Pobierz historię poleceń tego klubowicza
         const { data: refData } = await supabase
@@ -138,7 +139,7 @@ export default function AmbasadorKlubowiczPage() {
 
   const handleShareWhatsApp = () => {
     if (!referralLink) return;
-    const text = `Hej! Trenuj ze mną w klubie Forma Marzeń. Zarejestruj się z mojego polecenia i odbierz -10% zniżki na swój pierwszy karnet: ${referralLink}`;
+    const text = `Hej! Trenuj ze mną w klubie Forma Marzeń. Zapisz się z mojego polecenia na darmowy pierwszy trening próbny: ${referralLink}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
 
@@ -199,12 +200,12 @@ export default function AmbasadorKlubowiczPage() {
             ⭐ Program Ambasador • Forma Marzeń
           </div>
           <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-            Polecaj klub znajomym i odbieraj rabaty na karnety!
+            Zaproś znajomych na darmowy trening i odbieraj nagrody!
           </h1>
           <p className="text-xs sm:text-sm text-sky-200 leading-relaxed font-medium">
-            Każda osoba, która dołączy do Forma Marzeń z Twojego linku, otrzymuje 
-            <strong className="text-amber-300 font-black"> 10% rabatu</strong> na swój pierwszy karnet. 
-            Ty zdobywasz kolejne poziomy i zniżki na własne treningi (nawet do 50% rabatu na 18 miesięcy)!
+            Każda osoba, która dołączy do klubu z Twojego linku, zapisuje się na 
+            <strong className="text-amber-300 font-black"> bezpłatny pierwszy trening próbny</strong>. 
+            Gdy po treningu wykupi swój pierwszy karnet (min. {settings.min_pass_price} PLN), Ty zdobywasz kolejne poziomy i zniżki na własne treningi (nawet do 50% rabatu na 18 miesięcy)!
           </p>
         </div>
 
@@ -220,7 +221,7 @@ export default function AmbasadorKlubowiczPage() {
             🔗 Twój Osobisty Link Polecający
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Wyślij ten link znajomemu. System automatycznie rozpozna Twoje polecenie przy rejestracji i zakupie karnetu.
+            Wyślij ten link znajomemu. Znajomy wybierze z grafiku termin na swój pierwszy darmowy trening, a system powiąże jego konto z Tobą.
           </p>
         </div>
 
@@ -261,7 +262,7 @@ export default function AmbasadorKlubowiczPage() {
               </button>
             </div>
             <p className="text-[11px] text-slate-400">
-              * Aby polecenie zostało zaliczone, nowa osoba musi zakupić karnet o wartości min. {settings.min_pass_price} PLN.
+              * Nowa osoba korzysta z darmowego treningu próbnego. Aby polecenie zostało zaliczone do nagrody, jej <strong>pierwszy zakupiony karnet</strong> musi mieć wartość min. {settings.min_pass_price} PLN.
             </p>
           </div>
         </div>
@@ -398,7 +399,7 @@ export default function AmbasadorKlubowiczPage() {
                       🤝 Dla znajomego:
                     </div>
                     <div className="text-xs font-medium text-slate-700 leading-snug">
-                      {tier.referee_reward_description || '10% rabatu na pierwszy karnet'}
+                      Darmowy pierwszy trening próbny + rabat powitalny
                     </div>
                   </div>
                 </div>
@@ -416,7 +417,7 @@ export default function AmbasadorKlubowiczPage() {
               👥 Osoby Zaproszone Przez Ciebie
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Rejestr wszystkich osób, które założyły konto z Twojego linku i kupiły karnet.
+              Rejestr wszystkich osób, które zapisały się na trening próbny lub kupiły karnet z Twojego polecenia.
             </p>
           </div>
           <span className="text-xs bg-sky-50 text-sky-900 border border-sky-200 font-bold px-3 py-1 rounded-full self-start sm:self-auto">
@@ -429,7 +430,7 @@ export default function AmbasadorKlubowiczPage() {
             <div className="text-3xl">🤝</div>
             <p>Nie zaprosiłeś jeszcze żadnego znajomego.</p>
             <p className="text-[11px] text-slate-500">
-              Skopiuj swój link powyżej i udostępnij go znajomym, aby zacząć zbierać zniżki!
+              Skopiuj swój link powyżej i wyślij go znajomym na darmowy trening próbny!
             </p>
           </div>
         ) : (
@@ -438,15 +439,14 @@ export default function AmbasadorKlubowiczPage() {
               <thead>
                 <tr className="bg-sky-50/70 border-b border-sky-200 text-[11px] font-bold text-sky-900 uppercase tracking-wider">
                   <th className="py-3.5 px-5">Imię i Nazwisko</th>
-                  <th className="py-3.5 px-5">Kupiony Karnet</th>
-                  <th className="py-3.5 px-5">Kwota Karnetu</th>
-                  <th className="py-3.5 px-5 text-center">Status Nalizenia</th>
-                  <th className="py-3.5 px-5 text-right">Data Rejestracji</th>
+                  <th className="py-3.5 px-5">Status / Karnet</th>
+                  <th className="py-3.5 px-5">Wartość Zakupu</th>
+                  <th className="py-3.5 px-5 text-center">Status Nagrody</th>
+                  <th className="py-3.5 px-5 text-right">Data Dołączenia</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-sky-100 text-slate-700">
                 {referrals.map((item) => {
-                  // Formatowanie nazwiska do formatu "Jan K." dla ochrony prywatności
                   const imie = item.referred?.Imię || 'Klubowicz';
                   const nazwisko = item.referred?.Nazwisko ? `${item.referred.Nazwisko.charAt(0)}.` : '';
 
@@ -457,7 +457,7 @@ export default function AmbasadorKlubowiczPage() {
                       </td>
 
                       <td className="py-3.5 px-5 font-medium text-sky-950">
-                        {item.pass_name}
+                        {item.pass_name || 'Trening próbny'}
                       </td>
 
                       <td className="py-3.5 px-5 font-black text-slate-800">
@@ -469,9 +469,13 @@ export default function AmbasadorKlubowiczPage() {
                           <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase">
                             ✓ Zaliczone
                           </span>
+                        ) : item.status === 'oczekuje_na_pierwszy_karnet' ? (
+                          <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase" title="Znajomy zapisał się na darmowy trening próbny. Oczekuje na zakup pierwszego karnetu.">
+                            ⏳ Trening próbny
+                          </span>
                         ) : (
-                          <span className="bg-rose-100 text-rose-900 border border-rose-300 text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase" title={`Minimalna kwota karnetu to ${settings.min_pass_price} PLN`}>
-                            ✕ Poniżej min. kwoty
+                          <span className="bg-rose-100 text-rose-900 border border-rose-300 text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase" title={`Pierwszy karnet nie spełnił warunku minimalnej kwoty (${settings.min_pass_price} PLN)`}>
+                            ✕ Niezaliczone (&lt; {settings.min_pass_price} zł)
                           </span>
                         )}
                       </td>
