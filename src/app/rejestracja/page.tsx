@@ -64,24 +64,43 @@ function FreeRegistrationContent() {
   const [errorMsg, setErrorMsg] = useState('');
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
 
-  // Odczytanie kodu polecającego z URL
+  // Bezpieczny i odporny odczyt kodu polecającego z URL oraz weryfikacja w Supabase
   useEffect(() => {
-    const rawRef = searchParams.get('ref') || searchParams.get('kod') || '';
+    let rawRef = searchParams.get('ref') || searchParams.get('kod') || searchParams.get('r') || '';
+    
+    // Fallback bezpośrednio z window.location na wypadek opóźnienia hooka useSearchParams
+    if (!rawRef && typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      rawRef = urlParams.get('ref') || urlParams.get('kod') || urlParams.get('r') || '';
+    }
+
     if (rawRef) {
-      const cleanRef = rawRef.trim().toUpperCase();
+      const cleanRef = rawRef.trim();
       const verifyReferrer = async () => {
         try {
-          const { data: clientData } = await supabase
+          // Szukamy po kodzie (bez względu na wielkość liter)
+          let { data: clientData, error } = await supabase
             .from('klienci')
             .select('id, "Imię", "Nazwisko", referral_code')
-            .eq('referral_code', cleanRef)
+            .ilike('referral_code', cleanRef)
             .maybeSingle();
 
+          // Jeśli nie znaleziono, a kod jest liczbą – sprawdzamy czy to bezpośrednie ID
+          if (!clientData && !isNaN(Number(cleanRef))) {
+            const { data: clientById } = await supabase
+              .from('klienci')
+              .select('id, "Imię", "Nazwisko", referral_code')
+              .eq('id', Number(cleanRef))
+              .maybeSingle();
+            clientData = clientById;
+          }
+
           if (clientData) {
+            const fullName = `${clientData['Imię'] || ''} ${clientData['Nazwisko'] || ''}`.trim() || 'Klubowicz Forma Marzeń';
             setReferrer({
               id: clientData.id,
-              name: `${clientData['Imię'] || ''} ${clientData['Nazwisko'] || ''}`.trim(),
-              referral_code: clientData.referral_code
+              name: fullName,
+              referral_code: clientData.referral_code || cleanRef
             });
           }
         } catch (err) {
@@ -124,7 +143,6 @@ function FreeRegistrationContent() {
     const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
 
     try {
-      // Równoległe pobranie zajęć cyklicznych oraz jednorazowych
       const [{ data: cykliczne }, { data: jednorazowe }] = await Promise.all([
         supabase.from('grafik_zajec').select('*'),
         supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr)
@@ -137,14 +155,12 @@ function FreeRegistrationContent() {
         ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
       ];
 
-      // Sortowanie od najwcześniejszych do najpóźniejszych godzin danego dnia
       combined.sort((a, b) => {
         const timeA = a.time || a.godzina || a.start || '00:00';
         const timeB = b.time || b.godzina || b.start || '00:00';
         return timeA.localeCompare(timeB);
       });
 
-      // Filtrowanie zajęć, które już minęły lub są z dni przeszłych
       const now = new Date();
       const selectedMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
       const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -240,7 +256,6 @@ function FreeRegistrationContent() {
     setErrorMsg('');
 
     try {
-      // Weryfikacja czy adres e-mail już istnieje w tabeli klienci
       const { data: existingClientCheck } = await supabase
         .from('klienci')
         .select('id')
@@ -280,9 +295,9 @@ function FreeRegistrationContent() {
         ? `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`
         : null;
 
-      // 2. Równoległe zapisy do bazy Supabase
+      // 2. Operacje bazodanowe
       const databaseOperations: Promise<any>[] = [
-        // 2a. Dodanie klienta do tabeli "klienci" z przypisanym polecającym
+        // Dodanie klienta do tabeli "klienci"
         Promise.resolve(
           supabase.from('klienci').insert([
             {
@@ -308,7 +323,7 @@ function FreeRegistrationContent() {
           ])
         ),
 
-        // 2b. Dodanie początkowej transakcji
+        // Saldo startowe
         Promise.resolve(
           supabase.from('transakcje').insert([
             {
@@ -320,7 +335,7 @@ function FreeRegistrationContent() {
           ])
         ),
 
-        // 2c. Powiadomienie na czacie dla administratora (ID 5000)
+        // Powiadomienie na czacie dla administratora (ID 5000)
         Promise.resolve(
           supabase.from('czat_wiadomosci').insert([
             {
@@ -334,7 +349,7 @@ function FreeRegistrationContent() {
         )
       ];
 
-      // 2d. Zapis akceptacji regulaminów
+      // Akceptacja regulaminów
       if (newUserId && regulations.length > 0) {
         const acceptanceInserts = regulations.map(reg => ({
           user_id: newUserId,
@@ -347,7 +362,7 @@ function FreeRegistrationContent() {
         );
       }
 
-      // 2e. Rezerwacja w tabeli zapisy_zajec
+      // Rezerwacja w tabeli zapisy_zajec
       if (classKey) {
         databaseOperations.push(
           Promise.resolve(
@@ -363,7 +378,7 @@ function FreeRegistrationContent() {
         );
       }
 
-      // 2f. PROGRAM AMBASADOR: Rejestracja oczekującego wpisu w referrals oraz powiadomienie
+      // Program Ambasador: wpis ze statusem oczekującym
       if (referrer) {
         databaseOperations.push(
           Promise.resolve(
@@ -395,10 +410,9 @@ function FreeRegistrationContent() {
         );
       }
 
-      // Wykonanie wszystkich operacji bazodanowych
       await Promise.all(databaseOperations);
 
-      // 3. Wysłanie powiadomienia Web Push do Administratora w tle
+      // Web Push do administratora w tle
       try {
         const { data: adminSubs } = await supabase
           .from('push_subscriptions')
@@ -483,16 +497,28 @@ function FreeRegistrationContent() {
           </div>
 
           {/* BANER POLECENIA AMBASADORA */}
-          {referrer && (
-            <div className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 text-white p-3.5 rounded-2xl shadow-sm text-left flex items-center gap-3">
-              <span className="text-2xl">🎁</span>
+          {referrer ? (
+            <div className="w-full bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-4 rounded-2xl shadow-md text-left flex items-center gap-3.5 border border-emerald-500 animate-in fade-in">
+              <span className="text-3xl shrink-0">🎁</span>
               <div>
-                <div className="text-[10px] font-black uppercase tracking-wider text-emerald-100">
+                <div className="text-[10px] font-black uppercase tracking-wider text-emerald-200">
                   Zaproszenie od Ambasadora
                 </div>
-                <div className="text-xs font-bold mt-0.5">
-                  Dołączasz z rekomendacji: <span className="underline">{referrer.name}</span>. Twój pierwszy trening jest całkowicie darmowy!
+                <div className="text-xs font-bold mt-0.5 leading-snug">
+                  Dołączasz z polecenia klubowicza: <span className="underline font-black text-amber-300">{referrer.name}</span>.
                 </div>
+                <div className="text-[11px] text-emerald-100 font-medium mt-1">
+                  Twój pierwszy trening próbny jest w <strong>100% darmowy (0 zł)</strong>!
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="w-full bg-gradient-to-r from-sky-600 to-blue-700 text-white p-3.5 rounded-2xl shadow-sm text-center">
+              <div className="text-[10px] font-black uppercase tracking-wider text-sky-200">
+                Pierwszy Trening Próbny
+              </div>
+              <div className="text-xs font-bold mt-0.5">
+                Wybierz dogodny termin – Twoje pierwsze zajęcia są całkowicie bezpłatne!
               </div>
             </div>
           )}
@@ -503,7 +529,7 @@ function FreeRegistrationContent() {
 
           <div className="w-full grid grid-cols-2 pt-4 text-xs font-bold border-b border-slate-200">
             <div className={`pb-2 border-b-2 ${step === 1 ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-400'}`}>
-              1. WYBIERZ ZAJĘCIA
+              1. WYBIERZ DARMOWE ZAJĘCIA
             </div>
             <div className={`pb-2 border-b-2 ${step === 2 ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-400'}`}>
               2. PRZEDSTAW SIĘ
@@ -520,7 +546,7 @@ function FreeRegistrationContent() {
         {step === 1 && (
           <div className="space-y-4">
             <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-xs text-sky-900 font-medium text-center">
-              Cześć! Bardzo się cieszymy, że chcesz do nas dołączyć! Wybierz datę i zajęcia, na które chcesz się zapisać.
+              Wybierz datę i zajęcia z poniższego grafiku, na które chcesz bezpłatnie przyjść:
             </div>
 
             <div className="flex justify-between items-center bg-slate-100 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-800">
@@ -550,17 +576,22 @@ function FreeRegistrationContent() {
                   <div 
                     key={idx}
                     onClick={() => handleSelectClass(cls)}
-                    className="bg-white border border-slate-200 hover:border-sky-400 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group"
+                    className="bg-white border border-slate-200 hover:border-emerald-500 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group hover:shadow-md"
                   >
-                    <div>
-                      <h4 className="font-bold text-xs text-slate-900 group-hover:text-sky-600">
-                        {cls.title ?? cls.nazwa ?? 'Zajęcia'}
-                      </h4>
-                      <span className="text-[11px] text-slate-500">• Prowadzący: {cls.trainer ?? cls.prowadzacy ?? 'Brak'}</span>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-xs text-slate-900 group-hover:text-emerald-700">
+                          {cls.title ?? cls.nazwa ?? 'Zajęcia'}
+                        </h4>
+                        <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider">
+                          Darmowy Trening
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 block">• Prowadzący: {cls.trainer ?? cls.prowadzacy ?? 'Brak'}</span>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 shrink-0">
                       <span className="text-xs font-semibold text-slate-700">{cls.time ?? cls.godzina ?? cls.start ?? ''}</span>
-                      <span className="text-slate-400 group-hover:text-sky-600">→</span>
+                      <span className="text-slate-400 group-hover:text-emerald-600 font-bold">→</span>
                     </div>
                   </div>
                 ))
@@ -575,8 +606,13 @@ function FreeRegistrationContent() {
 
         {step === 2 && (
           <form onSubmit={handleRegisterAndLogin} className="space-y-4 text-xs">
-            <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-xs text-sky-900 font-medium text-center">
-              Wybrane zajęcia: <span className="font-bold">{selectedClass?.title}</span>, {selectedClass?.date} o {selectedClass?.time}. Świetnie! Teraz daj nam proszę znać trochę o sobie i widzimy się na zajęciach!
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-950 font-medium text-center space-y-1">
+              <div>
+                Wybrane darmowe zajęcia: <span className="font-black text-emerald-900">{selectedClass?.title}</span>, {selectedClass?.date} o {selectedClass?.time}.
+              </div>
+              <div className="text-[11px] text-emerald-800 font-bold">
+                Cena: 0.00 PLN (Wstęp bezpłatny)
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -636,9 +672,9 @@ function FreeRegistrationContent() {
               </button>
               <button 
                 type="submit" disabled={isLoading}
-                className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-bold py-3 rounded-xl shadow-md transition-colors disabled:opacity-70 cursor-pointer"
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition-colors disabled:opacity-70 cursor-pointer"
               >
-                {isLoading ? 'Zapisywanie na zajęcia...' : '📅 ZAPISZ NA ZAJĘCIA'}
+                {isLoading ? 'Zapisywanie na zajęcia...' : '🎟️ ZAPISZ NA DARMOWY TRENING'}
               </button>
             </div>
           </form>
@@ -686,7 +722,7 @@ function FreeRegistrationContent() {
                 Rejestracja udana!
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Twoje konto zostało utworzone, a miejsce na bezpłatnych zajęciach (<strong className="text-slate-900">{selectedClass?.title}</strong>) zostało zarezerwowane. Możesz się teraz zalogować i korzystać z aplikacji.
+                Twoje konto zostało utworzone, a bezpłatne wejście na zajęcia (<strong className="text-slate-900">{selectedClass?.title}</strong>) zostało zarezerwowane.
               </p>
               <div className="bg-sky-50 border border-sky-200 rounded-xl p-2.5 font-mono font-bold text-sky-950 text-xs break-all">
                 {email}
