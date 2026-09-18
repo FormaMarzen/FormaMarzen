@@ -692,9 +692,24 @@ export default function KarnetyPage() {
     };
   };
 
-  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW
+  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW (W TYM DYNAMICZNY BONUS DLA POLECONEGO Z AMBASSADOR_TIERS)
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number, targetPassNameToCheck?: string) => {
-    if (!client) return { percent: 0, label: '', type: 'none', isBirthday: false, continuityPercent: 0, birthdayPercent: 0, daysLeftBirthday: 0, isBirthdayUsedThisYear: false, ambassadorPercent: 0, ambassadorTierName: '', isPassQualifiedForAmbassador: true };
+    if (!client) return { 
+      percent: 0, 
+      label: '', 
+      type: 'none', 
+      isBirthday: false, 
+      continuityPercent: 0, 
+      birthdayPercent: 0, 
+      daysLeftBirthday: 0, 
+      isBirthdayUsedThisYear: false, 
+      ambassadorPercent: 0, 
+      ambassadorTierName: '', 
+      isPassQualifiedForAmbassador: true,
+      refereePercent: 0,
+      refereeTierName: '',
+      isPassQualifiedForReferee: true
+    };
     
     const bStatus = checkBirthdayStatus(client.birthDate || client.Urodziny || client.urodziny || client['Data urodzenia'], client.urodziny_rabat_rok);
     
@@ -728,6 +743,35 @@ export default function KarnetyPage() {
       }
     }
 
+    // OBSŁUGA DYNAMICZNEGO RABATU POWITALNEGO DLA OSOBY Z POLECENIA Z TABELI AMBASSADOR_TIERS
+    const rawRefereeDiscountVal = Number(client.refereeDiscountPercent) || 0;
+    const refereeTierName = client.refereeTierName || '';
+    const refereeTargetPass = (client.refereeTargetPass || 'all').toLowerCase().trim();
+
+    // Rabat powitalny przysługuje osobie z polecenia przed zakupem pierwszego płatnego karnetu
+    const hasBoughtPaidPass = Array.isArray(client.karnetyKlubowicza) && client.karnetyKlubowicza.some((k: any) => {
+      const price = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+      return price > 0;
+    });
+
+    let refereeDiscountVal = 0;
+    let isPassQualifiedForReferee = true;
+
+    if (rawRefereeDiscountVal > 0 && !hasBoughtPaidPass) {
+      const passNameLower = (targetPassNameToCheck || '').toLowerCase().trim();
+
+      if (refereeTargetPass !== 'all' && refereeTargetPass !== '') {
+        if (passNameLower && !passNameLower.includes(refereeTargetPass)) {
+          isPassQualifiedForReferee = false;
+          refereeDiscountVal = 0;
+        } else {
+          refereeDiscountVal = rawRefereeDiscountVal;
+        }
+      } else {
+        refereeDiscountVal = rawRefereeDiscountVal;
+      }
+    }
+
     let totalPercent = 0;
     let labelParts: string[] = [];
 
@@ -749,11 +793,16 @@ export default function KarnetyPage() {
       labelParts.push(`${ambassadorDiscountVal}% Ambasador${ambassadorTierName ? ` (${ambassadorTierName})` : ''}`);
     }
 
+    if (refereeDiscountVal > 0) {
+      totalPercent += refereeDiscountVal;
+      labelParts.push(`${refereeDiscountVal}% Rabat z polecenia Ambasadora${refereeTierName ? ` (${refereeTierName})` : ''}`);
+    }
+
     if (totalPercent > 0) {
       return {
         percent: Math.min(100, totalPercent),
         label: `(-${Math.min(100, totalPercent)}% ${labelParts.join(' + ')})`,
-        type: ambassadorDiscountVal > 0 ? 'ambassador' : (birthdayDiscountVal > 0 ? 'birthday' : (manualDiscountVal > 0 ? 'manual' : 'system')),
+        type: refereeDiscountVal > 0 ? 'referee' : (ambassadorDiscountVal > 0 ? 'ambassador' : (birthdayDiscountVal > 0 ? 'birthday' : (manualDiscountVal > 0 ? 'manual' : 'system'))),
         isBirthday: birthdayDiscountVal > 0,
         continuityPercent: continuityDiscountVal,
         birthdayPercent: birthdayDiscountVal,
@@ -761,7 +810,10 @@ export default function KarnetyPage() {
         isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
         ambassadorPercent: ambassadorDiscountVal,
         ambassadorTierName: ambassadorTierName,
-        isPassQualifiedForAmbassador
+        isPassQualifiedForAmbassador,
+        refereePercent: refereeDiscountVal,
+        refereeTierName: refereeTierName,
+        isPassQualifiedForReferee
       };
     }
 
@@ -776,7 +828,10 @@ export default function KarnetyPage() {
       isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
       ambassadorPercent: 0,
       ambassadorTierName: '',
-      isPassQualifiedForAmbassador
+      isPassQualifiedForAmbassador,
+      refereePercent: 0,
+      refereeTierName: '',
+      isPassQualifiedForReferee
     };
   };
   const calculateContractProRata = (baseMonthlyPrice: number) => {
@@ -1139,6 +1194,38 @@ export default function KarnetyPage() {
               }
             } catch(e) {}
 
+            // DYNAMICZNE POBIERANIE RABATU DLA OSOBY Z POLECENIA (REFEREE) Z BAZY AMBASSADOR_TIERS
+            let refDiscountPercent = 0;
+            let refTierName = '';
+            let refTargetPass = 'all';
+
+            if (c.referred_by && ambassadorTiersList.length > 0) {
+              try {
+                const { data: referrerQualifiedRefs } = await supabase
+                  .from('referrals')
+                  .select('id')
+                  .eq('referrer_id', c.referred_by)
+                  .eq('is_qualified', true);
+
+                const referrerRefCount = referrerQualifiedRefs ? referrerQualifiedRefs.length : 0;
+
+                let matchedTier = ambassadorTiersList[0];
+                for (const t of ambassadorTiersList) {
+                  if (referrerRefCount >= t.required_referrals) {
+                    matchedTier = t;
+                  }
+                }
+
+                if (matchedTier) {
+                  refDiscountPercent = Number(matchedTier.referee_discount_percent) || 0;
+                  refTierName = matchedTier.name || '';
+                  refTargetPass = matchedTier.target_pass_name || 'all';
+                }
+              } catch (e) {
+                console.error('Błąd pobierania rabatu powitalnego dla osoby z polecenia:', e);
+              }
+            }
+
             let displayWallet = `${currentWalletAmount.toFixed(2)} PLN`;
 
             return {
@@ -1164,7 +1251,10 @@ export default function KarnetyPage() {
               ambassadorDiscountPercent: ambDiscountPercent,
               ambassadorTierName: ambTierName,
               ambassadorTargetPass: ambTargetPass,
-              qualifiedReferralsCount: qualifiedCount
+              qualifiedReferralsCount: qualifiedCount,
+              refereeDiscountPercent: refDiscountPercent,
+              refereeTierName: refTierName,
+              refereeTargetPass: refTargetPass
             };
           }));
           
@@ -1219,7 +1309,10 @@ export default function KarnetyPage() {
                  ambassadorDiscountPercent: 0,
                  ambassadorTierName: '',
                  ambassadorTargetPass: 'all',
-                 qualifiedReferralsCount: 0
+                 qualifiedReferralsCount: 0,
+                 refereeDiscountPercent: 0,
+                 refereeTierName: '',
+                 refereeTargetPass: 'all'
                };
              }
              globalCreatingLock = false;
@@ -1763,6 +1856,7 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2086,7 +2180,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -2816,7 +2909,9 @@ export default function KarnetyPage() {
         {!birthdayStatus.isBirthdayWindow && effectiveDiscount.percent > 0 && (
           <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-4 flex items-center justify-between shadow-sm">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">{effectiveDiscount.ambassadorPercent > 0 ? '🏆' : '🏷️'}</span>
+              <span className="text-2xl">
+                {effectiveDiscount.refereePercent > 0 ? '🎁' : effectiveDiscount.ambassadorPercent > 0 ? '🏆' : '🏷️'}
+              </span>
               <div>
                 <div className="font-black text-xs uppercase tracking-wider flex items-center gap-2 flex-wrap">
                   <span>Twój aktywny rabat: {effectiveDiscount.percent}%</span>
@@ -2825,9 +2920,16 @@ export default function KarnetyPage() {
                       Ambasador: {effectiveDiscount.ambassadorTierName || 'Aktywny'} (-{effectiveDiscount.ambassadorPercent}%)
                     </span>
                   )}
+                  {effectiveDiscount.refereePercent > 0 && (
+                    <span className="bg-amber-200 text-amber-950 px-2 py-0.5 rounded text-[10px] font-black uppercase">
+                      Bonus z polecenia: {effectiveDiscount.refereeTierName || 'Powitalny'} (-{effectiveDiscount.refereePercent}%)
+                    </span>
+                  )}
                 </div>
                 <div className="text-[11px] text-emerald-700 mt-0.5">
-                  {effectiveDiscount.ambassadorPercent > 0 
+                  {effectiveDiscount.refereePercent > 0
+                    ? `Otrzymujesz rabat powitalny dla nowego klubowicza z polecenia Ambasadora na zakup pierwszego karnetu.`
+                    : effectiveDiscount.ambassadorPercent > 0 
                     ? `Zniżka z Programu Ambasador została naliczona i łączy się z Twoimi rabatami klubowicza.` 
                     : effectiveDiscount.type === 'manual' 
                     ? 'Przypisano indywidualny rabat stały do Twojego konta.' 
@@ -3151,6 +3253,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
+
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
@@ -3461,6 +3564,12 @@ export default function KarnetyPage() {
                     </div>
                   )}
 
+                  {!effectiveDiscount.isPassQualifiedForReferee && effectiveDiscount.refereePercent > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
+                      ℹ️ Twój rabat powitalny z polecenia ({effectiveDiscount.refereePercent}%) przysługuje na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
+                    </div>
+                  )}
+
                   {!isBonus13Period && finalPrice > 0 && (
                     <div className="space-y-1 mt-2">
                       <label className="font-bold text-slate-700 block">Masz kod rabatowy?</label>
@@ -3667,6 +3776,12 @@ export default function KarnetyPage() {
                   {!effectiveDiscount.isPassQualifiedForAmbassador && effectiveDiscount.ambassadorPercent > 0 && (
                     <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
                       ℹ️ Twój rabat Ambasador ({effectiveDiscount.ambassadorPercent}%) przysługuje wyłącznie na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
+                    </div>
+                  )}
+
+                  {!effectiveDiscount.isPassQualifiedForReferee && effectiveDiscount.refereePercent > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
+                      ℹ️ Twój rabat powitalny z polecenia ({effectiveDiscount.refereePercent}%) przysługuje na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
                     </div>
                   )}
 
@@ -3878,7 +3993,6 @@ export default function KarnetyPage() {
       </div>
     );
   }
-
   // PANEL ADMINISTRATORA / TRENERA
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased relative">
