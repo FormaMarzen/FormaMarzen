@@ -32,7 +32,7 @@ import {
 export interface Product {
   id: string;
   name: string;
-  category: 'Odzież' | 'Suplementy' | 'Akcesoria' | 'Gadżety';
+  category: string;
   price: number;
   description: string;
   image_url: string;
@@ -56,7 +56,7 @@ interface OrderFormData {
 
 interface ProductFormData {
   name: string;
-  category: 'Odzież' | 'Suplementy' | 'Akcesoria' | 'Gadżety';
+  category: string;
   price: string;
   description: string;
   image_url: string;
@@ -65,12 +65,12 @@ interface ProductFormData {
   is_active: boolean;
 }
 
-const CATEGORIES: ('Wszystko' | 'Odzież' | 'Suplementy' | 'Akcesoria' | 'Gadżety')[] = [
-  'Wszystko',
+const DEFAULT_CATEGORIES: string[] = [
   'Odzież',
   'Suplementy',
   'Akcesoria',
-  'Gadżety'
+  'Gadżety',
+  'Usługi'
 ];
 
 const INITIAL_PRODUCT_FORM: ProductFormData = {
@@ -85,7 +85,7 @@ const INITIAL_PRODUCT_FORM: ProductFormData = {
 };
 
 export default function ShopPage() {
-  // --- WYMUSZENIE ODŚWIEŻENIA PWA (CACHE BUSTER) ---
+  // Wymuszenie aktualizacji Service Workera PWA
   useEffect(() => {
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then((registrations) => {
@@ -140,7 +140,22 @@ export default function ShopPage() {
   const [savingProduct, setSavingProduct] = useState<boolean>(false);
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
-  // Weryfikacja konta w tle
+  // Dynamiczna lista kategorii bazująca na domyślnych + unikalnych z bazy produktów
+  const availableCategories = useMemo(() => {
+    const set = new Set<string>(DEFAULT_CATEGORIES);
+    products.forEach((p) => {
+      if (p.category && p.category.trim()) {
+        set.add(p.category.trim());
+      }
+    });
+    return Array.from(set);
+  }, [products]);
+
+  const filterCategories = useMemo(() => {
+    return ['Wszystko', ...availableCategories];
+  }, [availableCategories]);
+
+  // Weryfikacja konta administratora
   useEffect(() => {
     const verifyAdmin = async () => {
       try {
@@ -168,7 +183,7 @@ export default function ShopPage() {
           }
         }
       } catch (e) {
-        console.error('Weryfikacja admina:', e);
+        console.error('Weryfikacja uprawnień admina:', e);
       }
     };
 
@@ -218,7 +233,7 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie z uwzględnieniem trybu klubowicza
+  // Filtrowanie produktów
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isAdmin || !adminEditMode) {
@@ -226,15 +241,16 @@ export default function ShopPage() {
       }
 
       const matchesCategory =
-        selectedCategory === 'Wszystko' || item.category === selectedCategory;
+        selectedCategory === 'Wszystko' || item.category.toLowerCase() === selectedCategory.toLowerCase();
       const matchesSearch =
         item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase());
+        item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.category.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     });
   }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
 
-  // Koszyk
+  // Obsługa koszyka
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -360,7 +376,7 @@ export default function ShopPage() {
     setEditingProductId(product.id);
     setProductForm({
       name: product.name,
-      category: product.category,
+      category: product.category || 'Odzież',
       price: product.price.toString(),
       description: product.description || '',
       image_url: product.image_url || '',
@@ -378,9 +394,14 @@ export default function ShopPage() {
 
     const priceNum = parseFloat(productForm.price.replace(',', '.'));
     const stockNum = parseInt(productForm.stock, 10);
+    const trimmedCategory = productForm.category.trim();
 
     if (!productForm.name.trim()) {
       setProductModalError('Nazwa produktu jest wymagana.');
+      return;
+    }
+    if (!trimmedCategory) {
+      setProductModalError('Kategoria produktu jest wymagana.');
       return;
     }
     if (isNaN(priceNum) || priceNum < 0) {
@@ -397,7 +418,7 @@ export default function ShopPage() {
 
       const payload = {
         name: productForm.name.trim(),
-        category: productForm.category,
+        category: trimmedCategory,
         price: priceNum,
         description: productForm.description.trim(),
         image_url: productForm.image_url.trim(),
@@ -473,7 +494,7 @@ export default function ShopPage() {
   return (
     <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
       
-      {/* Ostry nagłówek bez nakładania się i bez rozmycia */}
+      {/* Nagłówek sklepu */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
@@ -525,7 +546,7 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – pełne zarządzanie cenami, stanem i publikacją' 
+                    ? 'Tryb edycji aktywny – pełne zarządzanie cenami, kategoriami, stanem i publikacją' 
                     : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
@@ -560,13 +581,13 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Wyszukiwarka i kategorie */}
+      {/* Wyszukiwarka i dynamiczne kategorie */}
       <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <input
             type="text"
-            placeholder="Szukaj odzieży, suplementów, akcesoriów..."
+            placeholder="Szukaj odzieży, suplementów, usług..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 py-2.5 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
@@ -582,12 +603,12 @@ export default function ShopPage() {
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-none">
-          {CATEGORIES.map((cat) => (
+          {filterCategories.map((cat) => (
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
               className={`whitespace-nowrap rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all ${
-                selectedCategory === cat
+                selectedCategory.toLowerCase() === cat.toLowerCase()
                   ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
                   : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
               }`}
@@ -658,7 +679,7 @@ export default function ShopPage() {
                       )}
                     </div>
 
-                    {/* Przyciski operacyjne administratora na karcie */}
+                    {/* Narzędzia edycji na kafelku */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
@@ -731,7 +752,7 @@ export default function ShopPage() {
             ))
           ) : (
             <div className="col-span-full py-16 text-center">
-              <p className="text-base text-zinc-400">Brak artykułów spełniających kryteria.</p>
+              <p className="text-base text-zinc-400">Brak artykułów w tej kategorii.</p>
               <button
                 onClick={() => {
                   setSelectedCategory('Wszystko');
@@ -746,7 +767,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Edycji i Tworzenia Produktu */}
+      {/* Modal Edycji i Tworzenia Produktu z edycją kategorii */}
       {isProductModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl my-8">
@@ -778,7 +799,7 @@ export default function ShopPage() {
                 <input
                   type="text"
                   required
-                  placeholder="np. Koszulka Techniczna FORMA MARZEŃ"
+                  placeholder="np. Analiza Składu Ciała"
                   value={productForm.name}
                   onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
@@ -786,20 +807,28 @@ export default function ShopPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                {/* Pole kategorii z możliwością wyboru lub wpisania nowej */}
                 <div>
-                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                    Kategoria *
-                  </label>
-                  <select
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold uppercase tracking-wider text-zinc-300">
+                      Kategoria *
+                    </label>
+                    <span className="text-[10px] text-amber-400">Wpisz lub wybierz</span>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    list="category-options-list"
+                    placeholder="Wpisz lub wybierz..."
                     value={productForm.category}
-                    onChange={(e) => setProductForm({ ...productForm, category: e.target.value as any })}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none"
-                  >
-                    <option value="Odzież">Odzież</option>
-                    <option value="Suplementy">Suplementy</option>
-                    <option value="Akcesoria">Akcesoria</option>
-                    <option value="Gadżety">Gadżety</option>
-                  </select>
+                    onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none"
+                  />
+                  <datalist id="category-options-list">
+                    {availableCategories.map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
                 </div>
 
                 <div>
