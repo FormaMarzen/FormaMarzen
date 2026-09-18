@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase } from '../raporty/klienci/supabase';
 import { 
   Search, 
   ShoppingBag, 
@@ -79,7 +79,6 @@ export default function ShopPage() {
     paymentMethod: 'blik',
   });
 
-  // Pobieranie produktów z bazy Supabase
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -108,7 +107,6 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Synchronizacja koszyka z localStorage
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -128,7 +126,6 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie asortymentu
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       const matchesCategory =
@@ -140,7 +137,6 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery]);
 
-  // Operacje na koszyku
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -185,7 +181,6 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Składanie zamówienia do tabeli orders i order_items
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -198,7 +193,6 @@ export default function ShopPage() {
     try {
       setIsCheckingOut(true);
 
-      // 1. Zapis rekordu zamówienia w tabeli orders
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
         .insert([
@@ -219,7 +213,6 @@ export default function ShopPage() {
         throw new Error(orderError?.message || 'Błąd zapisu zamówienia.');
       }
 
-      // 2. Zapis pozycji w tabeli order_items
       const orderItems = cart.map((item) => ({
         order_id: orderData.id,
         product_id: item.product.id,
@@ -236,7 +229,6 @@ export default function ShopPage() {
         throw new Error(itemsError.message);
       }
 
-      // 3. Sukces i czyszczenie koszyka
       setOrderSuccess(true);
       setCart([]);
       localStorage.removeItem('fm_shop_cart');
@@ -264,7 +256,6 @@ export default function ShopPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 pb-24">
-      {/* Pasek nawigacyjny sklepu */}
       <header className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/85 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
@@ -298,9 +289,7 @@ export default function ShopPage() {
         </div>
       </header>
 
-      {/* Główny obszar roboczy */}
       <main className="mx-auto max-w-7xl px-4 pt-8 sm:px-6 lg:px-8">
-        {/* Szukajka i kategorie */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -338,7 +327,6 @@ export default function ShopPage() {
           </div>
         </div>
 
-        {/* Stan ładowania / błędów */}
         {loading && (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
@@ -353,7 +341,6 @@ export default function ShopPage() {
           </div>
         )}
 
-        {/* Siatka produktów */}
         {!loading && !error && (
           <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {filteredProducts.length > 0 ? (
@@ -436,7 +423,6 @@ export default function ShopPage() {
         )}
       </main>
 
-      {/* Drawer Koszyka / Realizacji Zamówienia */}
       {isCartOpen && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div
@@ -480,7 +466,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 1: Podgląd artykułów w koszyku */}
               {checkoutStep === 'cart' && (
                 <div className="mt-4 max-h-[55vh] space-y-4 overflow-y-auto pr-1">
                   {cart.length > 0 ? (
@@ -547,7 +532,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 2: Formularz wysyłki i wyboru metody płatności */}
               {checkoutStep === 'form' && (
                 <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
@@ -638,7 +622,6 @@ export default function ShopPage() {
               )}
             </div>
 
-            {/* Stopka podsumowania */}
             {cart.length > 0 && (
               <div className="border-t border-zinc-800 pt-4">
                 <div className="mb-4 space-y-1.5 text-sm">
