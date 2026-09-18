@@ -141,8 +141,8 @@ function FreeRegistrationContent() {
   const fetchGrafik = useCallback(async (date: Date) => {
     const dateStr = date.toISOString().split('T')[0];
     const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
-    const dayStrPadded = String(date.getDate()).padStart(2, '0');
-    const monthStrPadded = String(date.getMonth() + 1).padStart(2, '0');
+    const dayNum = date.getDate();
+    const monthNum = date.getMonth() + 1;
 
     try {
       // Równoległe pobranie zajęć cyklicznych, jednorazowych oraz aktualnych zapisów
@@ -152,11 +152,19 @@ function FreeRegistrationContent() {
         supabase.from('zapisy_zajec').select('class_key')
       ]);
 
-      // Zliczamy zajęte miejsca dla każdego klucza zajęć
+      // Zliczamy zajęte miejsca z uwzględnieniem normalizacji (odporność na zera wiodące typu 18/9 vs 18/09)
       const bookingCounts: { [key: string]: number } = {};
       (zapisy || []).forEach((s: any) => {
-        if (s.class_key) {
-          bookingCounts[s.class_key] = (bookingCounts[s.class_key] || 0) + 1;
+        if (!s.class_key) return;
+        const parts = s.class_key.split('_');
+        if (parts.length >= 2) {
+          const clsId = parts[0];
+          const datePart = parts[1]; // np. 18/9 lub 18/09
+          const [dStr, mStr] = datePart.split('/');
+          if (dStr && mStr) {
+            const normalizedKey = `${clsId}_${parseInt(dStr, 10)}/${parseInt(mStr, 10)}`;
+            bookingCounts[normalizedKey] = (bookingCounts[normalizedKey] || 0) + 1;
+          }
         }
       });
 
@@ -169,9 +177,9 @@ function FreeRegistrationContent() {
 
       // Mapowanie dostępności i limitów miejsc
       let processedCombined = combined.map(c => {
-        const cKey = `${c.id}_${dayStrPadded}/${monthStrPadded}`;
-        const bookedCount = bookingCounts[cKey] || 0;
-        const limit = c.limit !== undefined && c.limit !== null ? Number(c.limit) : 20;
+        const normalizedKey = `${c.id}_${dayNum}/${monthNum}`;
+        const bookedCount = bookingCounts[normalizedKey] || 0;
+        const limit = c.limit !== undefined && c.limit !== null ? Number(c.limit) : 12;
         const isFull = bookedCount >= limit;
 
         return {
@@ -325,8 +333,10 @@ function FreeRegistrationContent() {
       const newClientId = Date.now();
       const todayIsoStr = new Date().toISOString().split('T')[0];
       const selectedClassDateIso = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
+      
+      // Konstrukcja class_key spójna z resztą aplikacji (bez zer wiodących)
       const classKey = selectedClass?.id 
-        ? `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`
+        ? `${selectedClass.id}_${currentDate.getDate()}/${currentDate.getMonth() + 1}`
         : null;
 
       // 2. Operacje bazodanowe
