@@ -335,6 +335,9 @@ export default function AmbasadorKlubowiczPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {tiers.map((tier) => {
             const isUnlocked = qualifiedReferralsCount >= tier.required_referrals;
+            const formattedRefereeReward = tier.referee_reward_description
+              ? tier.referee_reward_description.replace(/^-\s*/, '')
+              : 'rabat powitalny';
 
             return (
               <div 
@@ -391,8 +394,8 @@ export default function AmbasadorKlubowiczPage() {
                     <div className="text-[10px] font-black uppercase text-sky-900 mb-1">
                       🤝 Dla znajomego:
                     </div>
-                    <div className="text-xs font-medium text-slate-700 leading-snug">
-                      Darmowy pierwszy trening próbny + rabat powitalny
+                    <div className="text-xs font-bold text-slate-800 leading-snug">
+                      Darmowy pierwszy trening próbny + {formattedRefereeReward}
                     </div>
                   </div>
                 </div>
