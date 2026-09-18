@@ -145,25 +145,39 @@ function FreeRegistrationContent() {
     const targetMonth = date.getMonth() + 1;
 
     try {
-      // Równoległe pobranie zajęć cyklicznych, jednorazowych oraz aktualnych zapisów z bazy
+      // Pobieramy grafik cykliczny, jednorazowe zajęcia oraz wszystkie zapisy
       const [{ data: cykliczne }, { data: jednorazowe }, { data: zapisy }] = await Promise.all([
         supabase.from('grafik_zajec').select('*'),
         supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr),
         supabase.from('zapisy_zajec').select('class_key')
       ]);
 
+      // Tworzymy mapę szablonów cyklicznych (nazwa + godzina -> ID szablonu w grafik_zajec)
+      const templateMap = new Map<string, string>();
+      (cykliczne || []).forEach((c: any) => {
+        const cTitle = (c.title || c.nazwa || '').trim().toLowerCase();
+        const cTime = (c.start || c.start_time || '').trim();
+        if (cTitle && cTime) {
+          templateMap.set(`${cTitle}_${cTime}`, String(c.id));
+        }
+      });
+
       const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
       
       let combined: ClassItem[] = [
-        ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
-        ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
+        ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy, isOneOff: false })),
+        ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy, isOneOff: true }))
       ];
 
-      // Mapowanie dostępności i limitów miejsc z odporną na formatowanie weryfikacją zapisów
+      // Precyzyjne zliczanie miejsc z uwzględnieniem powiązań jednorazowych z szablonami
       let processedCombined = combined.map(c => {
-        const targetId = String(c.id);
+        const cId = String(c.id);
+        const cTitle = (c.title || c.nazwa || '').trim().toLowerCase();
+        const cTime = (c.time || c.godzina || c.start || '').trim();
+        
+        // Znajdujemy odpowiednie ID do sprawdzenia w zapisach (szukamy po ID bezpośrednim lub szablonie powiązanym)
+        const templateId = templateMap.get(`${cTitle}_${cTime}`);
 
-        // Precyzyjne zliczanie dopasowań z bazy (ignorując zera wiodące w miesiącu/dniu)
         const bookedCount = (zapisy || []).filter((s: any) => {
           if (!s.class_key) return false;
           const parts = s.class_key.split('_');
@@ -173,11 +187,11 @@ function FreeRegistrationContent() {
           const [dStr, mStr] = datePart.split('/');
           if (!dStr || !mStr) return false;
           
-          return (
-            String(sId) === targetId &&
-            parseInt(dStr, 10) === targetDay &&
-            parseInt(mStr, 10) === targetMonth
-          );
+          const isSameDate = parseInt(dStr, 10) === targetDay && parseInt(mStr, 10) === targetMonth;
+          if (!isSameDate) return false;
+
+          // Sprawdzamy czy ID pasuje bezpośrednio lub przez powiązany szablon cykliczny
+          return String(sId) === cId || (templateId && String(sId) === templateId);
         }).length;
 
         const limit = c.limit !== undefined && c.limit !== null ? Number(c.limit) : 12;
@@ -335,7 +349,6 @@ function FreeRegistrationContent() {
       const todayIsoStr = new Date().toISOString().split('T')[0];
       const selectedClassDateIso = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
       
-      // Konstrukcja class_key spójna z resztą aplikacji (bez zer wiodących)
       const classKey = selectedClass?.id 
         ? `${selectedClass.id}_${currentDate.getDate()}/${currentDate.getMonth() + 1}`
         : null;
