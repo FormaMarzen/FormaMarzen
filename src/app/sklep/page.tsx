@@ -89,23 +89,20 @@ export default function ShopPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Natychmiastowa autoryzacja administratora
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
       const storedEmail = (localStorage.getItem('fm_user_email') || '').toLowerCase();
       return storedRole === 'admin' || storedEmail.includes('maciejklaput') || storedEmail.includes('klaput');
     }
-    return true; // Domyślnie w panelu administratora
+    return true;
   });
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
-  // Wyszukiwanie i filtrowanie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
-  // Koszyk
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
@@ -113,7 +110,6 @@ export default function ShopPage() {
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Formularz zamówienia
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
@@ -122,14 +118,12 @@ export default function ShopPage() {
     paymentMethod: 'blik',
   });
 
-  // Modal zarządzania produktem
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<ProductFormData>(INITIAL_PRODUCT_FORM);
   const [savingProduct, setSavingProduct] = useState<boolean>(false);
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
-  // Weryfikacja konta w tle
   useEffect(() => {
     const verifyAdmin = async () => {
       try {
@@ -164,7 +158,6 @@ export default function ShopPage() {
     verifyAdmin();
   }, []);
 
-  // Pobieranie asortymentu
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -189,7 +182,6 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pamięć podręczna koszyka
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -207,7 +199,6 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie z uwzględnieniem trybu klubowicza
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isAdmin || !adminEditMode) {
@@ -223,7 +214,6 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
 
-  // Koszyk
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -265,7 +255,6 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Składanie zamówienia
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -337,7 +326,6 @@ export default function ShopPage() {
     }
   };
 
-  // Funkcje administratora
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
@@ -462,7 +450,7 @@ export default function ShopPage() {
   return (
     <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
       
-      {/* Czysty i ostry nagłówek bez rozmycia */}
+      {/* Pasek nagłówka sklepu (bez rozmycia i bez sticky) */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
@@ -502,7 +490,7 @@ export default function ShopPage() {
         </button>
       </div>
 
-      {/* Złoty Panel Administratora */}
+      {/* Panel Zarządzania Administratora */}
       {isAdmin && (
         <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -647,7 +635,6 @@ export default function ShopPage() {
                       )}
                     </div>
 
-                    {/* Przyciski operacyjne administratora na karcie */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
