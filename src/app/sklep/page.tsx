@@ -85,11 +85,22 @@ const INITIAL_PRODUCT_FORM: ProductFormData = {
 };
 
 export default function ShopPage() {
+  // --- WYMUSZENIE ODŚWIEŻENIA PWA (CACHE BUSTER) ---
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        registrations.forEach((registration) => {
+          registration.update();
+        });
+      });
+    }
+  }, []);
+
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Natychmiastowe przyznanie roli administratora
+  // Natychmiastowa autoryzacja administratora
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
@@ -157,14 +168,14 @@ export default function ShopPage() {
           }
         }
       } catch (e) {
-        console.error('Weryfikacja uprawnień admina:', e);
+        console.error('Weryfikacja admina:', e);
       }
     };
 
     verifyAdmin();
   }, []);
 
-  // Pobieranie produktów z Supabase
+  // Pobieranie asortymentu
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -207,7 +218,7 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie produktów
+  // Filtrowanie z uwzględnieniem trybu klubowicza
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isAdmin || !adminEditMode) {
@@ -647,6 +658,7 @@ export default function ShopPage() {
                       )}
                     </div>
 
+                    {/* Przyciski operacyjne administratora na karcie */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
