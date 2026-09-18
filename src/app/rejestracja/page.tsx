@@ -141,78 +141,71 @@ function FreeRegistrationContent() {
   const fetchGrafik = useCallback(async (date: Date) => {
     const dateStr = date.toISOString().split('T')[0];
     const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
-    const targetDay = date.getDate();
-    const targetMonth = date.getMonth() + 1;
+    const dayNum = date.getDate();
+    const monthNum = date.getMonth() + 1;
 
     try {
-      // Pobieramy grafik cykliczny, jednorazowe zajęcia oraz wszystkie zapisy
-      const [{ data: cykliczne }, { data: jednorazowe }, { data: zapisy }] = await Promise.all([
+      const [{ data: cykliczne }, { data: jednorazowe }] = await Promise.all([
         supabase.from('grafik_zajec').select('*'),
-        supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr),
-        supabase.from('zapisy_zajec').select('class_key')
+        supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr)
       ]);
-
-      // Tworzymy mapę szablonów cyklicznych (nazwa + godzina -> ID szablonu w grafik_zajec)
-      const templateMap = new Map<string, string>();
-      (cykliczne || []).forEach((c: any) => {
-        const cTitle = (c.title || c.nazwa || '').trim().toLowerCase();
-        const cTime = (c.start || c.start_time || '').trim();
-        if (cTitle && cTime) {
-          templateMap.set(`${cTitle}_${cTime}`, String(c.id));
-        }
-      });
 
       const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
       
       let combined: ClassItem[] = [
-        ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy, isOneOff: false })),
-        ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy, isOneOff: true }))
+        ...dzisiejszeCykliczne.map(c => ({ ...c, title: c.title || c.nazwa, time: c.start || c.start_time, trainer: c.trainer || c.prowadzacy })),
+        ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
       ];
 
-      // Precyzyjne zliczanie miejsc z uwzględnieniem powiązań jednorazowych z szablonami
+      // Wygenerowanie wszystkich możliwych wariantów class_key dla zajęć z tego dnia, 
+      // aby ominąć domyślny limit 1000 wierszy w Supabase i pobrać dokładne zapisy.
+      const classIds = combined.map(c => String(c.id)).filter(Boolean);
+      const keysToCheck: string[] = [];
+      classIds.forEach(id => {
+        keysToCheck.push(`${id}_${dayNum}/${monthNum}`);
+        keysToCheck.push(`${id}_${dayNum}/${String(monthNum).padStart(2, '0')}`);
+        keysToCheck.push(`${id}_${String(dayNum).padStart(2, '0')}/${monthNum}`);
+        keysToCheck.push(`${id}_${String(dayNum).padStart(2, '0')}/${String(monthNum).padStart(2, '0')}`);
+      });
+
+      let zapisyData: any[] = [];
+      if (keysToCheck.length > 0) {
+        const uniqueKeys = Array.from(new Set(keysToCheck));
+        const { data: signups } = await supabase
+          .from('zapisy_zajec')
+          .select('class_key')
+          .in('class_key', uniqueKeys);
+        zapisyData = signups || [];
+      }
+
       let processedCombined = combined.map(c => {
         const cId = String(c.id);
-        const cTitle = (c.title || c.nazwa || '').trim().toLowerCase();
-        const cTime = (c.time || c.godzina || c.start || '').trim();
         
-        // Znajdujemy odpowiednie ID do sprawdzenia w zapisach (szukamy po ID bezpośrednim lub szablonie powiązanym)
-        const templateId = templateMap.get(`${cTitle}_${cTime}`);
-
-        const bookedCount = (zapisy || []).filter((s: any) => {
-          if (!s.class_key) return false;
-          const parts = s.class_key.split('_');
-          if (parts.length < 2) return false;
-          const sId = parts[0];
-          const datePart = parts[1]; // np. "18/09" lub "18/9"
-          const [dStr, mStr] = datePart.split('/');
-          if (!dStr || !mStr) return false;
-          
-          const isSameDate = parseInt(dStr, 10) === targetDay && parseInt(mStr, 10) === targetMonth;
-          if (!isSameDate) return false;
-
-          // Sprawdzamy czy ID pasuje bezpośrednio lub przez powiązany szablon cykliczny
-          return String(sId) === cId || (templateId && String(sId) === templateId);
-        }).length;
+        // Zliczamy dopasowania rezerwacji dla tych zajęć
+        const matchingSignupsCount = zapisyData.filter(s => s.class_key && s.class_key.startsWith(`${cId}_`) && (
+          s.class_key.endsWith(`_${dayNum}/${monthNum}`) ||
+          s.class_key.endsWith(`_${dayNum}/${String(monthNum).padStart(2, '0')}`) ||
+          s.class_key.endsWith(`_${String(dayNum).padStart(2, '0')}/${monthNum}`) ||
+          s.class_key.endsWith(`_${String(dayNum).padStart(2, '0')}/${String(monthNum).padStart(2, '0')}`)
+        )).length;
 
         const limit = c.limit !== undefined && c.limit !== null ? Number(c.limit) : 12;
-        const isFull = bookedCount >= limit;
+        const isFull = matchingSignupsCount >= limit;
 
         return {
           ...c,
-          bookedCount,
+          bookedCount: matchingSignupsCount,
           limit,
           isFull
         };
       });
 
-      // Sortowanie od najwcześniejszych do najpóźniejszych godzin danego dnia
       processedCombined.sort((a, b) => {
         const timeA = a.time || a.godzina || a.start || '00:00';
         const timeB = b.time || b.godzina || b.start || '00:00';
         return timeA.localeCompare(timeB);
       });
 
-      // Filtrowanie zajęć, które już minęły lub są z dni przeszłych
       const now = new Date();
       const selectedMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
       const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
