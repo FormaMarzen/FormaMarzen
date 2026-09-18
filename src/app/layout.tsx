@@ -251,6 +251,7 @@ export default function RootLayout({
 
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mainScrollRef = useRef<HTMLElement>(null);
   const pathname = usePathname();
   const router = useRouter();
 
@@ -497,7 +498,8 @@ export default function RootLayout({
 
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1 && window.scrollY <= 0) {
+      const isAtTop = mainScrollRef.current ? mainScrollRef.current.scrollTop <= 0 : window.scrollY <= 0;
+      if (e.touches.length === 1 && isAtTop) {
         touchStartY.current = e.touches[0].clientY;
         isPulling.current = true;
       } else {
@@ -507,9 +509,15 @@ export default function RootLayout({
 
     const handleTouchMove = (e: TouchEvent) => {
       if (!isPulling.current || isRefreshing) return;
+      const isAtTop = mainScrollRef.current ? mainScrollRef.current.scrollTop <= 0 : window.scrollY <= 0;
+      if (!isAtTop) {
+        isPulling.current = false;
+        setPullDistance(0);
+        return;
+      }
       const currentY = e.touches[0].clientY;
       const diffY = currentY - touchStartY.current;
-      if (diffY > 0 && window.scrollY <= 0) {
+      if (diffY > 0) {
         setPullDistance(Math.min(diffY * 0.25, 120));
       } else {
         setPullDistance(0);
@@ -1139,32 +1147,6 @@ export default function RootLayout({
     window.location.reload();
   };
 
-  if (!isMounted || (!isPublicPage && isAuthLoading)) {
-    return (
-      <html lang="pl">
-        <head>
-          <title>Forma Marzeń</title>
-          <meta name="description" content="Aplikacja do zarządzania Twoim kontem w klubie Forma Marzeń" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-          <meta name="HandheldFriendly" content="true" />
-          <link rel="icon" href="/favicon.ico?v=3" sizes="any" />
-          <link rel="icon" type="image/png" sizes="32x32" href="/logo.png?v=3" />
-          <link rel="shortcut icon" href="/favicon.ico?v=3" />
-          <link rel="apple-touch-icon" href="/logo.png?v=3" />
-          <link rel="manifest" href="/manifest.json?v=2" />
-          <meta name="theme-color" content="#0284c7" />
-        </head>
-        <body className="min-h-[100dvh] bg-sky-50/50 text-slate-800 flex flex-col items-center justify-center font-sans antialiased h-[100dvh] overflow-hidden">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
-            <div className="text-sky-950 font-black text-sm tracking-wider uppercase animate-pulse">Forma Marzeń</div>
-            <div className="text-slate-500 text-xs font-semibold">Ładowanie profilu...</div>
-          </div>
-        </body>
-      </html>
-    );
-  }
-
   const avatarInitials = profileName
     ? profileName.split(' ').map(n => n[0]).filter(Boolean).join('').substring(0, 2).toUpperCase()
     : 'FM';
@@ -1199,652 +1181,669 @@ export default function RootLayout({
         <meta name="twitter:image" content="https://forma-marzen.vercel.app/og-image.png" />
 
         <link rel="manifest" href="/manifest.json?v=2" />
-        <meta name="theme-color" content="#0284c7" />
+        
+        {/* Kolor status baru dostosowany do białego nagłówka - eliminuje rozmycie i ucięcie na iOS */}
+        <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#ffffff" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Forma Marzeń" />
       </head>
+
       <body className="min-h-[100dvh] bg-sky-50/50 text-slate-800 flex font-sans antialiased h-[100dvh] overflow-hidden w-full">
         
-        <div 
-          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out pt-[env(safe-area-inset-top)]"
-          style={{
-            transform: `translateY(${pullDistance > 0 ? pullDistance : 0}px)`,
-            opacity: pullDistance > 15 ? 1 : 0
-          }}
-        >
-          <div className="bg-sky-950 text-amber-400 px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 border border-sky-800 text-xs font-black">
-            <span className={`text-base inline-block ${isRefreshing ? 'animate-spin' : ''}`} style={{ transform: isRefreshing ? 'none' : `rotate(${pullDistance * 4}deg)` }}>
-              {isRefreshing ? '🔄' : '⬇️'}
-            </span>
-            <span>{isRefreshing ? 'Odświeżanie danych...' : pullDistance >= 90 ? 'Puść, aby odświeżyć' : 'Pociągnij mocniej w dół...'}</span>
+        {/* Ekran ładowania spójny w obrębie tego samego drzewa DOM */}
+        {!isMounted || (!isPublicPage && isAuthLoading) ? (
+          <div className="min-h-[100dvh] w-full flex flex-col items-center justify-center bg-sky-50/50 text-slate-800 font-sans antialiased h-[100dvh] overflow-hidden">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+              <div className="text-sky-950 font-black text-sm tracking-wider uppercase animate-pulse">Forma Marzeń</div>
+              <div className="text-slate-500 text-xs font-semibold">Ładowanie profilu...</div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Wskaźnik Pull-to-refresh: widoczny wyłącznie podczas aktywnego przeciągania */}
+            <div 
+              className={`fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out pt-[env(safe-area-inset-top)] ${pullDistance > 15 || isRefreshing ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+              style={{
+                transform: `translateY(${pullDistance > 0 ? pullDistance : 0}px)`
+              }}
+            >
+              <div className="bg-sky-950 text-amber-400 px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 border border-sky-800 text-xs font-black">
+                <span className={`text-base inline-block ${isRefreshing ? 'animate-spin' : ''}`} style={{ transform: isRefreshing ? 'none' : `rotate(${pullDistance * 4}deg)` }}>
+                  {isRefreshing ? '🔄' : '⬇️'}
+                </span>
+                <span>{isRefreshing ? 'Odświeżanie danych...' : pullDistance >= 90 ? 'Puść, aby odświeżyć' : 'Pociągnij mocniej w dół...'}</span>
+              </div>
+            </div>
 
-        <AuthGuard>
-          {isPublicPage ? (
-            <main className="flex-1 w-full h-[100dvh] overflow-y-auto bg-slate-50 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-              {children}
-            </main>
-          ) : (
-            <>
-              {isMenuOpen && (
-                <div 
-                  className="fixed inset-0 bg-slate-950/60 z-40 transition-opacity backdrop-blur-sm"
-                  onClick={() => setIsMenuOpen(false)}
-                />
-              )}
-
-              <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white flex flex-col justify-between shrink-0 z-50 transition-transform duration-300 ease-in-out h-[100dvh] overflow-hidden pt-[env(safe-area-inset-top)] ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                  <div className="flex items-center justify-between pb-2 px-1 pt-1">
-                    <span className="text-sm font-black text-sky-950 uppercase tracking-wider flex items-center flex-wrap">
-                      Forma Marzeń 
-                      <span className={`text-[9px] px-2 py-0.5 rounded font-bold ml-1 mt-1 ${
-                        appRole === 'admin' ? 'bg-amber-500/20 text-amber-800' : 
-                        appRole === 'trener' ? 'bg-emerald-500/20 text-emerald-800' : 
-                        'bg-sky-500/20 text-sky-800'
-                      }`}>
-                        {appRole === 'admin' ? 'ADMIN' : appRole === 'trener' ? 'TRENER' : 'KLUBOWICZ'}
-                      </span>
-                    </span>
-                    <button 
-                      className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+            <AuthGuard>
+              {isPublicPage ? (
+                <main ref={mainScrollRef} className="flex-1 w-full h-[100dvh] overflow-y-auto bg-slate-50 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+                  {children}
+                </main>
+              ) : (
+                <>
+                  {isMenuOpen && (
+                    <div 
+                      className="fixed inset-0 bg-slate-950/60 z-40 transition-opacity backdrop-blur-sm"
                       onClick={() => setIsMenuOpen(false)}
-                    >
-                      ✕
-                    </button>
-                  </div>
+                    />
+                  )}
 
-                  <nav className="space-y-6">
-                    {activeMenuSections.map((section, idx) => (
-                      <div key={idx} className="space-y-2">
-                        {section.title && (
-                          <div className="text-[10px] font-bold text-sky-900/60 uppercase tracking-wider px-3 border-t border-sky-100 pt-3">
-                            {section.title}
-                          </div>
-                        )}
-                        <div className="space-y-1">
-                          {section.items.map((item) => {
-                            const isActive = pathname === item.href.split('?')[0];
-                            
-                            let showBadge = false;
-                            if (item.href === '/analiza-formy') {
-                              const hasPendingForAdmin = (appRole === 'admin' || appRole === 'trener') && hasUnreadInterpretation;
-                              showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja || hasPendingForAdmin;
-                            } else if (item.href === '/wydarzenia') {
-                              showBadge = hasUnreadWydarzenia;
-                            } else if (item.href === '/baza-wiedzy') {
-                              showBadge = hasUnreadBazaWiedzy;
-                            } else if (item.href === '/odziez') {
-                              showBadge = hasUnreadOdziez;
-                            } else if (item.href === '/wyzwania') {
-                              showBadge = hasUnreadWyzwania;
-                            } else if (item.href === '/twoj-bonus') {
-                              showBadge = hasUnreadBonus;
-                            }
-
-                            return (
-                              <Link
-                                key={item.href}
-                                href={item.href}
-                                onClick={() => setIsMenuOpen(false)}
-                                className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
-                                  isActive
-                                    ? "bg-amber-500 text-slate-950 font-black shadow-sm"
-                                    : "text-slate-600 hover:bg-sky-50 hover:text-sky-950"
-                                }`}
-                              >
-                                <div className="flex items-center gap-3 truncate">
-                                  <span className="text-sm">{item.icon}</span>
-                                  <span className="truncate">{item.label}</span>
-                                </div>
-                                {showBadge && (
-                                  <span className="relative flex h-4 w-4 shrink-0 ml-1">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
-                                      !
-                                    </span>
-                                  </span>
-                                )}
-                              </Link>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </nav>
-                </div>
-
-                <div className="border-t border-sky-100 p-4 shrink-0 bg-white/95 backdrop-blur-sm pb-[max(1rem,env(safe-area-inset-bottom))]">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500 shadow-sm">
-                      {profileAvatar ? (
-                        <img src={profileAvatar} alt="Avatar" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="uppercase">{avatarInitials}</span>
-                      )}
-                    </div>
-                    <div className="overflow-hidden min-w-0 flex-1">
-                      <div className="text-xs font-bold text-slate-900 truncate leading-tight">{profileName || 'Użytkownik'}</div>
-                      <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
-                        {appRole === 'admin' ? 'Administrator' : appRole === 'trener' ? 'Trener' : 'Klubowicz'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </aside>
-
-              <div className="flex-1 flex flex-col h-[100dvh] overflow-hidden w-full">
-                <header className="bg-white border-b border-sky-200 flex items-center justify-between px-4 md:px-6 shrink-0 shadow-sm relative pt-[env(safe-area-inset-top)] min-h-[calc(4rem+env(safe-area-inset-top))]">
-                  <div className="flex items-center gap-3 py-3">
-                    <button 
-                      className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer relative"
-                      onClick={() => setIsMenuOpen(true)}
-                      title="Otwórz menu"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 6h16M4 12h16M4 18h16" />
-                      </svg>
-                      {hasAnyBadgeInMenu && (
-                        <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600 text-[8px] font-black text-white items-center justify-center shadow">
-                            !
+                  <aside className={`fixed inset-y-0 left-0 w-64 border-r border-sky-200 bg-white flex flex-col justify-between shrink-0 z-50 transition-transform duration-300 ease-in-out h-[100dvh] overflow-hidden pt-[env(safe-area-inset-top)] ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                      <div className="flex items-center justify-between pb-2 px-1 pt-1">
+                        <span className="text-sm font-black text-sky-950 uppercase tracking-wider flex items-center flex-wrap">
+                          Forma Marzeń 
+                          <span className={`text-[9px] px-2 py-0.5 rounded font-bold ml-1 mt-1 ${
+                            appRole === 'admin' ? 'bg-amber-500/20 text-amber-800' : 
+                            appRole === 'trener' ? 'bg-emerald-500/20 text-emerald-800' : 
+                            'bg-sky-500/20 text-sky-800'
+                          }`}>
+                            {appRole === 'admin' ? 'ADMIN' : appRole === 'trener' ? 'TRENER' : 'KLUBOWICZ'}
                           </span>
                         </span>
-                      )}
-                    </button>
-                    <span className="font-black text-sky-950 text-xs sm:text-sm tracking-wider uppercase">
-                      {appRole === 'admin' ? 'Panel Zarządzania' : appRole === 'trener' ? 'Panel Trenera' : 'Strefa Klienta'}
-                    </span>
-                  </div>
+                        <button 
+                          className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+                          onClick={() => setIsMenuOpen(false)}
+                        >
+                          ✕
+                        </button>
+                      </div>
 
-                  <div className="flex items-center gap-3 py-3">
-                    {appRole === 'admin' && (
-                      <button 
-                        onClick={() => setIsAddClientModalOpen(true)}
-                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <span>+</span>
-                        <span className="hidden sm:inline">DODAJ KLUBOWICZA</span>
-                      </button>
-                    )}
+                      <nav className="space-y-6">
+                        {activeMenuSections.map((section, idx) => (
+                          <div key={idx} className="space-y-2">
+                            {section.title && (
+                              <div className="text-[10px] font-bold text-sky-900/60 uppercase tracking-wider px-3 border-t border-sky-100 pt-3">
+                                {section.title}
+                              </div>
+                            )}
+                            <div className="space-y-1">
+                              {section.items.map((item) => {
+                                const isActive = pathname === item.href.split('?')[0];
+                                
+                                let showBadge = false;
+                                if (item.href === '/analiza-formy') {
+                                  const hasPendingForAdmin = (appRole === 'admin' || appRole === 'trener') && hasUnreadInterpretation;
+                                  showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja || hasPendingForAdmin;
+                                } else if (item.href === '/wydarzenia') {
+                                  showBadge = hasUnreadWydarzenia;
+                                } else if (item.href === '/baza-wiedzy') {
+                                  showBadge = hasUnreadBazaWiedzy;
+                                } else if (item.href === '/odziez') {
+                                  showBadge = hasUnreadOdziez;
+                                } else if (item.href === '/wyzwania') {
+                                  showBadge = hasUnreadWyzwania;
+                                } else if (item.href === '/twoj-bonus') {
+                                  showBadge = hasUnreadBonus;
+                                }
 
-                    <div className="relative">
-                      <button className="w-9 h-9 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl flex items-center justify-center transition-colors relative cursor-pointer" title="Koszyk">
-                        🛒
-                        <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white font-black text-[10px] w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
-                          0
-                        </span>
-                      </button>
+                                return (
+                                  <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    onClick={() => setIsMenuOpen(false)}
+                                    className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+                                      isActive
+                                        ? "bg-amber-500 text-slate-950 font-black shadow-sm"
+                                        : "text-slate-600 hover:bg-sky-50 hover:text-sky-950"
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-3 truncate">
+                                      <span className="text-sm">{item.icon}</span>
+                                      <span className="truncate">{item.label}</span>
+                                    </div>
+                                    {showBadge && (
+                                      <span className="relative flex h-4 w-4 shrink-0 ml-1">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                                          !
+                                        </span>
+                                      </span>
+                                    )}
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </nav>
                     </div>
 
-                    <div className="relative" ref={profileMenuRef}>
-                      <button 
-                        onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
-                        className="relative group block cursor-pointer focus:outline-none"
-                        title="Menu użytkownika"
-                      >
-                        <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-amber-500 shadow-md bg-sky-100 flex items-center justify-center font-black text-sky-900 text-xs">
+                    <div className="border-t border-sky-100 p-4 shrink-0 bg-white/95 backdrop-blur-sm pb-[max(1rem,env(safe-area-inset-bottom))]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full overflow-hidden bg-sky-100 flex items-center justify-center font-bold text-sky-900 text-xs shrink-0 border border-amber-500 shadow-sm">
                           {profileAvatar ? (
-                            <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
+                            <img src={profileAvatar} alt="Avatar" className="w-full h-full object-cover" />
                           ) : (
                             <span className="uppercase">{avatarInitials}</span>
                           )}
                         </div>
-                        <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
-                      </button>
-
-                      {isProfileMenuOpen && (
-                        <div className="absolute right-0 mt-2 w-56 bg-white border border-sky-200 rounded-2xl shadow-xl py-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
-                          <div className="px-4 py-2 border-b border-sky-100">
-                            <div className="text-[10px] text-slate-400 font-bold uppercase">Zalogowany klub:</div>
-                            <div className="font-black text-sky-950 text-sm">Forma Marzeń</div>
+                        <div className="overflow-hidden min-w-0 flex-1">
+                          <div className="text-xs font-bold text-slate-900 truncate leading-tight">{profileName || 'Użytkownik'}</div>
+                          <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                            {appRole === 'admin' ? 'Administrator' : appRole === 'trener' ? 'Trener' : 'Klubowicz'}
                           </div>
+                        </div>
+                      </div>
+                    </div>
+                  </aside>
+
+                  <div className="flex-1 flex flex-col h-[100dvh] overflow-hidden w-full">
+                    {/* Główny nagłówek ze statycznym tłem i zabezpieczeniem przed przenikaniem elementów z dołu */}
+                    <header className="bg-white border-b border-sky-200 flex items-center justify-between px-4 md:px-6 shrink-0 shadow-sm relative z-20 pt-[env(safe-area-inset-top)] min-h-[calc(4rem+env(safe-area-inset-top))]">
+                      <div className="flex items-center gap-3 py-3">
+                        <button 
+                          className="text-sky-900 hover:text-sky-950 p-2 -ml-2 rounded-lg bg-sky-50 border border-sky-200 cursor-pointer relative"
+                          onClick={() => setIsMenuOpen(true)}
+                          title="Otwórz menu"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 6h16M4 12h16M4 18h16" />
+                          </svg>
+                          {hasAnyBadgeInMenu && (
+                            <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600 text-[8px] font-black text-white items-center justify-center shadow">
+                                !
+                              </span>
+                            </span>
+                          )}
+                        </button>
+                        <span className="font-black text-sky-950 text-xs sm:text-sm tracking-wider uppercase">
+                          {appRole === 'admin' ? 'Panel Zarządzania' : appRole === 'trener' ? 'Panel Trenera' : 'Strefa Klienta'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-3 py-3">
+                        {appRole === 'admin' && (
                           <button 
-                            onClick={() => {
-                              setIsProfileMenuOpen(false);
-                              setIsProfileModalOpen(true);
-                            }}
-                            className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-sky-50 font-bold flex items-center gap-2 transition-colors cursor-pointer"
+                            onClick={() => setIsAddClientModalOpen(true)}
+                            className="bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
                           >
-                            <span>👤</span> Mój profil
+                            <span>+</span>
+                            <span className="hidden sm:inline">DODAJ KLUBOWICZA</span>
                           </button>
-                          <div className="border-t border-sky-100 my-1"></div>
-                          <button 
-                            onClick={async () => {
-                              setIsProfileMenuOpen(false);
-                              await supabase.auth.signOut();
-                              router.push("/login");
-                            }}
-                            className="w-full text-left px-4 py-2.5 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 transition-colors cursor-pointer"
-                          >
-                            <span>🚪</span> Wyloguj się
+                        )}
+
+                        <div className="relative">
+                          <button className="w-9 h-9 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl flex items-center justify-center transition-colors relative cursor-pointer" title="Koszyk">
+                            🛒
+                            <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white font-black text-[10px] w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
+                              0
+                            </span>
                           </button>
                         </div>
+
+                        <div className="relative" ref={profileMenuRef}>
+                          <button 
+                            onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                            className="relative group block cursor-pointer focus:outline-none"
+                            title="Menu użytkownika"
+                          >
+                            <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-amber-500 shadow-md bg-sky-100 flex items-center justify-center font-black text-sky-900 text-xs">
+                              {profileAvatar ? (
+                                <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="uppercase">{avatarInitials}</span>
+                              )}
+                            </div>
+                            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                          </button>
+
+                          {isProfileMenuOpen && (
+                            <div className="absolute right-0 mt-2 w-56 bg-white border border-sky-200 rounded-2xl shadow-xl py-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
+                              <div className="px-4 py-2 border-b border-sky-100">
+                                <div className="text-[10px] text-slate-400 font-bold uppercase">Zalogowany klub:</div>
+                                <div className="font-black text-sky-950 text-sm">Forma Marzeń</div>
+                              </div>
+                              <button 
+                                onClick={() => {
+                                  setIsProfileMenuOpen(false);
+                                  setIsProfileModalOpen(true);
+                                }}
+                                className="w-full text-left px-4 py-2.5 text-slate-700 hover:bg-sky-50 font-bold flex items-center gap-2 transition-colors cursor-pointer"
+                              >
+                                <span>👤</span> Mój profil
+                              </button>
+                              <div className="border-t border-sky-100 my-1"></div>
+                              <button 
+                                onClick={async () => {
+                                  setIsProfileMenuOpen(false);
+                                  await supabase.auth.signOut();
+                                  router.push("/login");
+                                }}
+                                className="w-full text-left px-4 py-2.5 text-rose-600 hover:bg-rose-50 font-bold flex items-center gap-2 transition-colors cursor-pointer"
+                              >
+                                <span>🚪</span> Wyloguj się
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </header>
+
+                    <main ref={mainScrollRef} className="flex-1 p-4 md:p-8 overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                      {children}
+                    </main>
+                  </div>
+                </>
+              )}
+            </AuthGuard>
+
+            {!isPublicPage && <ClubChat />}
+
+            {isAddClientModalOpen && (
+              <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+                <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
+                  <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                    <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                      Dodaj nowego klienta
+                    </h3>
+                    <button onClick={() => setIsAddClientModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+                  </div>
+
+                  <div className="flex rounded-xl bg-sky-50 p-1 border border-sky-200 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTabModal('klubowicz')}
+                      className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${activeTabModal === 'klubowicz' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-600 hover:text-sky-950'}`}
+                    >
+                      Klubowicz
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTabModal('gosc')}
+                      className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${activeTabModal === 'gosc' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-600 hover:text-sky-950'}`}
+                    >
+                      Gość
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTabModal('rodzina')}
+                      className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${activeTabModal === 'rodzina' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-600 hover:text-sky-950'}`}
+                    >
+                      Rodzina
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveClient} className="space-y-4 text-xs">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block">Imię *</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={formImiwe}
+                          onChange={(e) => setFormImiwe(e.target.value)}
+                          placeholder="np. Jan"
+                          className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block">Nazwisko *</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={formNazwisko}
+                          onChange={(e) => setFormNazwisko(e.target.value)}
+                          placeholder="np. Kowalski"
+                          className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Adres e-mail</label>
+                      <input 
+                        type="email" 
+                        value={formEmail}
+                        onChange={(e) => setFormEmail(e.target.value)}
+                        placeholder="jan.kowalski@example.com"
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Numer telefonu</label>
+                      <input 
+                        type="text" 
+                        value={formTelefon}
+                        onChange={(e) => setFormTelefon(e.target.value)}
+                        placeholder="123 456 789"
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Karnet / Usługa początkowa</label>
+                      <select 
+                        value={formKarnet}
+                        onChange={(e) => setFormKarnet(e.target.value)}
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                      >
+                        <option value="">-- Wybierz karnet z bazy --</option>
+                        {dostepneKarnety.length > 0 ? (
+                          dostepneKarnety.map((karnet) => (
+                            <option key={karnet.id} value={karnet.nazwa}>{karnet.nazwa} ({karnet.cena} PLN)</option>
+                          ))
+                        ) : (
+                          <option value="" disabled>Brak karnetów w Ustawienia ➔ Karnety</option>
+                        )}
+                      </select>
+                    </div>
+
+                    <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
+                      <button 
+                        type="button" 
+                        onClick={() => setIsAddClientModalOpen(false)}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
+                      >
+                        Anuluj
+                      </button>
+                      <button 
+                        type="submit" 
+                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
+                      >
+                        Zapisz klienta
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {isProfileModalOpen && (
+              <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+                <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
+                  <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                    <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                      {profileName}
+                    </h3>
+                    <button onClick={() => setIsProfileModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
+                  </div>
+
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleImageChange} 
+                    accept="image/*" 
+                    className="hidden" 
+                  />
+
+                  <div className="flex flex-col items-center justify-center space-y-3 pb-2 border-b border-sky-100">
+                    <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-amber-500 shadow-md bg-sky-100 flex items-center justify-center text-3xl">
+                      {profileAvatar ? (
+                        <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="uppercase">{avatarInitials}</span>
                       )}
                     </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="bg-rose-950 hover:bg-rose-900 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <span>🖼️</span> Zmień zdjęcie
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setIsProfileModalOpen(false);
+                          setShowCalendarSettings(true);
+                        }}
+                        className="bg-sky-100 hover:bg-sky-200 text-sky-900 text-xs font-bold px-4 py-2 rounded-xl border border-sky-300 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <span>📅</span> Kalendarz ICS
+                      </button>
+                    </div>
                   </div>
-                </header>
 
-                <main className="flex-1 p-4 md:p-8 overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]">
-                  {children}
-                </main>
-              </div>
-            </>
-          )}
-        </AuthGuard>
+                  <div className="space-y-4 text-xs">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Adres e-mail *</label>
+                      <input 
+                        type="email" 
+                        readOnly 
+                        value={profileEmail}
+                        className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-slate-500 focus:outline-none cursor-not-allowed"
+                      />
+                    </div>
 
-        {!isPublicPage && <ClubChat />}
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Numer telefonu</label>
+                      <input 
+                        type="text" 
+                        value={profilePhone}
+                        onChange={(e) => setProfilePhone(e.target.value)}
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
 
-        {isAddClientModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
-              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
-                  Dodaj nowego klienta
-                </h3>
-                <button onClick={() => setIsAddClientModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
-              </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block">Płeć</label>
+                        <select 
+                          value={profileGender}
+                          onChange={(e) => setProfileGender(e.target.value)}
+                          className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
+                        >
+                          <option value="">-- Wybierz płeć --</option>
+                          <option value="Mężczyzna">Mężczyzna</option>
+                          <option value="Kobieta">Kobieta</option>
+                        </select>
+                      </div>
 
-              <div className="flex rounded-xl bg-sky-50 p-1 border border-sky-200 text-xs font-bold">
-                <button
-                  type="button"
-                  onClick={() => setActiveTabModal('klubowicz')}
-                  className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${activeTabModal === 'klubowicz' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-600 hover:text-sky-950'}`}
-                >
-                  Klubowicz
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTabModal('gosc')}
-                  className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${activeTabModal === 'gosc' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-600 hover:text-sky-950'}`}
-                >
-                  Gość
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTabModal('rodzina')}
-                  className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${activeTabModal === 'rodzina' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-600 hover:text-sky-950'}`}
-                >
-                  Rodzina
-                </button>
-              </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 block">Wzrost (cm)</label>
+                        <input 
+                          type="number" 
+                          step="any" 
+                          placeholder="np. 175"
+                          value={profileHeight}
+                          onChange={(e) => setProfileHeight(e.target.value)}
+                          className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                        />
+                      </div>
+                    </div>
 
-              <form onSubmit={handleSaveClient} className="space-y-4 text-xs">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block">Imię *</label>
-                    <input 
-                      type="text" 
-                      required
-                      value={formImiwe}
-                      onChange={(e) => setFormImiwe(e.target.value)}
-                      placeholder="np. Jan"
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                    />
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Urodziny</label>
+                      <input 
+                        type="date" 
+                        value={profileBirth}
+                        onChange={(e) => setProfileBirth(e.target.value)}
+                        className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block">Nazwisko *</label>
-                    <input 
-                      type="text" 
-                      required
-                      value={formNazwisko}
-                      onChange={(e) => setFormNazwisko(e.target.value)}
-                      placeholder="np. Kowalski"
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
-                </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Adres e-mail</label>
-                  <input 
-                    type="email" 
-                    value={formEmail}
-                    onChange={(e) => setFormEmail(e.target.value)}
-                    placeholder="jan.kowalski@example.com"
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Numer telefonu</label>
-                  <input 
-                    type="text" 
-                    value={formTelefon}
-                    onChange={(e) => setFormTelefon(e.target.value)}
-                    placeholder="123 456 789"
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Karnet / Usługa początkowa</label>
-                  <select 
-                    value={formKarnet}
-                    onChange={(e) => setFormKarnet(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="">-- Wybierz karnet z bazy --</option>
-                    {dostepneKarnety.length > 0 ? (
-                      dostepneKarnety.map((karnet) => (
-                        <option key={karnet.id} value={karnet.nazwa}>{karnet.nazwa} ({karnet.cena} PLN)</option>
-                      ))
-                    ) : (
-                      <option value="" disabled>Brak karnetów w Ustawienia ➔ Karnety</option>
-                    )}
-                  </select>
-                </div>
-
-                <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
-                  <button 
-                    type="button" 
-                    onClick={() => setIsAddClientModalOpen(false)}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
-                  >
-                    Anuluj
-                  </button>
-                  <button 
-                    type="submit" 
-                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
-                  >
-                    Zapisz klienta
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {isProfileModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6 my-8 border border-sky-200 relative">
-              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
-                  {profileName}
-                </h3>
-                <button onClick={() => setIsProfileModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
-              </div>
-
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleImageChange} 
-                accept="image/*" 
-                className="hidden" 
-              />
-
-              <div className="flex flex-col items-center justify-center space-y-3 pb-2 border-b border-sky-100">
-                <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-amber-500 shadow-md bg-sky-100 flex items-center justify-center text-3xl">
-                  {profileAvatar ? (
-                    <img src={profileAvatar} alt="Profil" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="uppercase">{avatarInitials}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button 
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-rose-950 hover:bg-rose-900 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <span>🖼️</span> Zmień zdjęcie
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setIsProfileModalOpen(false);
-                      setShowCalendarSettings(true);
-                    }}
-                    className="bg-sky-100 hover:bg-sky-200 text-sky-900 text-xs font-bold px-4 py-2 rounded-xl border border-sky-300 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <span>📅</span> Kalendarz ICS
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-4 text-xs">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Adres e-mail *</label>
-                  <input 
-                    type="email" 
-                    readOnly 
-                    value={profileEmail}
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-slate-500 focus:outline-none cursor-not-allowed"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Numer telefonu</label>
-                  <input 
-                    type="text" 
-                    value={profilePhone}
-                    onChange={(e) => setProfilePhone(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block">Płeć</label>
-                    <select 
-                      value={profileGender}
-                      onChange={(e) => setProfileGender(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
+                  <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
+                    <button 
+                      type="button"
+                      onClick={() => setIsProfileModalOpen(false)}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
                     >
-                      <option value="">-- Wybierz płeć --</option>
-                      <option value="Mężczyzna">Mężczyzna</option>
-                      <option value="Kobieta">Kobieta</option>
-                    </select>
-                  </div>
+                      Anuluj
+                    </button>
+                    <button 
+                      type="submit"
+                      onClick={async () => {
+                        const cleanEmail = (profileEmail || '').trim();
+                        if (!cleanEmail) {
+                          alert("Brak adresu e-mail.");
+                          return;
+                        }
 
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 block">Wzrost (cm)</label>
-                    <input 
-                      type="number" 
-                      step="any"
-                      placeholder="np. 175"
-                      value={profileHeight}
-                      onChange={(e) => setProfileHeight(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
-                </div>
+                        const parsedHeight = profileHeight ? parseFloat(profileHeight) : null;
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 block">Urodziny</label>
-                  <input 
-                    type="date" 
-                    value={profileBirth}
-                    onChange={(e) => setProfileBirth(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-4 flex items-center justify-end gap-2 border-t border-sky-100">
-                <button 
-                  type="button"
-                  onClick={() => setIsProfileModalOpen(false)}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit"
-                  onClick={async () => {
-                    const cleanEmail = (profileEmail || '').trim();
-                    if (!cleanEmail) {
-                      alert("Brak adresu e-mail.");
-                      return;
-                    }
-
-                    const parsedHeight = profileHeight ? parseFloat(profileHeight) : null;
-
-                    let updateClientQuery = supabase
-                      .from('klienci')
-                      .update({
-                        'Numer tel.': profilePhone,
-                        Urodziny: profileBirth,
-                        gender: profileGender,
-                        wzrost: parsedHeight
-                      });
-
-                    if (currentClientId) {
-                      updateClientQuery = updateClientQuery.eq('id', currentClientId);
-                    } else {
-                      updateClientQuery = updateClientQuery.ilike('E-mail', cleanEmail);
-                    }
-
-                    const { data: updatedClients, error: clientErr } = await updateClientQuery.select();
-
-                    if (clientErr) {
-                      console.error("Błąd zapisu profilu klienta:", clientErr);
-                      alert("Wystąpił błąd zapisu: " + clientErr.message);
-                      return;
-                    }
-
-                    if (!updatedClients || updatedClients.length === 0) {
-                      const { data: existingClient } = await supabase
-                        .from('klienci')
-                        .select('id')
-                        .ilike('E-mail', cleanEmail)
-                        .maybeSingle();
-
-                      if (existingClient) {
-                        await supabase
+                        let updateClientQuery = supabase
                           .from('klienci')
                           .update({
                             'Numer tel.': profilePhone,
                             Urodziny: profileBirth,
                             gender: profileGender,
                             wzrost: parsedHeight
-                          })
-                          .eq('id', existingClient.id);
-                      }
-                    }
+                          });
 
-                    await supabase
-                      .from('trenerzy')
-                      .update({ telefon: profilePhone })
-                      .ilike('email', cleanEmail);
+                        if (currentClientId) {
+                          updateClientQuery = updateClientQuery.eq('id', currentClientId);
+                        } else {
+                          updateClientQuery = updateClientQuery.ilike('E-mail', cleanEmail);
+                        }
 
-                    alert("Profil, płeć, wzrost oraz data urodzin zostały zapisane pomyślnie!");
-                    setIsProfileModalOpen(false);
-                    window.location.reload();
-                  }}
-                  className="bg-rose-950 hover:bg-rose-900 text-white font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
-                >
-                  Zapisz
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+                        const { data: updatedClients, error: clientErr } = await updateClientQuery.select();
 
-        {showCalendarSettings && (
-          <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
-              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📅 Synchronizacja kalendarza</h3>
-                <button onClick={() => setShowCalendarSettings(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
-              </div>
-              
-              <div className="space-y-4 text-xs text-slate-700">
-                <p>
-                  Dzięki integracji możesz automatycznie dodawać swoje treningi do kalendarza w telefonie. Wybierz odpowiedni link w zależności od używanej aplikacji.
-                </p>
+                        if (clientErr) {
+                          console.error("Błąd zapisu profilu klienta:", clientErr);
+                          alert("Wystąpił błąd zapisu: " + clientErr.message);
+                          return;
+                        }
 
-                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-slate-900 text-sm">Auto-synchronizacja</div>
-                    <div className="text-[10px] text-slate-500 mt-1">
-                      Zapisy będą widoczne w zewnętrznych aplikacjach.
-                    </div>
+                        if (!updatedClients || updatedClients.length === 0) {
+                          const { data: existingClient } = await supabase
+                            .from('klienci')
+                            .select('id')
+                            .ilike('E-mail', cleanEmail)
+                            .maybeSingle();
+
+                          if (existingClient) {
+                            await supabase
+                              .from('klienci')
+                              .update({
+                                'Numer tel.': profilePhone,
+                                Urodziny: profileBirth,
+                                gender: profileGender,
+                                wzrost: parsedHeight
+                              })
+                              .eq('id', existingClient.id);
+                          }
+                        }
+
+                        await supabase
+                          .from('trenerzy')
+                          .update({ telefon: profilePhone })
+                          .ilike('email', cleanEmail);
+
+                        alert("Profil, płeć, wzrost oraz data urodzin zostały zapisane pomyślnie!");
+                        setIsProfileModalOpen(false);
+                        window.location.reload();
+                      }}
+                      className="bg-rose-950 hover:bg-rose-900 text-white font-black px-6 py-2.5 rounded-xl transition-colors shadow-sm uppercase tracking-wider cursor-pointer"
+                    >
+                      Zapisz
+                    </button>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      className="sr-only peer" 
-                      checked={calendarAutoSync}
-                      onChange={(e) => handleToggleCalendarSync(e.target.checked)}
-                    />
-                    <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                  </label>
                 </div>
+              </div>
+            )}
 
-                {calendarAutoSync && (
-                  <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-top-2">
-                    {currentClientId ? (
-                      <div className="space-y-3">
-                        <div className="space-y-1">
-                          <label className="font-bold text-slate-900 text-[11px]"> Apple Calendar / iPhone / iPad (webcal):</label>
-                          <div className="flex items-center gap-2">
-                            <input 
-                              type="text" 
-                              readOnly 
-                              value={`webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
-                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
-                            />
-                            <button 
-                              onClick={() => {
-                                const url = `webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
-                                navigator.clipboard.writeText(url);
-                                alert("Link dla Apple (webcal://) skopiowany do schowka!");
-                              }}
-                              className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer text-xs"
-                            >
-                              Kopiuj
-                            </button>
-                          </div>
-                        </div>
+            {showCalendarSettings && (
+              <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+                <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-6 border border-sky-200 relative">
+                  <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                    <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">📅 Synchronizacja kalendarza</h3>
+                    <button onClick={() => setShowCalendarSettings(false)} className="text-slate-400 font-bold hover:text-slate-700 cursor-pointer">✕</button>
+                  </div>
+                  
+                  <div className="space-y-4 text-xs text-slate-700">
+                    <p>
+                      Dzięki integracji możesz automatycznie dodawać swoje treningi do kalendarza w telefonie. Wybierz odpowiedni link w zależności od używanej aplikacji.
+                    </p>
 
-                        <div className="space-y-1">
-                          <label className="font-bold text-slate-900 text-[11px]">🌐 Google Calendar / Outlook / Inne (https):</label>
-                          <div className="flex items-center gap-2">
-                            <input 
-                              type="text" 
-                              readOnly 
-                              value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
-                              className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
-                            />
-                            <button 
-                              onClick={() => {
-                                const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
-                                navigator.clipboard.writeText(url);
-                                alert("Link standardowy (https://) skopiowany do schowka!");
-                              }}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer text-xs"
-                            >
-                              Kopiuj
-                            </button>
-                          </div>
+                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900 text-sm">Auto-synchronizacja</div>
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          Zapisy będą widoczne w zewnętrznych aplikacjach.
                         </div>
                       </div>
-                    ) : (
-                      <div className="text-amber-600 font-bold py-2 text-center animate-pulse">
-                        Ładowanie Twojego identyfikatora klienta...
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          className="sr-only peer" 
+                          checked={calendarAutoSync}
+                          onChange={(e) => handleToggleCalendarSync(e.target.checked)}
+                        />
+                        <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                      </label>
+                    </div>
+
+                    {calendarAutoSync && (
+                      <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-top-2">
+                        {currentClientId ? (
+                          <div className="space-y-3">
+                            <div className="space-y-1">
+                              <label className="font-bold text-slate-900 text-[11px]"> Apple Calendar / iPhone / iPad (webcal):</label>
+                              <div className="flex items-center gap-2">
+                                <input 
+                                  type="text" 
+                                  readOnly 
+                                  value={`webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
+                                  className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                                />
+                                <button 
+                                  onClick={() => {
+                                    const url = `webcal://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
+                                    navigator.clipboard.writeText(url);
+                                    alert("Link dla Apple (webcal://) skopiowany do schowka!");
+                                  }}
+                                  className="bg-sky-600 hover:bg-sky-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer text-xs"
+                                >
+                                  Kopiuj
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="font-bold text-slate-900 text-[11px]">🌐 Google Calendar / Outlook / Inne (https):</label>
+                              <div className="flex items-center gap-2">
+                                <input 
+                                  type="text" 
+                                  readOnly 
+                                  value={`https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`}
+                                  className="flex-1 bg-sky-50 border border-sky-200 rounded-xl px-3.5 py-2 font-mono text-[10px] text-slate-600 focus:outline-none"
+                                />
+                                <button 
+                                  onClick={() => {
+                                    const url = `https://${typeof window !== 'undefined' ? window.location.host : 'forma-marzen.vercel.app'}/api/calendar?klient_id=${currentClientId}`;
+                                    navigator.clipboard.writeText(url);
+                                    alert("Link standardowy (https://) skopiowany do schowka!");
+                                  }}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl transition-colors shrink-0 cursor-pointer text-xs"
+                                >
+                                  Kopiuj
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-amber-600 font-bold py-2 text-center animate-pulse">
+                            Ładowanie Twojego identyfikatora klienta...
+                          </div>
+                        )}
+                        <p className="text-[10px] text-amber-700 font-medium bg-amber-50 p-2 rounded-lg border border-amber-200 mt-2">
+                          Nigdy nie udostępniaj tych linków osobom trzecim. Zawierają one listę Twoich zapisów w klubie.
+                        </p>
                       </div>
                     )}
-                    <p className="text-[10px] text-amber-700 font-medium bg-amber-50 p-2 rounded-lg border border-amber-200 mt-2">
-                      Nigdy nie udostępniaj tych linków osobom trzecim. Zawierają one listę Twoich zapisów w klubie.
-                    </p>
                   </div>
-                )}
-              </div>
 
-              <div className="pt-4 flex justify-end border-t border-sky-100">
-                <button onClick={() => setShowCalendarSettings(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-2.5 rounded-xl transition-colors cursor-pointer">
-                  Zamknij
-                </button>
+                  <div className="pt-4 flex justify-end border-t border-sky-100">
+                    <button onClick={() => setShowCalendarSettings(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-2.5 rounded-xl transition-colors cursor-pointer">
+                      Zamknij
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
-
       </body>
     </html>
   );
