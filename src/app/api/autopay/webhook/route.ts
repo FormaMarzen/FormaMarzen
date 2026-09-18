@@ -7,6 +7,8 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const SYSTEM_CHAT_ID = 5000;
+
 function extractXmlTag(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
   return match ? match[1].trim() : '';
@@ -45,6 +47,63 @@ function calculateEndOfMonthDate(currentPaidUntil?: string | null): string {
 
   const lastDay = new Date(baseYear, baseMonth, 0).getDate();
   return `${baseYear}-${String(baseMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+}
+
+// AUTOMATYCZNA WERYFIKACJA POLECENIA AMBASADORA PRZY OPŁACIE ONLINE
+async function evaluateAmbassadorReferralInWebhook(
+  klientId: number, 
+  clientName: string, 
+  passName: string, 
+  totalPassPrice: number
+) {
+  try {
+    const { data: pendingRef } = await supabase
+      .from('referrals')
+      .select('id, referrer_id')
+      .eq('referred_client_id', klientId)
+      .eq('status', 'oczekuje_na_pierwszy_karnet')
+      .maybeSingle();
+
+    if (!pendingRef) return;
+
+    let minPrice = 200;
+    try {
+      const { data: settingsData } = await supabase
+        .from('ambassador_settings')
+        .select('min_pass_price')
+        .eq('id', 1)
+        .maybeSingle();
+      if (settingsData?.min_pass_price) {
+        minPrice = Number(settingsData.min_pass_price);
+      }
+    } catch (e) {}
+
+    const isQualified = totalPassPrice >= minPrice;
+    const newStatus = isQualified ? 'confirmed' : 'disqualified';
+
+    await supabase
+      .from('referrals')
+      .update({
+        pass_name: passName,
+        pass_price: totalPassPrice,
+        is_qualified: isQualified,
+        status: newStatus
+      })
+      .eq('id', pendingRef.id);
+
+    if (isQualified && pendingRef.referrer_id) {
+      await supabase.from('czat_wiadomosci').insert([{
+        nadawca_id: SYSTEM_CHAT_ID,
+        nadawca_nazwa: 'Program Ambasador',
+        odbiorca_id: pendingRef.referrer_id,
+        tresc: `🎉 Świetna wiadomość! Twój polecony znajomy (${clientName}) opłacił swój pierwszy karnet: "${passName}" za ${totalPassPrice.toFixed(2)} PLN. Polecenie zostało pomyślnie zaliczone do Twoich nagród Ambasadora!`,
+        przeczytana: false,
+        created_at: new Date().toISOString()
+      }]);
+    }
+  } catch (err) {
+    console.error('[Autopay Webhook Referral Error]:', err);
+  }
 }
 
 async function sendPushToAdmins(title: string, body: string, url: string = '/raporty/klienci') {
@@ -506,6 +565,10 @@ export async function POST(req: Request) {
             payload: { klient_id: klient.id, amount: transactionAmount, paid_until: targetPaidUntil, order_id: orderID }
           }]);
 
+          // PROGRAM AMBASADOR: Ewaluacja pierwszego karnetu przy racie umowy
+          const totalEffectivePrice = transactionAmount + (Number(metadata.walletDeduction) || 0);
+          await evaluateAmbassadorReferralInWebhook(klient.id, clientName, passName, totalEffectivePrice);
+
           await sendPushToAdmins(
             'Opłacono ratę umowy 12M! 💳',
             `${clientName} opłacił(a) ratę umowy online Autopay (${transactionAmount.toFixed(2)} PLN, ważność do ${targetPaidUntil})`,
@@ -646,6 +709,27 @@ export async function POST(req: Request) {
                 transakcja_id: insertedTrans?.id || null
               }]);
           }
+
+          // PROGRAM AMBASADOR: Ewaluacja pierwszego karnetu przy zakupie/przedłużeniu online
+          let cleanPassName = passTitle;
+          if (!cleanPassName) {
+            const desc = transakcja.gateway_response?.opis || '';
+            cleanPassName = desc.replace(/^Zakup\s*:\s*/i, '').replace(/^Zakup\s+/i, '').replace(/^Przedłużenie\s*:\s*/i, '').replace(/^Przedluzenie\s*:\s*/i, '').replace(/^Przedłużenie\s+/i, '').replace(/^Przedluzenie\s+/i, '').trim();
+          }
+          if (!cleanPassName && metadata.updatedKarnetyList && metadata.updatedKarnetyList.length > 0) {
+            cleanPassName = metadata.updatedKarnetyList[metadata.updatedKarnetyList.length - 1]?.nazwa || 'Karnet';
+          }
+          if (!cleanPassName) cleanPassName = 'Karnet';
+
+          let totalPassPrice = transactionAmount + (Number(metadata.walletDeduction) || 0);
+          if (metadata.cenaStr) {
+            const parsedCena = parseFloat(String(metadata.cenaStr).replace(/[^0-9.-]/g, ''));
+            if (!isNaN(parsedCena) && parsedCena > 0) {
+              totalPassPrice = parsedCena;
+            }
+          }
+
+          await evaluateAmbassadorReferralInWebhook(klient.id, clientName, cleanPassName, totalPassPrice);
 
           await sendPushToAdmins(
             transakcja.type === 'pass_extend' ? 'Przedłużono karnet! 💳' : 'Kupiono nowy karnet! 💳',
