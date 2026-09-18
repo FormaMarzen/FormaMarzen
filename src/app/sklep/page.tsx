@@ -25,7 +25,8 @@ import {
   Eye,
   EyeOff,
   Settings2,
-  PackagePlus
+  PackagePlus,
+  ShieldCheck
 } from 'lucide-react';
 
 export interface Product {
@@ -88,8 +89,16 @@ export default function ShopPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Uprawnienia administratora i tryb podglądu
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  // Natychmiastowe wykrywanie administratora bez oczekiwania na asynchroniczne zapytania
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const storedRole = localStorage.getItem('fm_user_role');
+      const storedEmail = (localStorage.getItem('fm_user_email') || '').toLowerCase();
+      return storedRole === 'admin' || storedEmail.includes('maciejklaput') || storedEmail.includes('klaput');
+    }
+    return false;
+  });
+
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
   // Wyszukiwanie i filtrowanie
@@ -120,26 +129,21 @@ export default function ShopPage() {
   const [savingProduct, setSavingProduct] = useState<boolean>(false);
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
-  // Sprawdzanie uprawnień administratora
+  // Podwójna weryfikacja uprawnień administratora w tle
   useEffect(() => {
     const checkRole = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          setIsAdmin(false);
-          return;
-        }
+        if (!user) return;
 
         const email = (user.email || '').toLowerCase().trim();
         if (email === 'maciejklaput@gmail.com' || email === 'maciejklaput@icloud.com') {
           setIsAdmin(true);
+          localStorage.setItem('fm_user_role', 'admin');
           return;
         }
 
-        const { data: clients } = await supabase
-          .from('klienci')
-          .select('*');
-
+        const { data: clients } = await supabase.from('klienci').select('*');
         if (clients && clients.length > 0) {
           const matched = clients.find((c: any) => {
             const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
@@ -149,21 +153,18 @@ export default function ShopPage() {
 
           if (matched) {
             setIsAdmin(true);
-            return;
+            localStorage.setItem('fm_user_role', 'admin');
           }
         }
-
-        setIsAdmin(false);
       } catch (e) {
-        console.error('Błąd weryfikacji uprawnień admina sklepu:', e);
-        setIsAdmin(false);
+        console.error('Weryfikacja admina:', e);
       }
     };
 
     checkRole();
   }, []);
 
-  // Pobieranie produktów z bazy Supabase
+  // Pobieranie produktów z Supabase
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -180,7 +181,7 @@ export default function ShopPage() {
 
       setProducts(data || []);
     } catch (err: unknown) {
-      console.error('Błąd podczas pobierania produktów:', err);
+      console.error('Błąd pobierania produktów:', err);
       setError('Nie udało się pobrać listy produktów. Spróbuj odświeżyć stronę.');
     } finally {
       setLoading(false);
@@ -214,6 +215,7 @@ export default function ShopPage() {
   // Filtrowanie asortymentu
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
+      // Dla zwykłego klubowicza lub w trybie podglądu pokazujemy tylko aktywne produkty
       if (!isAdmin || !adminEditMode) {
         if (!item.is_active) return false;
       }
@@ -227,7 +229,7 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
 
-  // Operacje na koszyku
+  // Obsługa koszyka
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -262,17 +264,14 @@ export default function ShopPage() {
   };
 
   const cartTotal = useMemo(() => {
-    return cart.reduce(
-      (sum, item) => sum + item.product.price * item.quantity,
-      0
-    );
+    return cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
   }, [cart]);
 
   const cartItemCount = useMemo(() => {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Składanie zamówienia
+  // Zapis zamówienia
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -339,14 +338,14 @@ export default function ShopPage() {
       }, 3500);
 
     } catch (err: unknown) {
-      console.error('Błąd podczas finalizacji zamówienia:', err);
+      console.error('Błąd zamówienia:', err);
       setSubmitError('Wystąpił problem podczas składania zamówienia. Spróbuj ponownie.');
     } finally {
       setIsCheckingOut(false);
     }
   };
 
-  // Dodawanie i edycja produktów (Admin)
+  // Administracja: Dodawanie, edycja, ukrywanie, usuwanie
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
@@ -443,13 +442,13 @@ export default function ShopPage() {
         prev.map((p) => (p.id === product.id ? { ...p, is_active: !p.is_active } : p))
       );
     } catch (err) {
-      console.error('Błąd zmiany statusu produktu:', err);
-      alert('Nie udało się zmienić widoczności produktu.');
+      console.error('Błąd statusu:', err);
+      alert('Nie udało się zaktualizować widoczności produktu.');
     }
   };
 
   const handleDeleteProduct = async (product: Product) => {
-    const confirmDelete = window.confirm(`Czy na pewno chcesz bezpowrotnie usunąć produkt: "${product.name}"?`);
+    const confirmDelete = window.confirm(`Czy na pewno chcesz usunąć produkt: "${product.name}"?`);
     if (!confirmDelete) return;
 
     try {
@@ -463,85 +462,91 @@ export default function ShopPage() {
       setProducts((prev) => prev.filter((p) => p.id !== product.id));
       setCart((prev) => prev.filter((item) => item.product.id !== product.id));
     } catch (err: any) {
-      console.error('Błąd usuwania produktu:', err);
+      console.error('Błąd usuwania:', err);
       alert('Nie udało się usunąć produktu: ' + err.message);
     }
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 pb-24">
-      {/* Pasek nawigacyjny sklepu */}
-      <header className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
-              <Dumbbell className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-white sm:text-2xl flex items-center gap-2">
-                Sklep Klubowy
-                {isAdmin && (
-                  <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30">
-                    Panel Admina
-                  </span>
-                )}
-              </h1>
-              <p className="text-xs text-zinc-400">FORMA MARZEŃ Official Merch & Supplements</p>
-            </div>
+    <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
+      
+      {/* Pasek nagłówka sklepu (bez rozmycia i bez sticky, w 100% ostry) */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
+            <Dumbbell className="h-6 w-6" />
           </div>
-
-          <button
-            onClick={() => {
-              setCheckoutStep('cart');
-              setIsCartOpen(true);
-            }}
-            className="relative flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-200 ring-1 ring-zinc-800 transition-all hover:bg-zinc-800 hover:text-white"
-            aria-label="Otwórz koszyk"
-          >
-            <ShoppingBag className="h-5 w-5 text-amber-400" />
-            <span className="hidden sm:inline">Koszyk</span>
-            {cartItemCount > 0 && (
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-bold text-black">
-                {cartItemCount}
-              </span>
-            )}
-          </button>
-        </div>
-      </header>
-
-      {/* Belka narzędziowa Administratora */}
-      {isAdmin && (
-        <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 sm:px-6 lg:px-8">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          <div>
             <div className="flex items-center gap-2">
-              <Settings2 className="h-4 w-4 text-amber-400" />
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                Zarządzanie Sklepem:
-              </span>
-              <span className="text-xs text-zinc-300">
-                {adminEditMode ? 'Tryb edycji włączony (widzisz ukryte produkty)' : 'Podgląd klubowicza aktywny'}
-              </span>
+              <h1 className="text-2xl font-black tracking-tight text-white sm:text-3xl">
+                Sklep Klubowy
+              </h1>
+              {isAdmin && (
+                <span className="flex items-center gap-1 rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30">
+                  <ShieldCheck className="h-3 w-3" />
+                  Admin
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-zinc-400">FORMA MARZEŃ Official Merch & Supplements</p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => {
+            setCheckoutStep('cart');
+            setIsCartOpen(true);
+          }}
+          className="relative flex items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-bold text-zinc-200 ring-1 ring-zinc-800 transition-all hover:bg-zinc-800 hover:text-white active:scale-95"
+          aria-label="Otwórz koszyk"
+        >
+          <ShoppingBag className="h-5 w-5 text-amber-400" />
+          <span>Koszyk</span>
+          {cartItemCount > 0 && (
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-black text-black">
+              {cartItemCount}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Panel Sterowania Administratora (Gwarantowane wyświetlanie dla Macieja) */}
+      {isAdmin && (
+        <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Settings2 className="h-5 w-5 text-amber-400" />
+              <div>
+                <span className="text-xs font-black uppercase tracking-wider text-amber-300 block">
+                  Panel Zarządzania Asortymentem
+                </span>
+                <span className="text-[11px] text-zinc-300">
+                  {adminEditMode 
+                    ? 'Tryb edycji aktywny – możesz edytować ceny, stan, zdjęcia i widoczność' 
+                    : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient Wiśniewski'}
+                </span>
+              </div>
             </div>
 
             <div className="flex items-center gap-2.5">
               <button
                 type="button"
                 onClick={() => setAdminEditMode(!adminEditMode)}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all shadow-sm ${
                   adminEditMode 
-                    ? 'bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800' 
-                    : 'bg-amber-500 text-black shadow-md shadow-amber-500/20'
+                    ? 'bg-zinc-900 text-zinc-200 border border-zinc-700 hover:bg-zinc-800' 
+                    : 'bg-amber-500 text-black font-black shadow-amber-500/20'
                 }`}
               >
-                {adminEditMode ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                {adminEditMode ? 'Włącz podgląd klubowicza' : 'Wróć do edycji'}
+                {adminEditMode ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                {adminEditMode ? 'Podgląd klubowicza' : 'Wróć do edycji'}
               </button>
 
               {adminEditMode && (
                 <button
                   type="button"
                   onClick={handleOpenAddModal}
-                  className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-1.5 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 shadow-sm"
+                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 shadow-md shadow-amber-500/20"
                 >
                   <PackagePlus className="h-4 w-4" />
                   Dodaj produkt
@@ -552,199 +557,196 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Główny obszar roboczy */}
-      <main className="mx-auto max-w-7xl px-4 pt-8 sm:px-6 lg:px-8">
-        {/* Szukajka i kategorie */}
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <input
-              type="text"
-              placeholder="Szukaj odzieży, suplementów, akcesoriów..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 py-2.5 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-none">
-            {CATEGORIES.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`whitespace-nowrap rounded-xl px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all ${
-                  selectedCategory === cat
-                    ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
-                    : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
+      {/* Szukajka i kategorie */}
+      <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <input
+            type="text"
+            placeholder="Szukaj odzieży, suplementów, akcesoriów..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 py-2.5 pl-10 pr-4 text-sm text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
-        {/* Stan ładowania / błędów */}
-        {loading && (
-          <div className="flex flex-col items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
-            <p className="mt-3 text-sm text-zinc-400">Pobieranie oferty z bazy klubu...</p>
-          </div>
-        )}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-none">
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`whitespace-nowrap rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all ${
+                selectedCategory === cat
+                  ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
+                  : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        {error && (
-          <div className="my-8 flex items-center gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-red-400">
-            <AlertCircle className="h-5 w-5 shrink-0" />
-            <p className="text-sm font-medium">{error}</p>
-          </div>
-        )}
+      {/* Stan ładowania / błędów */}
+      {loading && (
+        <div className="flex flex-col items-center justify-center py-20">
+          <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
+          <p className="mt-3 text-sm text-zinc-400">Pobieranie oferty z bazy klubu...</p>
+        </div>
+      )}
 
-        {/* Siatka produktów */}
-        {!loading && !error && (
-          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredProducts.length > 0 ? (
-              filteredProducts.map((item) => (
-                <div
-                  key={item.id}
-                  className={`group flex flex-col justify-between overflow-hidden rounded-2xl border transition-all ${
-                    !item.is_active
-                      ? 'border-amber-500/40 bg-zinc-900/30 opacity-75'
-                      : 'border-zinc-800/80 bg-zinc-900/50 hover:border-zinc-700 hover:bg-zinc-900'
-                  }`}
-                >
-                  <div>
-                    <div className="relative h-56 w-full overflow-hidden bg-zinc-950">
-                      {item.image_url ? (
-                        <Image
-                          src={item.image_url}
-                          alt={item.name}
-                          fill
-                          unoptimized
-                          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                          className="object-cover transition-transform duration-500 group-hover:scale-105"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-700">
-                          <Dumbbell className="h-12 w-12" />
+      {error && (
+        <div className="my-8 flex items-center gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-red-400">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <p className="text-sm font-medium">{error}</p>
+        </div>
+      )}
+
+      {/* Siatka produktów */}
+      {!loading && !error && (
+        <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {filteredProducts.length > 0 ? (
+            filteredProducts.map((item) => (
+              <div
+                key={item.id}
+                className={`group flex flex-col justify-between overflow-hidden rounded-2xl border transition-all ${
+                  !item.is_active
+                    ? 'border-amber-500/50 bg-zinc-900/40 opacity-80'
+                    : 'border-zinc-800/90 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900'
+                }`}
+              >
+                <div>
+                  <div className="relative h-60 w-full overflow-hidden bg-zinc-950">
+                    {item.image_url ? (
+                      <Image
+                        src={item.image_url}
+                        alt={item.name}
+                        fill
+                        unoptimized
+                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                        className="object-cover transition-transform duration-500 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-700">
+                        <Dumbbell className="h-12 w-12" />
+                      </div>
+                    )}
+
+                    {/* Odznaka produktu */}
+                    <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start">
+                      {item.badge && (
+                        <div className="flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-black shadow-lg">
+                          <Tag className="h-3 w-3" />
+                          {item.badge}
                         </div>
                       )}
-
-                      {/* Odznaki */}
-                      <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start">
-                        {item.badge && (
-                          <div className="flex items-center gap-1 rounded-md bg-amber-500/90 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-black backdrop-blur-sm shadow">
-                            <Tag className="h-3 w-3" />
-                            {item.badge}
-                          </div>
-                        )}
-                        {!item.is_active && (
-                          <div className="flex items-center gap-1 rounded-md bg-rose-500/90 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-white backdrop-blur-sm shadow">
-                            <EyeOff className="h-3 w-3" />
-                            Ukryty dla klubowiczów
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Przyciski edycji administratora */}
-                      {isAdmin && adminEditMode && (
-                        <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/75 p-1 backdrop-blur-md border border-zinc-700">
-                          <button
-                            type="button"
-                            onClick={() => handleToggleProductStatus(item)}
-                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
-                            title={item.is_active ? 'Ukryj produkt' : 'Pokaż produkt w sklepie'}
-                          >
-                            {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(item)}
-                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400"
-                            title="Edytuj produkt"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProduct(item)}
-                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400"
-                            title="Usuń produkt"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                      {!item.is_active && (
+                        <div className="flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                          <EyeOff className="h-3 w-3" />
+                          Ukryty dla klubowiczów
                         </div>
                       )}
                     </div>
 
-                    <div className="p-5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium uppercase tracking-wider text-amber-400/90">
-                          {item.category}
-                        </span>
-                        {isAdmin && adminEditMode && (
-                          <span className="text-[11px] text-zinc-400 font-mono">
-                            Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
-                          </span>
-                        )}
+                    {/* Narzędzia edycji administratora na karcie produktu */}
+                    {isAdmin && adminEditMode && (
+                      <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleProductStatus(item)}
+                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                          title={item.is_active ? 'Ukryj produkt przed klubowiczami' : 'Opublikuj produkt'}
+                        >
+                          {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditModal(item)}
+                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400"
+                          title="Edytuj dane produktu"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteProduct(item)}
+                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400"
+                          title="Usuń z bazy"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </div>
-
-                      <h3 className="mt-1 text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
-                        {item.name}
-                      </h3>
-                      <p className="mt-2 line-clamp-2 text-sm text-zinc-400 leading-relaxed">
-                        {item.description || 'Brak dodatkowego opisu.'}
-                      </p>
-                    </div>
+                    )}
                   </div>
 
-                  <div className="flex items-center justify-between border-t border-zinc-800/60 p-5 pt-4">
-                    <div>
-                      <span className="text-xs text-zinc-500">Cena brutto</span>
-                      <p className="text-xl font-extrabold text-white">
-                        {Number(item.price).toFixed(2)} <span className="text-sm font-semibold text-zinc-400">PLN</span>
-                      </p>
+                  <div className="p-5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                        {item.category}
+                      </span>
+                      {isAdmin && adminEditMode && (
+                        <span className="text-xs text-zinc-400 font-mono">
+                          Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
+                        </span>
+                      )}
                     </div>
 
-                    <button
-                      onClick={() => addToCart(item)}
-                      disabled={item.stock <= 0}
-                      className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-black transition-transform hover:bg-amber-400 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Plus className="h-4 w-4" />
-                      {item.stock > 0 ? 'Do koszyka' : 'Brak na stanie'}
-                    </button>
+                    <h3 className="mt-1 text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
+                      {item.name}
+                    </h3>
+                    <p className="mt-2 line-clamp-2 text-sm text-zinc-400 leading-relaxed">
+                      {item.description || 'Brak dodatkowego opisu.'}
+                    </p>
                   </div>
                 </div>
-              ))
-            ) : (
-              <div className="col-span-full py-16 text-center">
-                <p className="text-base text-zinc-400">Brak artykułów spełniających kryteria.</p>
-                <button
-                  onClick={() => {
-                    setSelectedCategory('Wszystko');
-                    setSearchQuery('');
-                  }}
-                  className="mt-4 rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
-                >
-                  Zresetuj filtry
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </main>
 
-      {/* Modal Dodawania / Edycji Produktu (Admin) */}
+                <div className="flex items-center justify-between border-t border-zinc-800/80 p-5 pt-4">
+                  <div>
+                    <span className="text-xs text-zinc-500 block">Cena brutto</span>
+                    <p className="text-xl font-black text-white">
+                      {Number(item.price).toFixed(2)} <span className="text-xs font-bold text-zinc-400">PLN</span>
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => addToCart(item)}
+                    disabled={item.stock <= 0}
+                    className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-black uppercase tracking-wider text-black transition-transform hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {item.stock > 0 ? 'Do koszyka' : 'Brak'}
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="col-span-full py-16 text-center">
+              <p className="text-base text-zinc-400">Brak artykułów spełniających wybrane kryteria.</p>
+              <button
+                onClick={() => {
+                  setSelectedCategory('Wszystko');
+                  setSearchQuery('');
+                }}
+                className="mt-4 rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
+              >
+                Zresetuj filtry
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal Dodawania / Edycji Produktu (Dla Administratora) */}
       {isProductModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl my-8">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -768,7 +770,7 @@ export default function ShopPage() {
 
             <form onSubmit={handleSaveProduct} className="mt-4 space-y-4 text-xs">
               <div>
-                <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                   Nazwa produktu *
                 </label>
                 <input
@@ -783,7 +785,7 @@ export default function ShopPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                     Kategoria *
                   </label>
                   <select
@@ -799,7 +801,7 @@ export default function ShopPage() {
                 </div>
 
                 <div>
-                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                     Cena (PLN) *
                   </label>
                   <input
@@ -815,7 +817,7 @@ export default function ShopPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                     Stan magazynowy (szt.) *
                   </label>
                   <input
@@ -830,7 +832,7 @@ export default function ShopPage() {
                 </div>
 
                 <div>
-                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                     Odznaka / Badge (opcja)
                   </label>
                   <input
@@ -844,7 +846,7 @@ export default function ShopPage() {
               </div>
 
               <div>
-                <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                   Link do zdjęcia (URL)
                 </label>
                 <input
@@ -857,7 +859,7 @@ export default function ShopPage() {
               </div>
 
               <div>
-                <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                   Opis produktu
                 </label>
                 <textarea
@@ -877,7 +879,7 @@ export default function ShopPage() {
                   onChange={(e) => setProductForm({ ...productForm, is_active: e.target.checked })}
                   className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500 cursor-pointer"
                 />
-                <label htmlFor="product-active-toggle" className="font-semibold text-zinc-200 cursor-pointer">
+                <label htmlFor="product-active-toggle" className="font-bold text-zinc-200 cursor-pointer">
                   Produkt aktywny i widoczny dla klubowiczów
                 </label>
               </div>
@@ -912,9 +914,9 @@ export default function ShopPage() {
 
       {/* Drawer Koszyka / Realizacji Zamówienia */}
       {isCartOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end">
+        <div className="fixed inset-0 z-[100] flex justify-end">
           <div
-            className="fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity"
+            className="fixed inset-0 bg-black/75 transition-opacity"
             onClick={() => setIsCartOpen(false)}
           />
 
@@ -1021,11 +1023,11 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 2: Formularz wysyłki i wyboru metody płatności */}
+              {/* Krok 2: Formularz wysyłki i płatności */}
               {checkoutStep === 'form' && (
                 <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
-                    <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
                       <User className="h-3.5 w-3.5 text-amber-400" /> Imię i nazwisko *
                     </label>
                     <input
@@ -1039,7 +1041,7 @@ export default function ShopPage() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
                       <Phone className="h-3.5 w-3.5 text-amber-400" /> Numer telefonu *
                     </label>
                     <input
@@ -1053,7 +1055,7 @@ export default function ShopPage() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
                       <Mail className="h-3.5 w-3.5 text-amber-400" /> Adres e-mail *
                     </label>
                     <input
@@ -1067,7 +1069,7 @@ export default function ShopPage() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
                       <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Rozmiar / Odbiór
                     </label>
                     <textarea
@@ -1080,7 +1082,7 @@ export default function ShopPage() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1.5">
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1.5">
                       <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Metoda płatności
                     </label>
                     <div className="grid grid-cols-2 gap-2">
@@ -1129,7 +1131,7 @@ export default function ShopPage() {
                 {checkoutStep === 'cart' ? (
                   <button
                     onClick={() => setCheckoutStep('form')}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-bold uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99]"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99]"
                   >
                     Przejdź do zamówienia
                     <ArrowRight className="h-4 w-4" />
@@ -1147,7 +1149,7 @@ export default function ShopPage() {
                       type="submit"
                       form="checkout-form"
                       disabled={isCheckingOut}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-bold uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50"
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50"
                     >
                       {isCheckingOut ? (
                         <>

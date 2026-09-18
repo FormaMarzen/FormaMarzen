@@ -221,7 +221,14 @@ export default function RootLayout({
   const [showCalendarSettings, setShowCalendarSettings] = useState(false);
   const [calendarAutoSync, setCalendarAutoSync] = useState(false);
 
-  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>('klubowicz');
+  const [appRole, setAppRole] = useState<'admin' | 'trener' | 'klubowicz'>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem('fm_user_role') as any;
+      if (saved === 'admin' || saved === 'trener' || saved === 'klubowicz') return saved;
+    }
+    return 'klubowicz';
+  });
+
   const [isMounted, setIsMounted] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
@@ -649,6 +656,10 @@ export default function RootLayout({
           computedRole = 'admin';
           setAppRole('admin');
           setProfileName('Maciej Kłaput');
+          if (typeof window !== "undefined") {
+            localStorage.setItem('fm_user_role', 'admin');
+            localStorage.setItem('fm_user_email', cleanEmail);
+          }
           if (klientData) subscribeToPushNotifications((klientData as any).id);
         } else {
           const { data: trenerData } = await supabase
@@ -660,11 +671,19 @@ export default function RootLayout({
           if (trenerData) {
             computedRole = 'trener';
             setAppRole('trener');
+            if (typeof window !== "undefined") {
+              localStorage.setItem('fm_user_role', 'trener');
+              localStorage.setItem('fm_user_email', cleanEmail);
+            }
             setProfileName(trenerData.imie_nazwisko || (klientData ? `${(klientData as any).Imię} ${(klientData as any).Nazwisko}` : cleanEmail.split('@')[0]));
             if (trenerData.telefon && trenerData.telefon !== '-') setProfilePhone(trenerData.telefon);
           } else {
             computedRole = 'klubowicz';
             setAppRole('klubowicz');
+            if (typeof window !== "undefined") {
+              localStorage.setItem('fm_user_role', 'klubowicz');
+              localStorage.setItem('fm_user_email', cleanEmail);
+            }
             if (klientData) {
               const k = klientData as any;
               setProfileName(`${k.Imię || ''} ${k.Nazwisko || ''}`.trim() || cleanEmail.split('@')[0]);
@@ -1376,7 +1395,7 @@ export default function RootLayout({
                           </button>
                         )}
 
-                        {/* Przycisk koszyka / sklepu w nagłówku - widoczny WYŁĄCZNIE dla administratora */}
+                        {/* Przycisk koszyka w nagłówku dla administratora */}
                         {appRole === 'admin' && (
                           <div className="relative">
                             <Link href="/sklep">
@@ -1428,6 +1447,10 @@ export default function RootLayout({
                               <button 
                                 onClick={async () => {
                                   setIsProfileMenuOpen(false);
+                                  if (typeof window !== "undefined") {
+                                    localStorage.removeItem('fm_user_role');
+                                    localStorage.removeItem('fm_user_email');
+                                  }
                                   await supabase.auth.signOut();
                                   router.push("/login");
                                 }}
