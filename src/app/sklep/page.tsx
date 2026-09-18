@@ -20,7 +20,12 @@ import {
   User,
   Mail,
   FileText,
-  CreditCard
+  CreditCard,
+  Edit,
+  Eye,
+  EyeOff,
+  Settings2,
+  PackagePlus
 } from 'lucide-react';
 
 export interface Product {
@@ -48,7 +53,18 @@ interface OrderFormData {
   paymentMethod: 'blik' | 'karta';
 }
 
-const CATEGORIES = [
+interface ProductFormData {
+  name: string;
+  category: 'Odzież' | 'Suplementy' | 'Akcesoria' | 'Gadżety';
+  price: string;
+  description: string;
+  image_url: string;
+  stock: string;
+  badge: string;
+  is_active: boolean;
+}
+
+const CATEGORIES: ('Wszystko' | 'Odzież' | 'Suplementy' | 'Akcesoria' | 'Gadżety')[] = [
   'Wszystko',
   'Odzież',
   'Suplementy',
@@ -56,14 +72,31 @@ const CATEGORIES = [
   'Gadżety'
 ];
 
+const INITIAL_PRODUCT_FORM: ProductFormData = {
+  name: '',
+  category: 'Odzież',
+  price: '',
+  description: '',
+  image_url: '',
+  stock: '10',
+  badge: '',
+  is_active: true,
+};
+
 export default function ShopPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Uprawnienia administratora i tryb podglądu
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
+
+  // Wyszukiwanie i filtrowanie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
+  // Koszyk
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
@@ -71,6 +104,7 @@ export default function ShopPage() {
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Formularz zamówienia
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
@@ -79,6 +113,57 @@ export default function ShopPage() {
     paymentMethod: 'blik',
   });
 
+  // Modal dodawania / edycji produktu dla Administratora
+  const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [productForm, setProductForm] = useState<ProductFormData>(INITIAL_PRODUCT_FORM);
+  const [savingProduct, setSavingProduct] = useState<boolean>(false);
+  const [productModalError, setProductModalError] = useState<string | null>(null);
+
+  // Sprawdzanie uprawnień administratora
+  useEffect(() => {
+    const checkRole = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setIsAdmin(false);
+          return;
+        }
+
+        const email = (user.email || '').toLowerCase().trim();
+        if (email === 'maciejklaput@gmail.com' || email === 'maciejklaput@icloud.com') {
+          setIsAdmin(true);
+          return;
+        }
+
+        const { data: clients } = await supabase
+          .from('klienci')
+          .select('*');
+
+        if (clients && clients.length > 0) {
+          const matched = clients.find((c: any) => {
+            const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
+            const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
+            return (email && cEmail === email) || nazwisko.includes('kłaput');
+          });
+
+          if (matched) {
+            setIsAdmin(true);
+            return;
+          }
+        }
+
+        setIsAdmin(false);
+      } catch (e) {
+        console.error('Błąd weryfikacji uprawnień admina sklepu:', e);
+        setIsAdmin(false);
+      }
+    };
+
+    checkRole();
+  }, []);
+
+  // Pobieranie produktów z bazy Supabase
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -87,7 +172,6 @@ export default function ShopPage() {
       const { data, error: fetchError } = await supabase
         .from('products')
         .select('*')
-        .eq('is_active', true)
         .order('created_at', { ascending: false });
 
       if (fetchError) {
@@ -107,6 +191,7 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
+  // Synchronizacja koszyka z localStorage
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -126,8 +211,13 @@ export default function ShopPage() {
     }
   }, [cart]);
 
+  // Filtrowanie asortymentu
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
+      if (!isAdmin || !adminEditMode) {
+        if (!item.is_active) return false;
+      }
+
       const matchesCategory =
         selectedCategory === 'Wszystko' || item.category === selectedCategory;
       const matchesSearch =
@@ -135,8 +225,9 @@ export default function ShopPage() {
         item.description.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     });
-  }, [products, selectedCategory, searchQuery]);
+  }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
 
+  // Operacje na koszyku
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -181,6 +272,7 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
+  // Składanie zamówienia
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -254,8 +346,131 @@ export default function ShopPage() {
     }
   };
 
+  // Dodawanie i edycja produktów (Admin)
+  const handleOpenAddModal = () => {
+    setEditingProductId(null);
+    setProductForm(INITIAL_PRODUCT_FORM);
+    setProductModalError(null);
+    setIsProductModalOpen(true);
+  };
+
+  const handleOpenEditModal = (product: Product) => {
+    setEditingProductId(product.id);
+    setProductForm({
+      name: product.name,
+      category: product.category,
+      price: product.price.toString(),
+      description: product.description || '',
+      image_url: product.image_url || '',
+      stock: product.stock.toString(),
+      badge: product.badge || '',
+      is_active: product.is_active,
+    });
+    setProductModalError(null);
+    setIsProductModalOpen(true);
+  };
+
+  const handleSaveProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProductModalError(null);
+
+    const priceNum = parseFloat(productForm.price.replace(',', '.'));
+    const stockNum = parseInt(productForm.stock, 10);
+
+    if (!productForm.name.trim()) {
+      setProductModalError('Nazwa produktu jest wymagana.');
+      return;
+    }
+    if (isNaN(priceNum) || priceNum < 0) {
+      setProductModalError('Podaj prawidłową cenę produktu.');
+      return;
+    }
+    if (isNaN(stockNum) || stockNum < 0) {
+      setProductModalError('Podaj prawidłowy stan magazynowy.');
+      return;
+    }
+
+    try {
+      setSavingProduct(true);
+
+      const payload = {
+        name: productForm.name.trim(),
+        category: productForm.category,
+        price: priceNum,
+        description: productForm.description.trim(),
+        image_url: productForm.image_url.trim(),
+        stock: stockNum,
+        badge: productForm.badge.trim() ? productForm.badge.trim() : null,
+        is_active: productForm.is_active,
+        updated_at: new Date().toISOString()
+      };
+
+      if (editingProductId) {
+        const { error: updateErr } = await supabase
+          .from('products')
+          .update(payload)
+          .eq('id', editingProductId);
+
+        if (updateErr) throw updateErr;
+      } else {
+        const { error: insertErr } = await supabase
+          .from('products')
+          .insert([payload]);
+
+        if (insertErr) throw insertErr;
+      }
+
+      setIsProductModalOpen(false);
+      await fetchProducts();
+    } catch (err: any) {
+      console.error('Błąd zapisu produktu:', err);
+      setProductModalError(err.message || 'Wystąpił błąd podczas zapisywania produktu.');
+    } finally {
+      setSavingProduct(false);
+    }
+  };
+
+  const handleToggleProductStatus = async (product: Product) => {
+    try {
+      const { error: toggleErr } = await supabase
+        .from('products')
+        .update({ is_active: !product.is_active, updated_at: new Date().toISOString() })
+        .eq('id', product.id);
+
+      if (toggleErr) throw toggleErr;
+
+      setProducts((prev) =>
+        prev.map((p) => (p.id === product.id ? { ...p, is_active: !p.is_active } : p))
+      );
+    } catch (err) {
+      console.error('Błąd zmiany statusu produktu:', err);
+      alert('Nie udało się zmienić widoczności produktu.');
+    }
+  };
+
+  const handleDeleteProduct = async (product: Product) => {
+    const confirmDelete = window.confirm(`Czy na pewno chcesz bezpowrotnie usunąć produkt: "${product.name}"?`);
+    if (!confirmDelete) return;
+
+    try {
+      const { error: delErr } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', product.id);
+
+      if (delErr) throw delErr;
+
+      setProducts((prev) => prev.filter((p) => p.id !== product.id));
+      setCart((prev) => prev.filter((item) => item.product.id !== product.id));
+    } catch (err: any) {
+      console.error('Błąd usuwania produktu:', err);
+      alert('Nie udało się usunąć produktu: ' + err.message);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 pb-24">
+      {/* Pasek nawigacyjny sklepu */}
       <header className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/85 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
@@ -263,8 +478,13 @@ export default function ShopPage() {
               <Dumbbell className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
+              <h1 className="text-xl font-bold tracking-tight text-white sm:text-2xl flex items-center gap-2">
                 Sklep Klubowy
+                {isAdmin && (
+                  <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30">
+                    Panel Admina
+                  </span>
+                )}
               </h1>
               <p className="text-xs text-zinc-400">FORMA MARZEŃ Official Merch & Supplements</p>
             </div>
@@ -289,7 +509,52 @@ export default function ShopPage() {
         </div>
       </header>
 
+      {/* Belka narzędziowa Administratora */}
+      {isAdmin && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Settings2 className="h-4 w-4 text-amber-400" />
+              <span className="text-xs font-bold uppercase tracking-wider text-amber-300">
+                Zarządzanie Sklepem:
+              </span>
+              <span className="text-xs text-zinc-300">
+                {adminEditMode ? 'Tryb edycji włączony (widzisz ukryte produkty)' : 'Podgląd klubowicza aktywny'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setAdminEditMode(!adminEditMode)}
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                  adminEditMode 
+                    ? 'bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800' 
+                    : 'bg-amber-500 text-black shadow-md shadow-amber-500/20'
+                }`}
+              >
+                {adminEditMode ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                {adminEditMode ? 'Włącz podgląd klubowicza' : 'Wróć do edycji'}
+              </button>
+
+              {adminEditMode && (
+                <button
+                  type="button"
+                  onClick={handleOpenAddModal}
+                  className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-1.5 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 shadow-sm"
+                >
+                  <PackagePlus className="h-4 w-4" />
+                  Dodaj produkt
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Główny obszar roboczy */}
       <main className="mx-auto max-w-7xl px-4 pt-8 sm:px-6 lg:px-8">
+        {/* Szukajka i kategorie */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -327,6 +592,7 @@ export default function ShopPage() {
           </div>
         </div>
 
+        {/* Stan ładowania / błędów */}
         {loading && (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
@@ -341,13 +607,18 @@ export default function ShopPage() {
           </div>
         )}
 
+        {/* Siatka produktów */}
         {!loading && !error && (
           <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {filteredProducts.length > 0 ? (
               filteredProducts.map((item) => (
                 <div
                   key={item.id}
-                  className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/50 transition-all hover:border-zinc-700 hover:bg-zinc-900"
+                  className={`group flex flex-col justify-between overflow-hidden rounded-2xl border transition-all ${
+                    !item.is_active
+                      ? 'border-amber-500/40 bg-zinc-900/30 opacity-75'
+                      : 'border-zinc-800/80 bg-zinc-900/50 hover:border-zinc-700 hover:bg-zinc-900'
+                  }`}
                 >
                   <div>
                     <div className="relative h-56 w-full overflow-hidden bg-zinc-950">
@@ -365,23 +636,71 @@ export default function ShopPage() {
                           <Dumbbell className="h-12 w-12" />
                         </div>
                       )}
-                      {item.badge && (
-                        <div className="absolute left-3 top-3 flex items-center gap-1 rounded-md bg-amber-500/90 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-black backdrop-blur-sm">
-                          <Tag className="h-3 w-3" />
-                          {item.badge}
+
+                      {/* Odznaki */}
+                      <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start">
+                        {item.badge && (
+                          <div className="flex items-center gap-1 rounded-md bg-amber-500/90 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-black backdrop-blur-sm shadow">
+                            <Tag className="h-3 w-3" />
+                            {item.badge}
+                          </div>
+                        )}
+                        {!item.is_active && (
+                          <div className="flex items-center gap-1 rounded-md bg-rose-500/90 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-white backdrop-blur-sm shadow">
+                            <EyeOff className="h-3 w-3" />
+                            Ukryty dla klubowiczów
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Przyciski edycji administratora */}
+                      {isAdmin && adminEditMode && (
+                        <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/75 p-1 backdrop-blur-md border border-zinc-700">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProductStatus(item)}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                            title={item.is_active ? 'Ukryj produkt' : 'Pokaż produkt w sklepie'}
+                          >
+                            {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditModal(item)}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400"
+                            title="Edytuj produkt"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteProduct(item)}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400"
+                            title="Usuń produkt"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
                         </div>
                       )}
                     </div>
 
                     <div className="p-5">
-                      <span className="text-xs font-medium uppercase tracking-wider text-amber-400/90">
-                        {item.category}
-                      </span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium uppercase tracking-wider text-amber-400/90">
+                          {item.category}
+                        </span>
+                        {isAdmin && adminEditMode && (
+                          <span className="text-[11px] text-zinc-400 font-mono">
+                            Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
+                          </span>
+                        )}
+                      </div>
+
                       <h3 className="mt-1 text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
                         {item.name}
                       </h3>
                       <p className="mt-2 line-clamp-2 text-sm text-zinc-400 leading-relaxed">
-                        {item.description}
+                        {item.description || 'Brak dodatkowego opisu.'}
                       </p>
                     </div>
                   </div>
@@ -407,7 +726,7 @@ export default function ShopPage() {
               ))
             ) : (
               <div className="col-span-full py-16 text-center">
-                <p className="text-base text-zinc-400">Brak artykułów w wybranej kategorii.</p>
+                <p className="text-base text-zinc-400">Brak artykułów spełniających kryteria.</p>
                 <button
                   onClick={() => {
                     setSelectedCategory('Wszystko');
@@ -423,6 +742,175 @@ export default function ShopPage() {
         )}
       </main>
 
+      {/* Modal Dodawania / Edycji Produktu (Admin) */}
+      {isProductModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+          <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl my-8">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <PackagePlus className="h-5 w-5 text-amber-400" />
+                {editingProductId ? 'Edycja produktu' : 'Dodaj nowy produkt do sklepu'}
+              </h3>
+              <button
+                onClick={() => setIsProductModalOpen(false)}
+                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {productModalError && (
+              <div className="my-4 flex items-center gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{productModalError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveProduct} className="mt-4 space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  Nazwa produktu *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="np. Koszulka Techniczna FORMA MARZEŃ"
+                  value={productForm.name}
+                  onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                    Kategoria *
+                  </label>
+                  <select
+                    value={productForm.category}
+                    onChange={(e) => setProductForm({ ...productForm, category: e.target.value as any })}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none"
+                  >
+                    <option value="Odzież">Odzież</option>
+                    <option value="Suplementy">Suplementy</option>
+                    <option value="Akcesoria">Akcesoria</option>
+                    <option value="Gadżety">Gadżety</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                    Cena (PLN) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="np. 129.00"
+                    value={productForm.price}
+                    onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                    Stan magazynowy (szt.) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    placeholder="np. 25"
+                    value={productForm.stock}
+                    onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                    Odznaka / Badge (opcja)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="np. Bestseller, Nowość"
+                    value={productForm.badge}
+                    onChange={(e) => setProductForm({ ...productForm, badge: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  Link do zdjęcia (URL)
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://images.unsplash.com/..."
+                  value={productForm.image_url}
+                  onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold uppercase tracking-wider text-zinc-300 mb-1">
+                  Opis produktu
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Krótki opis materiału, zastosowania, składu..."
+                  value={productForm.description}
+                  onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2.5 pt-1">
+                <input
+                  type="checkbox"
+                  id="product-active-toggle"
+                  checked={productForm.is_active}
+                  onChange={(e) => setProductForm({ ...productForm, is_active: e.target.checked })}
+                  className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                />
+                <label htmlFor="product-active-toggle" className="font-semibold text-zinc-200 cursor-pointer">
+                  Produkt aktywny i widoczny dla klubowiczów
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsProductModalOpen(false)}
+                  className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingProduct}
+                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-6 py-2.5 text-xs font-black uppercase tracking-wider text-black hover:bg-amber-400 disabled:opacity-50"
+                >
+                  {savingProduct ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Zapisywanie...
+                    </>
+                  ) : (
+                    'Zapisz produkt'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Drawer Koszyka / Realizacji Zamówienia */}
       {isCartOpen && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div
@@ -466,6 +954,7 @@ export default function ShopPage() {
                 </div>
               )}
 
+              {/* Krok 1: Podgląd artykułów w koszyku */}
               {checkoutStep === 'cart' && (
                 <div className="mt-4 max-h-[55vh] space-y-4 overflow-y-auto pr-1">
                   {cart.length > 0 ? (
@@ -532,6 +1021,7 @@ export default function ShopPage() {
                 </div>
               )}
 
+              {/* Krok 2: Formularz wysyłki i wyboru metody płatności */}
               {checkoutStep === 'form' && (
                 <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
@@ -622,6 +1112,7 @@ export default function ShopPage() {
               )}
             </div>
 
+            {/* Stopka podsumowania */}
             {cart.length > 0 && (
               <div className="border-t border-zinc-800 pt-4">
                 <div className="mb-4 space-y-1.5 text-sm">
