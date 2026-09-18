@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../raporty/klienci/supabase';
 
 interface ClassItem {
@@ -24,8 +24,16 @@ interface RegulationItem {
   checkbox_text?: string;
 }
 
-export default function FreeRegistrationPage() {
+interface ReferrerInfo {
+  id: number;
+  name: string;
+  referral_code: string;
+}
+
+function FreeRegistrationContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [step, setStep] = useState(1);
   const [customLogo, setCustomLogo] = useState('');
   const [logoError, setLogoError] = useState(false);
@@ -33,6 +41,9 @@ export default function FreeRegistrationPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedClass, setSelectedClass] = useState<{ id?: any; title: string; time: string; date: string } | null>(null);
   const [classesList, setClassesList] = useState<ClassItem[]>([]);
+
+  // Dane Ambasadora (polecającego)
+  const [referrer, setReferrer] = useState<ReferrerInfo | null>(null);
 
   // Stan formularza danych (Krok 2)
   const [firstName, setFirstName] = useState('');
@@ -52,6 +63,34 @@ export default function FreeRegistrationPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+
+  // Odczytanie kodu polecającego z URL
+  useEffect(() => {
+    const rawRef = searchParams.get('ref') || searchParams.get('kod') || '';
+    if (rawRef) {
+      const cleanRef = rawRef.trim().toUpperCase();
+      const verifyReferrer = async () => {
+        try {
+          const { data: clientData } = await supabase
+            .from('klienci')
+            .select('id, "Imię", "Nazwisko", referral_code')
+            .eq('referral_code', cleanRef)
+            .maybeSingle();
+
+          if (clientData) {
+            setReferrer({
+              id: clientData.id,
+              name: `${clientData['Imię'] || ''} ${clientData['Nazwisko'] || ''}`.trim(),
+              referral_code: clientData.referral_code
+            });
+          }
+        } catch (err) {
+          console.error('Błąd weryfikacji ambasadora:', err);
+        }
+      };
+      verifyReferrer();
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     try {
@@ -201,7 +240,7 @@ export default function FreeRegistrationPage() {
     setErrorMsg('');
 
     try {
-      // Weryfikacja czy adres e-mail już istnieje w tabeli klienci (niewrażliwa na wielkość liter)
+      // Weryfikacja czy adres e-mail już istnieje w tabeli klienci
       const { data: existingClientCheck } = await supabase
         .from('klienci')
         .select('id')
@@ -241,9 +280,9 @@ export default function FreeRegistrationPage() {
         ? `${selectedClass.id}_${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}`
         : null;
 
-      // 2. Równoległe zapisy do bazy Supabase z pełnym wsparciem Promise dla TypeScript
+      // 2. Równoległe zapisy do bazy Supabase
       const databaseOperations: Promise<any>[] = [
-        // 2a. Dodanie klienta do tabeli "klienci"
+        // 2a. Dodanie klienta do tabeli "klienci" z przypisanym polecającym
         Promise.resolve(
           supabase.from('klienci').insert([
             {
@@ -255,6 +294,7 @@ export default function FreeRegistrationPage() {
               Zarejestrowany: todayIsoStr,
               Portfel: '0.00 PLN',
               karnetyKlubowicza: [],
+              referred_by: referrer ? referrer.id : null,
               zapisyNadchodzace: [
                 {
                   id: Date.now(),
@@ -287,7 +327,7 @@ export default function FreeRegistrationPage() {
               nadawca_id: 5000,
               nadawca_nazwa: 'System / Administrator',
               odbiorca_id: 5000,
-              tresc: `Nowy użytkownik zarejestrowany (darmowe zajęcia): ${cleanFirstName} ${cleanLastName} (${cleanEmail}, tel: ${cleanPhone})`,
+              tresc: `Nowy użytkownik zarejestrowany (darmowe zajęcia): ${cleanFirstName} ${cleanLastName} (${cleanEmail}, tel: ${cleanPhone})${referrer ? ` [Z polecenia: ${referrer.name}]` : ''}`,
               przeczytana: false
             }
           ])
@@ -323,7 +363,39 @@ export default function FreeRegistrationPage() {
         );
       }
 
-      // Wykonanie wszystkich operacji bazodanowych jednocześnie
+      // 2f. PROGRAM AMBASADOR: Rejestracja oczekującego wpisu w referrals oraz powiadomienie
+      if (referrer) {
+        databaseOperations.push(
+          Promise.resolve(
+            supabase.from('referrals').insert([
+              {
+                referrer_id: referrer.id,
+                referred_client_id: newClientId,
+                pass_name: 'Darmowy trening próbny',
+                pass_price: 0.00,
+                is_qualified: false,
+                status: 'oczekuje_na_pierwszy_karnet'
+              }
+            ])
+          )
+        );
+
+        databaseOperations.push(
+          Promise.resolve(
+            supabase.from('czat_wiadomosci').insert([
+              {
+                nadawca_id: 5000,
+                nadawca_nazwa: 'Program Ambasador',
+                odbiorca_id: referrer.id,
+                tresc: `👋 Twój znajomy ${cleanFirstName} ${cleanLastName} zapisał się na darmowy trening próbny (${selectedClass?.title || 'Zajęcia'}) z Twojego polecenia! Gdy zakupi swój pierwszy karnet (min. 200 zł), otrzymasz nagrodę Ambasadora.`,
+                przeczytana: false
+              }
+            ])
+          )
+        );
+      }
+
+      // Wykonanie wszystkich operacji bazodanowych
       await Promise.all(databaseOperations);
 
       // 3. Wysłanie powiadomienia Web Push do Administratora w tle
@@ -345,7 +417,7 @@ export default function FreeRegistrationPage() {
           .filter(Boolean);
 
         const pushTitle = 'Nowy klubowicz zarejestrowany!';
-        const pushBody = `${cleanFirstName} ${cleanLastName} (${cleanEmail}) zarejestrował(a) się na bezpłatne zajęcia: ${selectedClass?.title || 'Zajęcia'} (${selectedClass?.date || todayIsoStr} ${selectedClass?.time || ''}).`;
+        const pushBody = `${cleanFirstName} ${cleanLastName} (${cleanEmail}) zarejestrował(a) się na bezpłatne zajęcia: ${selectedClass?.title || 'Zajęcia'} (${selectedClass?.date || todayIsoStr} ${selectedClass?.time || ''})${referrer ? ` [Ambasador: ${referrer.name}]` : ''}.`;
 
         if (subscriptions.length > 0) {
           fetch('/api/push/send', {
@@ -409,6 +481,22 @@ export default function FreeRegistrationPage() {
               <span className="text-red-600 font-black text-xl">🏋️‍♂️</span>
             )}
           </div>
+
+          {/* BANER POLECENIA AMBASADORA */}
+          {referrer && (
+            <div className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 text-white p-3.5 rounded-2xl shadow-sm text-left flex items-center gap-3">
+              <span className="text-2xl">🎁</span>
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-wider text-emerald-100">
+                  Zaproszenie od Ambasadora
+                </div>
+                <div className="text-xs font-bold mt-0.5">
+                  Dołączasz z rekomendacji: <span className="underline">{referrer.name}</span>. Twój pierwszy trening jest całkowicie darmowy!
+                </div>
+              </div>
+            </div>
+          )}
+
           <p className="text-xs text-slate-600 font-medium">
             Cześć, zapraszam Cię na zajęcia.<br />Myślę, że znajdziesz coś dla siebie.
           </p>
@@ -616,5 +704,13 @@ export default function FreeRegistrationPage() {
       )}
 
     </div>
+  );
+}
+
+export default function FreeRegistrationPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50 flex items-center justify-center text-xs font-bold text-slate-400">Ładowanie grafiku zajęć...</div>}>
+      <FreeRegistrationContent />
+    </Suspense>
   );
 }
