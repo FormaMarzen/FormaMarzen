@@ -82,8 +82,8 @@ export default function AmbasadorKlubowiczPage() {
         setReferralCode(code);
 
         const origin = typeof window !== 'undefined' ? window.location.origin : 'https://forma-marzen.vercel.app';
-        // Link kieruje prosto do zapisu na pierwszy bezpłatny trening z grafiku
-        setReferralLink(`${origin}/rejestracja-ogolna?ref=${code}`);
+        // Link kieruje poprawnie na /rejestracja z kodem polecenia
+        setReferralLink(`${origin}/rejestracja?ref=${code}`);
 
         // 3. Pobierz historię poleceń tego klubowicza
         const { data: refData } = await supabase
@@ -159,7 +159,6 @@ export default function AmbasadorKlubowiczPage() {
     }
   }
 
-  // Obliczenie postępu procentowego do kolejnego poziomu
   let progressPercent = 100;
   let referralsNeeded = 0;
 
@@ -185,7 +184,6 @@ export default function AmbasadorKlubowiczPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800">
       
-      {/* POWIADOMIENIE O SKOPIOWANIU LINKU */}
       {copiedNotification && (
         <div className="fixed top-6 right-6 z-50 bg-emerald-900 text-emerald-100 border border-emerald-700 px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold animate-in fade-in">
           <span>✅</span>
@@ -205,7 +203,7 @@ export default function AmbasadorKlubowiczPage() {
           <p className="text-xs sm:text-sm text-sky-200 leading-relaxed font-medium">
             Każda osoba, która dołączy do klubu z Twojego linku, zapisuje się na 
             <strong className="text-amber-300 font-black"> bezpłatny pierwszy trening próbny</strong>. 
-            Gdy po treningu wykupi swój pierwszy karnet (min. {settings.min_pass_price} PLN), Ty zdobywasz kolejne poziomy i zniżki na własne treningi (nawet do 50% rabatu na 18 miesięcy)!
+            Gdy po treningu wykupi swój pierwszy karnet (min. {settings.min_pass_price} PLN), Ty zdobywasz kolejne poziomy i zniżki na własne treningi!
           </p>
         </div>
 
@@ -226,7 +224,6 @@ export default function AmbasadorKlubowiczPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-          {/* Kod polecający */}
           <div className="bg-sky-50/70 border border-sky-200 rounded-2xl p-4 text-center">
             <div className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">
               Twój Kod Ambasadora
@@ -236,7 +233,6 @@ export default function AmbasadorKlubowiczPage() {
             </div>
           </div>
 
-          {/* Pełny link do skopiowania */}
           <div className="md:col-span-2 space-y-2">
             <div className="flex flex-col sm:flex-row items-stretch gap-2">
               <input
@@ -300,7 +296,6 @@ export default function AmbasadorKlubowiczPage() {
           </div>
         </div>
 
-        {/* Pasek postępu */}
         <div className="space-y-2">
           <div className="flex justify-between text-xs font-bold">
             <span className="text-slate-600">
@@ -383,7 +378,6 @@ export default function AmbasadorKlubowiczPage() {
                     {tier.required_referrals} {tier.required_referrals === 1 ? 'polecenie' : 'poleceń'}
                   </div>
 
-                  {/* Benefit Ambasadora */}
                   <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3">
                     <div className="text-[10px] font-black uppercase text-amber-900 mb-1">
                       🎁 Twoja nagroda:
@@ -393,7 +387,6 @@ export default function AmbasadorKlubowiczPage() {
                     </div>
                   </div>
 
-                  {/* Benefit Nowej Osoby */}
                   <div className="bg-sky-50/70 border border-sky-200 rounded-xl p-3">
                     <div className="text-[10px] font-black uppercase text-sky-900 mb-1">
                       🤝 Dla znajomego:
