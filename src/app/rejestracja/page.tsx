@@ -14,6 +14,9 @@ interface ClassItem {
   prowadzacy?: string;
   start?: string;
   start_time?: string;
+  limit?: number;
+  bookedCount?: number;
+  isFull?: boolean;
 }
 
 interface RegulationItem {
@@ -64,11 +67,10 @@ function FreeRegistrationContent() {
   const [errorMsg, setErrorMsg] = useState('');
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
 
-  // Bezpieczny i odporny odczyt kodu polecającego z URL oraz weryfikacja w Supabase
+  // Odczytanie kodu polecającego z URL
   useEffect(() => {
     let rawRef = searchParams.get('ref') || searchParams.get('kod') || searchParams.get('r') || '';
     
-    // Fallback bezpośrednio z window.location na wypadek opóźnienia hooka useSearchParams
     if (!rawRef && typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
       rawRef = urlParams.get('ref') || urlParams.get('kod') || urlParams.get('r') || '';
@@ -78,14 +80,12 @@ function FreeRegistrationContent() {
       const cleanRef = rawRef.trim();
       const verifyReferrer = async () => {
         try {
-          // Szukamy po kodzie (bez względu na wielkość liter)
-          let { data: clientData, error } = await supabase
+          let { data: clientData } = await supabase
             .from('klienci')
             .select('id, "Imię", "Nazwisko", referral_code')
             .ilike('referral_code', cleanRef)
             .maybeSingle();
 
-          // Jeśli nie znaleziono, a kod jest liczbą – sprawdzamy czy to bezpośrednie ID
           if (!clientData && !isNaN(Number(cleanRef))) {
             const { data: clientById } = await supabase
               .from('klienci')
@@ -141,12 +141,24 @@ function FreeRegistrationContent() {
   const fetchGrafik = useCallback(async (date: Date) => {
     const dateStr = date.toISOString().split('T')[0];
     const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
+    const dayStrPadded = String(date.getDate()).padStart(2, '0');
+    const monthStrPadded = String(date.getMonth() + 1).padStart(2, '0');
 
     try {
-      const [{ data: cykliczne }, { data: jednorazowe }] = await Promise.all([
+      // Równoległe pobranie zajęć cyklicznych, jednorazowych oraz aktualnych zapisów
+      const [{ data: cykliczne }, { data: jednorazowe }, { data: zapisy }] = await Promise.all([
         supabase.from('grafik_zajec').select('*'),
-        supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr)
+        supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr),
+        supabase.from('zapisy_zajec').select('class_key')
       ]);
+
+      // Zliczamy zajęte miejsca dla każdego klucza zajęć
+      const bookingCounts: { [key: string]: number } = {};
+      (zapisy || []).forEach((s: any) => {
+        if (s.class_key) {
+          bookingCounts[s.class_key] = (bookingCounts[s.class_key] || 0) + 1;
+        }
+      });
 
       const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
       
@@ -155,30 +167,47 @@ function FreeRegistrationContent() {
         ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
       ];
 
-      combined.sort((a, b) => {
+      // Mapowanie dostępności i limitów miejsc
+      let processedCombined = combined.map(c => {
+        const cKey = `${c.id}_${dayStrPadded}/${monthStrPadded}`;
+        const bookedCount = bookingCounts[cKey] || 0;
+        const limit = c.limit !== undefined && c.limit !== null ? Number(c.limit) : 20;
+        const isFull = bookedCount >= limit;
+
+        return {
+          ...c,
+          bookedCount,
+          limit,
+          isFull
+        };
+      });
+
+      // Sortowanie od najwcześniejszych do najpóźniejszych godzin danego dnia
+      processedCombined.sort((a, b) => {
         const timeA = a.time || a.godzina || a.start || '00:00';
         const timeB = b.time || b.godzina || b.start || '00:00';
         return timeA.localeCompare(timeB);
       });
 
+      // Filtrowanie zajęć, które już minęły lub są z dni przeszłych
       const now = new Date();
       const selectedMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
       const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
       if (selectedMidnight < todayMidnight) {
-        combined = [];
+        processedCombined = [];
       } else if (selectedMidnight.getTime() === todayMidnight.getTime()) {
         const currentHours = now.getHours();
         const currentMinutes = now.getMinutes();
         const currentTimeStr = `${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}`;
 
-        combined = combined.filter(cls => {
+        processedCombined = processedCombined.filter(cls => {
           const clsTime = cls.time || cls.godzina || cls.start || '00:00';
           return clsTime >= currentTimeStr;
         });
       }
 
-      setClassesList(combined);
+      setClassesList(processedCombined);
     } catch (err) {
       console.error('Błąd pobierania grafiku:', err);
       setClassesList([]);
@@ -196,6 +225,11 @@ function FreeRegistrationContent() {
   };
 
   const handleSelectClass = (cls: ClassItem) => {
+    if (cls.isFull) {
+      setErrorMsg('Te zajęcia nie mają już wolnych miejsc. Wybierz inny termin.');
+      return;
+    }
+    setErrorMsg('');
     setSelectedClass({
       id: cls.id,
       title: cls.title || cls.nazwa || 'Zajęcia',
@@ -297,7 +331,6 @@ function FreeRegistrationContent() {
 
       // 2. Operacje bazodanowe
       const databaseOperations: Promise<any>[] = [
-        // Dodanie klienta do tabeli "klienci"
         Promise.resolve(
           supabase.from('klienci').insert([
             {
@@ -323,7 +356,6 @@ function FreeRegistrationContent() {
           ])
         ),
 
-        // Saldo startowe
         Promise.resolve(
           supabase.from('transakcje').insert([
             {
@@ -335,7 +367,6 @@ function FreeRegistrationContent() {
           ])
         ),
 
-        // Powiadomienie na czacie dla administratora (ID 5000)
         Promise.resolve(
           supabase.from('czat_wiadomosci').insert([
             {
@@ -349,7 +380,6 @@ function FreeRegistrationContent() {
         )
       ];
 
-      // Akceptacja regulaminów
       if (newUserId && regulations.length > 0) {
         const acceptanceInserts = regulations.map(reg => ({
           user_id: newUserId,
@@ -362,7 +392,6 @@ function FreeRegistrationContent() {
         );
       }
 
-      // Rezerwacja w tabeli zapisy_zajec
       if (classKey) {
         databaseOperations.push(
           Promise.resolve(
@@ -378,7 +407,6 @@ function FreeRegistrationContent() {
         );
       }
 
-      // Program Ambasador: wpis ze statusem oczekującym
       if (referrer) {
         databaseOperations.push(
           Promise.resolve(
@@ -412,7 +440,6 @@ function FreeRegistrationContent() {
 
       await Promise.all(databaseOperations);
 
-      // Web Push do administratora w tle
       try {
         const { data: adminSubs } = await supabase
           .from('push_subscriptions')
@@ -576,22 +603,36 @@ function FreeRegistrationContent() {
                   <div 
                     key={idx}
                     onClick={() => handleSelectClass(cls)}
-                    className="bg-white border border-slate-200 hover:border-emerald-500 rounded-xl p-3.5 flex justify-between items-center cursor-pointer transition-all shadow-sm group hover:shadow-md"
+                    className={`border rounded-xl p-3.5 flex justify-between items-center transition-all shadow-sm ${
+                      cls.isFull 
+                        ? 'bg-slate-100 border-slate-300 opacity-80 cursor-not-allowed' 
+                        : 'bg-white border-slate-200 hover:border-emerald-500 cursor-pointer group hover:shadow-md'
+                    }`}
                   >
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-bold text-xs text-slate-900 group-hover:text-emerald-700">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className={`font-bold text-xs ${cls.isFull ? 'text-slate-500 line-through' : 'text-slate-900 group-hover:text-emerald-700'}`}>
                           {cls.title ?? cls.nazwa ?? 'Zajęcia'}
                         </h4>
-                        <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider">
-                          Darmowy Trening
-                        </span>
+                        {cls.isFull ? (
+                          <span className="bg-rose-100 text-rose-800 border border-rose-300 font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1">
+                            <span>🔒</span> Brak miejsc ({cls.bookedCount}/{cls.limit})
+                          </span>
+                        ) : (
+                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-black text-[9px] px-2 py-0.5 rounded-full uppercase tracking-wider">
+                            Darmowy Trening ({cls.bookedCount}/{cls.limit})
+                          </span>
+                        )}
                       </div>
                       <span className="text-[11px] text-slate-500 block">• Prowadzący: {cls.trainer ?? cls.prowadzacy ?? 'Brak'}</span>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                       <span className="text-xs font-semibold text-slate-700">{cls.time ?? cls.godzina ?? cls.start ?? ''}</span>
-                      <span className="text-slate-400 group-hover:text-emerald-600 font-bold">→</span>
+                      {cls.isFull ? (
+                        <span className="text-rose-600 text-base" title="Brak miejsc - kłódka">🔒</span>
+                      ) : (
+                        <span className="text-slate-400 group-hover:text-emerald-600 font-bold">→</span>
+                      )}
                     </div>
                   </div>
                 ))
