@@ -265,6 +265,13 @@ export default function RootLayout({
     );
   })();
 
+  // Ochrona bezpośredniego wejścia pod adres /sklep dla osób innych niż admin
+  useEffect(() => {
+    if (!isAuthLoading && appRole !== 'admin' && pathname === '/sklep') {
+      router.push('/');
+    }
+  }, [isAuthLoading, appRole, pathname, router]);
+
   const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz', clientId?: number | string | null) => {
     if (typeof window === "undefined") return;
 
@@ -383,7 +390,7 @@ export default function RootLayout({
         }
 
         const unlockedTiers = matchedTable.customTiers.filter((tier: any) => userVal >= Number(tier.threshold));
-        if (unlockedTiers.length > 0) {
+        if (unlockedTiers > 0) {
           const topTier = unlockedTiers[unlockedTiers.length - 1];
           const verificationKey = `${c.id}_${topTier.id}`;
           if (!allVerifiedKeys.has(verificationKey)) {
@@ -753,6 +760,7 @@ export default function RootLayout({
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
         { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
+        { href: '/sklep', label: 'Sklep (W budowie)', icon: '🛒' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/odziez', label: 'Odzież', icon: '👕' },
       ]
@@ -819,7 +827,6 @@ export default function RootLayout({
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
-        { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
@@ -847,7 +854,6 @@ export default function RootLayout({
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
         { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
-        { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
@@ -1182,7 +1188,7 @@ export default function RootLayout({
 
         <link rel="manifest" href="/manifest.json?v=2" />
         
-        {/* Kolor status baru dostosowany do białego nagłówka - eliminuje rozmycie i ucięcie na iOS */}
+        {/* Kolor status baru dostosowany do białego nagłówka */}
         <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#ffffff" />
         <meta name="mobile-web-app-capable" content="yes" />
@@ -1204,7 +1210,7 @@ export default function RootLayout({
           </div>
         ) : (
           <>
-            {/* Wskaźnik Pull-to-refresh: widoczny wyłącznie podczas aktywnego przeciągania */}
+            {/* Wskaźnik Pull-to-refresh */}
             <div 
               className={`fixed top-0 left-0 right-0 z-50 flex items-center justify-center pointer-events-none transition-transform duration-200 ease-out pt-[env(safe-area-inset-top)] ${pullDistance > 15 || isRefreshing ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
               style={{
@@ -1334,7 +1340,7 @@ export default function RootLayout({
                   </aside>
 
                   <div className="flex-1 flex flex-col h-[100dvh] overflow-hidden w-full">
-                    {/* Główny nagłówek ze statycznym tłem i zabezpieczeniem przed przenikaniem elementów z dołu */}
+                    {/* Główny nagłówek */}
                     <header className="bg-white border-b border-sky-200 flex items-center justify-between px-4 md:px-6 shrink-0 shadow-sm relative z-20 pt-[env(safe-area-inset-top)] min-h-[calc(4rem+env(safe-area-inset-top))]">
                       <div className="flex items-center gap-3 py-3">
                         <button 
@@ -1370,14 +1376,22 @@ export default function RootLayout({
                           </button>
                         )}
 
-                        <div className="relative">
-                          <button className="w-9 h-9 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl flex items-center justify-center transition-colors relative cursor-pointer" title="Koszyk">
-                            🛒
-                            <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white font-black text-[10px] w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
-                              0
-                            </span>
-                          </button>
-                        </div>
+                        {/* Przycisk koszyka / sklepu w nagłówku - widoczny WYŁĄCZNIE dla administratora */}
+                        {appRole === 'admin' && (
+                          <div className="relative">
+                            <Link href="/sklep">
+                              <button 
+                                className="w-9 h-9 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl flex items-center justify-center transition-colors relative cursor-pointer" 
+                                title="Sklep klubowy (Widok administratora)"
+                              >
+                                🛒
+                                <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white font-black text-[10px] w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
+                                  0
+                                </span>
+                              </button>
+                            </Link>
+                          </div>
+                        )}
 
                         <div className="relative" ref={profileMenuRef}>
                           <button 
