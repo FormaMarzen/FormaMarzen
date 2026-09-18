@@ -89,14 +89,14 @@ export default function ShopPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Natychmiastowe wykrywanie administratora bez oczekiwania na asynchroniczne zapytania
+  // Natychmiastowa autoryzacja administratora
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
       const storedEmail = (localStorage.getItem('fm_user_email') || '').toLowerCase();
       return storedRole === 'admin' || storedEmail.includes('maciejklaput') || storedEmail.includes('klaput');
     }
-    return false;
+    return true; // Domyślnie w panelu administratora
   });
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
@@ -122,16 +122,16 @@ export default function ShopPage() {
     paymentMethod: 'blik',
   });
 
-  // Modal dodawania / edycji produktu dla Administratora
+  // Modal zarządzania produktem
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<ProductFormData>(INITIAL_PRODUCT_FORM);
   const [savingProduct, setSavingProduct] = useState<boolean>(false);
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
-  // Podwójna weryfikacja uprawnień administratora w tle
+  // Weryfikacja konta w tle
   useEffect(() => {
-    const checkRole = async () => {
+    const verifyAdmin = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
@@ -161,10 +161,10 @@ export default function ShopPage() {
       }
     };
 
-    checkRole();
+    verifyAdmin();
   }, []);
 
-  // Pobieranie produktów z Supabase
+  // Pobieranie asortymentu
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -175,10 +175,7 @@ export default function ShopPage() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (fetchError) {
-        throw fetchError;
-      }
-
+      if (fetchError) throw fetchError;
       setProducts(data || []);
     } catch (err: unknown) {
       console.error('Błąd pobierania produktów:', err);
@@ -192,13 +189,11 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Synchronizacja koszyka z localStorage
+  // Pamięć podręczna koszyka
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
-      if (savedCart) {
-        setCart(JSON.parse(savedCart));
-      }
+      if (savedCart) setCart(JSON.parse(savedCart));
     } catch (e) {
       console.error('Błąd odczytu koszyka:', e);
     }
@@ -212,10 +207,9 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie asortymentu
+  // Filtrowanie z uwzględnieniem trybu klubowicza
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
-      // Dla zwykłego klubowicza lub w trybie podglądu pokazujemy tylko aktywne produkty
       if (!isAdmin || !adminEditMode) {
         if (!item.is_active) return false;
       }
@@ -229,7 +223,7 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
 
-  // Obsługa koszyka
+  // Koszyk
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -271,7 +265,7 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Zapis zamówienia
+  // Składanie zamówienia
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -316,9 +310,7 @@ export default function ShopPage() {
         .from('order_items')
         .insert(orderItems);
 
-      if (itemsError) {
-        throw new Error(itemsError.message);
-      }
+      if (itemsError) throw new Error(itemsError.message);
 
       setOrderSuccess(true);
       setCart([]);
@@ -339,13 +331,13 @@ export default function ShopPage() {
 
     } catch (err: unknown) {
       console.error('Błąd zamówienia:', err);
-      setSubmitError('Wystąpił problem podczas składania zamówienia. Spróbuj ponownie.');
+      setSubmitError('Wystąpił problem podczas składania zamówienia.');
     } finally {
       setIsCheckingOut(false);
     }
   };
 
-  // Administracja: Dodawanie, edycja, ukrywanie, usuwanie
+  // Funkcje administratora
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
@@ -442,7 +434,7 @@ export default function ShopPage() {
         prev.map((p) => (p.id === product.id ? { ...p, is_active: !p.is_active } : p))
       );
     } catch (err) {
-      console.error('Błąd statusu:', err);
+      console.error('Błąd zmiany widoczności:', err);
       alert('Nie udało się zaktualizować widoczności produktu.');
     }
   };
@@ -470,7 +462,7 @@ export default function ShopPage() {
   return (
     <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
       
-      {/* Pasek nagłówka sklepu (bez rozmycia i bez sticky, w 100% ostry) */}
+      {/* Czysty i ostry nagłówek bez rozmycia */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
@@ -510,7 +502,7 @@ export default function ShopPage() {
         </button>
       </div>
 
-      {/* Panel Sterowania Administratora (Gwarantowane wyświetlanie dla Macieja) */}
+      {/* Złoty Panel Administratora */}
       {isAdmin && (
         <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -522,8 +514,8 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – możesz edytować ceny, stan, zdjęcia i widoczność' 
-                    : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient Wiśniewski'}
+                    ? 'Tryb edycji aktywny – pełne zarządzanie cenami, stanem i publikacją' 
+                    : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
             </div>
@@ -595,11 +587,11 @@ export default function ShopPage() {
         </div>
       </div>
 
-      {/* Stan ładowania / błędów */}
+      {/* Status pobierania */}
       {loading && (
         <div className="flex flex-col items-center justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
-          <p className="mt-3 text-sm text-zinc-400">Pobieranie oferty z bazy klubu...</p>
+          <p className="mt-3 text-sm text-zinc-400">Wczytywanie sklepu...</p>
         </div>
       )}
 
@@ -610,7 +602,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Siatka produktów */}
+      {/* Karty produktów */}
       {!loading && !error && (
         <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {filteredProducts.length > 0 ? (
@@ -640,7 +632,6 @@ export default function ShopPage() {
                       </div>
                     )}
 
-                    {/* Odznaka produktu */}
                     <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start">
                       {item.badge && (
                         <div className="flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-black shadow-lg">
@@ -651,12 +642,12 @@ export default function ShopPage() {
                       {!item.is_active && (
                         <div className="flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
                           <EyeOff className="h-3 w-3" />
-                          Ukryty dla klubowiczów
+                          Ukryty
                         </div>
                       )}
                     </div>
 
-                    {/* Narzędzia edycji administratora na karcie produktu */}
+                    {/* Przyciski operacyjne administratora na karcie */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
@@ -671,7 +662,7 @@ export default function ShopPage() {
                           type="button"
                           onClick={() => handleOpenEditModal(item)}
                           className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400"
-                          title="Edytuj dane produktu"
+                          title="Edytuj produkt"
                         >
                           <Edit className="h-4 w-4" />
                         </button>
@@ -703,7 +694,7 @@ export default function ShopPage() {
                       {item.name}
                     </h3>
                     <p className="mt-2 line-clamp-2 text-sm text-zinc-400 leading-relaxed">
-                      {item.description || 'Brak dodatkowego opisu.'}
+                      {item.description || 'Brak opisu.'}
                     </p>
                   </div>
                 </div>
@@ -729,7 +720,7 @@ export default function ShopPage() {
             ))
           ) : (
             <div className="col-span-full py-16 text-center">
-              <p className="text-base text-zinc-400">Brak artykułów spełniających wybrane kryteria.</p>
+              <p className="text-base text-zinc-400">Brak artykułów spełniających kryteria.</p>
               <button
                 onClick={() => {
                   setSelectedCategory('Wszystko');
@@ -744,14 +735,14 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Dodawania / Edycji Produktu (Dla Administratora) */}
+      {/* Modal Edycji i Tworzenia Produktu */}
       {isProductModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl my-8">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <PackagePlus className="h-5 w-5 text-amber-400" />
-                {editingProductId ? 'Edycja produktu' : 'Dodaj nowy produkt do sklepu'}
+                {editingProductId ? 'Edycja produktu' : 'Dodaj nowy produkt'}
               </h3>
               <button
                 onClick={() => setIsProductModalOpen(false)}
@@ -912,7 +903,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Drawer Koszyka / Realizacji Zamówienia */}
+      {/* Drawer Koszyka */}
       {isCartOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
           <div
@@ -956,7 +947,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 1: Podgląd artykułów w koszyku */}
               {checkoutStep === 'cart' && (
                 <div className="mt-4 max-h-[55vh] space-y-4 overflow-y-auto pr-1">
                   {cart.length > 0 ? (
@@ -1023,7 +1013,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 2: Formularz wysyłki i płatności */}
               {checkoutStep === 'form' && (
                 <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
@@ -1114,59 +1103,56 @@ export default function ShopPage() {
               )}
             </div>
 
-            {/* Stopka podsumowania */}
-            {cart.length > 0 && (
-              <div className="border-t border-zinc-800 pt-4">
-                <div className="mb-4 space-y-1.5 text-sm">
-                  <div className="flex justify-between text-zinc-400">
-                    <span>Suma częściowa</span>
-                    <span>{cartTotal.toFixed(2)} PLN</span>
-                  </div>
-                  <div className="flex justify-between font-bold text-white text-base">
-                    <span>Do zapłaty</span>
-                    <span className="text-amber-400">{cartTotal.toFixed(2)} PLN</span>
-                  </div>
+            <div className="border-t border-zinc-800 pt-4">
+              <div className="mb-4 space-y-1.5 text-sm">
+                <div className="flex justify-between text-zinc-400">
+                  <span>Suma częściowa</span>
+                  <span>{cartTotal.toFixed(2)} PLN</span>
                 </div>
-
-                {checkoutStep === 'cart' ? (
-                  <button
-                    onClick={() => setCheckoutStep('form')}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99]"
-                  >
-                    Przejdź do zamówienia
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setCheckoutStep('cart')}
-                      className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800"
-                    >
-                      Wróć
-                    </button>
-                    <button
-                      type="submit"
-                      form="checkout-form"
-                      disabled={isCheckingOut}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50"
-                    >
-                      {isCheckingOut ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Zapisywanie...
-                        </>
-                      ) : (
-                        <>
-                          Zatwierdź i zapłać
-                          <ArrowRight className="h-4 w-4" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
+                <div className="flex justify-between font-bold text-white text-base">
+                  <span>Do zapłaty</span>
+                  <span className="text-amber-400">{cartTotal.toFixed(2)} PLN</span>
+                </div>
               </div>
-            )}
+
+              {checkoutStep === 'cart' ? (
+                <button
+                  onClick={() => setCheckoutStep('form')}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99]"
+                >
+                  Przejdź do zamówienia
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutStep('cart')}
+                    className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800"
+                  >
+                    Wróć
+                  </button>
+                  <button
+                    type="submit"
+                    form="checkout-form"
+                    disabled={isCheckingOut}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50"
+                  >
+                    {isCheckingOut ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Zapisywanie...
+                      </>
+                    ) : (
+                      <>
+                        Zatwierdź i zapłać
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
