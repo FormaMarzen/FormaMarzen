@@ -141,32 +141,16 @@ function FreeRegistrationContent() {
   const fetchGrafik = useCallback(async (date: Date) => {
     const dateStr = date.toISOString().split('T')[0];
     const dayNameKey = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sb'][date.getDay()];
-    const dayNum = date.getDate();
-    const monthNum = date.getMonth() + 1;
+    const targetDay = date.getDate();
+    const targetMonth = date.getMonth() + 1;
 
     try {
-      // Równoległe pobranie zajęć cyklicznych, jednorazowych oraz aktualnych zapisów
+      // Równoległe pobranie zajęć cyklicznych, jednorazowych oraz aktualnych zapisów z bazy
       const [{ data: cykliczne }, { data: jednorazowe }, { data: zapisy }] = await Promise.all([
         supabase.from('grafik_zajec').select('*'),
         supabase.from('zajecia_jednorazowe').select('*').eq('full_date_str', dateStr),
         supabase.from('zapisy_zajec').select('class_key')
       ]);
-
-      // Zliczamy zajęte miejsca z uwzględnieniem normalizacji (odporność na zera wiodące typu 18/9 vs 18/09)
-      const bookingCounts: { [key: string]: number } = {};
-      (zapisy || []).forEach((s: any) => {
-        if (!s.class_key) return;
-        const parts = s.class_key.split('_');
-        if (parts.length >= 2) {
-          const clsId = parts[0];
-          const datePart = parts[1]; // np. 18/9 lub 18/09
-          const [dStr, mStr] = datePart.split('/');
-          if (dStr && mStr) {
-            const normalizedKey = `${clsId}_${parseInt(dStr, 10)}/${parseInt(mStr, 10)}`;
-            bookingCounts[normalizedKey] = (bookingCounts[normalizedKey] || 0) + 1;
-          }
-        }
-      });
 
       const dzisiejszeCykliczne = (cykliczne || []).filter(c => c.days && c.days[dayNameKey]);
       
@@ -175,10 +159,27 @@ function FreeRegistrationContent() {
         ...(jednorazowe || []).map(j => ({ ...j, title: j.title || j.nazwa, time: j.start_time || j.start, trainer: j.trainer || j.prowadzacy }))
       ];
 
-      // Mapowanie dostępności i limitów miejsc
+      // Mapowanie dostępności i limitów miejsc z odporną na formatowanie weryfikacją zapisów
       let processedCombined = combined.map(c => {
-        const normalizedKey = `${c.id}_${dayNum}/${monthNum}`;
-        const bookedCount = bookingCounts[normalizedKey] || 0;
+        const targetId = String(c.id);
+
+        // Precyzyjne zliczanie dopasowań z bazy (ignorując zera wiodące w miesiącu/dniu)
+        const bookedCount = (zapisy || []).filter((s: any) => {
+          if (!s.class_key) return false;
+          const parts = s.class_key.split('_');
+          if (parts.length < 2) return false;
+          const sId = parts[0];
+          const datePart = parts[1]; // np. "18/09" lub "18/9"
+          const [dStr, mStr] = datePart.split('/');
+          if (!dStr || !mStr) return false;
+          
+          return (
+            String(sId) === targetId &&
+            parseInt(dStr, 10) === targetDay &&
+            parseInt(mStr, 10) === targetMonth
+          );
+        }).length;
+
         const limit = c.limit !== undefined && c.limit !== null ? Number(c.limit) : 12;
         const isFull = bookedCount >= limit;
 
