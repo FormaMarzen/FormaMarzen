@@ -246,6 +246,7 @@ export default function RootLayout({
 
   const [hasUnreadInterpretation, setHasUnreadInterpretation] = useState<boolean>(false);
   const [hasUnreadRedukcja, setHasUnreadRedukcja] = useState<boolean>(false);
+  const [hasFinishedRedukcjaAwaitingTally, setHasFinishedRedukcjaAwaitingTally] = useState<boolean>(false);
   const [hasUnreadWydarzenia, setHasUnreadWydarzenia] = useState<boolean>(false);
   const [hasUnreadBazaWiedzy, setHasUnreadBazaWiedzy] = useState<boolean>(false);
   const [hasUnreadOdziez, setHasUnreadOdziez] = useState<boolean>(false);
@@ -353,22 +354,32 @@ export default function RootLayout({
     }
   }, [pathname, appRole]);
 
-  // Nasłuchiwanie nowych zamówień w sklepie w czasie rzeczywistym
+  // Nasłuchiwanie nowych zamówień oraz aktualizacji wyzwań i badań w czasie rzeczywistym
   useEffect(() => {
-    if (appRole !== 'admin') return;
-
     const channel = supabase
-      .channel('realtime-orders-badge')
+      .channel('realtime-layout-badges')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, () => {
-        setHasUnreadSklep(true);
+        if (appRole === 'admin') setHasUnreadSklep(true);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, () => {
         checkAllBadges(currentClientId, profileEmail, appRole);
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klub_redukcja_edycje' }, () => {
+        checkAllBadges(currentClientId, profileEmail, appRole);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klub_badania_krwi' }, () => {
+        checkAllBadges(currentClientId, profileEmail, appRole);
+      })
       .subscribe();
+
+    const handleFocus = () => {
+      checkAllBadges(currentClientId, profileEmail, appRole);
+    };
+    window.addEventListener('focus', handleFocus);
 
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener('focus', handleFocus);
     };
   }, [appRole, currentClientId, profileEmail]);
 
@@ -859,7 +870,7 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
-  // 1. Menu Administratora (bez dopisku "W budowie")
+  // 1. Menu Administratora
   const adminMenuSections = [
     {
       title: "Główne",
@@ -913,7 +924,7 @@ export default function RootLayout({
     }
   ];
 
-  // 2. Menu Klubowicza (z zakładką "Sklep" pod pozycją "Odzież")
+  // 2. Menu Klubowicza
   const klientMenuSections = [
     {
       title: "Główne",
@@ -948,7 +959,7 @@ export default function RootLayout({
     }
   ];
 
-  // 3. Menu Trenera (ukryto "Mój bonus", dodano "Sklep" pod pozycją "Odzież")
+  // 3. Menu Trenera
   const trenerMenuSections = [
     {
       title: "Strefa Trenera",
@@ -986,6 +997,7 @@ export default function RootLayout({
     return (
       hasUnreadInterpretation ||
       hasUnreadRedukcja ||
+      hasFinishedRedukcjaAwaitingTally ||
       hasUnreadWydarzenia ||
       hasUnreadBazaWiedzy ||
       hasUnreadOdziez ||
@@ -996,6 +1008,7 @@ export default function RootLayout({
   }, [
     hasUnreadInterpretation,
     hasUnreadRedukcja,
+    hasFinishedRedukcjaAwaitingTally,
     hasUnreadWydarzenia,
     hasUnreadBazaWiedzy,
     hasUnreadOdziez,
@@ -1032,10 +1045,22 @@ export default function RootLayout({
 
       if (redukcjeData && redukcjeData.length > 0) {
         const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
-        setHasUnreadRedukcja(hasUnseenRedukcja);
 
+        // WERYFIKACJA ZAKOŃCZONEGO WYZWANIA OCZEKUJĄCEGO NA PODLICZENIE (DLA ADMINA)
         const dzisiaj = new Date();
         dzisiaj.setHours(0, 0, 0, 0);
+
+        const hasFinishedAwaiting = role === 'admin' && redukcjeData.some((ed: any) => {
+          if (ed.status === 'aktywne' && ed.data_koniec) {
+            const endDate = new Date(ed.data_koniec);
+            endDate.setHours(0, 0, 0, 0);
+            return dzisiaj > endDate;
+          }
+          return false;
+        });
+
+        setHasFinishedRedukcjaAwaitingTally(hasFinishedAwaiting);
+        setHasUnreadRedukcja(hasUnseenRedukcja || hasFinishedAwaiting);
 
         for (const ed of redukcjeData) {
           if (ed.status === 'aktywne' && ed.data_koniec) {
@@ -1087,6 +1112,7 @@ export default function RootLayout({
           }
         }
       } else {
+        setHasFinishedRedukcjaAwaitingTally(false);
         setHasUnreadRedukcja(false);
       }
 
@@ -1315,7 +1341,6 @@ export default function RootLayout({
     window.location.reload();
   };
 
-  // Obsługa kliknięcia ikony koszyka w nagłówku
   const handleHeaderCartClick = (e: React.MouseEvent) => {
     if (pathname === '/sklep') {
       e.preventDefault();
@@ -1331,8 +1356,7 @@ export default function RootLayout({
   const avatarInitials = profileName
     ? profileName.split(' ').map(n => n[0]).filter(Boolean).join('').substring(0, 2).toUpperCase()
     : 'FM';
-
-  return (
+    return (
     <html lang="pl">
       <head>
         <title>Forma Marzeń</title>
@@ -1448,7 +1472,7 @@ export default function RootLayout({
                                 let showBadge = false;
                                 if (item.href === '/analiza-formy') {
                                   const hasPendingForAdmin = (appRole === 'admin' || appRole === 'trener') && hasUnreadInterpretation;
-                                  showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja || hasPendingForAdmin;
+                                  showBadge = (hasUnreadInterpretation && appRole === 'klubowicz') || hasUnreadRedukcja || hasFinishedRedukcjaAwaitingTally || hasPendingForAdmin;
                                 } else if (item.href === '/wydarzenia') {
                                   showBadge = hasUnreadWydarzenia;
                                 } else if (item.href === '/baza-wiedzy') {
@@ -1571,7 +1595,6 @@ export default function RootLayout({
                                   </span>
                                 </span>
                               ) : headerCartCount > 0 ? (
-                                /* Licznik produktów w koszyku */
                                 <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-slate-950 font-black text-[10px] min-w-4 h-4 px-1 rounded-full flex items-center justify-center shadow-sm">
                                   {headerCartCount}
                                 </span>
