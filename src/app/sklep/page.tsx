@@ -33,7 +33,8 @@ import {
   Receipt,
   Clock,
   CheckCheck,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Lock
 } from 'lucide-react';
 
 export interface Product {
@@ -80,7 +81,7 @@ interface OrderFormData {
   customerEmail: string;
   customerPhone: string;
   shippingNotes: string;
-  paymentMethod: 'autopay_blik' | 'autopay_card';
+  paymentMethod: string;
 }
 
 interface ProductFormData {
@@ -160,13 +161,13 @@ export default function ShopPage() {
   const [historyFilter, setHistoryFilter] = useState<'all' | 'my'>('all');
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
 
-  // Formularz zamówienia z danymi AutoPay
+  // Formularz zamówienia AutoPay
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
     customerPhone: '',
     shippingNotes: '',
-    paymentMethod: 'autopay_blik',
+    paymentMethod: 'AutoPay',
   });
 
   // Modal zarządzania produktem
@@ -180,45 +181,45 @@ export default function ShopPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Automatyczne uzupełnianie danych zalogowanego klubowicza
+  // Pobranie danych zalogowanego klubowicza bez możliwości późniejszej edycji
   useEffect(() => {
     const fetchLoggedMemberData = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        const storedEmail = (typeof window !== 'undefined' ? localStorage.getItem('fm_user_email') : '') || '';
+        const authEmail = (user?.email || storedEmail).toLowerCase().trim();
 
-        const email = (user.email || '').toLowerCase().trim();
+        if (!authEmail) return;
+
         const { data: clients } = await supabase.from('klienci').select('*');
 
         if (clients && clients.length > 0) {
           const matched = clients.find((c: any) => {
             const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
             const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
-            return (email && cEmail === email) || nazwisko.includes('kłaput');
+            return (authEmail && cEmail === authEmail) || nazwisko.includes('kłaput');
           });
 
           if (matched) {
             const fullName = `${matched.Imię || ''} ${matched.Nazwisko || ''}`.trim();
             const phone = matched['Numer tel.'] && matched['Numer tel.'] !== '-' ? matched['Numer tel.'] : '';
-            const memberEmail = matched['E-mail'] || matched.email || email;
+            const memberEmail = matched['E-mail'] || matched.email || authEmail;
 
             setFormData((prev) => ({
               ...prev,
-              customerName: prev.customerName || fullName || email.split('@')[0],
-              customerEmail: prev.customerEmail || memberEmail,
-              customerPhone: prev.customerPhone || phone,
+              customerName: fullName || authEmail.split('@')[0],
+              customerEmail: memberEmail,
+              customerPhone: phone,
             }));
             return;
           }
         }
 
-        if (email) {
-          setFormData((prev) => ({
-            ...prev,
-            customerEmail: prev.customerEmail || email,
-            customerName: prev.customerName || (email.includes('klaput') ? 'Maciej Kłaput' : email.split('@')[0]),
-          }));
-        }
+        setFormData((prev) => ({
+          ...prev,
+          customerEmail: authEmail,
+          customerName: authEmail.includes('klaput') ? 'Maciej Kłaput' : authEmail.split('@')[0],
+        }));
       } catch (err) {
         console.error('Błąd pobierania danych klubowicza:', err);
       }
@@ -226,6 +227,10 @@ export default function ShopPage() {
 
     fetchLoggedMemberData();
   }, []);
+
+  const isMemberLoggedIn = useMemo(() => {
+    return Boolean(formData.customerEmail && formData.customerEmail.trim().length > 0);
+  }, [formData.customerEmail]);
 
   // Dynamiczna lista kategorii
   const availableCategories = useMemo(() => {
@@ -277,7 +282,7 @@ export default function ShopPage() {
     verifyAdmin();
   }, []);
 
-  // Pobieranie asortymentu produktów
+  // Pobieranie produktów ze sklepu
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -302,7 +307,7 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie zamówień z Supabase ze ścisłą separacją uprawnień
+  // Pobieranie rejestru zamówień z blokadą dla zwykłych klubowiczów
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
@@ -319,7 +324,6 @@ export default function ShopPage() {
         .select('*, order_items(*)')
         .order('created_at', { ascending: false });
 
-      // Ścisła blokada prywatności: klubowicz widzi wyłącznie swoje zamówienia
       if (!isAdmin || historyFilter === 'my') {
         if (!currentEmail) {
           setOrdersHistory([]);
@@ -346,7 +350,7 @@ export default function ShopPage() {
     }
   }, [isHistoryOpen, historyFilter]);
 
-  // Aktualizacja statusu opłacenia (wyłącznie dla Administratora)
+  // Zmiana statusu opłacenia zamówienia przez administratora
   const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
     if (!isAdmin) return;
     const isCurrentlyPaid = currentStatus?.toLowerCase() === 'opłacone' || currentStatus?.toLowerCase() === 'paid';
@@ -365,11 +369,11 @@ export default function ShopPage() {
       );
     } catch (err: any) {
       console.error('Błąd aktualizacji statusu:', err);
-      alert('Nie udało się zmienić statusu: ' + err.message);
+      alert('Nie udało się zmienić statusu: ' + (err.message || 'Błąd zapisu w bazie'));
     }
   };
 
-  // Filtrowanie listy zamówień w oknie
+  // Filtrowanie listy zamówień w tabeli
   const filteredOrdersHistory = useMemo(() => {
     return ordersHistory.filter((ord) => {
       const query = historySearchQuery.toLowerCase().trim();
@@ -386,7 +390,7 @@ export default function ShopPage() {
     });
   }, [ordersHistory, historySearchQuery]);
 
-  // Synchronizacja koszyka w pamięci podręcznej
+  // Obsługa pamięci koszyka
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -404,7 +408,7 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie listy produktów
+  // Filtrowanie produktów
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isAdmin || !adminEditMode) {
@@ -421,7 +425,7 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
 
-  // Obsługa koszyka
+  // Akcje koszyka
   const addToCart = (product: Product) => {
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
@@ -463,37 +467,42 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Zapis zamówienia z metodą AutoPay
+  // Zapis zamówienia z obsługą AutoPay
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
 
-    if (!formData.customerName.trim() || !formData.customerPhone.trim() || !formData.customerEmail.trim()) {
-      setSubmitError('Wypełnij wszystkie wymagane pola kontaktowe.');
+    if (!isMemberLoggedIn) {
+      setSubmitError('Zakupy są dostępne wyłącznie dla zalogowanych klubowiczów. Zaloguj się w aplikacji.');
+      return;
+    }
+
+    if (!formData.customerName.trim() || !formData.customerEmail.trim()) {
+      setSubmitError('Nie znaleziono wymaganych danych profilu klubowicza.');
       return;
     }
 
     try {
       setIsCheckingOut(true);
 
+      const orderPayload = {
+        customer_name: formData.customerName.trim(),
+        customer_email: formData.customerEmail.trim(),
+        customer_phone: formData.customerPhone.trim() || '-',
+        shipping_notes: formData.shippingNotes.trim(),
+        payment_method: 'AutoPay',
+        total_amount: cartTotal,
+        status: 'oczekuje'
+      };
+
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
-        .insert([
-          {
-            customer_name: formData.customerName.trim(),
-            customer_email: formData.customerEmail.trim(),
-            customer_phone: formData.customerPhone.trim(),
-            shipping_notes: formData.shippingNotes.trim(),
-            payment_method: formData.paymentMethod,
-            total_amount: cartTotal,
-            status: 'opłacone'
-          }
-        ])
+        .insert([orderPayload])
         .select()
         .single();
 
       if (orderError || !orderData) {
-        throw new Error(orderError?.message || 'Błąd zapisu zamówienia.');
+        throw new Error(orderError?.message || 'Błąd zapisu rekordu zamówienia w bazie.');
       }
 
       const orderItems = cart.map((item) => ({
@@ -517,7 +526,6 @@ export default function ShopPage() {
       setFormData((prev) => ({
         ...prev,
         shippingNotes: '',
-        paymentMethod: 'autopay_blik',
       }));
 
       setTimeout(() => {
@@ -525,15 +533,16 @@ export default function ShopPage() {
         setIsCartOpen(false);
       }, 3500);
 
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error('Błąd zamówienia:', err);
-      setSubmitError('Wystąpił problem podczas składania zamówienia.');
+      const exactError = err?.message || (err?.error_description) || 'Wystąpił problem z bazą danych.';
+      setSubmitError(`Błąd zamówienia: ${exactError}`);
     } finally {
       setIsCheckingOut(false);
     }
   };
 
-  // Bezpieczne usuwanie kategorii i przeniesienie produktów
+  // Bezpieczne usuwanie kategorii
   const handleDeleteCategory = async (catToDelete: string) => {
     if (catToDelete === 'Wszystko') {
       alert('Tej kategorii systemowej nie można usunąć.');
@@ -568,7 +577,7 @@ export default function ShopPage() {
     }
   };
 
-  // Wybór i kompresja zdjęcia z galerii urządzenia
+  // Obsługa zdjęcia z galerii lub dysku urządzenia
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -609,7 +618,7 @@ export default function ShopPage() {
         setIsProcessingImage(false);
       };
       img.onerror = () => {
-        setProductModalError('Nie udało się przetworzyć wskazanego pliku graficznego.');
+        setProductModalError('Nie udało się przetworzyć pliku graficznego.');
         setIsProcessingImage(false);
       };
       img.src = event.target?.result as string;
@@ -621,7 +630,7 @@ export default function ShopPage() {
     reader.readAsDataURL(file);
   };
 
-  // Formularz administratora
+  // Obsługa modalu produktu
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
@@ -1341,7 +1350,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Rejestru Zamówień (Tabela dla Admina, Lista zamówień dla Klubowicza) */}
+      {/* Modal Rejestru Zamówień */}
       {isHistoryOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-5xl rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-7 shadow-2xl my-6 flex flex-col max-h-[92vh]">
@@ -1421,7 +1430,7 @@ export default function ShopPage() {
               </div>
             </div>
 
-            {/* Kontener tabeli zamówień */}
+            {/* Tabela zamówień */}
             <div className="mt-4 flex-1 overflow-y-auto pr-1">
               {historyLoading ? (
                 <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
@@ -1507,7 +1516,7 @@ export default function ShopPage() {
                                 {Number(order.total_amount).toFixed(2)} PLN
                               </span>
                               <span className="block text-[10px] text-zinc-500 uppercase">
-                                {order.payment_method?.includes('blik') ? 'AutoPay BLIK' : 'AutoPay Online'}
+                                AutoPay Online
                               </span>
                             </td>
 
@@ -1563,7 +1572,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Drawer Koszyka / Realizacji Zamówienia */}
+      {/* Drawer Koszyka i Realizacji Zamówienia (Pełna wysokość bez ucinania) */}
       {isCartOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
           <div
@@ -1571,49 +1580,55 @@ export default function ShopPage() {
             onClick={() => setIsCartOpen(false)}
           />
 
-          <div className="relative z-10 flex h-full w-full max-w-md flex-col justify-between border-l border-zinc-800 bg-zinc-950 p-6 shadow-2xl sm:p-8">
-            <div>
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-                <div className="flex items-center gap-2">
-                  <ShoppingBag className="h-5 w-5 text-amber-400" />
-                  <h2 className="text-lg font-bold text-white">
-                    {checkoutStep === 'cart' ? 'Twój Koszyk' : 'Dane do zamówienia'}
-                  </h2>
-                  <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-semibold text-zinc-400">
-                    {cartItemCount}
-                  </span>
-                </div>
-                <button
-                  onClick={() => setIsCartOpen(false)}
-                  className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
+          <div className="relative z-10 flex h-[100dvh] w-full max-w-md flex-col bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-hidden">
+            
+            {/* Nagłówek Drawera */}
+            <div className="flex items-center justify-between border-b border-zinc-800 p-5 shrink-0">
+              <div className="flex items-center gap-2">
+                <ShoppingBag className="h-5 w-5 text-amber-400" />
+                <h2 className="text-base font-bold text-white">
+                  {checkoutStep === 'cart' ? 'Twój Koszyk' : 'Dane do zamówienia'}
+                </h2>
+                <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-semibold text-zinc-400">
+                  {cartItemCount}
+                </span>
               </div>
+              <button
+                onClick={() => setIsCartOpen(false)}
+                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
+            {/* Komunikaty */}
+            <div className="px-5 pt-2 shrink-0">
               {orderSuccess && (
-                <div className="my-4 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-400">
+                <div className="my-2 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-emerald-400">
                   <CheckCircle2 className="h-5 w-5 shrink-0" />
-                  <p className="text-sm font-medium">
+                  <p className="text-xs font-medium">
                     Zamówienie zostało zapisane! Przekierowywanie do płatności AutoPay...
                   </p>
                 </div>
               )}
 
               {submitError && (
-                <div className="my-4 flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-red-400 text-xs">
+                <div className="my-2 flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-red-400 text-xs">
                   <AlertCircle className="h-4 w-4 shrink-0" />
                   <p>{submitError}</p>
                 </div>
               )}
+            </div>
 
-              {checkoutStep === 'cart' && (
-                <div className="mt-4 max-h-[55vh] space-y-4 overflow-y-auto pr-1">
+            {/* Treść przewijana (Krok 1: Koszyk, Krok 2: Formularz z zablokowanymi danymi) */}
+            <div className="flex-1 overflow-y-auto px-5 py-2 space-y-4">
+              {checkoutStep === 'cart' ? (
+                <div className="space-y-3">
                   {cart.length > 0 ? (
                     cart.map(({ product, quantity }) => (
                       <div
                         key={product.id}
-                        className="flex items-center justify-between gap-4 rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3.5"
+                        className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3"
                       >
                         <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
                           {product.image_url ? (
@@ -1639,7 +1654,7 @@ export default function ShopPage() {
                           <p className="text-xs font-medium text-amber-400">
                             {Number(product.price).toFixed(2)} PLN
                           </p>
-                          <div className="mt-2 flex items-center gap-2">
+                          <div className="mt-1.5 flex items-center gap-2">
                             <button
                               onClick={() => updateQuantity(product.id, -1)}
                               className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
@@ -1665,60 +1680,81 @@ export default function ShopPage() {
                       </div>
                     ))
                   ) : (
-                    <div className="py-12 text-center">
-                      <ShoppingBag className="mx-auto h-10 w-10 text-zinc-700" />
-                      <p className="mt-3 text-sm text-zinc-500">Twój koszyk jest pusty</p>
+                    <div className="py-16 text-center">
+                      <ShoppingBag className="mx-auto h-12 w-12 text-zinc-700" />
+                      <p className="mt-3 text-sm text-zinc-500 font-bold">Twój koszyk jest pusty</p>
                     </div>
                   )}
                 </div>
-              )}
+              ) : (
+                <form id="checkout-form" onSubmit={handleSubmitOrder} className="space-y-3.5">
+                  {!isMemberLoggedIn && (
+                    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-300 flex items-start gap-2">
+                      <Lock className="h-4 w-4 shrink-0 mt-0.5" />
+                      <span>Zakupy w sklepie są dostępne wyłącznie dla zalogowanych klubowiczów.</span>
+                    </div>
+                  )}
 
-              {checkoutStep === 'form' && (
-                <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
+                  {/* Imię i nazwisko (Zablokowane do edycji) */}
                   <div>
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
-                      <User className="h-3.5 w-3.5 text-amber-400" /> Imię i nazwisko *
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <User className="h-3.5 w-3.5 text-amber-400" /> Imię i nazwisko *
+                      </label>
+                      <span className="text-[10px] text-zinc-500 flex items-center gap-1 font-mono">
+                        <Lock className="h-2.5 w-2.5" /> Profil klubowicza
+                      </span>
+                    </div>
                     <input
                       type="text"
+                      readOnly
                       required
-                      placeholder="np. Jan Kowalski"
                       value={formData.customerName}
-                      onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900/50 px-3.5 py-2.5 text-sm text-zinc-300 select-none cursor-not-allowed focus:outline-none"
                     />
                   </div>
 
+                  {/* Numer telefonu (Zablokowany do edycji) */}
                   <div>
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
-                      <Phone className="h-3.5 w-3.5 text-amber-400" /> Numer telefonu *
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <Phone className="h-3.5 w-3.5 text-amber-400" /> Numer telefonu *
+                      </label>
+                      <span className="text-[10px] text-zinc-500 flex items-center gap-1 font-mono">
+                        <Lock className="h-2.5 w-2.5" /> Z bazy klubu
+                      </span>
+                    </div>
                     <input
                       type="tel"
+                      readOnly
                       required
-                      placeholder="+48 000 000 000"
                       value={formData.customerPhone}
-                      onChange={(e) => setFormData({ ...formData, customerPhone: e.target.value })}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900/50 px-3.5 py-2.5 text-sm text-zinc-300 select-none cursor-not-allowed focus:outline-none font-mono"
                     />
                   </div>
 
+                  {/* E-mail (Zablokowany do edycji) */}
                   <div>
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
-                      <Mail className="h-3.5 w-3.5 text-amber-400" /> Adres e-mail *
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <Mail className="h-3.5 w-3.5 text-amber-400" /> Adres e-mail *
+                      </label>
+                      <span className="text-[10px] text-zinc-500 flex items-center gap-1 font-mono">
+                        <Lock className="h-2.5 w-2.5" /> Konto klubowe
+                      </span>
+                    </div>
                     <input
                       type="email"
+                      readOnly
                       required
-                      placeholder="twoj@email.pl"
                       value={formData.customerEmail}
-                      onChange={(e) => setFormData({ ...formData, customerEmail: e.target.value })}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900/50 px-3.5 py-2.5 text-sm text-zinc-300 select-none cursor-not-allowed focus:outline-none font-mono"
                     />
                   </div>
 
+                  {/* Edytowalne uwagi klubowicza */}
                   <div>
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-1.5 mb-1">
                       <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Termin realizacji / Rozmiar
                     </label>
                     <textarea
@@ -1726,72 +1762,64 @@ export default function ShopPage() {
                       placeholder="np. Odbiór w recepcji klubu / preferowany termin usługi..."
                       value={formData.shippingNotes}
                       onChange={(e) => setFormData({ ...formData, shippingNotes: e.target.value })}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-none leading-relaxed"
                     />
                   </div>
 
+                  {/* Kafelek płatności AutoPay bez rozbijania na BLIK/Karta */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                        <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Płatność online AutoPay
+                        <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Metoda płatności
                       </label>
-                      <span className="text-[10px] font-bold text-amber-400/90 uppercase tracking-wider">
-                        AutoPay S.A.
+                      <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                        Bramka AutoPay
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paymentMethod: 'autopay_blik' })}
-                        className={`rounded-xl border py-3 px-3 text-xs font-bold uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-1 cursor-pointer ${
-                          formData.paymentMethod === 'autopay_blik'
-                            ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-sm'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                        }`}
-                      >
-                        <span className="text-sm font-black tracking-tight">BLIK (AutoPay)</span>
-                        <span className="text-[9px] font-normal opacity-70">Kod z banku</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paymentMethod: 'autopay_card' })}
-                        className={`rounded-xl border py-3 px-3 text-xs font-bold uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-1 cursor-pointer ${
-                          formData.paymentMethod === 'autopay_card'
-                            ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-sm'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                        }`}
-                      >
-                        <span className="text-sm font-black tracking-tight">Karta / Przelew</span>
-                        <span className="text-[9px] font-normal opacity-70">AutoPay Online</span>
-                      </button>
+                    
+                    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 flex items-center justify-between gap-3 shadow-inner">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400">
+                          <CreditCard className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-white">Szybka płatność online AutoPay</p>
+                          <p className="text-[10px] text-zinc-300">Wybór formy (BLIK, karta, przelew) nastąpi na bramce</p>
+                        </div>
+                      </div>
+                      <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30 shrink-0">
+                        AutoPay S.A.
+                      </span>
                     </div>
                   </div>
                 </form>
               )}
             </div>
 
-            <div className="border-t border-zinc-800 pt-4">
-              <div className="mb-4 space-y-1.5 text-sm">
+            {/* Dolna belka z podsumowaniem i przyciskami (Zawsze widoczna bez ucinania) */}
+            <div className="border-t border-zinc-800 bg-zinc-950 p-5 shrink-0 space-y-3 shadow-2xl">
+              <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-zinc-400">
                   <span>Suma częściowa</span>
-                  <span>{cartTotal.toFixed(2)} PLN</span>
+                  <span className="font-mono">{cartTotal.toFixed(2)} PLN</span>
                 </div>
                 <div className="flex justify-between font-bold text-white text-base">
                   <span>Do zapłaty</span>
-                  <span className="text-amber-400">{cartTotal.toFixed(2)} PLN</span>
+                  <span className="text-amber-400 font-mono text-lg">{cartTotal.toFixed(2)} PLN</span>
                 </div>
               </div>
 
               {checkoutStep === 'cart' ? (
                 <button
                   onClick={() => setCheckoutStep('form')}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] cursor-pointer"
+                  disabled={cart.length === 0}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Przejdź do zamówienia
                   <ArrowRight className="h-4 w-4" />
                 </button>
               ) : (
-                <div className="flex gap-2">
+                <div className="flex gap-2.5">
                   <button
                     type="button"
                     onClick={() => setCheckoutStep('cart')}
@@ -1802,17 +1830,17 @@ export default function ShopPage() {
                   <button
                     type="submit"
                     form="checkout-form"
-                    disabled={isCheckingOut}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
+                    disabled={isCheckingOut || !isMemberLoggedIn}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
                   >
                     {isCheckingOut ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        Zapisywanie...
+                        Przetwarzanie...
                       </>
                     ) : (
                       <>
-                        Zatwierdź i zapłać AutoPay
+                        Zatwierdź i przejdź do AutoPay
                         <ArrowRight className="h-4 w-4" />
                       </>
                     )}
@@ -1820,6 +1848,7 @@ export default function ShopPage() {
                 </div>
               )}
             </div>
+
           </div>
         </div>
       )}
