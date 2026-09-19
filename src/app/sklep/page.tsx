@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Image from 'next/image';
 import { supabase } from '../raporty/klienci/supabase';
 import { 
@@ -13,20 +13,22 @@ import {
   ArrowRight, 
   CheckCircle2, 
   Tag, 
-  Dumbbell,
-  Loader2,
-  AlertCircle,
-  Phone,
-  User,
-  Mail,
-  FileText,
-  CreditCard,
-  Edit,
-  Eye,
-  EyeOff,
-  Settings2,
-  PackagePlus,
-  ShieldCheck
+  Dumbbell, 
+  Loader2, 
+  AlertCircle, 
+  Phone, 
+  User, 
+  Mail, 
+  FileText, 
+  CreditCard, 
+  Edit, 
+  Eye, 
+  EyeOff, 
+  Settings2, 
+  PackagePlus, 
+  ShieldCheck,
+  Upload,
+  Image as ImageIcon
 } from 'lucide-react';
 
 export interface Product {
@@ -137,10 +139,14 @@ export default function ShopPage() {
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<ProductFormData>(INITIAL_PRODUCT_FORM);
+  const [isCustomCategory, setIsCustomCategory] = useState<boolean>(false);
   const [savingProduct, setSavingProduct] = useState<boolean>(false);
+  const [isProcessingImage, setIsProcessingImage] = useState<boolean>(false);
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
-  // Dynamiczna lista kategorii bazująca na domyślnych + unikalnych z bazy produktów
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Dynamiczna lista unikalnych kategorii
   const availableCategories = useMemo(() => {
     const set = new Set<string>(DEFAULT_CATEGORIES);
     products.forEach((p) => {
@@ -364,16 +370,72 @@ export default function ShopPage() {
     }
   };
 
+  // Obsługa wyboru zdjęcia z galerii urządzenia
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessingImage(true);
+    setProductModalError(null);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = document.createElement('img');
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 900;
+        const MAX_HEIGHT = 900;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width = Math.round((width * MAX_HEIGHT) / height);
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          setProductForm((prev) => ({ ...prev, image_url: compressedDataUrl }));
+        }
+        setIsProcessingImage(false);
+      };
+      img.onerror = () => {
+        setProductModalError('Nie udało się załadować wybranego pliku graficznego.');
+        setIsProcessingImage(false);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => {
+      setProductModalError('Błąd podczas odczytu pliku z pamięci urządzenia.');
+      setIsProcessingImage(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Funkcje administratora
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
+    setIsCustomCategory(false);
     setProductModalError(null);
     setIsProductModalOpen(true);
   };
 
   const handleOpenEditModal = (product: Product) => {
     setEditingProductId(product.id);
+    const hasCategoryInList = availableCategories.includes(product.category);
+    setIsCustomCategory(!hasCategoryInList);
     setProductForm({
       name: product.name,
       category: product.category || 'Odzież',
@@ -394,13 +456,13 @@ export default function ShopPage() {
 
     const priceNum = parseFloat(productForm.price.replace(',', '.'));
     const stockNum = parseInt(productForm.stock, 10);
-    const trimmedCategory = productForm.category.trim();
+    const finalCategory = productForm.category.trim();
 
     if (!productForm.name.trim()) {
       setProductModalError('Nazwa produktu jest wymagana.');
       return;
     }
-    if (!trimmedCategory) {
+    if (!finalCategory) {
       setProductModalError('Kategoria produktu jest wymagana.');
       return;
     }
@@ -418,7 +480,7 @@ export default function ShopPage() {
 
       const payload = {
         name: productForm.name.trim(),
-        category: trimmedCategory,
+        category: finalCategory,
         price: priceNum,
         description: productForm.description.trim(),
         image_url: productForm.image_url.trim(),
@@ -494,7 +556,7 @@ export default function ShopPage() {
   return (
     <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
       
-      {/* Nagłówek sklepu */}
+      {/* Ostry nagłówek sklepu */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
@@ -634,7 +696,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Karty produktów */}
+      {/* Siatka produktów */}
       {!loading && !error && (
         <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {filteredProducts.length > 0 ? (
@@ -679,7 +741,6 @@ export default function ShopPage() {
                       )}
                     </div>
 
-                    {/* Narzędzia edycji na kafelku */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
@@ -767,7 +828,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Edycji i Tworzenia Produktu z edycją kategorii */}
+      {/* Modal Edycji i Dodawania Produktu */}
       {isProductModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl my-8">
@@ -791,6 +852,15 @@ export default function ShopPage() {
               </div>
             )}
 
+            {/* Ukryty input do wyboru zdjęcia z galerii urządzenia */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/*"
+              onChange={handleImageUpload}
+              className="hidden"
+            />
+
             <form onSubmit={handleSaveProduct} className="mt-4 space-y-4 text-xs">
               <div>
                 <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
@@ -807,28 +877,59 @@ export default function ShopPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                {/* Pole kategorii z możliwością wyboru lub wpisania nowej */}
+                {/* Wybór lub wpisanie własnej kategorii */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="font-bold uppercase tracking-wider text-zinc-300">
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300">
                       Kategoria *
                     </label>
-                    <span className="text-[10px] text-amber-400">Wpisz lub wybierz</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextCustom = !isCustomCategory;
+                        setIsCustomCategory(nextCustom);
+                        if (nextCustom) {
+                          setProductForm({ ...productForm, category: '' });
+                        } else {
+                          setProductForm({ ...productForm, category: availableCategories[0] || 'Odzież' });
+                        }
+                      }}
+                      className="text-[10px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                    >
+                      {isCustomCategory ? 'Wybierz z listy' : '+ Wpisz własną'}
+                    </button>
                   </div>
-                  <input
-                    type="text"
-                    required
-                    list="category-options-list"
-                    placeholder="Wpisz lub wybierz..."
-                    value={productForm.category}
-                    onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none"
-                  />
-                  <datalist id="category-options-list">
-                    {availableCategories.map((c) => (
-                      <option key={c} value={c} />
-                    ))}
-                  </datalist>
+
+                  {isCustomCategory ? (
+                    <input
+                      type="text"
+                      required
+                      placeholder="np. Usługi, Pakiety..."
+                      value={productForm.category}
+                      onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
+                      className="w-full rounded-xl border border-amber-500/50 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                    />
+                  ) : (
+                    <select
+                      value={productForm.category}
+                      onChange={(e) => {
+                        if (e.target.value === '__custom__') {
+                          setIsCustomCategory(true);
+                          setProductForm({ ...productForm, category: '' });
+                        } else {
+                          setProductForm({ ...productForm, category: e.target.value });
+                        }
+                      }}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
+                    >
+                      {availableCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                      <option value="__custom__">+ Dodaj inną kategorię...</option>
+                    </select>
+                  )}
                 </div>
 
                 <div>
@@ -876,17 +977,76 @@ export default function ShopPage() {
                 </div>
               </div>
 
+              {/* Wybór zdjęcia z galerii lub wklejenie linku */}
               <div>
-                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                  Link do zdjęcia (URL)
+                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
+                  Zdjęcie produktu
                 </label>
-                <input
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={productForm.image_url}
-                  onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })}
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-                />
+
+                {productForm.image_url ? (
+                  <div className="relative h-44 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
+                    <Image
+                      src={productForm.image_url}
+                      alt="Podgląd zdjęcia"
+                      fill
+                      unoptimized
+                      className="object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center gap-2 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-2 text-xs font-bold text-black shadow-lg hover:bg-amber-400 cursor-pointer"
+                      >
+                        <Upload className="h-3.5 w-3.5" />
+                        Zmień z galerii
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProductForm({ ...productForm, image_url: '' })}
+                        className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-rose-500 cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Usuń
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-5 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
+                  >
+                    {isProcessingImage ? (
+                      <div className="flex flex-col items-center gap-2 text-amber-400">
+                        <Loader2 className="h-7 w-7 animate-spin" />
+                        <span className="text-xs font-semibold">Kompresja i wczytywanie zdjęcia...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 mb-2">
+                          <ImageIcon className="h-6 w-6" />
+                        </div>
+                        <span className="text-xs font-bold text-zinc-200">
+                          Wybierz zdjęcie z galerii urządzenia
+                        </span>
+                        <span className="text-[10px] text-zinc-500 mt-1">
+                          Dotknij tutaj, aby otworzyć zdjęcia lub aparat
+                        </span>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Alternatywny link URL */}
+                <div className="mt-2">
+                  <input
+                    type="url"
+                    placeholder="Lub wklej bezpośredni link URL do grafiki..."
+                    value={productForm.image_url.startsWith('data:') ? '' : productForm.image_url}
+                    onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-300 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div>
@@ -895,7 +1055,7 @@ export default function ShopPage() {
                 </label>
                 <textarea
                   rows={3}
-                  placeholder="Krótki opis materiału, zastosowania, składu..."
+                  placeholder="Krótki opis materiału, zakresu usługi, składu..."
                   value={productForm.description}
                   onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
@@ -919,14 +1079,14 @@ export default function ShopPage() {
                 <button
                   type="button"
                   onClick={() => setIsProductModalOpen(false)}
-                  className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800"
+                  className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800 cursor-pointer"
                 >
                   Anuluj
                 </button>
                 <button
                   type="submit"
-                  disabled={savingProduct}
-                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-6 py-2.5 text-xs font-black uppercase tracking-wider text-black hover:bg-amber-400 disabled:opacity-50"
+                  disabled={savingProduct || isProcessingImage}
+                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-6 py-2.5 text-xs font-black uppercase tracking-wider text-black hover:bg-amber-400 disabled:opacity-50 cursor-pointer"
                 >
                   {savingProduct ? (
                     <>
@@ -1118,7 +1278,7 @@ export default function ShopPage() {
                       <button
                         type="button"
                         onClick={() => setFormData({ ...formData, paymentMethod: 'blik' })}
-                        className={`rounded-xl border py-2.5 text-xs font-bold uppercase tracking-wider transition-all ${
+                        className={`rounded-xl border py-2.5 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
                           formData.paymentMethod === 'blik'
                             ? 'border-amber-500 bg-amber-500/10 text-amber-400'
                             : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
@@ -1129,7 +1289,7 @@ export default function ShopPage() {
                       <button
                         type="button"
                         onClick={() => setFormData({ ...formData, paymentMethod: 'karta' })}
-                        className={`rounded-xl border py-2.5 text-xs font-bold uppercase tracking-wider transition-all ${
+                        className={`rounded-xl border py-2.5 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
                           formData.paymentMethod === 'karta'
                             ? 'border-amber-500 bg-amber-500/10 text-amber-400'
                             : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
@@ -1158,7 +1318,7 @@ export default function ShopPage() {
               {checkoutStep === 'cart' ? (
                 <button
                   onClick={() => setCheckoutStep('form')}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99]"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] cursor-pointer"
                 >
                   Przejdź do zamówienia
                   <ArrowRight className="h-4 w-4" />
@@ -1168,7 +1328,7 @@ export default function ShopPage() {
                   <button
                     type="button"
                     onClick={() => setCheckoutStep('cart')}
-                    className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800"
+                    className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-zinc-800 cursor-pointer"
                   >
                     Wróć
                   </button>
@@ -1176,7 +1336,7 @@ export default function ShopPage() {
                     type="submit"
                     form="checkout-form"
                     disabled={isCheckingOut}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50"
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
                   >
                     {isCheckingOut ? (
                       <>
