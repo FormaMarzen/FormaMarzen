@@ -103,8 +103,12 @@ interface ProductFormData {
   badge: string;
   is_active: boolean;
   size_chart_url: string;
-  size_stocks: Record<string, number>;
   target_gender: string;
+  gender_stocks: {
+    'Męski': Record<string, number>;
+    'Damski': Record<string, number>;
+    'Unisex': Record<string, number>;
+  };
 }
 
 const DEFAULT_CATEGORIES: string[] = [
@@ -127,47 +131,99 @@ const INITIAL_PRODUCT_FORM: ProductFormData = {
   badge: '',
   is_active: true,
   size_chart_url: '',
-  size_stocks: { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
-  target_gender: 'Unisex'
+  target_gender: 'Unisex',
+  gender_stocks: {
+    'Męski': { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
+    'Damski': { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
+    'Unisex': { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 }
+  }
 };
 
-// Pomocnik do bezpiecznego odczytu stanów magazynowych poszczególnych rozmiarów
-export const parseSizeStocks = (raw: any, fallbackStock = 0): Record<string, number> => {
-  if (!raw) return {};
+export const parseProductSizeStocks = (raw: any, targetGender?: string | null): {
+  isDualGender: boolean;
+  stocks: {
+    Męski: Record<string, number>;
+    Damski: Record<string, number>;
+    Unisex: Record<string, number>;
+  };
+} => {
+  const result = {
+    isDualGender: targetGender === 'Męski / Damski (do wyboru)',
+    stocks: {
+      Męski: {} as Record<string, number>,
+      Damski: {} as Record<string, number>,
+      Unisex: {} as Record<string, number>,
+    }
+  };
+
+  if (!raw) return result;
+
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (Array.isArray(parsed)) {
-      const res: Record<string, number> = {};
-      parsed.forEach((item) => {
-        if (typeof item === 'string') {
-          res[item] = fallbackStock;
-        } else if (item && typeof item === 'object' && item.size) {
-          res[item.size] = Number(item.stock) || 0;
+
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if ('Męski' in parsed || 'Damski' in parsed) {
+        result.isDualGender = true;
+        if (parsed['Męski'] && typeof parsed['Męski'] === 'object') {
+          Object.entries(parsed['Męski']).forEach(([k, v]) => {
+            result.stocks.Męski[k] = Number(v) || 0;
+          });
         }
-      });
-      return res;
-    } else if (typeof parsed === 'object' && parsed !== null) {
-      const res: Record<string, number> = {};
+        if (parsed['Damski'] && typeof parsed['Damski'] === 'object') {
+          Object.entries(parsed['Damski']).forEach(([k, v]) => {
+            result.stocks.Damski[k] = Number(v) || 0;
+          });
+        }
+        return result;
+      }
+
+      const flat: Record<string, number> = {};
       Object.entries(parsed).forEach(([k, v]) => {
-        res[k] = Number(v) || 0;
+        flat[k] = Number(v) || 0;
       });
-      return res;
+
+      if (targetGender === 'Damski') {
+        result.stocks.Damski = flat;
+      } else if (targetGender === 'Męski') {
+        result.stocks.Męski = flat;
+      } else if (targetGender === 'Męski / Damski (do wyboru)') {
+        result.isDualGender = true;
+        result.stocks.Męski = { ...flat };
+        result.stocks.Damski = { ...flat };
+      } else {
+        result.stocks.Unisex = flat;
+      }
+      return result;
+    }
+
+    if (Array.isArray(parsed)) {
+      const flat: Record<string, number> = {};
+      parsed.forEach((s) => {
+        if (typeof s === 'string') flat[s] = 5;
+      });
+      result.stocks.Unisex = flat;
+      result.stocks.Męski = { ...flat };
+      result.stocks.Damski = { ...flat };
+      return result;
     }
   } catch (e) {
     if (typeof raw === 'string') {
-      const res: Record<string, number> = {};
+      const flat: Record<string, number> = {};
       raw.split(',').forEach((s) => {
         const trimmed = s.trim();
-        if (trimmed) res[trimmed] = fallbackStock;
+        if (trimmed) flat[trimmed] = 5;
       });
-      return res;
+      result.stocks.Unisex = flat;
+      result.stocks.Męski = { ...flat };
+      result.stocks.Damski = { ...flat };
+      return result;
     }
   }
-  return {};
+
+  return result;
 };
 
 export default function ShopPage() {
-  // Wymuszenie aktualizacji Service Workera PWA
   useEffect(() => {
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then((registrations) => {
@@ -182,10 +238,8 @@ export default function ShopPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Dane zalogowanego klienta z tabeli 'klienci'
   const [currentClientRecord, setCurrentClientRecord] = useState<any>(null);
 
-  // Autoryzacja administratora
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
@@ -197,25 +251,22 @@ export default function ShopPage() {
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
-  // Efektywny tryb administratora (wyłączony w podglądzie klubowicza)
   const isEffectiveAdmin = useMemo(() => {
     return isAdmin && adminEditMode;
   }, [isAdmin, adminEditMode]);
 
-  // Filtrowanie i wyszukiwanie w sklepie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
-  // Wybór rozmiaru i płci na kafelkach produktów
   const [selectedProductSizes, setSelectedProductSizes] = useState<Record<string, string>>({});
   const [selectedProductGenders, setSelectedProductGenders] = useState<Record<string, string>>({});
   const [sizeWarningProductId, setSizeWarningProductId] = useState<string | null>(null);
 
-  // Modal podglądu tabeli rozmiarów
+  const [adminActiveGenderTab, setAdminActiveGenderTab] = useState<'Męski' | 'Damski'>('Męski');
+
   const [activeSizeChartUrl, setActiveSizeChartUrl] = useState<string | null>(null);
   const [activeSizeChartTitle, setActiveSizeChartTitle] = useState<string>('');
 
-  // Koszyk
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
@@ -223,17 +274,14 @@ export default function ShopPage() {
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Blokada wielokrotnego kliknięcia płatności
   const isSubmittingAutopayRef = useRef<boolean>(false);
 
-  // Tabela i Rejestr zamówień
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
   const [ordersHistory, setOrdersHistory] = useState<OrderRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'my'>('all');
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
 
-  // Formularz zamówienia z AutoPay
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
@@ -242,7 +290,6 @@ export default function ShopPage() {
     paymentMethod: 'AutoPay',
   });
 
-  // Modal zarządzania produktem
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<ProductFormData>(INITIAL_PRODUCT_FORM);
@@ -255,7 +302,6 @@ export default function ShopPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sizeChartFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Pobranie danych zalogowanego klubowicza bez możliwości edycji
   useEffect(() => {
     const fetchLoggedMemberData = async () => {
       try {
@@ -307,7 +353,6 @@ export default function ShopPage() {
     return Boolean(formData.customerEmail && formData.customerEmail.trim().length > 0);
   }, [formData.customerEmail]);
 
-  // Dynamiczna lista kategorii
   const availableCategories = useMemo(() => {
     const set = new Set<string>(DEFAULT_CATEGORIES);
     products.forEach((p) => {
@@ -322,7 +367,6 @@ export default function ShopPage() {
     return ['Wszystko', ...availableCategories];
   }, [availableCategories]);
 
-  // Weryfikacja uprawnień administratora
   useEffect(() => {
     const verifyAdmin = async () => {
       try {
@@ -357,7 +401,6 @@ export default function ShopPage() {
     verifyAdmin();
   }, []);
 
-  // Pobieranie asortymentu produktów
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -382,7 +425,6 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie rejestru zamówień ze ścisłą separacją uprawnień
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
@@ -439,7 +481,6 @@ export default function ShopPage() {
     }
   }, [isHistoryOpen, historyFilter, isEffectiveAdmin]);
 
-  // Zmiana statusu zamówienia przez administratora
   const handleSetOrderStatus = async (orderId: string, newStatus: string) => {
     if (!isEffectiveAdmin) return;
 
@@ -460,7 +501,6 @@ export default function ShopPage() {
     }
   };
 
-  // Anulowanie zamówienia
   const handleCancelOrder = async (orderId: string) => {
     if (!isEffectiveAdmin) return;
     const confirmCancel = window.confirm(
@@ -471,7 +511,6 @@ export default function ShopPage() {
     await handleSetOrderStatus(orderId, 'anulowano');
   };
 
-  // Filtrowanie listy zamówień w tabeli
   const filteredOrdersHistory = useMemo(() => {
     return ordersHistory.filter((ord) => {
       const query = historySearchQuery.toLowerCase().trim();
@@ -488,7 +527,6 @@ export default function ShopPage() {
     });
   }, [ordersHistory, historySearchQuery]);
 
-  // Pamięć podręczna koszyka
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -506,7 +544,6 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie produktów
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isEffectiveAdmin) {
@@ -523,22 +560,25 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isEffectiveAdmin]);
 
-  // Obsługa dodawania do koszyka z rygorystyczną weryfikacją stanu wybranego rozmiaru
   const handleAddToCartWithValidation = (product: Product) => {
     const isClothing = product.category.toLowerCase().includes('odzież') || product.category.toLowerCase().includes('odziez');
-    const sizeStocks = parseSizeStocks(product.available_sizes, product.stock);
-    const hasSizes = Object.keys(sizeStocks).length > 0;
+    const parsedData = parseProductSizeStocks(product.available_sizes, product.target_gender);
 
-    const selectedSize = selectedProductSizes[product.id];
-    let selectedGender = selectedProductGenders[product.id];
-
-    if (!selectedGender) {
-      if (product.target_gender?.includes('Męski / Damski')) {
-        selectedGender = 'Męski';
-      } else if (product.target_gender) {
-        selectedGender = product.target_gender;
+    let activeGender = selectedProductGenders[product.id];
+    if (!activeGender) {
+      if (parsedData.isDualGender) {
+        activeGender = 'Męski';
+      } else {
+        activeGender = product.target_gender || 'Unisex';
       }
     }
+
+    const currentGenderStocks = parsedData.isDualGender
+      ? (activeGender === 'Damski' ? parsedData.stocks.Damski : parsedData.stocks.Męski)
+      : (product.target_gender === 'Damski' ? parsedData.stocks.Damski : product.target_gender === 'Męski' ? parsedData.stocks.Męski : parsedData.stocks.Unisex);
+
+    const hasSizes = Object.keys(currentGenderStocks).length > 0;
+    const selectedSize = selectedProductSizes[product.id];
 
     if (isClothing && hasSizes) {
       if (!selectedSize) {
@@ -547,16 +587,16 @@ export default function ShopPage() {
         return;
       }
 
-      const availableQtyForSize = sizeStocks[selectedSize] ?? 0;
+      const availableQtyForSize = currentGenderStocks[selectedSize] ?? 0;
       if (availableQtyForSize <= 0) {
-        alert(`Rozmiar ${selectedSize} jest wyprzedany (brak na stanie magazynowym).`);
+        alert(`Krój ${activeGender}, rozmiar ${selectedSize} jest wyprzedany.`);
         return;
       }
 
-      const cartKey = `${product.id}_${selectedSize}_${selectedGender || 'none'}`;
+      const cartKey = `${product.id}_${activeGender}_${selectedSize}`;
       const inCartItem = cart.find(c => c.cartItemId === cartKey);
       if (inCartItem && inCartItem.quantity >= availableQtyForSize) {
-        alert(`Nie możesz dodać więcej sztuk rozmiaru ${selectedSize}. Dostępna ilość na stanie to: ${availableQtyForSize} szt.`);
+        alert(`Nie możesz dodać więcej sztuk (${activeGender}, ${selectedSize}). Dostępna ilość na stanie to: ${availableQtyForSize} szt.`);
         return;
       }
     } else {
@@ -567,7 +607,7 @@ export default function ShopPage() {
       }
     }
 
-    const cartKey = `${product.id}_${selectedSize || 'none'}_${selectedGender || 'none'}`;
+    const cartKey = `${product.id}_${activeGender}_${selectedSize || 'none'}`;
 
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.cartItemId === cartKey);
@@ -585,7 +625,7 @@ export default function ShopPage() {
           product,
           quantity: 1,
           selectedSize: selectedSize || undefined,
-          selectedGender: selectedGender || undefined,
+          selectedGender: activeGender || undefined,
         },
       ];
     });
@@ -593,7 +633,6 @@ export default function ShopPage() {
     setIsCartOpen(true);
   };
 
-  // Aktualizacja ilości w koszyku z blokadą przekroczenia stanu rozmiaru
   const updateQuantity = (cartItemId: string, delta: number) => {
     setCart((prevCart) =>
       prevCart
@@ -604,12 +643,16 @@ export default function ShopPage() {
 
             if (delta > 0) {
               const isClothing = item.product.category.toLowerCase().includes('odzież') || item.product.category.toLowerCase().includes('odziez');
-              const sizeStocks = parseSizeStocks(item.product.available_sizes, item.product.stock);
+              const parsedData = parseProductSizeStocks(item.product.available_sizes, item.product.target_gender);
               
-              if (isClothing && item.selectedSize && Object.keys(sizeStocks).length > 0) {
-                const maxStock = sizeStocks[item.selectedSize] ?? item.product.stock;
+              if (isClothing && item.selectedSize) {
+                const currentGenderStocks = parsedData.isDualGender
+                  ? (item.selectedGender === 'Damski' ? parsedData.stocks.Damski : parsedData.stocks.Męski)
+                  : (item.product.target_gender === 'Damski' ? parsedData.stocks.Damski : item.product.target_gender === 'Męski' ? parsedData.stocks.Męski : parsedData.stocks.Unisex);
+
+                const maxStock = currentGenderStocks[item.selectedSize] ?? item.product.stock;
                 if (newQty > maxStock) {
-                  alert(`Maksymalna ilość rozmiaru ${item.selectedSize} dostępna na stanie to ${maxStock} szt.`);
+                  alert(`Maksymalna ilość (${item.selectedGender || ''} ${item.selectedSize}) dostępna na stanie to ${maxStock} szt.`);
                   return item;
                 }
               } else if (newQty > item.product.stock) {
@@ -638,7 +681,6 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Przekierowanie do bramki AutoPay
   const redirectToShopAutopay = async (amount: number, orderId: string, description: string, orderDbId: string) => {
     try {
       const userId = currentClientRecord?.id || Date.now();
@@ -690,7 +732,6 @@ export default function ShopPage() {
     }
   };
 
-  // Złożenie zamówienia
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -774,7 +815,6 @@ export default function ShopPage() {
     }
   };
 
-  // Bezpieczne usuwanie kategorii
   const handleDeleteCategory = async (catToDelete: string) => {
     if (catToDelete === 'Wszystko') {
       alert('Tej kategorii systemowej nie można usunąć.');
@@ -809,7 +849,6 @@ export default function ShopPage() {
     }
   };
 
-  // Kompresor Canvas dla plików graficznych
   const compressImageFile = (file: File, maxWidth = 1000, maxHeight = 1000, quality = 0.82): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -850,7 +889,6 @@ export default function ShopPage() {
     });
   };
 
-  // Obsługa zdjęcia produktu z galerii
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -867,7 +905,6 @@ export default function ShopPage() {
     }
   };
 
-  // Obsługa zdjęcia tabeli rozmiarów z galerii
   const handleSizeChartUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -884,10 +921,10 @@ export default function ShopPage() {
     }
   };
 
-  // Obsługa modalu produktu
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
+    setAdminActiveGenderTab('Męski');
     setIsCustomCategory(false);
     setProductModalError(null);
     setIsProductModalOpen(true);
@@ -898,7 +935,7 @@ export default function ShopPage() {
     const hasCategoryInList = availableCategories.includes(product.category);
     setIsCustomCategory(!hasCategoryInList);
     
-    const parsedStocks = parseSizeStocks(product.available_sizes, product.stock);
+    const parsed = parseProductSizeStocks(product.available_sizes, product.target_gender);
 
     setProductForm({
       name: product.name,
@@ -910,33 +947,84 @@ export default function ShopPage() {
       badge: product.badge || '',
       is_active: product.is_active,
       size_chart_url: product.size_chart_url || '',
-      size_stocks: Object.keys(parsedStocks).length > 0 ? parsedStocks : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
-      target_gender: product.target_gender || 'Unisex'
+      target_gender: product.target_gender || 'Unisex',
+      gender_stocks: {
+        'Męski': Object.keys(parsed.stocks.Męski).length > 0 ? parsed.stocks.Męski : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
+        'Damski': Object.keys(parsed.stocks.Damski).length > 0 ? parsed.stocks.Damski : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
+        'Unisex': Object.keys(parsed.stocks.Unisex).length > 0 ? parsed.stocks.Unisex : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
+      }
     });
+
+    setAdminActiveGenderTab('Męski');
     setProductModalError(null);
     setIsProductModalOpen(true);
   };
 
-  // Włączanie / wyłączanie rozmiaru w formularzu admina
-  const toggleSizeInForm = (size: string) => {
+  const toggleSizeInForm = (genderKey: 'Męski' | 'Damski' | 'Unisex', size: string) => {
     setProductForm((prev) => {
-      const current = { ...prev.size_stocks };
-      if (size in current) {
-        delete current[size];
+      const currentGenderStock = { ...prev.gender_stocks[genderKey] };
+      if (size in currentGenderStock) {
+        delete currentGenderStock[size];
       } else {
-        current[size] = 5;
+        currentGenderStock[size] = 5;
       }
-      const sumStock = Object.values(current).reduce((a, b) => a + b, 0);
-      return { ...prev, size_stocks: current, stock: sumStock.toString() };
+
+      const updatedGenderStocks = {
+        ...prev.gender_stocks,
+        [genderKey]: currentGenderStock
+      };
+
+      let sumStock = 0;
+      if (prev.target_gender === 'Męski / Damski (do wyboru)') {
+        sumStock = 
+          Object.values(updatedGenderStocks['Męski']).reduce((a, b) => a + b, 0) +
+          Object.values(updatedGenderStocks['Damski']).reduce((a, b) => a + b, 0);
+      } else if (prev.target_gender === 'Damski') {
+        sumStock = Object.values(updatedGenderStocks['Damski']).reduce((a, b) => a + b, 0);
+      } else if (prev.target_gender === 'Męski') {
+        sumStock = Object.values(updatedGenderStocks['Męski']).reduce((a, b) => a + b, 0);
+      } else {
+        sumStock = Object.values(updatedGenderStocks['Unisex']).reduce((a, b) => a + b, 0);
+      }
+
+      return {
+        ...prev,
+        gender_stocks: updatedGenderStocks,
+        stock: sumStock.toString()
+      };
     });
   };
 
-  // Aktualizacja ilości sztuk dla danego rozmiaru w formularzu admina
-  const updateSizeStockInForm = (size: string, quantity: number) => {
+  const updateSizeStockInForm = (genderKey: 'Męski' | 'Damski' | 'Unisex', size: string, quantity: number) => {
     setProductForm((prev) => {
-      const current = { ...prev.size_stocks, [size]: Math.max(0, quantity) };
-      const sumStock = Object.values(current).reduce((a, b) => a + b, 0);
-      return { ...prev, size_stocks: current, stock: sumStock.toString() };
+      const currentGenderStock = {
+        ...prev.gender_stocks[genderKey],
+        [size]: Math.max(0, quantity)
+      };
+
+      const updatedGenderStocks = {
+        ...prev.gender_stocks,
+        [genderKey]: currentGenderStock
+      };
+
+      let sumStock = 0;
+      if (prev.target_gender === 'Męski / Damski (do wyboru)') {
+        sumStock = 
+          Object.values(updatedGenderStocks['Męski']).reduce((a, b) => a + b, 0) +
+          Object.values(updatedGenderStocks['Damski']).reduce((a, b) => a + b, 0);
+      } else if (prev.target_gender === 'Damski') {
+        sumStock = Object.values(updatedGenderStocks['Damski']).reduce((a, b) => a + b, 0);
+      } else if (prev.target_gender === 'Męski') {
+        sumStock = Object.values(updatedGenderStocks['Męski']).reduce((a, b) => a + b, 0);
+      } else {
+        sumStock = Object.values(updatedGenderStocks['Unisex']).reduce((a, b) => a + b, 0);
+      }
+
+      return {
+        ...prev,
+        gender_stocks: updatedGenderStocks,
+        stock: sumStock.toString()
+      };
     });
   };
 
@@ -948,8 +1036,27 @@ export default function ShopPage() {
     const isClothing = productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez');
     
     let stockNum = parseInt(productForm.stock, 10);
-    if (isClothing && Object.keys(productForm.size_stocks).length > 0) {
-      stockNum = Object.values(productForm.size_stocks).reduce((a, b) => a + b, 0);
+    let sizesPayload: any = null;
+
+    if (isClothing) {
+      if (productForm.target_gender === 'Męski / Damski (do wyboru)') {
+        sizesPayload = JSON.stringify({
+          'Męski': productForm.gender_stocks['Męski'],
+          'Damski': productForm.gender_stocks['Damski']
+        });
+        stockNum = 
+          Object.values(productForm.gender_stocks['Męski']).reduce((a, b) => a + b, 0) +
+          Object.values(productForm.gender_stocks['Damski']).reduce((a, b) => a + b, 0);
+      } else if (productForm.target_gender === 'Damski') {
+        sizesPayload = JSON.stringify(productForm.gender_stocks['Damski']);
+        stockNum = Object.values(productForm.gender_stocks['Damski']).reduce((a, b) => a + b, 0);
+      } else if (productForm.target_gender === 'Męski') {
+        sizesPayload = JSON.stringify(productForm.gender_stocks['Męski']);
+        stockNum = Object.values(productForm.gender_stocks['Męski']).reduce((a, b) => a + b, 0);
+      } else {
+        sizesPayload = JSON.stringify(productForm.gender_stocks['Unisex']);
+        stockNum = Object.values(productForm.gender_stocks['Unisex']).reduce((a, b) => a + b, 0);
+      }
     }
 
     const finalCategory = productForm.category.trim();
@@ -984,7 +1091,7 @@ export default function ShopPage() {
         badge: productForm.badge.trim() ? productForm.badge.trim() : null,
         is_active: productForm.is_active,
         size_chart_url: productForm.size_chart_url.trim() || null,
-        available_sizes: isClothing ? JSON.stringify(productForm.size_stocks) : null,
+        available_sizes: sizesPayload,
         target_gender: productForm.target_gender || 'Unisex',
         updated_at: new Date().toISOString()
       };
@@ -1077,7 +1184,6 @@ export default function ShopPage() {
           </div>
         </div>
 
-        {/* Przyciski operacyjne */}
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => {
@@ -1127,7 +1233,7 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – pełne zarządzanie odzieżą, stanami rozmiarówki, cenami i publikacją' 
+                    ? 'Tryb edycji aktywny – pełne zarządzanie odzieżą, krojami męskimi i damskimi oraz rozmiarami' 
                     : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
@@ -1261,13 +1367,16 @@ export default function ShopPage() {
           {filteredProducts.length > 0 ? (
             filteredProducts.map((item) => {
               const isClothing = item.category.toLowerCase().includes('odzież') || item.category.toLowerCase().includes('odziez');
-              const sizeStocks = parseSizeStocks(item.available_sizes, item.stock);
-              const hasSizes = Object.keys(sizeStocks).length > 0;
+              const parsedData = parseProductSizeStocks(item.available_sizes, item.target_gender);
               const hasSizeChart = Boolean(item.size_chart_url);
-              const isGenderSelectable = item.target_gender === 'Męski / Damski (do wyboru)';
 
+              const activeGender = selectedProductGenders[item.id] || (parsedData.isDualGender ? 'Męski' : (item.target_gender || 'Unisex'));
+              const currentGenderStocks = parsedData.isDualGender
+                ? (activeGender === 'Damski' ? parsedData.stocks.Damski : parsedData.stocks.Męski)
+                : (item.target_gender === 'Damski' ? parsedData.stocks.Damski : item.target_gender === 'Męski' ? parsedData.stocks.Męski : parsedData.stocks.Unisex);
+
+              const hasSizes = Object.keys(currentGenderStocks).length > 0;
               const currentSelectedSize = selectedProductSizes[item.id] || '';
-              const currentSelectedGender = selectedProductGenders[item.id] || (isGenderSelectable ? 'Męski' : (item.target_gender || 'Unisex'));
               const isSizeWarning = sizeWarningProductId === item.id;
 
               return (
@@ -1313,7 +1422,6 @@ export default function ShopPage() {
                         )}
                       </div>
 
-                      {/* Narzędzia edycji na karcie produktu */}
                       {isEffectiveAdmin && (
                         <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                           <button
@@ -1363,13 +1471,11 @@ export default function ShopPage() {
                         {item.description || 'Brak opisu.'}
                       </p>
 
-                      {/* Sekcja wariantów odzieży z blokadą zerowych stanów */}
                       {isClothing && (
                         <div className="mt-4 space-y-3 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3.5">
-                          {/* Pasek z tabelą rozmiarów i informacją o płci */}
                           <div className="flex items-center justify-between">
                             <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                              {item.target_gender || 'Unisex'}
+                              {parsedData.isDualGender ? 'Dostępne kroje:' : (item.target_gender || 'Unisex')}
                             </span>
                             {hasSizeChart && (
                               <button
@@ -1386,34 +1492,33 @@ export default function ShopPage() {
                             )}
                           </div>
 
-                          {/* Wybór płci, jeśli wariant Męski / Damski */}
-                          {isGenderSelectable && (
+                          {parsedData.isDualGender && (
                             <div className="flex items-center gap-1.5 pt-1">
-                              {['Męski', 'Damski'].map((gender) => (
+                              {(['Męski', 'Damski'] as const).map((gender) => (
                                 <button
                                   key={gender}
                                   type="button"
-                                  onClick={() =>
-                                    setSelectedProductGenders((prev) => ({ ...prev, [item.id]: gender }))
-                                  }
-                                  className={`flex-1 rounded-lg py-1 text-xs font-bold transition-all cursor-pointer ${
-                                    currentSelectedGender === gender
+                                  onClick={() => {
+                                    setSelectedProductGenders((prev) => ({ ...prev, [item.id]: gender }));
+                                    setSelectedProductSizes((prev) => ({ ...prev, [item.id]: '' }));
+                                  }}
+                                  className={`flex-1 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                                    activeGender === gender
                                       ? 'bg-amber-500 text-black shadow-sm font-black'
                                       : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 border border-zinc-800'
                                   }`}
                                 >
-                                  {gender}
+                                  {gender === 'Męski' ? '👔 Krój Męski' : '👗 Krój Damski'}
                                 </button>
                               ))}
                             </div>
                           )}
 
-                          {/* Wybór rozmiaru z blokowaniem wyprzedanych */}
                           {hasSizes && (
                             <div>
                               <div className="flex items-center justify-between mb-1.5">
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                                  Wybierz rozmiar:
+                                  Rozmiar ({activeGender}):
                                 </span>
                                 {isSizeWarning && (
                                   <span className="text-[10px] font-bold text-rose-400 animate-pulse">
@@ -1422,7 +1527,7 @@ export default function ShopPage() {
                                 )}
                               </div>
                               <div className="flex flex-wrap gap-1.5">
-                                {Object.entries(sizeStocks).map(([size, stockQty]) => {
+                                {Object.entries(currentGenderStocks).map(([size, stockQty]) => {
                                   const isSelected = currentSelectedSize === size;
                                   const isOutOfStock = stockQty <= 0;
 
@@ -1444,7 +1549,7 @@ export default function ShopPage() {
                                           ? 'bg-amber-500 text-black shadow-sm font-black ring-1 ring-amber-400 cursor-pointer'
                                           : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-zinc-800 cursor-pointer'
                                       }`}
-                                      title={isOutOfStock ? `Rozmiar ${size} - wyprzedany` : `Dostępne na stanie: ${stockQty} szt.`}
+                                      title={isOutOfStock ? `Rozmiar ${size} wyprzedany` : `Na stanie: ${stockQty} szt.`}
                                     >
                                       <span>{size}</span>
                                       <span className={`ml-1 text-[9px] font-mono ${isSelected ? 'text-zinc-900' : isOutOfStock ? 'text-zinc-600' : 'text-amber-400/80'}`}>
@@ -1586,7 +1691,7 @@ export default function ShopPage() {
                 <input
                   type="text"
                   required
-                  placeholder="np. Bluza Klubowa Hoodie FORMA MARZEŃ"
+                  placeholder="np. Koszulka Treningowa FORMA MARZEŃ"
                   value={productForm.name}
                   onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
@@ -1655,7 +1760,7 @@ export default function ShopPage() {
                   <input
                     type="text"
                     required
-                    placeholder="np. 219.00"
+                    placeholder="np. 149.00"
                     value={productForm.price}
                     onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
                     className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
@@ -1696,7 +1801,7 @@ export default function ShopPage() {
                 </div>
               </div>
 
-              {/* Konfiguracja stanów dla poszczególnych rozmiarów w odzieży */}
+              {/* Konfiguracja krojów i rozmiarów */}
               {(productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) && (
                 <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3.5">
                   <div className="flex items-center gap-2">
@@ -1706,7 +1811,6 @@ export default function ShopPage() {
                     </span>
                   </div>
 
-                  {/* Płeć */}
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
                       Płeć / Przeznaczenie
@@ -1716,70 +1820,153 @@ export default function ShopPage() {
                       onChange={(e) => setProductForm({ ...productForm, target_gender: e.target.value })}
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
                     >
-                      <option value="Unisex">Unisex</option>
+                      <option value="Męski / Damski (do wyboru)">Męski / Damski (do wyboru)</option>
                       <option value="Męski">Męski</option>
                       <option value="Damski">Damski</option>
-                      <option value="Męski / Damski (do wyboru)">Męski / Damski (do wyboru)</option>
+                      <option value="Unisex">Unisex</option>
                     </select>
                   </div>
 
-                  {/* Rozmiary z przypisaną ilością sztuk na stanie */}
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block font-bold uppercase tracking-wider text-zinc-300">
-                        Dostępne rozmiary i ich stany magazynowe:
-                      </label>
-                      <span className="text-[10px] text-amber-400 font-mono">
-                        Razem: {Object.values(productForm.size_stocks).reduce((a, b) => a + b, 0)} szt.
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {STANDARD_SIZES.map((size) => {
-                        const isEnabled = size in productForm.size_stocks;
-                        const currentStock = productForm.size_stocks[size] ?? 0;
-                        return (
-                          <div
-                            key={size}
-                            className={`flex flex-col p-2.5 rounded-xl border transition-all ${
-                              isEnabled
-                                ? 'border-amber-500/50 bg-zinc-900'
-                                : 'border-zinc-800 bg-zinc-950/40 opacity-60'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
-                                <input
-                                  type="checkbox"
-                                  checked={isEnabled}
-                                  onChange={() => toggleSizeInForm(size)}
-                                  className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                                />
-                                <span>{size}</span>
-                              </label>
-                              {isEnabled && (
-                                <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                  {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
-                                </span>
-                              )}
-                            </div>
-                            {isEnabled && (
-                              <input
-                                type="number"
-                                min="0"
-                                placeholder="Ilość sztuk"
-                                value={currentStock}
-                                onChange={(e) => updateSizeStockInForm(size, parseInt(e.target.value, 10) || 0)}
-                                className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
-                              />
-                            )}
+                    {productForm.target_gender === 'Męski / Damski (do wyboru)' ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                            Stany magazynowe per krój:
+                          </label>
+                          <div className="flex rounded-lg bg-zinc-900 p-0.5 border border-zinc-800">
+                            <button
+                              type="button"
+                              onClick={() => setAdminActiveGenderTab('Męski')}
+                              className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
+                                adminActiveGenderTab === 'Męski'
+                                  ? 'bg-amber-500 text-black font-black'
+                                  : 'text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              👔 Męski
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAdminActiveGenderTab('Damski')}
+                              className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
+                                adminActiveGenderTab === 'Damski'
+                                  ? 'bg-amber-500 text-black font-black'
+                                  : 'text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              👗 Damski
+                            </button>
                           </div>
-                        );
-                      })}
-                    </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {STANDARD_SIZES.map((size) => {
+                            const isEnabled = size in productForm.gender_stocks[adminActiveGenderTab];
+                            const currentStock = productForm.gender_stocks[adminActiveGenderTab][size] ?? 0;
+                            return (
+                              <div
+                                key={size}
+                                className={`flex flex-col p-2.5 rounded-xl border transition-all ${
+                                  isEnabled
+                                    ? 'border-amber-500/50 bg-zinc-900'
+                                    : 'border-zinc-800 bg-zinc-950/40 opacity-60'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-1">
+                                  <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
+                                    <input
+                                      type="checkbox"
+                                      checked={isEnabled}
+                                      onChange={() => toggleSizeInForm(adminActiveGenderTab, size)}
+                                      className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                                    />
+                                    <span>{size}</span>
+                                  </label>
+                                  {isEnabled && (
+                                    <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                      {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
+                                    </span>
+                                  )}
+                                </div>
+                                {isEnabled && (
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="Ilość"
+                                    value={currentStock}
+                                    onChange={(e) => updateSizeStockInForm(adminActiveGenderTab, size, parseInt(e.target.value, 10) || 0)}
+                                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                            Rozmiary i stany magazynowe:
+                          </label>
+                          <span className="text-[10px] text-amber-400 font-mono">
+                            Razem: {productForm.stock} szt.
+                          </span>
+                        </div>
+
+                        {(() => {
+                          const genderKey = (productForm.target_gender === 'Damski' ? 'Damski' : productForm.target_gender === 'Męski' ? 'Męski' : 'Unisex') as 'Męski' | 'Damski' | 'Unisex';
+                          return (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {STANDARD_SIZES.map((size) => {
+                                const isEnabled = size in productForm.gender_stocks[genderKey];
+                                const currentStock = productForm.gender_stocks[genderKey][size] ?? 0;
+                                return (
+                                  <div
+                                    key={size}
+                                    className={`flex flex-col p-2.5 rounded-xl border transition-all ${
+                                      isEnabled
+                                        ? 'border-amber-500/50 bg-zinc-900'
+                                        : 'border-zinc-800 bg-zinc-950/40 opacity-60'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between mb-1">
+                                      <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
+                                        <input
+                                          type="checkbox"
+                                          checked={isEnabled}
+                                          onChange={() => toggleSizeInForm(genderKey, size)}
+                                          className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                                        />
+                                        <span>{size}</span>
+                                      </label>
+                                      {isEnabled && (
+                                        <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                          {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {isEnabled && (
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        placeholder="Ilość"
+                                        value={currentStock}
+                                        onChange={(e) => updateSizeStockInForm(genderKey, size, parseInt(e.target.value, 10) || 0)}
+                                        className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
+                                      />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Zdjęcie tabeli rozmiarów */}
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
                       Zdjęcie tabeli rozmiarów (Galeria / Dysk)
@@ -1838,7 +2025,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Zdjęcie artykułu */}
               <div>
                 <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
                   Zdjęcie artykułu (Galeria / Dysk)
@@ -1899,7 +2085,6 @@ export default function ShopPage() {
                 )}
               </div>
 
-              {/* Okno opisu */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block font-bold uppercase tracking-wider text-zinc-300">
@@ -2015,7 +2200,6 @@ export default function ShopPage() {
               </div>
             </div>
 
-            {/* Wyszukiwarka w tabeli zamówień */}
             <div className="mt-4 shrink-0">
               <div className="relative max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
@@ -2037,7 +2221,6 @@ export default function ShopPage() {
               </div>
             </div>
 
-            {/* Tabela zamówień */}
             <div className="mt-4 flex-1 overflow-y-auto pr-1">
               {historyLoading ? (
                 <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
@@ -2133,7 +2316,6 @@ export default function ShopPage() {
                               </span>
                             </td>
 
-                            {/* Kolumna Czy opłacono / Anulowano */}
                             <td className="py-3.5 px-4 align-top text-center whitespace-nowrap">
                               {isPaid ? (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-emerald-400">
@@ -2153,7 +2335,6 @@ export default function ShopPage() {
                               )}
                             </td>
 
-                            {/* Kolumna Akcja dla Administratora */}
                             {isEffectiveAdmin && (
                               <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end gap-1.5">
@@ -2228,7 +2409,6 @@ export default function ShopPage() {
 
           <div className="relative z-10 flex h-[100dvh] w-full max-w-md flex-col bg-zinc-950 border-l border-zinc-800 shadow-2xl overflow-hidden">
             
-            {/* Nagłówek Drawera */}
             <div className="flex items-center justify-between border-b border-zinc-800 p-5 shrink-0">
               <div className="flex items-center gap-2">
                 <ShoppingBag className="h-5 w-5 text-amber-400" />
@@ -2247,7 +2427,6 @@ export default function ShopPage() {
               </button>
             </div>
 
-            {/* Komunikaty */}
             <div className="px-5 pt-2 shrink-0">
               {orderSuccess && (
                 <div className="my-2 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-emerald-400">
@@ -2266,7 +2445,6 @@ export default function ShopPage() {
               )}
             </div>
 
-            {/* Treść przewijana */}
             <div className="flex-1 overflow-y-auto px-5 py-2 space-y-4">
               {checkoutStep === 'cart' ? (
                 <div className="space-y-3">
@@ -2299,7 +2477,11 @@ export default function ShopPage() {
                           </h4>
                           {(item.selectedSize || item.selectedGender) && (
                             <div className="flex items-center gap-2 text-[11px] text-zinc-400 font-medium">
-                              {item.selectedGender && <span>{item.selectedGender}</span>}
+                              {item.selectedGender && (
+                                <span className={item.selectedGender === 'Damski' ? 'text-rose-400' : 'text-blue-400'}>
+                                  {item.selectedGender}
+                                </span>
+                              )}
                               {item.selectedGender && item.selectedSize && <span>•</span>}
                               {item.selectedSize && (
                                 <span className="font-bold text-amber-400">
@@ -2352,7 +2534,6 @@ export default function ShopPage() {
                     </div>
                   )}
 
-                  {/* Imię i nazwisko */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -2371,7 +2552,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Numer telefonu */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -2390,7 +2570,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* E-mail */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -2409,7 +2588,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Uwagi */}
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-1.5 mb-1">
                       <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Termin odbioru w klubie
@@ -2423,7 +2601,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Kafelek AutoPay */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -2453,7 +2630,6 @@ export default function ShopPage() {
               )}
             </div>
 
-            {/* Dolna belka */}
             <div className="border-t border-zinc-800 bg-zinc-950 p-5 shrink-0 space-y-3 shadow-2xl">
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-zinc-400">
