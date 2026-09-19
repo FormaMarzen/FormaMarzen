@@ -130,6 +130,9 @@ export default function ShopPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Dane zalogowanego klienta z tabeli 'klienci'
+  const [currentClientRecord, setCurrentClientRecord] = useState<any>(null);
+
   // Autoryzacja administratora
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -154,6 +157,9 @@ export default function ShopPage() {
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Blokada wielokrotnego kliknięcia płatności
+  const isSubmittingAutopayRef = useRef<boolean>(false);
+
   // Tabela i Rejestr zamówień
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
   const [ordersHistory, setOrdersHistory] = useState<OrderRecord[]>([]);
@@ -161,7 +167,7 @@ export default function ShopPage() {
   const [historyFilter, setHistoryFilter] = useState<'all' | 'my'>('all');
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
 
-  // Formularz zamówienia AutoPay
+  // Formularz zamówienia z AutoPay
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
@@ -201,6 +207,7 @@ export default function ShopPage() {
           });
 
           if (matched) {
+            setCurrentClientRecord(matched);
             const fullName = `${matched.Imię || ''} ${matched.Nazwisko || ''}`.trim();
             const phone = matched['Numer tel.'] && matched['Numer tel.'] !== '-' ? matched['Numer tel.'] : '';
             const memberEmail = matched['E-mail'] || matched.email || authEmail;
@@ -467,22 +474,78 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Zapis zamówienia z obsługą AutoPay
+  // Przekierowanie do bramki AutoPay na wzór modułu Portfela
+  const redirectToShopAutopay = async (amount: number, orderId: string, description: string, orderDbId: string) => {
+    try {
+      const userId = currentClientRecord?.id || Date.now();
+      const clientEmail = formData.customerEmail.trim();
+
+      const response = await fetch('/api/autopay/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amount,
+          orderId: orderId,
+          userId: userId,
+          description: description,
+          email: clientEmail,
+          type: 'shop_order',
+          metadata: {
+            order_db_id: orderDbId,
+            customer_name: formData.customerName,
+            customer_phone: formData.customerPhone,
+            shipping_notes: formData.shippingNotes
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Nie udało się zainicjalizować płatności w bramce AutoPay');
+      }
+
+      // Dynamiczne wygenerowanie i wysłanie formularza POST do bramki AutoPay
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = data.gatewayUrl;
+      form.setAttribute('accept-charset', 'UTF-8');
+
+      Object.keys(data.payload).forEach((key) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = data.payload[key];
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      form.submit();
+    } catch (err: any) {
+      console.error("Błąd przekierowania do bramki AutoPay:", err);
+      throw err;
+    }
+  };
+
+  // Złożenie zamówienia i bezpośrednie przejście do AutoPay
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
 
+    if (isSubmittingAutopayRef.current) return;
+
     if (!isMemberLoggedIn) {
-      setSubmitError('Zakupy są dostępne wyłącznie dla zalogowanych klubowiczów. Zaloguj się w aplikacji.');
+      setSubmitError('Zakupy w sklepie są dostępne wyłącznie dla zalogowanych klubowiczów.');
       return;
     }
 
     if (!formData.customerName.trim() || !formData.customerEmail.trim()) {
-      setSubmitError('Nie znaleziono wymaganych danych profilu klubowicza.');
+      setSubmitError('Brak wymaganych danych klubowicza do autoryzacji zamówienia.');
       return;
     }
 
     try {
+      isSubmittingAutopayRef.current = true;
       setIsCheckingOut(true);
 
       const orderPayload = {
@@ -502,7 +565,7 @@ export default function ShopPage() {
         .single();
 
       if (orderError || !orderData) {
-        throw new Error(orderError?.message || 'Błąd zapisu rekordu zamówienia w bazie.');
+        throw new Error(orderError?.message || 'Błąd zapisu zamówienia w bazie.');
       }
 
       const orderItems = cart.map((item) => ({
@@ -519,25 +582,22 @@ export default function ShopPage() {
 
       if (itemsError) throw new Error(itemsError.message);
 
+      // Identyfikator zamówienia dla AutoPay (max 32 znaki)
+      const autopayOrderId = `SHOP-${orderData.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}-${Date.now()}`.substring(0, 32);
+      const opisOperacji = `Sklep Forma Marzen - Zamowienie #${orderData.id.slice(0, 8)}`;
+
       setOrderSuccess(true);
       setCart([]);
       localStorage.removeItem('fm_shop_cart');
-      setCheckoutStep('cart');
-      setFormData((prev) => ({
-        ...prev,
-        shippingNotes: '',
-      }));
 
-      setTimeout(() => {
-        setOrderSuccess(false);
-        setIsCartOpen(false);
-      }, 3500);
+      // Przekierowanie na oficjalną bramkę płatności AutoPay
+      await redirectToShopAutopay(cartTotal, autopayOrderId, opisOperacji, orderData.id);
 
     } catch (err: any) {
-      console.error('Błąd zamówienia:', err);
-      const exactError = err?.message || (err?.error_description) || 'Wystąpił problem z bazą danych.';
-      setSubmitError(`Błąd zamówienia: ${exactError}`);
-    } finally {
+      console.error('Błąd zamówienia / AutoPay:', err);
+      const exactError = err?.message || (err?.error_description) || 'Wystąpił problem z połączeniem z AutoPay.';
+      setSubmitError(`Błąd realizacji płatności: ${exactError}`);
+      isSubmittingAutopayRef.current = false;
       setIsCheckingOut(false);
     }
   };
@@ -1572,7 +1632,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Drawer Koszyka i Realizacji Zamówienia (Pełna wysokość bez ucinania) */}
+      {/* Drawer Koszyka i Realizacji Zamówienia */}
       {isCartOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
           <div
@@ -1601,13 +1661,13 @@ export default function ShopPage() {
               </button>
             </div>
 
-            {/* Komunikaty */}
+            {/* Komunikaty błędów / sukcesu */}
             <div className="px-5 pt-2 shrink-0">
               {orderSuccess && (
                 <div className="my-2 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-emerald-400">
                   <CheckCircle2 className="h-5 w-5 shrink-0" />
                   <p className="text-xs font-medium">
-                    Zamówienie zostało zapisane! Przekierowywanie do płatności AutoPay...
+                    Zamówienie zostało zarejestrowane! Przekierowywanie do płatności AutoPay...
                   </p>
                 </div>
               )}
@@ -1766,7 +1826,7 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Kafelek płatności AutoPay bez rozbijania na BLIK/Karta */}
+                  {/* Pojedynczy kafelek płatności AutoPay */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -1783,8 +1843,8 @@ export default function ShopPage() {
                           <CreditCard className="h-5 w-5" />
                         </div>
                         <div>
-                          <p className="text-xs font-bold text-white">Szybka płatność online AutoPay</p>
-                          <p className="text-[10px] text-zinc-300">Wybór formy (BLIK, karta, przelew) nastąpi na bramce</p>
+                          <p className="text-xs font-bold text-white">Płatność online przez AutoPay S.A.</p>
+                          <p className="text-[10px] text-zinc-300">BLIK, karta płatnicza, Apple Pay i szybki przelew</p>
                         </div>
                       </div>
                       <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30 shrink-0">
@@ -1831,16 +1891,16 @@ export default function ShopPage() {
                     type="submit"
                     form="checkout-form"
                     disabled={isCheckingOut || !isMemberLoggedIn}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
                   >
                     {isCheckingOut ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        Przetwarzanie...
+                        Przekierowywanie do AutoPay...
                       </>
                     ) : (
                       <>
-                        Zatwierdź i przejdź do AutoPay
+                        Zatwierdź i zapłać AutoPay
                         <ArrowRight className="h-4 w-4" />
                       </>
                     )}
