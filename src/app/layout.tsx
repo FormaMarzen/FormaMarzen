@@ -859,7 +859,7 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
-  // 1. Menu Administratora (usunięto dopisek "W budowie")
+  // 1. Menu Administratora (bez dopisku "W budowie")
   const adminMenuSections = [
     {
       title: "Główne",
@@ -913,7 +913,7 @@ export default function RootLayout({
     }
   ];
 
-  // 2. Menu Klubowicza (dodano "Sklep" pod pozycją "Odzież")
+  // 2. Menu Klubowicza (z zakładką "Sklep" pod pozycją "Odzież")
   const klientMenuSections = [
     {
       title: "Główne",
@@ -948,7 +948,7 @@ export default function RootLayout({
     }
   ];
 
-  // 3. Menu Trenera (dodano "Sklep" pod pozycją "Odzież")
+  // 3. Menu Trenera (ukryto "Mój bonus", dodano "Sklep" pod pozycją "Odzież")
   const trenerMenuSections = [
     {
       title: "Strefa Trenera",
@@ -970,7 +970,6 @@ export default function RootLayout({
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
-        { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/regulamin', label: 'Regulamin klubu', icon: '📋' },
       ]
@@ -1201,6 +1200,7 @@ export default function RootLayout({
       }
       setHasUnreadWyzwania(unreadWyzwania);
 
+      // Weryfikacja nieodczytanych zakupów w sklepie klubowym dla administratora
       let unreadShop = false;
       if (role === 'admin') {
         const { data: unreadShopOrders, error: shopOrdersErr } = await supabase
