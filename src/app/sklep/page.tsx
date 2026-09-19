@@ -187,7 +187,7 @@ export default function ShopPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Pobranie danych zalogowanego klubowicza bez możliwości późniejszej edycji
+  // Pobranie danych zalogowanego klubowicza bez możliwości edycji
   useEffect(() => {
     const fetchLoggedMemberData = async () => {
       try {
@@ -289,7 +289,7 @@ export default function ShopPage() {
     verifyAdmin();
   }, []);
 
-  // Pobieranie produktów ze sklepu
+  // Pobieranie asortymentu produktów
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -314,7 +314,7 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie rejestru zamówień z blokadą dla zwykłych klubowiczów
+  // Pobieranie zamówień z Supabase
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
@@ -360,8 +360,12 @@ export default function ShopPage() {
   // Zmiana statusu opłacenia zamówienia przez administratora
   const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
     if (!isAdmin) return;
-    const isCurrentlyPaid = currentStatus?.toLowerCase() === 'opłacone' || currentStatus?.toLowerCase() === 'paid';
-    const newStatus = isCurrentlyPaid ? 'oczekuje' : 'opłacone';
+    const isCurrentlyPaid = 
+      currentStatus?.toLowerCase() === 'opłacone' || 
+      currentStatus?.toLowerCase() === 'paid' ||
+      currentStatus?.toLowerCase() === 'completed';
+
+    const newStatus = isCurrentlyPaid ? 'pending' : 'opłacone';
 
     try {
       const { error: updateErr } = await supabase
@@ -474,7 +478,7 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Przekierowanie do bramki AutoPay na wzór modułu Portfela
+  // Przekierowanie do bramki AutoPay
   const redirectToShopAutopay = async (amount: number, orderId: string, description: string, orderDbId: string) => {
     try {
       const userId = currentClientRecord?.id || Date.now();
@@ -505,7 +509,6 @@ export default function ShopPage() {
         throw new Error(data.error || 'Nie udało się zainicjalizować płatności w bramce AutoPay');
       }
 
-      // Dynamiczne wygenerowanie i wysłanie formularza POST do bramki AutoPay
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = data.gatewayUrl;
@@ -527,7 +530,7 @@ export default function ShopPage() {
     }
   };
 
-  // Złożenie zamówienia i bezpośrednie przejście do AutoPay
+  // Złożenie zamówienia
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -548,6 +551,7 @@ export default function ShopPage() {
       isSubmittingAutopayRef.current = true;
       setIsCheckingOut(true);
 
+      // Uniwersalny status początkowy zgodny z constraintami bazy danych
       const orderPayload = {
         customer_name: formData.customerName.trim(),
         customer_email: formData.customerEmail.trim(),
@@ -555,7 +559,7 @@ export default function ShopPage() {
         shipping_notes: formData.shippingNotes.trim(),
         payment_method: 'AutoPay',
         total_amount: cartTotal,
-        status: 'oczekuje'
+        status: 'pending'
       };
 
       const { data: orderData, error: orderError } = await supabase
@@ -582,7 +586,6 @@ export default function ShopPage() {
 
       if (itemsError) throw new Error(itemsError.message);
 
-      // Identyfikator zamówienia dla AutoPay (max 32 znaki)
       const autopayOrderId = `SHOP-${orderData.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}-${Date.now()}`.substring(0, 32);
       const opisOperacji = `Sklep Forma Marzen - Zamowienie #${orderData.id.slice(0, 8)}`;
 
@@ -590,12 +593,11 @@ export default function ShopPage() {
       setCart([]);
       localStorage.removeItem('fm_shop_cart');
 
-      // Przekierowanie na oficjalną bramkę płatności AutoPay
       await redirectToShopAutopay(cartTotal, autopayOrderId, opisOperacji, orderData.id);
 
     } catch (err: any) {
       console.error('Błąd zamówienia / AutoPay:', err);
-      const exactError = err?.message || (err?.error_description) || 'Wystąpił problem z połączeniem z AutoPay.';
+      const exactError = err?.message || err?.error_description || 'Wystąpił problem z połączeniem z AutoPay.';
       setSubmitError(`Błąd realizacji płatności: ${exactError}`);
       isSubmittingAutopayRef.current = false;
       setIsCheckingOut(false);
@@ -845,7 +847,7 @@ export default function ShopPage() {
           </div>
         </div>
 
-        {/* Przyciski operacyjne: Tabela zamówień + Koszyk */}
+        {/* Przyciski: Tabela zamówień + Koszyk */}
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => {
@@ -1512,9 +1514,10 @@ export default function ShopPage() {
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60">
                       {filteredOrdersHistory.map((order) => {
-                        const isPaid = order.status?.toLowerCase() === 'opłacone' || 
-                                       order.status?.toLowerCase() === 'paid' || 
-                                       order.status?.toLowerCase() === 'completed';
+                        const isPaid = 
+                          order.status?.toLowerCase() === 'opłacone' || 
+                          order.status?.toLowerCase() === 'paid' || 
+                          order.status?.toLowerCase() === 'completed';
 
                         const formattedDate = order.created_at
                           ? new Date(order.created_at).toLocaleString('pl-PL', {
@@ -1661,7 +1664,7 @@ export default function ShopPage() {
               </button>
             </div>
 
-            {/* Komunikaty błędów / sukcesu */}
+            {/* Komunikaty */}
             <div className="px-5 pt-2 shrink-0">
               {orderSuccess && (
                 <div className="my-2 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-emerald-400">
@@ -1680,7 +1683,7 @@ export default function ShopPage() {
               )}
             </div>
 
-            {/* Treść przewijana (Krok 1: Koszyk, Krok 2: Formularz z zablokowanymi danymi) */}
+            {/* Treść przewijana */}
             <div className="flex-1 overflow-y-auto px-5 py-2 space-y-4">
               {checkoutStep === 'cart' ? (
                 <div className="space-y-3">
@@ -1826,7 +1829,7 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Pojedynczy kafelek płatności AutoPay */}
+                  {/* Kafelek AutoPay */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -1856,7 +1859,7 @@ export default function ShopPage() {
               )}
             </div>
 
-            {/* Dolna belka z podsumowaniem i przyciskami (Zawsze widoczna bez ucinania) */}
+            {/* Dolna belka */}
             <div className="border-t border-zinc-800 bg-zinc-950 p-5 shrink-0 space-y-3 shadow-2xl">
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-zinc-400">
