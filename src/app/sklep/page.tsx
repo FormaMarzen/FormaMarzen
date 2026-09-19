@@ -36,7 +36,8 @@ import {
   FileSpreadsheet, 
   Lock,
   XCircle,
-  RotateCcw
+  RotateCcw,
+  Ruler
 } from 'lucide-react';
 
 export interface Product {
@@ -49,11 +50,17 @@ export interface Product {
   stock: number;
   badge?: string | null;
   is_active: boolean;
+  size_chart_url?: string | null;
+  available_sizes?: string | null;
+  target_gender?: string | null;
 }
 
 export interface CartItem {
+  cartItemId: string;
   product: Product;
   quantity: number;
+  selectedSize?: string;
+  selectedGender?: string;
 }
 
 export interface OrderItemRecord {
@@ -95,6 +102,9 @@ interface ProductFormData {
   stock: string;
   badge: string;
   is_active: boolean;
+  size_chart_url: string;
+  available_sizes: string[];
+  target_gender: string;
 }
 
 const DEFAULT_CATEGORIES: string[] = [
@@ -105,6 +115,8 @@ const DEFAULT_CATEGORIES: string[] = [
   'Usługi'
 ];
 
+const STANDARD_SIZES: string[] = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'];
+
 const INITIAL_PRODUCT_FORM: ProductFormData = {
   name: '',
   category: 'Odzież',
@@ -114,6 +126,9 @@ const INITIAL_PRODUCT_FORM: ProductFormData = {
   stock: '10',
   badge: '',
   is_active: true,
+  size_chart_url: '',
+  available_sizes: ['S', 'M', 'L', 'XL'],
+  target_gender: 'Unisex'
 };
 
 export default function ShopPage() {
@@ -156,6 +171,15 @@ export default function ShopPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
+  // Wybór rozmiaru i płci na kafelkach produktów przed dodaniem do koszyka
+  const [selectedProductSizes, setSelectedProductSizes] = useState<Record<string, string>>({});
+  const [selectedProductGenders, setSelectedProductGenders] = useState<Record<string, string>>({});
+  const [sizeWarningProductId, setSizeWarningProductId] = useState<string | null>(null);
+
+  // Modal podglądu tabeli rozmiarów
+  const [activeSizeChartUrl, setActiveSizeChartUrl] = useState<string | null>(null);
+  const [activeSizeChartTitle, setActiveSizeChartTitle] = useState<string>('');
+
   // Koszyk
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
@@ -190,9 +214,11 @@ export default function ShopPage() {
   const [isCustomCategory, setIsCustomCategory] = useState<boolean>(false);
   const [savingProduct, setSavingProduct] = useState<boolean>(false);
   const [isProcessingImage, setIsProcessingImage] = useState<boolean>(false);
+  const [isProcessingSizeChart, setIsProcessingSizeChart] = useState<boolean>(false);
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sizeChartFileInputRef = useRef<HTMLInputElement>(null);
 
   // Pobranie danych zalogowanego klubowicza bez możliwości edycji
   useEffect(() => {
@@ -321,7 +347,7 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie rejestru zamówień ze ścisłą separacją uprawnień i odpornością na podwójne maile
+  // Pobieranie rejestru zamówień ze ścisłą separacją uprawnień
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
@@ -378,7 +404,7 @@ export default function ShopPage() {
     }
   }, [isHistoryOpen, historyFilter, isEffectiveAdmin]);
 
-  // Uniwersalna zmiana statusu zamówienia przez administratora
+  // Zmiana statusu zamówienia przez administratora
   const handleSetOrderStatus = async (orderId: string, newStatus: string) => {
     if (!isEffectiveAdmin) return;
 
@@ -399,7 +425,7 @@ export default function ShopPage() {
     }
   };
 
-  // Anulowanie zamówienia z potwierdzeniem
+  // Anulowanie zamówienia
   const handleCancelOrder = async (orderId: string) => {
     if (!isEffectiveAdmin) return;
     const confirmCancel = window.confirm(
@@ -427,7 +453,7 @@ export default function ShopPage() {
     });
   }, [ordersHistory, historySearchQuery]);
 
-  // Obsługa pamięci koszyka
+  // Pamięć podręczna koszyka
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -462,27 +488,73 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isEffectiveAdmin]);
 
-  // Akcje koszyka
-  const addToCart = (product: Product) => {
+  // Parsowanie listy rozmiarów
+  const parseProductSizes = (sizesStr?: string | null): string[] => {
+    if (!sizesStr) return [];
+    try {
+      if (sizesStr.startsWith('[')) {
+        return JSON.parse(sizesStr);
+      }
+    } catch (e) {}
+    return sizesStr.split(',').map((s) => s.trim()).filter(Boolean);
+  };
+
+  // Obsługa dodawania do koszyka z weryfikacją rozmiaru dla odzieży
+  const handleAddToCartWithValidation = (product: Product) => {
+    const isClothing = product.category.toLowerCase().includes('odzież') || product.category.toLowerCase().includes('odziez');
+    const availableSizes = parseProductSizes(product.available_sizes);
+    const hasSizes = availableSizes.length > 0;
+
+    const selectedSize = selectedProductSizes[product.id];
+    let selectedGender = selectedProductGenders[product.id];
+
+    if (!selectedGender) {
+      if (product.target_gender?.includes('Męski / Damski')) {
+        selectedGender = 'Męski';
+      } else if (product.target_gender) {
+        selectedGender = product.target_gender;
+      }
+    }
+
+    if (isClothing && hasSizes && !selectedSize) {
+      setSizeWarningProductId(product.id);
+      setTimeout(() => {
+        setSizeWarningProductId(null);
+      }, 3000);
+      return;
+    }
+
+    const cartKey = `${product.id}_${selectedSize || 'none'}_${selectedGender || 'none'}`;
+
     setCart((prevCart) => {
-      const existing = prevCart.find((item) => item.product.id === product.id);
+      const existing = prevCart.find((item) => item.cartItemId === cartKey);
       if (existing) {
         return prevCart.map((item) =>
-          item.product.id === product.id
+          item.cartItemId === cartKey
             ? { ...item, quantity: item.quantity + 1 }
             : item
         );
       }
-      return [...prevCart, { product, quantity: 1 }];
+      return [
+        ...prevCart,
+        {
+          cartItemId: cartKey,
+          product,
+          quantity: 1,
+          selectedSize: selectedSize || undefined,
+          selectedGender: selectedGender || undefined,
+        },
+      ];
     });
+
     setIsCartOpen(true);
   };
 
-  const updateQuantity = (productId: string, delta: number) => {
+  const updateQuantity = (cartItemId: string, delta: number) => {
     setCart((prevCart) =>
       prevCart
         .map((item) => {
-          if (item.product.id === productId) {
+          if (item.cartItemId === cartItemId) {
             const newQty = item.quantity + delta;
             return newQty > 0 ? { ...item, quantity: newQty } : null;
           }
@@ -492,8 +564,8 @@ export default function ShopPage() {
     );
   };
 
-  const removeFromCart = (productId: string) => {
-    setCart((prevCart) => prevCart.filter((item) => item.product.id !== productId));
+  const removeFromCart = (cartItemId: string) => {
+    setCart((prevCart) => prevCart.filter((item) => item.cartItemId !== cartItemId));
   };
 
   const cartTotal = useMemo(() => {
@@ -597,13 +669,24 @@ export default function ShopPage() {
         throw new Error(orderError?.message || 'Błąd zapisu zamówienia w bazie.');
       }
 
-      const orderItems = cart.map((item) => ({
-        order_id: orderData.id,
-        product_id: item.product.id,
-        product_name: item.product.name,
-        quantity: item.quantity,
-        unit_price: item.product.price
-      }));
+      const orderItems = cart.map((item) => {
+        let fullName = item.product.name;
+        const details = [];
+        if (item.selectedGender) details.push(item.selectedGender);
+        if (item.selectedSize) details.push(`Rozmiar: ${item.selectedSize}`);
+
+        if (details.length > 0) {
+          fullName += ` (${details.join(', ')})`;
+        }
+
+        return {
+          order_id: orderData.id,
+          product_id: item.product.id,
+          product_name: fullName,
+          quantity: item.quantity,
+          unit_price: item.product.price
+        };
+      });
 
       const { error: itemsError } = await supabase
         .from('order_items')
@@ -664,57 +747,79 @@ export default function ShopPage() {
     }
   };
 
-  // Obsługa zdjęcia z galerii lub dysku urządzenia
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Kompresor Canvas dla plików graficznych
+  const compressImageFile = (file: File, maxWidth = 1000, maxHeight = 1000, quality = 0.82): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = document.createElement('img');
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxHeight) {
+              width = Math.round((width * maxHeight) / height);
+              height = maxHeight;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+          } else {
+            reject(new Error('Canvas context error'));
+          }
+        };
+        img.onerror = () => reject(new Error('Błąd odczytu grafiki'));
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('Błąd pliku'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Obsługa zdjęcia produktu z galerii
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setIsProcessingImage(true);
-    setProductModalError(null);
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = document.createElement('img');
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 900;
-        const MAX_HEIGHT = 900;
-        let width = img.width;
-        let height = img.height;
-
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height = Math.round((height * MAX_WIDTH) / width);
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width = Math.round((width * MAX_HEIGHT) / height);
-            height = MAX_HEIGHT;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
-          setProductForm((prev) => ({ ...prev, image_url: compressedDataUrl }));
-        }
-        setIsProcessingImage(false);
-      };
-      img.onerror = () => {
-        setProductModalError('Nie udało się przetworzyć pliku graficznego.');
-        setIsProcessingImage(false);
-      };
-      img.src = event.target?.result as string;
-    };
-    reader.onerror = () => {
-      setProductModalError('Błąd podczas odczytu pliku z pamięci urządzenia.');
+    try {
+      setIsProcessingImage(true);
+      setProductModalError(null);
+      const compressedDataUrl = await compressImageFile(file, 900, 900, 0.82);
+      setProductForm((prev) => ({ ...prev, image_url: compressedDataUrl }));
+    } catch (err) {
+      setProductModalError('Nie udało się przetworzyć pliku graficznego.');
+    } finally {
       setIsProcessingImage(false);
-    };
-    reader.readAsDataURL(file);
+    }
+  };
+
+  // Obsługa zdjęcia tabeli rozmiarów z galerii
+  const handleSizeChartUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsProcessingSizeChart(true);
+      setProductModalError(null);
+      const compressedDataUrl = await compressImageFile(file, 1200, 1200, 0.85);
+      setProductForm((prev) => ({ ...prev, size_chart_url: compressedDataUrl }));
+    } catch (err) {
+      setProductModalError('Nie udało się przetworzyć tabeli rozmiarów.');
+    } finally {
+      setIsProcessingSizeChart(false);
+    }
   };
 
   // Obsługa modalu produktu
@@ -739,9 +844,23 @@ export default function ShopPage() {
       stock: product.stock.toString(),
       badge: product.badge || '',
       is_active: product.is_active,
+      size_chart_url: product.size_chart_url || '',
+      available_sizes: parseProductSizes(product.available_sizes),
+      target_gender: product.target_gender || 'Unisex'
     });
     setProductModalError(null);
     setIsProductModalOpen(true);
+  };
+
+  const toggleSizeInForm = (size: string) => {
+    setProductForm((prev) => {
+      const current = prev.available_sizes || [];
+      if (current.includes(size)) {
+        return { ...prev, available_sizes: current.filter((s) => s !== size) };
+      } else {
+        return { ...prev, available_sizes: [...current, size] };
+      }
+    });
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -781,6 +900,9 @@ export default function ShopPage() {
         stock: stockNum,
         badge: productForm.badge.trim() ? productForm.badge.trim() : null,
         is_active: productForm.is_active,
+        size_chart_url: productForm.size_chart_url.trim() || null,
+        available_sizes: JSON.stringify(productForm.available_sizes),
+        target_gender: productForm.target_gender || 'Unisex',
         updated_at: new Date().toISOString()
       };
 
@@ -872,7 +994,7 @@ export default function ShopPage() {
           </div>
         </div>
 
-        {/* Przyciski: Tabela zamówień (dla admina) / Moje zamówienia (dla klubowicza) + Koszyk */}
+        {/* Przyciski operacyjne */}
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => {
@@ -922,7 +1044,7 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – pełne zarządzanie cenami, kategoriami, stanem, publikacją i zamówieniami' 
+                    ? 'Tryb edycji aktywny – pełne zarządzanie odzieżą, rozmiarówką, cenami i publikacją' 
                     : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
@@ -1054,118 +1176,217 @@ export default function ShopPage() {
       {!loading && !error && (
         <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {filteredProducts.length > 0 ? (
-            filteredProducts.map((item) => (
-              <div
-                key={item.id}
-                className={`group flex flex-col justify-between overflow-hidden rounded-2xl border transition-all ${
-                  !item.is_active
-                    ? 'border-amber-500/50 bg-zinc-900/40 opacity-80'
-                    : 'border-zinc-800/90 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900'
-                }`}
-              >
-                <div>
-                  <div className="relative h-60 w-full overflow-hidden bg-zinc-950">
-                    {item.image_url ? (
-                      <Image
-                        src={item.image_url}
-                        alt={item.name}
-                        fill
-                        unoptimized
-                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                        className="object-cover transition-transform duration-500 group-hover:scale-105"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-700">
-                        <Dumbbell className="h-12 w-12" />
-                      </div>
-                    )}
+            filteredProducts.map((item) => {
+              const isClothing = item.category.toLowerCase().includes('odzież') || item.category.toLowerCase().includes('odziez');
+              const availableSizes = parseProductSizes(item.available_sizes);
+              const hasSizes = availableSizes.length > 0;
+              const hasSizeChart = Boolean(item.size_chart_url);
+              const isGenderSelectable = item.target_gender === 'Męski / Damski (do wyboru)';
 
-                    <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start">
-                      {item.badge && (
-                        <div className="flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-black shadow-lg">
-                          <Tag className="h-3 w-3" />
-                          {item.badge}
-                        </div>
-                      )}
-                      {!item.is_active && (
-                        <div className="flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
-                          <EyeOff className="h-3 w-3" />
-                          Ukryty
-                        </div>
-                      )}
-                    </div>
+              const currentSelectedSize = selectedProductSizes[item.id] || '';
+              const currentSelectedGender = selectedProductGenders[item.id] || (isGenderSelectable ? 'Męski' : (item.target_gender || 'Unisex'));
+              const isSizeWarning = sizeWarningProductId === item.id;
 
-                    {/* Narzędzia edycji na karcie produktu */}
-                    {isEffectiveAdmin && (
-                      <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleProductStatus(item)}
-                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white cursor-pointer"
-                          title={item.is_active ? 'Ukryj produkt przed klubowiczami' : 'Opublikuj produkt'}
-                        >
-                          {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditModal(item)}
-                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400 cursor-pointer"
-                          title="Edytuj produkt"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteProduct(item)}
-                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400 cursor-pointer"
-                          title="Usuń z bazy"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="p-5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                        {item.category}
-                      </span>
-                      {isEffectiveAdmin && (
-                        <span className="text-xs text-zinc-400 font-mono">
-                          Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
-                        </span>
-                      )}
-                    </div>
-
-                    <h3 className="mt-1 text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
-                      {item.name}
-                    </h3>
-                    <p className="mt-2 line-clamp-3 text-sm text-zinc-400 leading-relaxed">
-                      {item.description || 'Brak opisu.'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-zinc-800/80 p-5 pt-4">
+              return (
+                <div
+                  key={item.id}
+                  className={`group flex flex-col justify-between overflow-hidden rounded-2xl border transition-all ${
+                    !item.is_active
+                      ? 'border-amber-500/50 bg-zinc-900/40 opacity-80'
+                      : isSizeWarning
+                      ? 'border-rose-500 ring-2 ring-rose-500/50 bg-zinc-900'
+                      : 'border-zinc-800/90 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900'
+                  }`}
+                >
                   <div>
-                    <span className="text-xs text-zinc-500 block">Cena brutto</span>
-                    <p className="text-xl font-black text-white">
-                      {Number(item.price).toFixed(2)} <span className="text-xs font-bold text-zinc-400">PLN</span>
-                    </p>
+                    <div className="relative h-60 w-full overflow-hidden bg-zinc-950">
+                      {item.image_url ? (
+                        <Image
+                          src={item.image_url}
+                          alt={item.name}
+                          fill
+                          unoptimized
+                          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                          className="object-cover transition-transform duration-500 group-hover:scale-105"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-700">
+                          <Dumbbell className="h-12 w-12" />
+                        </div>
+                      )}
+
+                      <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start">
+                        {item.badge && (
+                          <div className="flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-black shadow-lg">
+                            <Tag className="h-3 w-3" />
+                            {item.badge}
+                          </div>
+                        )}
+                        {!item.is_active && (
+                          <div className="flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white shadow-lg">
+                            <EyeOff className="h-3 w-3" />
+                            Ukryty
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Narzędzia edycji na karcie produktu */}
+                      {isEffectiveAdmin && (
+                        <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProductStatus(item)}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white cursor-pointer"
+                            title={item.is_active ? 'Ukryj produkt przed klubowiczami' : 'Opublikuj produkt'}
+                          >
+                            {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditModal(item)}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400 cursor-pointer"
+                            title="Edytuj produkt"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteProduct(item)}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400 cursor-pointer"
+                            title="Usuń z bazy"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                          {item.category}
+                        </span>
+                        {isEffectiveAdmin && (
+                          <span className="text-xs text-zinc-400 font-mono">
+                            Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
+                          </span>
+                        )}
+                      </div>
+
+                      <h3 className="mt-1 text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
+                        {item.name}
+                      </h3>
+                      <p className="mt-2 line-clamp-3 text-sm text-zinc-400 leading-relaxed">
+                        {item.description || 'Brak opisu.'}
+                      </p>
+
+                      {/* Sekcja wariantów odzieży (Płeć, Rozmiar, Tabela rozmiarów) */}
+                      {isClothing && (
+                        <div className="mt-4 space-y-3 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3.5">
+                          {/* Pasek z tabelą rozmiarów i informacją o płci */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                              {item.target_gender || 'Unisex'}
+                            </span>
+                            {hasSizeChart && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveSizeChartUrl(item.size_chart_url || null);
+                                  setActiveSizeChartTitle(item.name);
+                                }}
+                                className="flex items-center gap-1.5 text-xs font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                              >
+                                <Ruler className="h-3.5 w-3.5" />
+                                Tabela rozmiarów
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Wybór płci, jeśli produkt ma warianty Męski / Damski */}
+                          {isGenderSelectable && (
+                            <div className="flex items-center gap-1.5 pt-1">
+                              {['Męski', 'Damski'].map((gender) => (
+                                <button
+                                  key={gender}
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedProductGenders((prev) => ({ ...prev, [item.id]: gender }))
+                                  }
+                                  className={`flex-1 rounded-lg py-1 text-xs font-bold transition-all cursor-pointer ${
+                                    currentSelectedGender === gender
+                                      ? 'bg-amber-500 text-black shadow-sm font-black'
+                                      : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 border border-zinc-800'
+                                  }`}
+                                >
+                                  {gender}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Wybór rozmiaru */}
+                          {hasSizes && (
+                            <div>
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                                  Wybierz rozmiar:
+                                </span>
+                                {isSizeWarning && (
+                                  <span className="text-[10px] font-bold text-rose-400 animate-pulse">
+                                    Wybierz rozmiar przed dodaniem!
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {availableSizes.map((size) => {
+                                  const isSelected = currentSelectedSize === size;
+                                  return (
+                                    <button
+                                      key={size}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedProductSizes((prev) => ({ ...prev, [item.id]: size }));
+                                        setSizeWarningProductId(null);
+                                      }}
+                                      className={`min-w-[34px] rounded-lg px-2 py-1 text-xs font-bold transition-all cursor-pointer ${
+                                        isSelected
+                                          ? 'bg-amber-500 text-black shadow-sm font-black'
+                                          : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-zinc-800'
+                                      }`}
+                                    >
+                                      {size}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  <button
-                    onClick={() => addToCart(item)}
-                    disabled={item.stock <= 0}
-                    className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-black uppercase tracking-wider text-black transition-transform hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {item.stock > 0 ? 'Do koszyka' : 'Brak'}
-                  </button>
+                  <div className="flex items-center justify-between border-t border-zinc-800/80 p-5 pt-4">
+                    <div>
+                      <span className="text-xs text-zinc-500 block">Cena brutto</span>
+                      <p className="text-xl font-black text-white">
+                        {Number(item.price).toFixed(2)} <span className="text-xs font-bold text-zinc-400">PLN</span>
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleAddToCartWithValidation(item)}
+                      disabled={item.stock <= 0}
+                      className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-black uppercase tracking-wider text-black transition-transform hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <Plus className="h-4 w-4" />
+                      {item.stock > 0 ? 'Do koszyka' : 'Brak'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="col-span-full py-16 text-center">
               <p className="text-base text-zinc-400">Brak artykułów w tej kategorii.</p>
@@ -1180,6 +1401,47 @@ export default function ShopPage() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal Podglądu Tabeli Rozmiarów */}
+      {activeSizeChartUrl && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md">
+          <div className="relative max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Ruler className="h-5 w-5 text-amber-400" />
+                <h3 className="text-base font-bold text-white">
+                  Tabela rozmiarów: {activeSizeChartTitle}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveSizeChartUrl(null)}
+                className="rounded-xl p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="relative mt-4 flex-1 overflow-auto rounded-2xl bg-zinc-900/50 p-2 flex items-center justify-center">
+              <img
+                src={activeSizeChartUrl}
+                alt={`Tabela rozmiarów: ${activeSizeChartTitle}`}
+                className="max-h-[70vh] w-auto max-w-full rounded-xl object-contain shadow-md"
+              />
+            </div>
+
+            <div className="mt-4 flex justify-end border-t border-zinc-800 pt-3">
+              <button
+                type="button"
+                onClick={() => setActiveSizeChartUrl(null)}
+                className="rounded-xl bg-amber-500 px-5 py-2 text-xs font-black uppercase tracking-wider text-black hover:bg-amber-400 cursor-pointer"
+              >
+                Zamknij
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1207,11 +1469,19 @@ export default function ShopPage() {
               </div>
             )}
 
+            {/* Ukryte inputy na pliki */}
             <input
               type="file"
               ref={fileInputRef}
               accept="image/*"
               onChange={handleImageUpload}
+              className="hidden"
+            />
+            <input
+              type="file"
+              ref={sizeChartFileInputRef}
+              accept="image/*"
+              onChange={handleSizeChartUpload}
               className="hidden"
             />
 
@@ -1223,7 +1493,7 @@ export default function ShopPage() {
                 <input
                   type="text"
                   required
-                  placeholder="np. Analiza Składu Ciała"
+                  placeholder="np. Bluza Klubowa Hoodie FORMA MARZEŃ"
                   value={productForm.name}
                   onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
@@ -1292,7 +1562,7 @@ export default function ShopPage() {
                   <input
                     type="text"
                     required
-                    placeholder="np. 129.00"
+                    placeholder="np. 219.00"
                     value={productForm.price}
                     onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
                     className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
@@ -1330,14 +1600,126 @@ export default function ShopPage() {
                 </div>
               </div>
 
-              {/* Zdjęcie artykułu wyłącznie z pamięci urządzenia */}
+              {/* Konfiguracja specyficzna dla kategorii "Odzież" */}
+              {productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez') ? (
+                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3.5">
+                  <div className="flex items-center gap-2">
+                    <Ruler className="h-4 w-4 text-amber-400" />
+                    <span className="font-black uppercase tracking-wider text-amber-300 text-xs">
+                      Konfiguracja Rozmiarówki i Wariantów
+                    </span>
+                  </div>
+
+                  {/* Płeć */}
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
+                      Płeć / Przeznaczenie
+                    </label>
+                    <select
+                      value={productForm.target_gender}
+                      onChange={(e) => setProductForm({ ...productForm, target_gender: e.target.value })}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
+                    >
+                      <option value="Unisex">Unisex</option>
+                      <option value="Męski">Męski</option>
+                      <option value="Damski">Damski</option>
+                      <option value="Męski / Damski (do wyboru)">Męski / Damski (do wyboru)</option>
+                    </select>
+                  </div>
+
+                  {/* Dostępne rozmiary */}
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
+                      Dostępne rozmiary (kliknij, aby włączyć/wyłączyć):
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {STANDARD_SIZES.map((size) => {
+                        const isIncluded = productForm.available_sizes.includes(size);
+                        return (
+                          <button
+                            key={size}
+                            type="button"
+                            onClick={() => toggleSizeInForm(size)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                              isIncluded
+                                ? 'bg-amber-500 text-black font-black shadow-sm'
+                                : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 border border-zinc-800'
+                            }`}
+                          >
+                            {size}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Zdjęcie tabeli rozmiarów */}
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
+                      Zdjęcie tabeli rozmiarów (Galeria / Dysk)
+                    </label>
+
+                    {productForm.size_chart_url ? (
+                      <div className="relative h-32 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 group">
+                        <img
+                          src={productForm.size_chart_url}
+                          alt="Podgląd tabeli rozmiarów"
+                          className="h-full w-full object-contain"
+                        />
+                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => sizeChartFileInputRef.current?.click()}
+                            className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-black shadow hover:bg-amber-400 cursor-pointer"
+                          >
+                            <Upload className="h-3 w-3" />
+                            Zmień tabelę
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setProductForm({ ...productForm, size_chart_url: '' })}
+                            className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-rose-500 cursor-pointer"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Usuń
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => sizeChartFileInputRef.current?.click()}
+                        className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-4 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
+                      >
+                        {isProcessingSizeChart ? (
+                          <div className="flex flex-col items-center gap-1.5 text-amber-400">
+                            <Loader2 className="h-6 w-6 animate-spin" />
+                            <span className="text-xs font-semibold">Kompresowanie tabeli...</span>
+                          </div>
+                        ) : (
+                          <>
+                            <Ruler className="h-6 w-6 text-amber-400 mb-1" />
+                            <span className="text-xs font-bold text-zinc-200">
+                              Wybierz zdjęcie tabeli rozmiarów
+                            </span>
+                            <span className="text-[10px] text-zinc-500 mt-0.5">
+                              Grafika pojawi się klubowiczom po kliknięciu "Tabela rozmiarów"
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Zdjęcie artykułu */}
               <div>
                 <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
                   Zdjęcie artykułu (Galeria / Dysk)
                 </label>
 
                 {productForm.image_url ? (
-                  <div className="relative h-48 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
+                  <div className="relative h-44 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
                     <Image
                       src={productForm.image_url}
                       alt="Podgląd zdjęcia"
@@ -1400,11 +1782,11 @@ export default function ShopPage() {
                   <span className="text-[10px] text-zinc-500">Powiększone okno edycji</span>
                 </div>
                 <textarea
-                  rows={8}
-                  placeholder="Wprowadź szczegółowy opis produktu, zakres sesji treningowej, specyfikację, korzyści, zasady realizacji..."
+                  rows={6}
+                  placeholder="Wprowadź szczegółowy opis produktu, skład materiału, zasady konserwacji, specyfikację..."
                   value={productForm.description}
                   onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
-                  className="w-full min-h-[180px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
+                  className="w-full min-h-[140px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
                 />
               </div>
 
@@ -1431,7 +1813,7 @@ export default function ShopPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingProduct || isProcessingImage}
+                  disabled={savingProduct || isProcessingImage || isProcessingSizeChart}
                   className="flex items-center gap-2 rounded-xl bg-amber-500 px-6 py-2.5 text-xs font-black uppercase tracking-wider text-black hover:bg-amber-400 disabled:opacity-50 cursor-pointer"
                 >
                   {savingProduct ? (
@@ -1449,7 +1831,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Rejestru Zamówień (Tabela dla Admina, Moje zakupy dla Klubowicza) */}
+      {/* Modal Rejestru Zamówień */}
       {isHistoryOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-5xl rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-7 shadow-2xl my-6 flex flex-col max-h-[92vh]">
@@ -1475,7 +1857,6 @@ export default function ShopPage() {
               </div>
 
               <div className="flex items-center gap-2.5">
-                {/* Przyciski filtrów widoczne WYŁĄCZNIE dla aktywnego administratora */}
                 {isEffectiveAdmin && (
                   <div className="flex items-center rounded-xl bg-zinc-900 p-1 border border-zinc-800">
                     <button
@@ -1626,7 +2007,6 @@ export default function ShopPage() {
                               </span>
                             </td>
 
-                            {/* Kolumna Czy opłacono / Anulowano */}
                             <td className="py-3.5 px-4 align-top text-center whitespace-nowrap">
                               {isPaid ? (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-emerald-400">
@@ -1646,7 +2026,6 @@ export default function ShopPage() {
                               )}
                             </td>
 
-                            {/* Kolumna Akcja dla Administratora (Zatwierdź / Cofnij + Anuluj) */}
                             {isEffectiveAdmin && (
                               <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end gap-1.5">
@@ -1764,16 +2143,16 @@ export default function ShopPage() {
               {checkoutStep === 'cart' ? (
                 <div className="space-y-3">
                   {cart.length > 0 ? (
-                    cart.map(({ product, quantity }) => (
+                    cart.map((item) => (
                       <div
-                        key={product.id}
+                        key={item.cartItemId}
                         className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3"
                       >
                         <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
-                          {product.image_url ? (
+                          {item.product.image_url ? (
                             <Image
-                              src={product.image_url}
-                              alt={product.name}
+                              src={item.product.image_url}
+                              alt={item.product.name}
                               fill
                               unoptimized
                               sizes="56px"
@@ -1788,21 +2167,32 @@ export default function ShopPage() {
 
                         <div className="flex-1 min-w-0">
                           <h4 className="truncate text-sm font-semibold text-white">
-                            {product.name}
+                            {item.product.name}
                           </h4>
-                          <p className="text-xs font-medium text-amber-400">
-                            {Number(product.price).toFixed(2)} PLN
+                          {(item.selectedSize || item.selectedGender) && (
+                            <div className="flex items-center gap-2 text-[11px] text-zinc-400 font-medium">
+                              {item.selectedGender && <span>{item.selectedGender}</span>}
+                              {item.selectedGender && item.selectedSize && <span>•</span>}
+                              {item.selectedSize && (
+                                <span className="font-bold text-amber-400">
+                                  Rozmiar: {item.selectedSize}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <p className="text-xs font-medium text-amber-400 mt-0.5">
+                            {Number(item.product.price).toFixed(2)} PLN
                           </p>
                           <div className="mt-1.5 flex items-center gap-2">
                             <button
-                              onClick={() => updateQuantity(product.id, -1)}
+                              onClick={() => updateQuantity(item.cartItemId, -1)}
                               className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
                             >
                               <Minus className="h-3 w-3" />
                             </button>
-                            <span className="text-xs font-bold text-zinc-100">{quantity}</span>
+                            <span className="text-xs font-bold text-zinc-100">{item.quantity}</span>
                             <button
-                              onClick={() => updateQuantity(product.id, 1)}
+                              onClick={() => updateQuantity(item.cartItemId, 1)}
                               className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
                             >
                               <Plus className="h-3 w-3" />
@@ -1811,7 +2201,7 @@ export default function ShopPage() {
                         </div>
 
                         <button
-                          onClick={() => removeFromCart(product.id)}
+                          onClick={() => removeFromCart(item.cartItemId)}
                           className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400 cursor-pointer"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1834,7 +2224,7 @@ export default function ShopPage() {
                     </div>
                   )}
 
-                  {/* Imię i nazwisko (Zablokowane do edycji) */}
+                  {/* Imię i nazwisko */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -1853,7 +2243,7 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Numer telefonu (Zablokowany do edycji) */}
+                  {/* Numer telefonu */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -1872,7 +2262,7 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* E-mail (Zablokowany do edycji) */}
+                  {/* E-mail */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
@@ -1891,14 +2281,14 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Edytowalne uwagi klubowicza */}
+                  {/* Uwagi */}
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-1.5 mb-1">
-                      <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Termin realizacji / Rozmiar
+                      <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Termin odbioru w klubie
                     </label>
                     <textarea
                       rows={2}
-                      placeholder="np. Odbiór w recepcji klubu / preferowany termin usługi..."
+                      placeholder="np. Odbiór osobisty w recepcji klubu..."
                       value={formData.shippingNotes}
                       onChange={(e) => setFormData({ ...formData, shippingNotes: e.target.value })}
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-none leading-relaxed"
