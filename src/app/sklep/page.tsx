@@ -11,6 +11,7 @@ import {
   Minus, 
   Trash2, 
   ArrowRight, 
+  ArrowLeft,
   CheckCircle2, 
   Tag, 
   Dumbbell, 
@@ -38,7 +39,8 @@ import {
   XCircle,
   RotateCcw,
   Ruler,
-  Wallet
+  Wallet,
+  ArrowUpDown
 } from 'lucide-react';
 
 export interface Product {
@@ -54,6 +56,7 @@ export interface Product {
   size_chart_url?: string | null;
   available_sizes?: string | null;
   target_gender?: string | null;
+  display_order?: number | null;
 }
 
 export interface CartItem {
@@ -105,6 +108,7 @@ interface ProductFormData {
   is_active: boolean;
   size_chart_url: string;
   target_gender: string;
+  display_order: string;
   gender_stocks: {
     'Męski': Record<string, number>;
     'Damski': Record<string, number>;
@@ -133,6 +137,7 @@ const INITIAL_PRODUCT_FORM: ProductFormData = {
   is_active: true,
   size_chart_url: '',
   target_gender: 'Unisex',
+  display_order: '0',
   gender_stocks: {
     'Męski': { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
     'Damski': { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
@@ -316,7 +321,6 @@ export default function ShopPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sizeChartFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Pobranie danych zalogowanego klubowicza i salda portfela
   const fetchLoggedMemberData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -364,7 +368,6 @@ export default function ShopPage() {
     fetchLoggedMemberData();
   }, []);
 
-  // Obliczenie salda portfela klubowicza
   const clientWalletBalance = useMemo(() => {
     if (!currentClientRecord) return 0;
     const rawWallet = currentClientRecord.Portfel ?? currentClientRecord.portfel ?? '0.00 PLN';
@@ -434,6 +437,7 @@ export default function ShopPage() {
     verifyAdmin();
   }, []);
 
+  // Pobieranie asortymentu produktów z uwzględnieniem samodzielnej kolejności
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -442,6 +446,7 @@ export default function ShopPage() {
       const { data, error: fetchError } = await supabase
         .from('products')
         .select('*')
+        .order('display_order', { ascending: true, nullsFirst: false })
         .order('created_at', { ascending: false });
 
       if (fetchError) throw fetchError;
@@ -457,6 +462,43 @@ export default function ShopPage() {
   useEffect(() => {
     fetchProducts();
   }, []);
+
+  // Samodzielne przesuwanie kolejności produktów przez administratora
+  const handleMoveProduct = async (product: Product, direction: 'prev' | 'next') => {
+    const list = [...filteredProducts];
+    const currentIndex = list.findIndex(p => p.id === product.id);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'prev' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= list.length) return;
+
+    // Zamiana miejscami w lokalnej liście
+    const temp = list[currentIndex];
+    list[currentIndex] = list[targetIndex];
+    list[targetIndex] = temp;
+
+    // Przypisanie nowych kolejności 1, 2, 3...
+    const updates = list.map((p, idx) => ({
+      id: p.id,
+      display_order: idx + 1
+    }));
+
+    // Optymistyczna aktualizacja UI
+    setProducts(prev => {
+      const updatedList = prev.map(p => {
+        const found = updates.find(u => u.id === p.id);
+        return found ? { ...p, display_order: found.display_order } : p;
+      });
+      return updatedList.sort((a, b) => (a.display_order ?? 9999) - (b.display_order ?? 9999));
+    });
+
+    try {
+      await Promise.all(
+        updates.map(u => supabase.from('products').update({ display_order: u.display_order }).eq('id', u.id))
+      );
+    } catch (err) {
+      console.error("Błąd zapisu kolejności:", err);
+    }
+  };
 
   const fetchOrderHistory = async () => {
     try {
@@ -714,7 +756,6 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Przekierowanie do bramki AutoPay
   const redirectToShopAutopay = async (amount: number, orderId: string, description: string, orderDbId: string) => {
     try {
       const userId = currentClientRecord?.id || Date.now();
@@ -766,7 +807,6 @@ export default function ShopPage() {
     }
   };
 
-  // Złożenie zamówienia z wyborem metody płatności: AutoPay lub Portfel
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -785,7 +825,6 @@ export default function ShopPage() {
 
     const isWalletPayment = formData.paymentMethod === 'wallet';
 
-    // Weryfikacja salda portfela
     if (isWalletPayment) {
       if (clientWalletBalance < cartTotal) {
         setSubmitError(
@@ -847,12 +886,10 @@ export default function ShopPage() {
 
       if (itemsError) throw new Error(itemsError.message);
 
-      // ŚCIEŻKA 1: PŁATNOŚĆ ŚRODKAMI Z PORTFELA
       if (isWalletPayment) {
         const newWalletNum = clientWalletBalance - cartTotal;
         const newWalletStr = `${newWalletNum.toFixed(2)} PLN`;
 
-        // Odliczenie środków z konta klubowicza
         if (currentClientRecord?.id) {
           await supabase
             .from('klienci')
@@ -862,7 +899,6 @@ export default function ShopPage() {
             })
             .eq('id', currentClientRecord.id);
 
-          // Zapisanie operacji finansowej w tabeli transakcje
           await supabase.from('transakcje').insert([{
             klient_id: currentClientRecord.id,
             typ_operacji: 'sklep_portfel',
@@ -871,7 +907,6 @@ export default function ShopPage() {
           }]);
         }
 
-        // Natychmiastowa redukcja stanów magazynowych
         for (const item of cart) {
           const isClothing = item.product.category.toLowerCase().includes('odzież') || item.product.category.toLowerCase().includes('odziez');
           const newTotalStock = Math.max(0, item.product.stock - item.quantity);
@@ -906,7 +941,6 @@ export default function ShopPage() {
             .eq('id', item.product.id);
         }
 
-        // Odświeżenie danych i sukces
         setOrderSuccessMessage(`Zamówienie zostało pomyślnie opłacone z Twojego portfela! Nowy stan portfela: ${newWalletStr}`);
         setOrderSuccess(true);
         setCart([]);
@@ -920,7 +954,6 @@ export default function ShopPage() {
           setCheckoutStep('cart');
         }, 3500);
 
-      // ŚCIEŻKA 2: PŁATNOŚĆ ONLINE AUTOPAY
       } else {
         const autopayOrderId = `SHOP-${orderData.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}-${Date.now()}`.substring(0, 32);
         const opisOperacji = `Sklep Forma Marzen - Zamowienie #${orderData.id.slice(0, 8)}`;
@@ -1085,6 +1118,7 @@ export default function ShopPage() {
       is_active: product.is_active,
       size_chart_url: product.size_chart_url || '',
       target_gender: product.target_gender || 'Unisex',
+      display_order: (product.display_order ?? 0).toString(),
       gender_stocks: {
         'Męski': Object.keys(parsed.stocks.Męski).length > 0 ? parsed.stocks.Męski : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
         'Damski': Object.keys(parsed.stocks.Damski).length > 0 ? parsed.stocks.Damski : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
@@ -1171,6 +1205,7 @@ export default function ShopPage() {
 
     const priceNum = parseFloat(productForm.price.replace(',', '.'));
     const isClothing = productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez');
+    const orderNum = parseInt(productForm.display_order, 10) || 0;
     
     let stockNum = parseInt(productForm.stock, 10);
     let sizesPayload: any = null;
@@ -1238,6 +1273,7 @@ export default function ShopPage() {
         size_chart_url: productForm.size_chart_url.trim() || null,
         available_sizes: sizesPayload,
         target_gender: productForm.target_gender || 'Unisex',
+        display_order: orderNum,
         updated_at: new Date().toISOString()
       };
 
@@ -1378,7 +1414,7 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – pełne zarządzanie odzieżą, krojami męskimi i damskimi oraz rozmiarami' 
+                    ? 'Tryb edycji aktywny – pełne zarządzanie kolejnością (strzałki ◀ ▶ na kafelkach), odzieżą, krojami i stanami' 
                     : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
@@ -1507,11 +1543,11 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Siatka produktów */}
+      {/* Siatka produktów ze strzałkami kolejności w trybie administratora */}
       {!loading && !error && (
         <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {filteredProducts.length > 0 ? (
-            filteredProducts.map((item) => {
+            filteredProducts.map((item, index) => {
               const isClothing = item.category.toLowerCase().includes('odzież') || item.category.toLowerCase().includes('odziez');
               const parsedData = parseProductSizeStocks(item.available_sizes, item.target_gender);
               const hasSizeChart = Boolean(item.size_chart_url);
@@ -1524,6 +1560,9 @@ export default function ShopPage() {
               const hasSizes = Object.keys(currentGenderStocks).length > 0;
               const currentSelectedSize = selectedProductSizes[item.id] || '';
               const isSizeWarning = sizeWarningProductId === item.id;
+
+              const isFirst = index === 0;
+              const isLast = index === filteredProducts.length - 1;
 
               return (
                 <div
@@ -1568,23 +1607,48 @@ export default function ShopPage() {
                         )}
                       </div>
 
+                      {/* Narzędzia administratora: Edycja, Widoczność, Usunięcie oraz PRZESUWANIE KOLEJNOŚCI */}
                       {isEffectiveAdmin && (
-                        <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
+                        <div className="absolute right-3 top-3 flex items-center gap-1 rounded-xl bg-black/85 p-1 border border-zinc-700 shadow-xl">
+                          {/* Przesuń w lewo / wyżej */}
+                          <button
+                            type="button"
+                            disabled={isFirst}
+                            onClick={() => handleMoveProduct(item, 'prev')}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            title="Przesuń produkt w lewo / wyżej"
+                          >
+                            <ArrowLeft className="h-3.5 w-3.5" />
+                          </button>
+
+                          {/* Przesuń w prawo / niżej */}
+                          <button
+                            type="button"
+                            disabled={isLast}
+                            onClick={() => handleMoveProduct(item, 'next')}
+                            className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            title="Przesuń produkt w prawo / niżej"
+                          >
+                            <ArrowRight className="h-3.5 w-3.5" />
+                          </button>
+
+                          <div className="h-3 w-[1px] bg-zinc-700 mx-0.5" />
+
                           <button
                             type="button"
                             onClick={() => handleToggleProductStatus(item)}
                             className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white cursor-pointer"
                             title={item.is_active ? 'Ukryj produkt przed klubowiczami' : 'Opublikuj produkt'}
                           >
-                            {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
+                            {item.is_active ? <Eye className="h-3.5 w-3.5 text-emerald-400" /> : <EyeOff className="h-3.5 w-3.5 text-zinc-400" />}
                           </button>
                           <button
                             type="button"
                             onClick={() => handleOpenEditModal(item)}
                             className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400 cursor-pointer"
-                            title="Edytuj produkt"
+                            title="Edytuj produkt i kolejność"
                           >
-                            <Edit className="h-4 w-4" />
+                            <Edit className="h-3.5 w-3.5" />
                           </button>
                           <button
                             type="button"
@@ -1592,7 +1656,7 @@ export default function ShopPage() {
                             className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400 cursor-pointer"
                             title="Usuń z bazy"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       )}
@@ -1846,8 +1910,8 @@ export default function ShopPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="col-span-1">
                     <div className="flex items-center justify-between mb-1">
                       <label className="block font-bold uppercase tracking-wider text-zinc-300">
                         Kategoria *
@@ -1863,9 +1927,9 @@ export default function ShopPage() {
                             setProductForm({ ...productForm, category: availableCategories[0] || 'Odzież' });
                           }
                         }}
-                        className="text-[10px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                        className="text-[9px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
                       >
-                        {isCustomCategory ? 'Wybierz z listy' : '+ Wpisz własną'}
+                        {isCustomCategory ? 'Lista' : '+ Własna'}
                       </button>
                     </div>
 
@@ -1873,10 +1937,10 @@ export default function ShopPage() {
                       <input
                         type="text"
                         required
-                        placeholder="np. Usługi, Pakiety..."
+                        placeholder="Kategoria"
                         value={productForm.category}
                         onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-                        className="w-full rounded-xl border border-amber-500/50 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                        className="w-full rounded-xl border border-amber-500/50 bg-zinc-900 px-3 py-2.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
                       />
                     ) : (
                       <select
@@ -1889,14 +1953,14 @@ export default function ShopPage() {
                             setProductForm({ ...productForm, category: e.target.value });
                           }
                         }}
-                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-2.5 py-2.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
                       >
                         {availableCategories.map((c) => (
                           <option key={c} value={c}>
                             {c}
                           </option>
                         ))}
-                        <option value="__custom__">+ Dodaj inną kategorię...</option>
+                        <option value="__custom__">+ Dodaj inną...</option>
                       </select>
                     )}
                   </div>
@@ -1911,7 +1975,23 @@ export default function ShopPage() {
                       placeholder="np. 149.00"
                       value={productForm.price}
                       onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  {/* Pole samodzielnej kolejności wyświetlania */}
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1 flex items-center gap-1" title="Kolejność w sklepie (np. 1 = pierwszy)">
+                      <ArrowUpDown className="h-3 w-3 text-amber-400" />
+                      Kolejność
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="np. 1"
+                      value={productForm.display_order}
+                      onChange={(e) => setProductForm({ ...productForm, display_order: e.target.value })}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none font-mono text-center"
                     />
                   </div>
                 </div>
@@ -2547,7 +2627,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Drawer Koszyka i Realizacji Zamówienia z wyborem AutoPay / Portfel */}
+      {/* Drawer Koszyka i Realizacji Zamówienia */}
       {isCartOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
           <div
@@ -2761,7 +2841,6 @@ export default function ShopPage() {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {/* Opcja 1: AutoPay */}
                       <button
                         type="button"
                         onClick={() => setFormData({ ...formData, paymentMethod: 'autopay' })}
@@ -2785,7 +2864,6 @@ export default function ShopPage() {
                         </p>
                       </button>
 
-                      {/* Opcja 2: Portfel */}
                       <button
                         type="button"
                         onClick={() => setFormData({ ...formData, paymentMethod: 'wallet' })}
