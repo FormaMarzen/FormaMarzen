@@ -26,15 +26,17 @@ import {
   EyeOff, 
   Settings2, 
   PackagePlus, 
-  ShieldCheck,
-  Upload,
-  Image as ImageIcon,
-  History,
-  Receipt,
-  Clock,
-  CheckCheck,
-  FileSpreadsheet,
-  Lock
+  ShieldCheck, 
+  Upload, 
+  Image as ImageIcon, 
+  History, 
+  Receipt, 
+  Clock, 
+  CheckCheck, 
+  FileSpreadsheet, 
+  Lock,
+  XCircle,
+  RotateCcw
 } from 'lucide-react';
 
 export interface Product {
@@ -344,7 +346,6 @@ export default function ShopPage() {
         .select('*, order_items(*)')
         .order('created_at', { ascending: false });
 
-      // Jeśli nie jesteśmy w aktywnym trybie admina lub włączono "Moje zakupy":
       if (!isEffectiveAdmin || historyFilter === 'my') {
         if (candidateEmails.length === 0) {
           setOrdersHistory([]);
@@ -377,15 +378,9 @@ export default function ShopPage() {
     }
   }, [isHistoryOpen, historyFilter, isEffectiveAdmin]);
 
-  // Zmiana statusu opłacenia zamówienia przez administratora
-  const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
+  // Uniwersalna zmiana statusu zamówienia przez administratora
+  const handleSetOrderStatus = async (orderId: string, newStatus: string) => {
     if (!isEffectiveAdmin) return;
-    const isCurrentlyPaid = 
-      currentStatus?.toLowerCase() === 'opłacone' || 
-      currentStatus?.toLowerCase() === 'paid' || 
-      currentStatus?.toLowerCase() === 'completed';
-
-    const newStatus = isCurrentlyPaid ? 'pending' : 'opłacone';
 
     try {
       const { error: updateErr } = await supabase
@@ -400,8 +395,19 @@ export default function ShopPage() {
       );
     } catch (err: any) {
       console.error('Błąd aktualizacji statusu:', err);
-      alert('Nie udało się zmienić statusu: ' + (err.message || 'Błąd zapisu w bazie'));
+      alert('Nie udało się zmienić statusu zamówienia: ' + (err.message || 'Błąd zapisu w bazie'));
     }
+  };
+
+  // Anulowanie zamówienia z potwierdzeniem
+  const handleCancelOrder = async (orderId: string) => {
+    if (!isEffectiveAdmin) return;
+    const confirmCancel = window.confirm(
+      'Czy na pewno chcesz anulować to zamówienie? Zamówienie pozostanie w historii ze statusem "Anulowano".'
+    );
+    if (!confirmCancel) return;
+
+    await handleSetOrderStatus(orderId, 'anulowano');
   };
 
   // Filtrowanie listy zamówień w tabeli
@@ -1443,7 +1449,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Rejestru Zamówień */}
+      {/* Modal Rejestru Zamówień (Tabela dla Admina, Moje zakupy dla Klubowicza) */}
       {isHistoryOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-5xl rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-7 shadow-2xl my-6 flex flex-col max-h-[92vh]">
@@ -1551,6 +1557,11 @@ export default function ShopPage() {
                           order.status?.toLowerCase() === 'paid' || 
                           order.status?.toLowerCase() === 'completed';
 
+                        const isCancelled = 
+                          order.status?.toLowerCase() === 'anulowano' || 
+                          order.status?.toLowerCase() === 'cancelled' || 
+                          order.status?.toLowerCase() === 'odrzucone';
+
                         const formattedDate = order.created_at
                           ? new Date(order.created_at).toLocaleString('pl-PL', {
                               day: '2-digit',
@@ -1615,11 +1626,17 @@ export default function ShopPage() {
                               </span>
                             </td>
 
+                            {/* Kolumna Czy opłacono / Anulowano */}
                             <td className="py-3.5 px-4 align-top text-center whitespace-nowrap">
                               {isPaid ? (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-emerald-400">
                                   <CheckCheck className="h-3.5 w-3.5" />
                                   Opłacone
+                                </span>
+                              ) : isCancelled ? (
+                                <span className="inline-flex items-center gap-1 rounded-lg bg-rose-500/15 border border-rose-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-rose-400">
+                                  <XCircle className="h-3.5 w-3.5" />
+                                  Anulowano
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-amber-400">
@@ -1629,20 +1646,47 @@ export default function ShopPage() {
                               )}
                             </td>
 
+                            {/* Kolumna Akcja dla Administratora (Zatwierdź / Cofnij + Anuluj) */}
                             {isEffectiveAdmin && (
                               <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleOrderStatus(order.id, order.status)}
-                                  className={`rounded-lg px-2.5 py-1 text-[11px] font-bold border transition-colors cursor-pointer ${
-                                    isPaid
-                                      ? 'border-zinc-700 bg-zinc-800/80 text-zinc-400 hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/30'
-                                      : 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                                  }`}
-                                  title={isPaid ? "Kliknij, aby cofnąć status na oczekujące" : "Kliknij, aby zatwierdzić jako opłacone"}
-                                >
-                                  {isPaid ? 'Cofnij wpłatę' : 'Zatwierdź wpłatę'}
-                                </button>
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {isCancelled ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetOrderStatus(order.id, 'pending')}
+                                      className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-[11px] font-bold text-zinc-200 hover:bg-zinc-700 transition-colors cursor-pointer"
+                                      title="Przywróć zamówienie do statusu oczekujące"
+                                    >
+                                      <RotateCcw className="h-3 w-3" />
+                                      Przywróć
+                                    </button>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSetOrderStatus(order.id, isPaid ? 'pending' : 'opłacone')}
+                                        className={`rounded-lg px-2.5 py-1 text-[11px] font-bold border transition-colors cursor-pointer ${
+                                          isPaid
+                                            ? 'border-zinc-700 bg-zinc-800/80 text-zinc-400 hover:bg-zinc-700 hover:text-white'
+                                            : 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                                        }`}
+                                        title={isPaid ? "Kliknij, aby cofnąć wpłatę do oczekujących" : "Kliknij, aby zatwierdzić jako opłacone"}
+                                      >
+                                        {isPaid ? 'Cofnij wpłatę' : 'Zatwierdź wpłatę'}
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCancelOrder(order.id)}
+                                        className="flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-500/15 px-2.5 py-1 text-[11px] font-bold text-rose-300 hover:bg-rose-500/25 transition-colors cursor-pointer"
+                                        title="Anuluj to zamówienie"
+                                      >
+                                        <XCircle className="h-3 w-3" />
+                                        Anuluj
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
                               </td>
                             )}
                           </tr>
