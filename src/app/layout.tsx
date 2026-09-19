@@ -241,6 +241,9 @@ export default function RootLayout({
   const [profileHeight, setProfileHeight] = useState('');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
+  // Dynamiczny stan liczby produktów w koszyku dla ikony w nagłówku
+  const [headerCartCount, setHeaderCartCount] = useState<number>(0);
+
   const [hasUnreadInterpretation, setHasUnreadInterpretation] = useState<boolean>(false);
   const [hasUnreadRedukcja, setHasUnreadRedukcja] = useState<boolean>(false);
   const [hasUnreadWydarzenia, setHasUnreadWydarzenia] = useState<boolean>(false);
@@ -248,6 +251,7 @@ export default function RootLayout({
   const [hasUnreadOdziez, setHasUnreadOdziez] = useState<boolean>(false);
   const [hasUnreadWyzwania, setHasUnreadWyzwania] = useState<boolean>(false);
   const [hasUnreadBonus, setHasUnreadBonus] = useState<boolean>(false);
+  const [hasUnreadSklep, setHasUnreadSklep] = useState<boolean>(false);
 
   const [dostepneKarnety, setDostepneKarnety] = useState<any[]>([]);
 
@@ -272,12 +276,101 @@ export default function RootLayout({
     );
   })();
 
-  // Ochrona bezpośredniego wejścia pod adres /sklep dla osób innych niż administrator
-  useEffect(() => {
-    if (!isAuthLoading && appRole !== 'admin' && pathname === '/sklep') {
-      router.push('/');
+  // Synchronizacja liczby produktów w koszyku w czasie rzeczywistym
+  const refreshCartCount = () => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem("fm_shop_cart");
+      if (!raw) {
+        setHeaderCartCount(0);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const total = parsed.reduce((sum: number, it: any) => sum + (Number(it.quantity) || 0), 0);
+        setHeaderCartCount(total);
+      } else {
+        setHeaderCartCount(0);
+      }
+    } catch (e) {
+      setHeaderCartCount(0);
     }
-  }, [isAuthLoading, appRole, pathname, router]);
+  };
+
+  useEffect(() => {
+    refreshCartCount();
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "fm_shop_cart" || !e.key) {
+        refreshCartCount();
+      }
+    };
+
+    const handleCartUpdate = () => {
+      refreshCartCount();
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("fm_cart_updated", handleCartUpdate);
+    const interval = setInterval(refreshCartCount, 1000);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("fm_cart_updated", handleCartUpdate);
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Automatyczne otwieranie koszyka po przejściu z nagłówka pod adres /sklep?koszyk=open
+  useEffect(() => {
+    if (pathname === '/sklep' && typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('koszyk') === 'open') {
+        const timer = setTimeout(() => {
+          const pageCartBtn = document.querySelector('button[aria-label="Otwórz koszyk"]') as HTMLButtonElement | null;
+          if (pageCartBtn) {
+            pageCartBtn.click();
+            window.history.replaceState({}, '', '/sklep');
+          }
+        }, 200);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [pathname]);
+
+  // Zerowanie powiadomienia o nowych zamówieniach w sklepie po wejściu administratora
+  useEffect(() => {
+    if (pathname === '/sklep' && appRole === 'admin') {
+      setHasUnreadSklep(false);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('fm_last_seen_shop_order_at', new Date().toISOString());
+      }
+      supabase
+        .from('orders')
+        .update({ admin_odczytane: true })
+        .eq('admin_odczytane', false)
+        .then(() => {});
+    }
+  }, [pathname, appRole]);
+
+  // Nasłuchiwanie nowych zamówień w sklepie w czasie rzeczywistym
+  useEffect(() => {
+    if (appRole !== 'admin') return;
+
+    const channel = supabase
+      .channel('realtime-orders-badge')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, () => {
+        setHasUnreadSklep(true);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, () => {
+        checkAllBadges(currentClientId, profileEmail, appRole);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [appRole, currentClientId, profileEmail]);
 
   const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz', clientId?: number | string | null) => {
     if (typeof window === "undefined") return;
@@ -766,6 +859,7 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
+  // 1. Menu Administratora (usunięto dopisek "W budowie")
   const adminMenuSections = [
     {
       title: "Główne",
@@ -779,7 +873,7 @@ export default function RootLayout({
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
         { href: '/twoj-bonus', label: 'Mój bonus', icon: '🎖️' },
-        { href: '/sklep', label: 'Sklep (W budowie)', icon: '🛒' },
+        { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/promocje', label: 'Aktualne promocje', icon: '🎁' },
         { href: '/odziez', label: 'Odzież', icon: '👕' },
       ]
@@ -819,6 +913,7 @@ export default function RootLayout({
     }
   ];
 
+  // 2. Menu Klubowicza (dodano "Sklep" pod pozycją "Odzież")
   const klientMenuSections = [
     {
       title: "Główne",
@@ -843,6 +938,7 @@ export default function RootLayout({
       title: "Klub i Finanse",
       items: [
         { href: '/odziez', label: 'Odzież', icon: '👕' },
+        { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
@@ -852,6 +948,7 @@ export default function RootLayout({
     }
   ];
 
+  // 3. Menu Trenera (dodano "Sklep" pod pozycją "Odzież")
   const trenerMenuSections = [
     {
       title: "Strefa Trenera",
@@ -869,6 +966,7 @@ export default function RootLayout({
         { href: '/wyzwania', label: 'Wyzwania i Odznaki', icon: '⚔️' },
         { href: '/baza-wiedzy', label: 'Baza wiedzy', icon: '📚' },
         { href: '/odziez', label: 'Odzież', icon: '👕' },
+        { href: '/sklep', label: 'Sklep', icon: '🛒' },
         { href: '/oferta-karnetow', label: 'Oferta karnetów', icon: '🎫' },
         { href: '/portfel', label: 'Portfel', icon: '💳' },
         { href: '/ambasador', label: 'Ambasador', icon: '👥' },
@@ -886,8 +984,26 @@ export default function RootLayout({
       : klientMenuSections;
 
   const hasAnyBadgeInMenu = useMemo(() => {
-    return hasUnreadInterpretation || hasUnreadRedukcja || hasUnreadWydarzenia || hasUnreadBazaWiedzy || hasUnreadOdziez || hasUnreadWyzwania || hasUnreadBonus;
-  }, [hasUnreadInterpretation, hasUnreadRedukcja, hasUnreadWydarzenia, hasUnreadBazaWiedzy, hasUnreadOdziez, hasUnreadWyzwania, hasUnreadBonus]);
+    return (
+      hasUnreadInterpretation ||
+      hasUnreadRedukcja ||
+      hasUnreadWydarzenia ||
+      hasUnreadBazaWiedzy ||
+      hasUnreadOdziez ||
+      hasUnreadWyzwania ||
+      hasUnreadBonus ||
+      hasUnreadSklep
+    );
+  }, [
+    hasUnreadInterpretation,
+    hasUnreadRedukcja,
+    hasUnreadWydarzenia,
+    hasUnreadBazaWiedzy,
+    hasUnreadOdziez,
+    hasUnreadWyzwania,
+    hasUnreadBonus,
+    hasUnreadSklep
+  ]);
 
   const checkAllBadges = async (cId: number | string | null, email: string, role: 'admin' | 'trener' | 'klubowicz') => {
     if (typeof window === "undefined") return;
@@ -1085,6 +1201,33 @@ export default function RootLayout({
       }
       setHasUnreadWyzwania(unreadWyzwania);
 
+      let unreadShop = false;
+      if (role === 'admin') {
+        const { data: unreadShopOrders, error: shopOrdersErr } = await supabase
+          .from('orders')
+          .select('id, created_at, admin_odczytane')
+          .or('admin_odczytane.eq.false,admin_odczytane.is.null')
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (!shopOrdersErr && unreadShopOrders && unreadShopOrders.length > 0) {
+          unreadShop = true;
+        } else if (shopOrdersErr) {
+          const lastSeenOrderAt = localStorage.getItem('fm_last_seen_shop_order_at') || '1970-01-01T00:00:00.000Z';
+          const { data: recentOrders } = await supabase
+            .from('orders')
+            .select('id, created_at')
+            .gt('created_at', lastSeenOrderAt)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (recentOrders && recentOrders.length > 0) {
+            unreadShop = true;
+          }
+        }
+      }
+      setHasUnreadSklep(unreadShop);
+
       await checkBonusAdminNotifications(role, cId);
     } catch (err) {
       console.error("Błąd sprawdzania powiadomień w menu:", err);
@@ -1172,6 +1315,19 @@ export default function RootLayout({
     window.location.reload();
   };
 
+  // Obsługa kliknięcia ikony koszyka w nagłówku
+  const handleHeaderCartClick = (e: React.MouseEvent) => {
+    if (pathname === '/sklep') {
+      e.preventDefault();
+      const pageCartBtn = document.querySelector('button[aria-label="Otwórz koszyk"]') as HTMLButtonElement | null;
+      if (pageCartBtn) {
+        pageCartBtn.click();
+      } else {
+        window.dispatchEvent(new CustomEvent('fm_open_cart'));
+      }
+    }
+  };
+
   const avatarInitials = profileName
     ? profileName.split(' ').map(n => n[0]).filter(Boolean).join('').substring(0, 2).toUpperCase()
     : 'FM';
@@ -1207,7 +1363,6 @@ export default function RootLayout({
 
         <link rel="manifest" href="/manifest.json?v=2" />
         
-        {/* Kolor status baru dostosowany do białego nagłówka */}
         <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#ffffff" />
         <meta name="mobile-web-app-capable" content="yes" />
@@ -1218,7 +1373,6 @@ export default function RootLayout({
 
       <body className="min-h-[100dvh] bg-sky-50/50 text-slate-800 flex font-sans antialiased h-[100dvh] overflow-hidden w-full">
         
-        {/* Ekran ładowania spójny w obrębie tego samego drzewa DOM */}
         {!isMounted || (!isPublicPage && isAuthLoading) ? (
           <div className="min-h-[100dvh] w-full flex flex-col items-center justify-center bg-sky-50/50 text-slate-800 font-sans antialiased h-[100dvh] overflow-hidden">
             <div className="flex flex-col items-center gap-3">
@@ -1305,6 +1459,8 @@ export default function RootLayout({
                                   showBadge = hasUnreadWyzwania;
                                 } else if (item.href === '/twoj-bonus') {
                                   showBadge = hasUnreadBonus;
+                                } else if (item.href === '/sklep') {
+                                  showBadge = hasUnreadSklep && appRole === 'admin';
                                 }
 
                                 return (
@@ -1395,22 +1551,34 @@ export default function RootLayout({
                           </button>
                         )}
 
-                        {/* Przycisk koszyka w nagłówku dla administratora */}
-                        {appRole === 'admin' && (
-                          <div className="relative">
-                            <Link href="/sklep">
-                              <button 
-                                className="w-9 h-9 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl flex items-center justify-center transition-colors relative cursor-pointer" 
-                                title="Sklep klubowy (Widok administratora)"
-                              >
-                                🛒
-                                <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white font-black text-[10px] w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
-                                  0
+                        {/* Zintegrowana ikona koszyka w nagłówku dla każdego zalogowanego użytkownika */}
+                        <div className="relative">
+                          <Link 
+                            href={pathname === '/sklep' ? '/sklep' : '/sklep?koszyk=open'}
+                            onClick={handleHeaderCartClick}
+                          >
+                            <button 
+                              className="w-9 h-9 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl flex items-center justify-center transition-colors relative cursor-pointer" 
+                              title={headerCartCount > 0 ? `Koszyk (${headerCartCount})` : "Sklep klubowy"}
+                            >
+                              🛒
+                              {/* Czerwony wykrzyknik dla admina o nowych zamówieniach */}
+                              {hasUnreadSklep && appRole === 'admin' ? (
+                                <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-600 text-[10px] font-black text-white items-center justify-center shadow">
+                                    !
+                                  </span>
                                 </span>
-                              </button>
-                            </Link>
-                          </div>
-                        )}
+                              ) : headerCartCount > 0 ? (
+                                /* Licznik produktów w koszyku */
+                                <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-slate-950 font-black text-[10px] min-w-4 h-4 px-1 rounded-full flex items-center justify-center shadow-sm">
+                                  {headerCartCount}
+                                </span>
+                              ) : null}
+                            </button>
+                          </Link>
+                        </div>
 
                         <div className="relative" ref={profileMenuRef}>
                           <button 
