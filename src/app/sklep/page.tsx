@@ -28,7 +28,13 @@ import {
   PackagePlus, 
   ShieldCheck,
   Upload,
-  Image as ImageIcon
+  Image as ImageIcon,
+  History,
+  Receipt,
+  Clock,
+  CheckCheck,
+  FileSpreadsheet,
+  XCircle
 } from 'lucide-react';
 
 export interface Product {
@@ -48,12 +54,34 @@ export interface CartItem {
   quantity: number;
 }
 
+export interface OrderItemRecord {
+  id?: string;
+  order_id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+}
+
+export interface OrderRecord {
+  id: string;
+  created_at: string;
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  shipping_notes: string;
+  payment_method: string;
+  total_amount: number;
+  status: string;
+  order_items?: OrderItemRecord[];
+}
+
 interface OrderFormData {
   customerName: string;
   customerEmail: string;
   customerPhone: string;
   shippingNotes: string;
-  paymentMethod: 'blik' | 'karta';
+  paymentMethod: 'autopay_blik' | 'autopay_card';
 }
 
 interface ProductFormData {
@@ -114,7 +142,7 @@ export default function ShopPage() {
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
-  // Wyszukiwanie i filtrowanie
+  // Wyszukiwanie i filtrowanie w sklepie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
@@ -126,13 +154,20 @@ export default function ShopPage() {
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Formularz zamówienia
+  // Rejestr i Historia zamówień
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [ordersHistory, setOrdersHistory] = useState<OrderRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(false);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'my'>('all');
+  const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
+
+  // Formularz zamówienia z AutoPay
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
     customerPhone: '',
     shippingNotes: '',
-    paymentMethod: 'blik',
+    paymentMethod: 'autopay_blik',
   });
 
   // Modal zarządzania produktem
@@ -145,6 +180,53 @@ export default function ShopPage() {
   const [productModalError, setProductModalError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Automatyczne pobranie danych zalogowanego klubowicza z bazy do zamówienia
+  useEffect(() => {
+    const fetchLoggedMemberData = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const email = (user.email || '').toLowerCase().trim();
+        const { data: clients } = await supabase.from('klienci').select('*');
+
+        if (clients && clients.length > 0) {
+          const matched = clients.find((c: any) => {
+            const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
+            const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
+            return (email && cEmail === email) || nazwisko.includes('kłaput');
+          });
+
+          if (matched) {
+            const fullName = `${matched.Imię || ''} ${matched.Nazwisko || ''}`.trim();
+            const phone = matched['Numer tel.'] && matched['Numer tel.'] !== '-' ? matched['Numer tel.'] : '';
+            const memberEmail = matched['E-mail'] || matched.email || email;
+
+            setFormData((prev) => ({
+              ...prev,
+              customerName: prev.customerName || fullName || email.split('@')[0],
+              customerEmail: prev.customerEmail || memberEmail,
+              customerPhone: prev.customerPhone || phone,
+            }));
+            return;
+          }
+        }
+
+        if (email) {
+          setFormData((prev) => ({
+            ...prev,
+            customerEmail: prev.customerEmail || email,
+            customerName: prev.customerName || (email.includes('klaput') ? 'Maciej Kłaput' : email.split('@')[0]),
+          }));
+        }
+      } catch (err) {
+        console.error('Błąd automatycznego uzupełniania danych klubowicza:', err);
+      }
+    };
+
+    fetchLoggedMemberData();
+  }, []);
 
   // Dynamiczna lista unikalnych kategorii
   const availableCategories = useMemo(() => {
@@ -161,7 +243,7 @@ export default function ShopPage() {
     return ['Wszystko', ...availableCategories];
   }, [availableCategories]);
 
-  // Weryfikacja konta administratora
+  // Weryfikacja uprawnień administratora
   useEffect(() => {
     const verifyAdmin = async () => {
       try {
@@ -189,7 +271,7 @@ export default function ShopPage() {
           }
         }
       } catch (e) {
-        console.error('Weryfikacja uprawnień admina:', e);
+        console.error('Weryfikacja admina:', e);
       }
     };
 
@@ -221,6 +303,80 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
+  // Pobieranie zamówień z Supabase
+  const fetchOrderHistory = async () => {
+    try {
+      setHistoryLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentEmail = (user?.email || formData.customerEmail || localStorage.getItem('fm_user_email') || '').toLowerCase().trim();
+
+      let query = supabase
+        .from('orders')
+        .select('*, order_items(*)')
+        .order('created_at', { ascending: false });
+
+      if (!isAdmin || historyFilter === 'my') {
+        if (currentEmail) {
+          query = query.eq('customer_email', currentEmail);
+        }
+      }
+
+      const { data, error: ordersErr } = await query;
+      if (ordersErr) throw ordersErr;
+
+      setOrdersHistory(data || []);
+    } catch (err) {
+      console.error('Błąd pobierania historii zamówień:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isHistoryOpen) {
+      fetchOrderHistory();
+    }
+  }, [isHistoryOpen, historyFilter]);
+
+  // Zmiana statusu opłacenia zamówienia przez administratora
+  const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
+    const isCurrentlyPaid = currentStatus?.toLowerCase() === 'opłacone' || currentStatus?.toLowerCase() === 'paid';
+    const newStatus = isCurrentlyPaid ? 'oczekuje' : 'opłacone';
+
+    try {
+      const { error: updateErr } = await supabase
+        .from('orders')
+        .update({ status: newStatus })
+        .eq('id', orderId);
+
+      if (updateErr) throw updateErr;
+
+      setOrdersHistory((prev) =>
+        prev.map((ord) => (ord.id === orderId ? { ...ord, status: newStatus } : ord))
+      );
+    } catch (err: any) {
+      console.error('Błąd aktualizacji statusu zamówienia:', err);
+      alert('Nie udało się zmienić statusu: ' + err.message);
+    }
+  };
+
+  // Filtrowanie historii zamówień
+  const filteredOrdersHistory = useMemo(() => {
+    return ordersHistory.filter((ord) => {
+      const query = historySearchQuery.toLowerCase().trim();
+      if (!query) return true;
+
+      const matchesName = (ord.customer_name || '').toLowerCase().includes(query);
+      const matchesEmail = (ord.customer_email || '').toLowerCase().includes(query);
+      const matchesPhone = (ord.customer_phone || '').toLowerCase().includes(query);
+      const matchesItems = ord.order_items?.some((it) => 
+        (it.product_name || '').toLowerCase().includes(query)
+      );
+
+      return matchesName || matchesEmail || matchesPhone || matchesItems;
+    });
+  }, [ordersHistory, historySearchQuery]);
+
   // Pamięć podręczna koszyka
   useEffect(() => {
     try {
@@ -239,7 +395,7 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie produktów
+  // Filtrowanie artykułów w sklepie
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isAdmin || !adminEditMode) {
@@ -298,7 +454,7 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Składanie zamówienia
+  // Składanie zamówienia (AutoPay)
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -321,7 +477,7 @@ export default function ShopPage() {
             shipping_notes: formData.shippingNotes.trim(),
             payment_method: formData.paymentMethod,
             total_amount: cartTotal,
-            status: 'pending'
+            status: 'opłacone'
           }
         ])
         .select()
@@ -349,13 +505,11 @@ export default function ShopPage() {
       setCart([]);
       localStorage.removeItem('fm_shop_cart');
       setCheckoutStep('cart');
-      setFormData({
-        customerName: '',
-        customerEmail: '',
-        customerPhone: '',
+      setFormData((prev) => ({
+        ...prev,
         shippingNotes: '',
-        paymentMethod: 'blik',
-      });
+        paymentMethod: 'autopay_blik',
+      }));
 
       setTimeout(() => {
         setOrderSuccess(false);
@@ -370,7 +524,41 @@ export default function ShopPage() {
     }
   };
 
-  // Obsługa wyboru zdjęcia z galerii urządzenia
+  // Usuwanie wybranej kategorii
+  const handleDeleteCategory = async (catToDelete: string) => {
+    if (catToDelete === 'Wszystko' || catToDelete === 'Ogólne') {
+      alert('Tej kategorii systemowej nie można usunąć.');
+      return;
+    }
+
+    const confirmDelete = window.confirm(
+      `Czy na pewno chcesz usunąć kategorię "${catToDelete}"? Produkty z tej kategorii zostaną bezpiecznie przeniesione do kategorii "Ogólne".`
+    );
+    if (!confirmDelete) return;
+
+    try {
+      setLoading(true);
+      const { error: updateErr } = await supabase
+        .from('products')
+        .update({ category: 'Ogólne', updated_at: new Date().toISOString() })
+        .eq('category', catToDelete);
+
+      if (updateErr) throw updateErr;
+
+      if (selectedCategory.toLowerCase() === catToDelete.toLowerCase()) {
+        setSelectedCategory('Wszystko');
+      }
+
+      await fetchProducts();
+    } catch (err: any) {
+      console.error('Błąd usuwania kategorii:', err);
+      alert('Wystąpił błąd podczas usuwania kategorii: ' + (err.message || 'Błąd bazy danych'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Obsługa wyboru zdjęcia wyłącznie z galerii lub dysku urządzenia
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -556,7 +744,7 @@ export default function ShopPage() {
   return (
     <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
       
-      {/* Ostry nagłówek sklepu */}
+      {/* Ostry nagłówek sklepu z ikonami koszyka i rejestru zamówień */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
@@ -578,22 +766,38 @@ export default function ShopPage() {
           </div>
         </div>
 
-        <button
-          onClick={() => {
-            setCheckoutStep('cart');
-            setIsCartOpen(true);
-          }}
-          className="relative flex items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-bold text-zinc-200 ring-1 ring-zinc-800 transition-all hover:bg-zinc-800 hover:text-white active:scale-95"
-          aria-label="Otwórz koszyk"
-        >
-          <ShoppingBag className="h-5 w-5 text-amber-400" />
-          <span>Koszyk</span>
-          {cartItemCount > 0 && (
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-black text-black">
-              {cartItemCount}
-            </span>
-          )}
-        </button>
+        {/* Przyciski operacyjne: Rejestr zamówień + Koszyk */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => {
+              if (isAdmin) setHistoryFilter('all');
+              setIsHistoryOpen(true);
+            }}
+            className="relative flex items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-zinc-800 transition-all hover:bg-zinc-800 hover:text-white active:scale-95 cursor-pointer"
+            aria-label="Rejestr zamówień"
+            title={isAdmin ? "Tabela wszystkich zamówień klubowiczów" : "Twoja historia zakupów"}
+          >
+            {isAdmin ? <FileSpreadsheet className="h-5 w-5 text-amber-400" /> : <History className="h-5 w-5 text-amber-400" />}
+            <span className="hidden sm:inline">{isAdmin ? 'Tabela zamówień' : 'Zamówienia'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setCheckoutStep('cart');
+              setIsCartOpen(true);
+            }}
+            className="relative flex items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-bold text-zinc-200 ring-1 ring-zinc-800 transition-all hover:bg-zinc-800 hover:text-white active:scale-95 cursor-pointer"
+            aria-label="Otwórz koszyk"
+          >
+            <ShoppingBag className="h-5 w-5 text-amber-400" />
+            <span>Koszyk</span>
+            {cartItemCount > 0 && (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-xs font-black text-black">
+                {cartItemCount}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Złoty Panel Administratora */}
@@ -608,7 +812,7 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – pełne zarządzanie cenami, kategoriami, stanem i publikacją' 
+                    ? 'Tryb edycji aktywny – pełne zarządzanie cenami, kategoriami, stanem, publikacją i zamówieniami' 
                     : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
@@ -617,8 +821,20 @@ export default function ShopPage() {
             <div className="flex items-center gap-2.5">
               <button
                 type="button"
+                onClick={() => {
+                  setHistoryFilter('all');
+                  setIsHistoryOpen(true);
+                }}
+                className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-amber-500/40 px-3.5 py-2 text-xs font-bold text-amber-300 transition-all hover:bg-zinc-800 shadow-sm cursor-pointer"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-amber-400" />
+                Tabela Zamówień
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setAdminEditMode(!adminEditMode)}
-                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all shadow-sm ${
+                className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all shadow-sm cursor-pointer ${
                   adminEditMode 
                     ? 'bg-zinc-900 text-zinc-200 border border-zinc-700 hover:bg-zinc-800' 
                     : 'bg-amber-500 text-black font-black shadow-amber-500/20'
@@ -632,7 +848,7 @@ export default function ShopPage() {
                 <button
                   type="button"
                   onClick={handleOpenAddModal}
-                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 shadow-md shadow-amber-500/20"
+                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-xs font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 shadow-md shadow-amber-500/20 cursor-pointer"
                 >
                   <PackagePlus className="h-4 w-4" />
                   Dodaj produkt
@@ -643,7 +859,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Wyszukiwarka i dynamiczne kategorie */}
+      {/* Wyszukiwarka i kategorie z opcją usuwania przez administratora */}
       <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -665,19 +881,39 @@ export default function ShopPage() {
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-none">
-          {filterCategories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`whitespace-nowrap rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all ${
-                selectedCategory.toLowerCase() === cat.toLowerCase()
-                  ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
-                  : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
+          {filterCategories.map((cat) => {
+            const isSelected = selectedCategory.toLowerCase() === cat.toLowerCase();
+            return (
+              <div key={cat} className="relative flex items-center shrink-0">
+                <button
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`whitespace-nowrap rounded-xl py-2 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    isAdmin && adminEditMode && cat !== 'Wszystko' ? 'pl-3.5 pr-7' : 'px-4'
+                  } ${
+                    isSelected
+                      ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
+                      : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                  }`}
+                >
+                  {cat}
+                </button>
+
+                {isAdmin && adminEditMode && cat !== 'Wszystko' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteCategory(cat);
+                    }}
+                    title={`Usuń kategorię "${cat}"`}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-4 w-4 items-center justify-center rounded-full bg-black/40 text-zinc-300 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -741,12 +977,13 @@ export default function ShopPage() {
                       )}
                     </div>
 
+                    {/* Narzędzia edycji na kafelku */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
                           type="button"
                           onClick={() => handleToggleProductStatus(item)}
-                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white cursor-pointer"
                           title={item.is_active ? 'Ukryj produkt przed klubowiczami' : 'Opublikuj produkt'}
                         >
                           {item.is_active ? <Eye className="h-4 w-4 text-emerald-400" /> : <EyeOff className="h-4 w-4 text-zinc-400" />}
@@ -754,7 +991,7 @@ export default function ShopPage() {
                         <button
                           type="button"
                           onClick={() => handleOpenEditModal(item)}
-                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400"
+                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-amber-400 cursor-pointer"
                           title="Edytuj produkt"
                         >
                           <Edit className="h-4 w-4" />
@@ -762,7 +999,7 @@ export default function ShopPage() {
                         <button
                           type="button"
                           onClick={() => handleDeleteProduct(item)}
-                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400"
+                          className="rounded-lg p-1.5 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-rose-400 cursor-pointer"
                           title="Usuń z bazy"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -786,7 +1023,7 @@ export default function ShopPage() {
                     <h3 className="mt-1 text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
                       {item.name}
                     </h3>
-                    <p className="mt-2 line-clamp-2 text-sm text-zinc-400 leading-relaxed">
+                    <p className="mt-2 line-clamp-3 text-sm text-zinc-400 leading-relaxed">
                       {item.description || 'Brak opisu.'}
                     </p>
                   </div>
@@ -803,7 +1040,7 @@ export default function ShopPage() {
                   <button
                     onClick={() => addToCart(item)}
                     disabled={item.stock <= 0}
-                    className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-black uppercase tracking-wider text-black transition-transform hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-black uppercase tracking-wider text-black transition-transform hover:bg-amber-400 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     <Plus className="h-4 w-4" />
                     {item.stock > 0 ? 'Do koszyka' : 'Brak'}
@@ -819,7 +1056,7 @@ export default function ShopPage() {
                   setSelectedCategory('Wszystko');
                   setSearchQuery('');
                 }}
-                className="mt-4 rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
+                className="mt-4 rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
               >
                 Zresetuj filtry
               </button>
@@ -835,11 +1072,11 @@ export default function ShopPage() {
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <PackagePlus className="h-5 w-5 text-amber-400" />
-                {editingProductId ? 'Edycja produktu' : 'Dodaj nowy produkt'}
+                {editingProductId ? 'Edycja produktu / usługi' : 'Dodaj nowy produkt / usługę'}
               </h3>
               <button
                 onClick={() => setIsProductModalOpen(false)}
-                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -852,7 +1089,7 @@ export default function ShopPage() {
               </div>
             )}
 
-            {/* Ukryty input do wyboru zdjęcia z galerii urządzenia */}
+            {/* Ukryty input do wyboru pliku z galerii lub dysku */}
             <input
               type="file"
               ref={fileInputRef}
@@ -864,7 +1101,7 @@ export default function ShopPage() {
             <form onSubmit={handleSaveProduct} className="mt-4 space-y-4 text-xs">
               <div>
                 <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                  Nazwa produktu *
+                  Nazwa produktu / usługi *
                 </label>
                 <input
                   type="text"
@@ -977,14 +1214,14 @@ export default function ShopPage() {
                 </div>
               </div>
 
-              {/* Wybór zdjęcia z galerii lub wklejenie linku */}
+              {/* Wybór zdjęcia wyłącznie z galerii lub dysku */}
               <div>
                 <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
-                  Zdjęcie produktu
+                  Zdjęcie artykułu (Galeria / Dysk)
                 </label>
 
                 {productForm.image_url ? (
-                  <div className="relative h-44 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
+                  <div className="relative h-48 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
                     <Image
                       src={productForm.image_url}
                       alt="Podgląd zdjęcia"
@@ -992,7 +1229,7 @@ export default function ShopPage() {
                       unoptimized
                       className="object-cover"
                     />
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center gap-2 transition-opacity">
+                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 transition-opacity">
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
@@ -1014,51 +1251,44 @@ export default function ShopPage() {
                 ) : (
                   <div
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-5 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
+                    className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-6 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
                   >
                     {isProcessingImage ? (
                       <div className="flex flex-col items-center gap-2 text-amber-400">
                         <Loader2 className="h-7 w-7 animate-spin" />
-                        <span className="text-xs font-semibold">Kompresja i wczytywanie zdjęcia...</span>
+                        <span className="text-xs font-semibold">Kompresowanie grafiki z galerii...</span>
                       </div>
                     ) : (
                       <>
-                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 mb-2">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 mb-2">
                           <ImageIcon className="h-6 w-6" />
                         </div>
                         <span className="text-xs font-bold text-zinc-200">
-                          Wybierz zdjęcie z galerii urządzenia
+                          Wybierz zdjęcie z galerii lub zrób aparatem
                         </span>
-                        <span className="text-[10px] text-zinc-500 mt-1">
-                          Dotknij tutaj, aby otworzyć zdjęcia lub aparat
+                        <span className="text-[11px] text-zinc-500 mt-1">
+                          Dotknij tutaj, aby otworzyć bibliotekę zdjęć urządzenia
                         </span>
                       </>
                     )}
                   </div>
                 )}
-
-                {/* Alternatywny link URL */}
-                <div className="mt-2">
-                  <input
-                    type="url"
-                    placeholder="Lub wklej bezpośredni link URL do grafiki..."
-                    value={productForm.image_url.startsWith('data:') ? '' : productForm.image_url}
-                    onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-300 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
               </div>
 
+              {/* Powiększone okno opisu */}
               <div>
-                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                  Opis produktu
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                    Szczegółowy opis artykułu / usługi
+                  </label>
+                  <span className="text-[10px] text-zinc-500">Powiększone okno edycji</span>
+                </div>
                 <textarea
-                  rows={3}
-                  placeholder="Krótki opis materiału, zakresu usługi, składu..."
+                  rows={8}
+                  placeholder="Wprowadź szczegółowy opis produktu, zakres sesji treningowej, specyfikację, korzyści, zasady realizacji..."
                   value={productForm.description}
                   onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                  className="w-full min-h-[180px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
                 />
               </div>
 
@@ -1094,7 +1324,7 @@ export default function ShopPage() {
                       Zapisywanie...
                     </>
                   ) : (
-                    'Zapisz produkt'
+                    'Zapisz artykuł'
                   )}
                 </button>
               </div>
@@ -1103,7 +1333,234 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Drawer Koszyka */}
+      {/* Modal / Tabela Rejestru Zamówień (Pełny widok tabelaryczny dla Administratora) */}
+      {isHistoryOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm overflow-y-auto">
+          <div className="relative w-full max-w-5xl rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-7 shadow-2xl my-6 flex flex-col max-h-[92vh]">
+            
+            {/* Nagłówek okna zamówień */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
+                  {isAdmin ? <FileSpreadsheet className="h-6 w-6" /> : <Receipt className="h-6 w-6" />}
+                </div>
+                <div>
+                  <h2 className="text-xl font-black text-white flex items-center gap-2">
+                    {isAdmin && historyFilter === 'all' ? 'Tabela Zamówień Klubowych' : 'Twoja Historia Zamówień'}
+                    <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-400">
+                      {filteredOrdersHistory.length}
+                    </span>
+                  </h2>
+                  <p className="text-xs text-zinc-400">
+                    {isAdmin && historyFilter === 'all' 
+                      ? 'Pełny rejestr kupionych pozycji z danymi klubowiczów i statusem wpłat' 
+                      : 'Zestawienie Twoich zakupów i opłaconych pakietów'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                {isAdmin && (
+                  <div className="flex items-center rounded-xl bg-zinc-900 p-1 border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryFilter('all')}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                        historyFilter === 'all' ? 'bg-amber-500 text-black shadow-sm' : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Wszystkie w klubie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryFilter('my')}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                        historyFilter === 'my' ? 'bg-amber-500 text-black shadow-sm' : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Moje zakupy
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => setIsHistoryOpen(false)}
+                  className="rounded-xl p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Wyszukiwarka w tabeli zamówień */}
+            <div className="mt-4 shrink-0">
+              <div className="relative max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
+                <input
+                  type="text"
+                  placeholder="Filtruj tabelę po imieniu, nazwisku, mailu lub produkcie..."
+                  value={historySearchQuery}
+                  onChange={(e) => setHistorySearchQuery(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900/80 py-2 pl-9 pr-8 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                />
+                {historySearchQuery && (
+                  <button
+                    onClick={() => setHistorySearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Kontener tabeli z przewijaniem */}
+            <div className="mt-4 flex-1 overflow-y-auto pr-1">
+              {historyLoading ? (
+                <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
+                  <Loader2 className="h-8 w-8 animate-spin text-amber-400" />
+                  <span className="mt-3 text-xs">Pobieranie rejestru zamówień...</span>
+                </div>
+              ) : filteredOrdersHistory.length > 0 ? (
+                <div className="overflow-x-auto rounded-2xl border border-zinc-800 bg-zinc-900/50">
+                  <table className="w-full text-left text-xs text-zinc-200 border-collapse">
+                    <thead className="bg-zinc-900 text-[11px] font-black uppercase tracking-wider text-zinc-400 border-b border-zinc-800 sticky top-0 z-10">
+                      <tr>
+                        <th className="py-3 px-4">Imię i nazwisko</th>
+                        <th className="py-3 px-4">Data zakupu</th>
+                        <th className="py-3 px-4">Produkt</th>
+                        <th className="py-3 px-4">Kwota</th>
+                        <th className="py-3 px-4 text-center">Czy opłacono</th>
+                        {isAdmin && <th className="py-3 px-4 text-right">Akcja</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60">
+                      {filteredOrdersHistory.map((order) => {
+                        const isPaid = order.status?.toLowerCase() === 'opłacone' || 
+                                       order.status?.toLowerCase() === 'paid' || 
+                                       order.status?.toLowerCase() === 'completed';
+
+                        const formattedDate = order.created_at
+                          ? new Date(order.created_at).toLocaleString('pl-PL', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })
+                          : 'Brak daty';
+
+                        return (
+                          <tr key={order.id} className="hover:bg-zinc-800/40 transition-colors">
+                            {/* Imię i nazwisko */}
+                            <td className="py-3.5 px-4 align-top">
+                              <div className="font-bold text-white text-sm">
+                                {order.customer_name || 'Brak danych'}
+                              </div>
+                              <div className="text-[11px] text-zinc-400 flex flex-col gap-0.5 mt-0.5">
+                                {order.customer_email && <span>{order.customer_email}</span>}
+                                {order.customer_phone && <span className="font-mono text-zinc-500">{order.customer_phone}</span>}
+                              </div>
+                            </td>
+
+                            {/* Data zakupu */}
+                            <td className="py-3.5 px-4 align-top whitespace-nowrap">
+                              <div className="flex items-center gap-1.5 text-zinc-300 font-mono text-[11px]">
+                                <Clock className="h-3.5 w-3.5 text-amber-400/80 shrink-0" />
+                                {formattedDate}
+                              </div>
+                              <span className="text-[10px] text-zinc-500 block mt-1 font-mono">
+                                #{order.id.slice(0, 8)}
+                              </span>
+                            </td>
+
+                            {/* Produkt / Kupione pozycje */}
+                            <td className="py-3.5 px-4 align-top">
+                              {order.order_items && order.order_items.length > 0 ? (
+                                <div className="space-y-1.5">
+                                  {order.order_items.map((it, idx) => (
+                                    <div key={it.id || idx} className="flex items-center gap-2">
+                                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                                      <span className="font-bold text-zinc-100">{it.product_name}</span>
+                                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-mono text-zinc-400">
+                                        ×{it.quantity}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-zinc-500 italic">Brak pozycji w rekordzie</span>
+                              )}
+                              {order.shipping_notes && (
+                                <p className="text-[11px] text-amber-400/80 italic mt-1.5 bg-amber-500/5 p-1 rounded border border-amber-500/10">
+                                  Uwagi: {order.shipping_notes}
+                                </p>
+                              )}
+                            </td>
+
+                            {/* Kwota */}
+                            <td className="py-3.5 px-4 align-top whitespace-nowrap">
+                              <span className="font-black text-amber-400 font-mono text-sm">
+                                {Number(order.total_amount).toFixed(2)} PLN
+                              </span>
+                              <span className="block text-[10px] text-zinc-500 uppercase">
+                                {order.payment_method?.includes('blik') ? 'AutoPay BLIK' : 'AutoPay Online'}
+                              </span>
+                            </td>
+
+                            {/* Czy opłacono */}
+                            <td className="py-3.5 px-4 align-top text-center whitespace-nowrap">
+                              {isPaid ? (
+                                <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-emerald-400">
+                                  <CheckCheck className="h-3.5 w-3.5" />
+                                  Opłacone
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-amber-400">
+                                  <Clock className="h-3.5 w-3.5" />
+                                  Oczekuje
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Akcja dla administratora */}
+                            {isAdmin && (
+                              <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleOrderStatus(order.id, order.status)}
+                                  className={`rounded-lg px-2.5 py-1 text-[11px] font-bold border transition-colors cursor-pointer ${
+                                    isPaid
+                                      ? 'border-zinc-700 bg-zinc-800/80 text-zinc-400 hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/30'
+                                      : 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                                  }`}
+                                  title={isPaid ? "Kliknij, aby cofnąć status na oczekujące" : "Kliknij, aby zatwierdzić jako opłacone"}
+                                >
+                                  {isPaid ? 'Cofnij wpłatę' : 'Zatwierdź wpłatę'}
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-24 text-center">
+                  <FileSpreadsheet className="mx-auto h-12 w-12 text-zinc-700" />
+                  <p className="mt-3 text-sm text-zinc-300 font-bold">Brak zamówień w tabeli</p>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    Gdy klubowicz zakupi produkt lub usługę, pojawi się w tym zestawieniu.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drawer Koszyka / Realizacji Zamówienia */}
       {isCartOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
           <div
@@ -1125,7 +1582,7 @@ export default function ShopPage() {
                 </div>
                 <button
                   onClick={() => setIsCartOpen(false)}
-                  className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                  className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -1135,7 +1592,7 @@ export default function ShopPage() {
                 <div className="my-4 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-400">
                   <CheckCircle2 className="h-5 w-5 shrink-0" />
                   <p className="text-sm font-medium">
-                    Zamówienie zostało zapisane w bazie! Przekierowywanie do płatności...
+                    Zamówienie zostało zapisane! Przekierowywanie do płatności AutoPay...
                   </p>
                 </div>
               )}
@@ -1147,6 +1604,7 @@ export default function ShopPage() {
                 </div>
               )}
 
+              {/* Krok 1: Artykuły w koszyku */}
               {checkoutStep === 'cart' && (
                 <div className="mt-4 max-h-[55vh] space-y-4 overflow-y-auto pr-1">
                   {cart.length > 0 ? (
@@ -1182,14 +1640,14 @@ export default function ShopPage() {
                           <div className="mt-2 flex items-center gap-2">
                             <button
                               onClick={() => updateQuantity(product.id, -1)}
-                              className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                              className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
                             >
                               <Minus className="h-3 w-3" />
                             </button>
                             <span className="text-xs font-bold text-zinc-100">{quantity}</span>
                             <button
                               onClick={() => updateQuantity(product.id, 1)}
-                              className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                              className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 cursor-pointer"
                             >
                               <Plus className="h-3 w-3" />
                             </button>
@@ -1198,7 +1656,7 @@ export default function ShopPage() {
 
                         <button
                           onClick={() => removeFromCart(product.id)}
-                          className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                          className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400 cursor-pointer"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -1213,6 +1671,7 @@ export default function ShopPage() {
                 </div>
               )}
 
+              {/* Krok 2: Formularz z automatycznie uzupełnionymi danymi klubowicza */}
               {checkoutStep === 'form' && (
                 <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
@@ -1259,43 +1718,51 @@ export default function ShopPage() {
 
                   <div>
                     <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1">
-                      <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Rozmiar / Odbiór
+                      <FileText className="h-3.5 w-3.5 text-amber-400" /> Uwagi / Termin realizacji / Rozmiar
                     </label>
                     <textarea
                       rows={2}
-                      placeholder="np. Odbiór osobisty w klubie / Rozmiar L"
+                      placeholder="np. Odbiór w recepcji klubu / preferowany termin usługi..."
                       value={formData.shippingNotes}
                       onChange={(e) => setFormData({ ...formData, shippingNotes: e.target.value })}
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
                     />
                   </div>
 
+                  {/* Metoda płatności: AutoPay */}
                   <div>
-                    <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5 mb-1.5">
-                      <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Metoda płatności
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Płatność online AutoPay
+                      </label>
+                      <span className="text-[10px] font-bold text-amber-400/90 uppercase tracking-wider">
+                        AutoPay S.A.
+                      </span>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => setFormData({ ...formData, paymentMethod: 'blik' })}
-                        className={`rounded-xl border py-2.5 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                          formData.paymentMethod === 'blik'
-                            ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                        onClick={() => setFormData({ ...formData, paymentMethod: 'autopay_blik' })}
+                        className={`rounded-xl border py-3 px-3 text-xs font-bold uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                          formData.paymentMethod === 'autopay_blik'
+                            ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-sm'
                             : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
                         }`}
                       >
-                        BLIK
+                        <span className="text-sm font-black tracking-tight">BLIK (AutoPay)</span>
+                        <span className="text-[9px] font-normal opacity-70">Kod z banku</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => setFormData({ ...formData, paymentMethod: 'karta' })}
-                        className={`rounded-xl border py-2.5 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                          formData.paymentMethod === 'karta'
-                            ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                        onClick={() => setFormData({ ...formData, paymentMethod: 'autopay_card' })}
+                        className={`rounded-xl border py-3 px-3 text-xs font-bold uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-1 cursor-pointer ${
+                          formData.paymentMethod === 'autopay_card'
+                            ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-sm'
                             : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
                         }`}
                       >
-                        Karta / Online
+                        <span className="text-sm font-black tracking-tight">Karta / Przelew</span>
+                        <span className="text-[9px] font-normal opacity-70">AutoPay Online</span>
                       </button>
                     </div>
                   </div>
@@ -1345,7 +1812,7 @@ export default function ShopPage() {
                       </>
                     ) : (
                       <>
-                        Zatwierdź i zapłać
+                        Zatwierdź i zapłać AutoPay
                         <ArrowRight className="h-4 w-4" />
                       </>
                     )}
