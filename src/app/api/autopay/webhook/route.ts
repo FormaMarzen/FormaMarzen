@@ -335,8 +335,87 @@ export async function POST(req: Request) {
         ? `${klient['Imię'] || klient.imie || ''} ${klient['Nazwisko'] || klient.nazwisko || ''}`.trim()
         : 'Klubowicz';
 
-      // A. OBSŁUGA ZAKUPU ODZIEŻY KLUBOWEJ
-      if (transakcja.type === 'tshirt_purchase' || transakcja.type === 'odziez_zakup') {
+      // A. OBSŁUGA ZAMÓWIENIA ZE SKLEPU KLUBOWEGO
+      if (transakcja.type === 'shop_order' || transakcja.type === 'sklep_zakup') {
+        const zamowienieId = gatewayResponse.zamowienie_id || metadata.order_db_id || metadata.zamowienie_id;
+        let targetOrderId = zamowienieId;
+
+        if (targetOrderId) {
+          await supabase
+            .from('orders')
+            .update({
+              status: 'opłacone'
+            })
+            .eq('id', targetOrderId);
+        } else {
+          // Fallback: szukanie najnowszego oczekującego zamówienia tego klienta
+          const customerEmail = gatewayResponse.email || (klient ? (klient['E-mail'] || klient.email) : '');
+          if (customerEmail) {
+            const { data: latestOrder } = await supabase
+              .from('orders')
+              .select('id')
+              .eq('customer_email', customerEmail.toLowerCase().trim())
+              .eq('status', 'oczekuje')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (latestOrder) {
+              targetOrderId = latestOrder.id;
+              await supabase
+                .from('orders')
+                .update({ status: 'opłacone' })
+                .eq('id', latestOrder.id);
+            }
+          }
+        }
+
+        // Automatyczna aktualizacja stanów magazynowych w tabeli products
+        if (targetOrderId) {
+          const { data: items } = await supabase
+            .from('order_items')
+            .select('product_id, quantity')
+            .eq('order_id', targetOrderId);
+
+          if (items && items.length > 0) {
+            for (const it of items) {
+              if (it.product_id && it.quantity) {
+                const { data: currentProduct } = await supabase
+                  .from('products')
+                  .select('stock')
+                  .eq('id', it.product_id)
+                  .maybeSingle();
+
+                if (currentProduct && typeof currentProduct.stock === 'number') {
+                  const updatedStock = Math.max(0, currentProduct.stock - it.quantity);
+                  await supabase
+                    .from('products')
+                    .update({ 
+                      stock: updatedStock, 
+                      updated_at: new Date().toISOString() 
+                    })
+                    .eq('id', it.product_id);
+                }
+              }
+            }
+          }
+        }
+
+        await supabase.from('transakcje').insert([{
+          klient_id: transakcja.user_id,
+          typ_operacji: 'sklep_autopay',
+          kwota: transactionAmount,
+          opis: `Zakup w sklepie klubowym: Zamówienie #${targetOrderId ? String(targetOrderId).slice(0, 8) : orderID} (Autopay online, Zamówienie: ${orderID})`
+        }]);
+
+        await sendPushToAdmins(
+          'Nowe zamówienie w sklepie! 🛍️',
+          `${clientName} opłacił(a) zamówienie w sklepie klubowym (${transactionAmount.toFixed(2)} PLN)`,
+          '/sklep'
+        );
+
+      // B. OBSŁUGA ZAKUPU ODZIEŻY KLUBOWEJ
+      } else if (transakcja.type === 'tshirt_purchase' || transakcja.type === 'odziez_zakup') {
         const kampaniaId = gatewayResponse.kampania_id || metadata.kampania_id;
         const zamowienieId = gatewayResponse.zamowienie_id || metadata.zamowienie_id;
         const wariant = gatewayResponse.wariant || metadata.wariant || '';
@@ -418,7 +497,7 @@ export async function POST(req: Request) {
           '/odziez'
         );
 
-      // B. OBSŁUGA OPŁACENIA KOSZULKI NA WYDARZENIE
+      // C. OBSŁUGA OPŁACENIA KOSZULKI NA WYDARZENIE
       } else if (transakcja.type === 'koszulka_fee') {
         const wydarzenieId = gatewayResponse.wydarzenie_id || metadata.wydarzenie_id;
 
@@ -467,7 +546,7 @@ export async function POST(req: Request) {
           }
         }
 
-      // C. OBSŁUGA WPISOWEGO NA WYZWANIE REDUKCJI
+      // D. OBSŁUGA WPISOWEGO NA WYZWANIE REDUKCJI
       } else if (transakcja.type === 'redukcja_fee') {
         const edycjaId = gatewayResponse.edycja_id || metadata.edycja_id;
 
@@ -492,7 +571,7 @@ export async function POST(req: Request) {
           );
         }
 
-      // D. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M
+      // E. DEDYKOWANA OBSŁUGA OPŁATY RATY UMOWY 12M
       } else if (transakcja.type === 'contract_installment') {
         if (klient) {
           const targetPaidUntil = metadata.targetPaidUntil || calculateEndOfMonthDate(klient.umowa_oplacona_do);
@@ -576,7 +655,7 @@ export async function POST(req: Request) {
           );
         }
 
-      // E. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
+      // F. OBSŁUGA ZAKUPU / PRZEDŁUŻENIA KARNETU PRZEZ AUTOPAY
       } else if (transakcja.type === 'pass_purchase' || transakcja.type === 'pass_extend') {
         if (klient) {
           const clientUpdatePayload: Record<string, any> = {};
@@ -738,7 +817,7 @@ export async function POST(req: Request) {
           );
         }
 
-      // F. OBSŁUGA DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
+      // G. OBSŁUGA DOŁADOWANIA PORTFELA LUB SPŁATY ZADŁUŻENIA
       } else {
         if (klient) {
           const rawWalletStr = klient.Portfel || klient.portfel || '0.00 PLN';
