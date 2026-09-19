@@ -103,7 +103,7 @@ interface ProductFormData {
   badge: string;
   is_active: boolean;
   size_chart_url: string;
-  available_sizes: string[];
+  size_stocks: Record<string, number>;
   target_gender: string;
 }
 
@@ -127,8 +127,43 @@ const INITIAL_PRODUCT_FORM: ProductFormData = {
   badge: '',
   is_active: true,
   size_chart_url: '',
-  available_sizes: ['S', 'M', 'L', 'XL'],
+  size_stocks: { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
   target_gender: 'Unisex'
+};
+
+// Pomocnik do bezpiecznego odczytu stanów magazynowych poszczególnych rozmiarów
+export const parseSizeStocks = (raw: any, fallbackStock = 0): Record<string, number> => {
+  if (!raw) return {};
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) {
+      const res: Record<string, number> = {};
+      parsed.forEach((item) => {
+        if (typeof item === 'string') {
+          res[item] = fallbackStock;
+        } else if (item && typeof item === 'object' && item.size) {
+          res[item.size] = Number(item.stock) || 0;
+        }
+      });
+      return res;
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      const res: Record<string, number> = {};
+      Object.entries(parsed).forEach(([k, v]) => {
+        res[k] = Number(v) || 0;
+      });
+      return res;
+    }
+  } catch (e) {
+    if (typeof raw === 'string') {
+      const res: Record<string, number> = {};
+      raw.split(',').forEach((s) => {
+        const trimmed = s.trim();
+        if (trimmed) res[trimmed] = fallbackStock;
+      });
+      return res;
+    }
+  }
+  return {};
 };
 
 export default function ShopPage() {
@@ -171,7 +206,7 @@ export default function ShopPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
-  // Wybór rozmiaru i płci na kafelkach produktów przed dodaniem do koszyka
+  // Wybór rozmiaru i płci na kafelkach produktów
   const [selectedProductSizes, setSelectedProductSizes] = useState<Record<string, string>>({});
   const [selectedProductGenders, setSelectedProductGenders] = useState<Record<string, string>>({});
   const [sizeWarningProductId, setSizeWarningProductId] = useState<string | null>(null);
@@ -488,22 +523,11 @@ export default function ShopPage() {
     });
   }, [products, selectedCategory, searchQuery, isEffectiveAdmin]);
 
-  // Parsowanie listy rozmiarów
-  const parseProductSizes = (sizesStr?: string | null): string[] => {
-    if (!sizesStr) return [];
-    try {
-      if (sizesStr.startsWith('[')) {
-        return JSON.parse(sizesStr);
-      }
-    } catch (e) {}
-    return sizesStr.split(',').map((s) => s.trim()).filter(Boolean);
-  };
-
-  // Obsługa dodawania do koszyka z weryfikacją rozmiaru dla odzieży
+  // Obsługa dodawania do koszyka z rygorystyczną weryfikacją stanu wybranego rozmiaru
   const handleAddToCartWithValidation = (product: Product) => {
     const isClothing = product.category.toLowerCase().includes('odzież') || product.category.toLowerCase().includes('odziez');
-    const availableSizes = parseProductSizes(product.available_sizes);
-    const hasSizes = availableSizes.length > 0;
+    const sizeStocks = parseSizeStocks(product.available_sizes, product.stock);
+    const hasSizes = Object.keys(sizeStocks).length > 0;
 
     const selectedSize = selectedProductSizes[product.id];
     let selectedGender = selectedProductGenders[product.id];
@@ -516,12 +540,31 @@ export default function ShopPage() {
       }
     }
 
-    if (isClothing && hasSizes && !selectedSize) {
-      setSizeWarningProductId(product.id);
-      setTimeout(() => {
-        setSizeWarningProductId(null);
-      }, 3000);
-      return;
+    if (isClothing && hasSizes) {
+      if (!selectedSize) {
+        setSizeWarningProductId(product.id);
+        setTimeout(() => setSizeWarningProductId(null), 3000);
+        return;
+      }
+
+      const availableQtyForSize = sizeStocks[selectedSize] ?? 0;
+      if (availableQtyForSize <= 0) {
+        alert(`Rozmiar ${selectedSize} jest wyprzedany (brak na stanie magazynowym).`);
+        return;
+      }
+
+      const cartKey = `${product.id}_${selectedSize}_${selectedGender || 'none'}`;
+      const inCartItem = cart.find(c => c.cartItemId === cartKey);
+      if (inCartItem && inCartItem.quantity >= availableQtyForSize) {
+        alert(`Nie możesz dodać więcej sztuk rozmiaru ${selectedSize}. Dostępna ilość na stanie to: ${availableQtyForSize} szt.`);
+        return;
+      }
+    } else {
+      const inCartQty = cart.filter(c => c.product.id === product.id).reduce((sum, i) => sum + i.quantity, 0);
+      if (inCartQty >= product.stock) {
+        alert(`Osiągnięto limit dostępnego stanu magazynowego tego produktu (${product.stock} szt.).`);
+        return;
+      }
     }
 
     const cartKey = `${product.id}_${selectedSize || 'none'}_${selectedGender || 'none'}`;
@@ -550,13 +593,32 @@ export default function ShopPage() {
     setIsCartOpen(true);
   };
 
+  // Aktualizacja ilości w koszyku z blokadą przekroczenia stanu rozmiaru
   const updateQuantity = (cartItemId: string, delta: number) => {
     setCart((prevCart) =>
       prevCart
         .map((item) => {
           if (item.cartItemId === cartItemId) {
             const newQty = item.quantity + delta;
-            return newQty > 0 ? { ...item, quantity: newQty } : null;
+            if (newQty <= 0) return null;
+
+            if (delta > 0) {
+              const isClothing = item.product.category.toLowerCase().includes('odzież') || item.product.category.toLowerCase().includes('odziez');
+              const sizeStocks = parseSizeStocks(item.product.available_sizes, item.product.stock);
+              
+              if (isClothing && item.selectedSize && Object.keys(sizeStocks).length > 0) {
+                const maxStock = sizeStocks[item.selectedSize] ?? item.product.stock;
+                if (newQty > maxStock) {
+                  alert(`Maksymalna ilość rozmiaru ${item.selectedSize} dostępna na stanie to ${maxStock} szt.`);
+                  return item;
+                }
+              } else if (newQty > item.product.stock) {
+                alert(`Maksymalna dostępna ilość produktu na stanie to ${item.product.stock} szt.`);
+                return item;
+              }
+            }
+
+            return { ...item, quantity: newQty };
           }
           return item;
         })
@@ -835,6 +897,9 @@ export default function ShopPage() {
     setEditingProductId(product.id);
     const hasCategoryInList = availableCategories.includes(product.category);
     setIsCustomCategory(!hasCategoryInList);
+    
+    const parsedStocks = parseSizeStocks(product.available_sizes, product.stock);
+
     setProductForm({
       name: product.name,
       category: product.category || 'Odzież',
@@ -845,21 +910,33 @@ export default function ShopPage() {
       badge: product.badge || '',
       is_active: product.is_active,
       size_chart_url: product.size_chart_url || '',
-      available_sizes: parseProductSizes(product.available_sizes),
+      size_stocks: Object.keys(parsedStocks).length > 0 ? parsedStocks : { 'S': 5, 'M': 5, 'L': 5, 'XL': 5 },
       target_gender: product.target_gender || 'Unisex'
     });
     setProductModalError(null);
     setIsProductModalOpen(true);
   };
 
+  // Włączanie / wyłączanie rozmiaru w formularzu admina
   const toggleSizeInForm = (size: string) => {
     setProductForm((prev) => {
-      const current = prev.available_sizes || [];
-      if (current.includes(size)) {
-        return { ...prev, available_sizes: current.filter((s) => s !== size) };
+      const current = { ...prev.size_stocks };
+      if (size in current) {
+        delete current[size];
       } else {
-        return { ...prev, available_sizes: [...current, size] };
+        current[size] = 5;
       }
+      const sumStock = Object.values(current).reduce((a, b) => a + b, 0);
+      return { ...prev, size_stocks: current, stock: sumStock.toString() };
+    });
+  };
+
+  // Aktualizacja ilości sztuk dla danego rozmiaru w formularzu admina
+  const updateSizeStockInForm = (size: string, quantity: number) => {
+    setProductForm((prev) => {
+      const current = { ...prev.size_stocks, [size]: Math.max(0, quantity) };
+      const sumStock = Object.values(current).reduce((a, b) => a + b, 0);
+      return { ...prev, size_stocks: current, stock: sumStock.toString() };
     });
   };
 
@@ -868,7 +945,13 @@ export default function ShopPage() {
     setProductModalError(null);
 
     const priceNum = parseFloat(productForm.price.replace(',', '.'));
-    const stockNum = parseInt(productForm.stock, 10);
+    const isClothing = productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez');
+    
+    let stockNum = parseInt(productForm.stock, 10);
+    if (isClothing && Object.keys(productForm.size_stocks).length > 0) {
+      stockNum = Object.values(productForm.size_stocks).reduce((a, b) => a + b, 0);
+    }
+
     const finalCategory = productForm.category.trim();
 
     if (!productForm.name.trim()) {
@@ -901,7 +984,7 @@ export default function ShopPage() {
         badge: productForm.badge.trim() ? productForm.badge.trim() : null,
         is_active: productForm.is_active,
         size_chart_url: productForm.size_chart_url.trim() || null,
-        available_sizes: JSON.stringify(productForm.available_sizes),
+        available_sizes: isClothing ? JSON.stringify(productForm.size_stocks) : null,
         target_gender: productForm.target_gender || 'Unisex',
         updated_at: new Date().toISOString()
       };
@@ -1044,7 +1127,7 @@ export default function ShopPage() {
                 </span>
                 <span className="text-[11px] text-zinc-300">
                   {adminEditMode 
-                    ? 'Tryb edycji aktywny – pełne zarządzanie odzieżą, rozmiarówką, cenami i publikacją' 
+                    ? 'Tryb edycji aktywny – pełne zarządzanie odzieżą, stanami rozmiarówki, cenami i publikacją' 
                     : 'Podgląd klubowicza aktywny – widzisz sklep dokładnie tak jak klient'}
                 </span>
               </div>
@@ -1178,8 +1261,8 @@ export default function ShopPage() {
           {filteredProducts.length > 0 ? (
             filteredProducts.map((item) => {
               const isClothing = item.category.toLowerCase().includes('odzież') || item.category.toLowerCase().includes('odziez');
-              const availableSizes = parseProductSizes(item.available_sizes);
-              const hasSizes = availableSizes.length > 0;
+              const sizeStocks = parseSizeStocks(item.available_sizes, item.stock);
+              const hasSizes = Object.keys(sizeStocks).length > 0;
               const hasSizeChart = Boolean(item.size_chart_url);
               const isGenderSelectable = item.target_gender === 'Męski / Damski (do wyboru)';
 
@@ -1268,7 +1351,7 @@ export default function ShopPage() {
                         </span>
                         {isEffectiveAdmin && (
                           <span className="text-xs text-zinc-400 font-mono">
-                            Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
+                            Łączny magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
                           </span>
                         )}
                       </div>
@@ -1280,7 +1363,7 @@ export default function ShopPage() {
                         {item.description || 'Brak opisu.'}
                       </p>
 
-                      {/* Sekcja wariantów odzieży (Płeć, Rozmiar, Tabela rozmiarów) */}
+                      {/* Sekcja wariantów odzieży z blokadą zerowych stanów */}
                       {isClothing && (
                         <div className="mt-4 space-y-3 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3.5">
                           {/* Pasek z tabelą rozmiarów i informacją o płci */}
@@ -1303,7 +1386,7 @@ export default function ShopPage() {
                             )}
                           </div>
 
-                          {/* Wybór płci, jeśli produkt ma warianty Męski / Damski */}
+                          {/* Wybór płci, jeśli wariant Męski / Damski */}
                           {isGenderSelectable && (
                             <div className="flex items-center gap-1.5 pt-1">
                               {['Męski', 'Damski'].map((gender) => (
@@ -1325,7 +1408,7 @@ export default function ShopPage() {
                             </div>
                           )}
 
-                          {/* Wybór rozmiaru */}
+                          {/* Wybór rozmiaru z blokowaniem wyprzedanych */}
                           {hasSizes && (
                             <div>
                               <div className="flex items-center justify-between mb-1.5">
@@ -1334,28 +1417,39 @@ export default function ShopPage() {
                                 </span>
                                 {isSizeWarning && (
                                   <span className="text-[10px] font-bold text-rose-400 animate-pulse">
-                                    Wybierz rozmiar przed dodaniem!
+                                    Wybierz dostępny rozmiar!
                                   </span>
                                 )}
                               </div>
                               <div className="flex flex-wrap gap-1.5">
-                                {availableSizes.map((size) => {
+                                {Object.entries(sizeStocks).map(([size, stockQty]) => {
                                   const isSelected = currentSelectedSize === size;
+                                  const isOutOfStock = stockQty <= 0;
+
                                   return (
                                     <button
                                       key={size}
                                       type="button"
+                                      disabled={isOutOfStock}
                                       onClick={() => {
-                                        setSelectedProductSizes((prev) => ({ ...prev, [item.id]: size }));
-                                        setSizeWarningProductId(null);
+                                        if (!isOutOfStock) {
+                                          setSelectedProductSizes((prev) => ({ ...prev, [item.id]: size }));
+                                          setSizeWarningProductId(null);
+                                        }
                                       }}
-                                      className={`min-w-[34px] rounded-lg px-2 py-1 text-xs font-bold transition-all cursor-pointer ${
-                                        isSelected
-                                          ? 'bg-amber-500 text-black shadow-sm font-black'
-                                          : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-zinc-800'
+                                      className={`relative rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                                        isOutOfStock
+                                          ? 'opacity-35 bg-zinc-900/50 text-zinc-500 border border-zinc-800 line-through cursor-not-allowed'
+                                          : isSelected
+                                          ? 'bg-amber-500 text-black shadow-sm font-black ring-1 ring-amber-400 cursor-pointer'
+                                          : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-zinc-800 cursor-pointer'
                                       }`}
+                                      title={isOutOfStock ? `Rozmiar ${size} - wyprzedany` : `Dostępne na stanie: ${stockQty} szt.`}
                                     >
-                                      {size}
+                                      <span>{size}</span>
+                                      <span className={`ml-1 text-[9px] font-mono ${isSelected ? 'text-zinc-900' : isOutOfStock ? 'text-zinc-600' : 'text-amber-400/80'}`}>
+                                        {isOutOfStock ? '(0)' : `(${stockQty})`}
+                                      </span>
                                     </button>
                                   );
                                 })}
@@ -1469,7 +1563,6 @@ export default function ShopPage() {
               </div>
             )}
 
-            {/* Ukryte inputy na pliki */}
             <input
               type="file"
               ref={fileInputRef}
@@ -1573,16 +1666,19 @@ export default function ShopPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                    Stan magazynowy (szt.) *
+                    Stan magazynowy (łączny)
                   </label>
                   <input
                     type="number"
                     required
                     min="0"
-                    placeholder="np. 25"
+                    readOnly={productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')}
+                    placeholder="np. 20"
                     value={productForm.stock}
                     onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                    className={`w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none ${
+                      (productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) ? 'opacity-75 cursor-not-allowed font-mono' : ''
+                    }`}
                   />
                 </div>
 
@@ -1600,13 +1696,13 @@ export default function ShopPage() {
                 </div>
               </div>
 
-              {/* Konfiguracja specyficzna dla kategorii "Odzież" */}
-              {productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez') ? (
+              {/* Konfiguracja stanów dla poszczególnych rozmiarów w odzieży */}
+              {(productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) && (
                 <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3.5">
                   <div className="flex items-center gap-2">
                     <Ruler className="h-4 w-4 text-amber-400" />
                     <span className="font-black uppercase tracking-wider text-amber-300 text-xs">
-                      Konfiguracja Rozmiarówki i Wariantów
+                      Stany Magazynowe Rozmiarów i Warianty
                     </span>
                   </div>
 
@@ -1627,27 +1723,57 @@ export default function ShopPage() {
                     </select>
                   </div>
 
-                  {/* Dostępne rozmiary */}
+                  {/* Rozmiary z przypisaną ilością sztuk na stanie */}
                   <div>
-                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
-                      Dostępne rozmiary (kliknij, aby włączyć/wyłączyć):
-                    </label>
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                        Dostępne rozmiary i ich stany magazynowe:
+                      </label>
+                      <span className="text-[10px] text-amber-400 font-mono">
+                        Razem: {Object.values(productForm.size_stocks).reduce((a, b) => a + b, 0)} szt.
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {STANDARD_SIZES.map((size) => {
-                        const isIncluded = productForm.available_sizes.includes(size);
+                        const isEnabled = size in productForm.size_stocks;
+                        const currentStock = productForm.size_stocks[size] ?? 0;
                         return (
-                          <button
+                          <div
                             key={size}
-                            type="button"
-                            onClick={() => toggleSizeInForm(size)}
-                            className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
-                              isIncluded
-                                ? 'bg-amber-500 text-black font-black shadow-sm'
-                                : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 border border-zinc-800'
+                            className={`flex flex-col p-2.5 rounded-xl border transition-all ${
+                              isEnabled
+                                ? 'border-amber-500/50 bg-zinc-900'
+                                : 'border-zinc-800 bg-zinc-950/40 opacity-60'
                             }`}
                           >
-                            {size}
-                          </button>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
+                                <input
+                                  type="checkbox"
+                                  checked={isEnabled}
+                                  onChange={() => toggleSizeInForm(size)}
+                                  className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                                />
+                                <span>{size}</span>
+                              </label>
+                              {isEnabled && (
+                                <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
+                                </span>
+                              )}
+                            </div>
+                            {isEnabled && (
+                              <input
+                                type="number"
+                                min="0"
+                                placeholder="Ilość sztuk"
+                                value={currentStock}
+                                onChange={(e) => updateSizeStockInForm(size, parseInt(e.target.value, 10) || 0)}
+                                className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
+                              />
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -1702,7 +1828,7 @@ export default function ShopPage() {
                               Wybierz zdjęcie tabeli rozmiarów
                             </span>
                             <span className="text-[10px] text-zinc-500 mt-0.5">
-                              Grafika pojawi się klubowiczom po kliknięciu "Tabela rozmiarów"
+                              Pojawi się klubowiczom po kliknięciu "Tabela rozmiarów"
                             </span>
                           </>
                         )}
@@ -1710,7 +1836,7 @@ export default function ShopPage() {
                     )}
                   </div>
                 </div>
-              ) : null}
+              )}
 
               {/* Zdjęcie artykułu */}
               <div>
@@ -1773,7 +1899,7 @@ export default function ShopPage() {
                 )}
               </div>
 
-              {/* Powiększone okno opisu */}
+              {/* Okno opisu */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block font-bold uppercase tracking-wider text-zinc-300">
@@ -1782,11 +1908,11 @@ export default function ShopPage() {
                   <span className="text-[10px] text-zinc-500">Powiększone okno edycji</span>
                 </div>
                 <textarea
-                  rows={6}
+                  rows={5}
                   placeholder="Wprowadź szczegółowy opis produktu, skład materiału, zasady konserwacji, specyfikację..."
                   value={productForm.description}
                   onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
-                  className="w-full min-h-[140px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
+                  className="w-full min-h-[120px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
                 />
               </div>
 
@@ -2007,6 +2133,7 @@ export default function ShopPage() {
                               </span>
                             </td>
 
+                            {/* Kolumna Czy opłacono / Anulowano */}
                             <td className="py-3.5 px-4 align-top text-center whitespace-nowrap">
                               {isPaid ? (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-emerald-400">
@@ -2026,6 +2153,7 @@ export default function ShopPage() {
                               )}
                             </td>
 
+                            {/* Kolumna Akcja dla Administratora */}
                             {isEffectiveAdmin && (
                               <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end gap-1.5">
