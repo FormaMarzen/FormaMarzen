@@ -141,7 +141,7 @@ export default function ShopPage() {
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
-  // Filtrowanie i wyszukiwanie
+  // Filtrowanie i wyszukiwanie w sklepie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
@@ -302,22 +302,31 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie rejestru zamówień
+  // Pobieranie zamówień z Supabase ze ścisłą separacją uprawnień
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      const currentEmail = (user?.email || formData.customerEmail || localStorage.getItem('fm_user_email') || '').toLowerCase().trim();
+      const currentEmail = (
+        user?.email || 
+        formData.customerEmail || 
+        (typeof window !== 'undefined' ? localStorage.getItem('fm_user_email') : '') || 
+        ''
+      ).toLowerCase().trim();
 
       let query = supabase
         .from('orders')
         .select('*, order_items(*)')
         .order('created_at', { ascending: false });
 
+      // Ścisła blokada prywatności: klubowicz widzi wyłącznie swoje zamówienia
       if (!isAdmin || historyFilter === 'my') {
-        if (currentEmail) {
-          query = query.eq('customer_email', currentEmail);
+        if (!currentEmail) {
+          setOrdersHistory([]);
+          setHistoryLoading(false);
+          return;
         }
+        query = query.eq('customer_email', currentEmail);
       }
 
       const { data, error: ordersErr } = await query;
@@ -337,8 +346,9 @@ export default function ShopPage() {
     }
   }, [isHistoryOpen, historyFilter]);
 
-  // Aktualizacja statusu opłacenia
+  // Aktualizacja statusu opłacenia (wyłącznie dla Administratora)
   const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
+    if (!isAdmin) return;
     const isCurrentlyPaid = currentStatus?.toLowerCase() === 'opłacone' || currentStatus?.toLowerCase() === 'paid';
     const newStatus = isCurrentlyPaid ? 'oczekuje' : 'opłacone';
 
@@ -359,7 +369,7 @@ export default function ShopPage() {
     }
   };
 
-  // Filtrowanie listy zamówień
+  // Filtrowanie listy zamówień w oknie
   const filteredOrdersHistory = useMemo(() => {
     return ordersHistory.filter((ord) => {
       const query = historySearchQuery.toLowerCase().trim();
@@ -1331,7 +1341,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal / Tabela Rejestru Zamówień (Pełny widok tabelaryczny dla Administratora) */}
+      {/* Modal Rejestru Zamówień (Tabela dla Admina, Lista zamówień dla Klubowicza) */}
       {isHistoryOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-5xl rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-7 shadow-2xl my-6 flex flex-col max-h-[92vh]">
@@ -1395,7 +1405,7 @@ export default function ShopPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
                 <input
                   type="text"
-                  placeholder="Filtruj tabelę po imieniu, nazwisku, mailu lub produkcie..."
+                  placeholder={isAdmin ? "Filtruj tabelę po imieniu, nazwisku, mailu lub produkcie..." : "Szukaj w swoich zamówieniach..."}
                   value={historySearchQuery}
                   onChange={(e) => setHistorySearchQuery(e.target.value)}
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900/80 py-2 pl-9 pr-8 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
@@ -1411,7 +1421,7 @@ export default function ShopPage() {
               </div>
             </div>
 
-            {/* Kontener tabeli z przewijaniem */}
+            {/* Kontener tabeli zamówień */}
             <div className="mt-4 flex-1 overflow-y-auto pr-1">
               {historyLoading ? (
                 <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
@@ -1540,9 +1550,11 @@ export default function ShopPage() {
               ) : (
                 <div className="py-24 text-center">
                   <FileSpreadsheet className="mx-auto h-12 w-12 text-zinc-700" />
-                  <p className="mt-3 text-sm text-zinc-300 font-bold">Brak zamówień w tabeli</p>
+                  <p className="mt-3 text-sm text-zinc-300 font-bold">Brak zamówień do wyświetlenia</p>
                   <p className="text-xs text-zinc-500 mt-1">
-                    Gdy klubowicz zakupi produkt lub usługę, pojawi się w tym zestawieniu.
+                    {isAdmin && historyFilter === 'all' 
+                      ? 'W klubie nie ma jeszcze zarejestrowanych zamówień.' 
+                      : 'Nie złożyłeś jeszcze żadnego zamówienia na tym koncie.'}
                   </p>
                 </div>
               )}
