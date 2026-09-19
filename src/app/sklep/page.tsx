@@ -33,8 +33,7 @@ import {
   Receipt,
   Clock,
   CheckCheck,
-  FileSpreadsheet,
-  XCircle
+  FileSpreadsheet
 } from 'lucide-react';
 
 export interface Product {
@@ -130,7 +129,7 @@ export default function ShopPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Natychmiastowa autoryzacja administratora
+  // Autoryzacja administratora
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
@@ -142,7 +141,7 @@ export default function ShopPage() {
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
-  // Wyszukiwanie i filtrowanie w sklepie
+  // Filtrowanie i wyszukiwanie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
@@ -154,14 +153,14 @@ export default function ShopPage() {
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Rejestr i Historia zamówień
+  // Tabela i Rejestr zamówień
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
   const [ordersHistory, setOrdersHistory] = useState<OrderRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'my'>('all');
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
 
-  // Formularz zamówienia z AutoPay
+  // Formularz zamówienia z danymi AutoPay
   const [formData, setFormData] = useState<OrderFormData>({
     customerName: '',
     customerEmail: '',
@@ -181,7 +180,7 @@ export default function ShopPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Automatyczne pobranie danych zalogowanego klubowicza z bazy do zamówienia
+  // Automatyczne uzupełnianie danych zalogowanego klubowicza
   useEffect(() => {
     const fetchLoggedMemberData = async () => {
       try {
@@ -221,14 +220,14 @@ export default function ShopPage() {
           }));
         }
       } catch (err) {
-        console.error('Błąd automatycznego uzupełniania danych klubowicza:', err);
+        console.error('Błąd pobierania danych klubowicza:', err);
       }
     };
 
     fetchLoggedMemberData();
   }, []);
 
-  // Dynamiczna lista unikalnych kategorii
+  // Dynamiczna lista kategorii
   const availableCategories = useMemo(() => {
     const set = new Set<string>(DEFAULT_CATEGORIES);
     products.forEach((p) => {
@@ -278,7 +277,7 @@ export default function ShopPage() {
     verifyAdmin();
   }, []);
 
-  // Pobieranie asortymentu
+  // Pobieranie asortymentu produktów
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -303,7 +302,7 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie zamówień z Supabase
+  // Pobieranie rejestru zamówień
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
@@ -326,7 +325,7 @@ export default function ShopPage() {
 
       setOrdersHistory(data || []);
     } catch (err) {
-      console.error('Błąd pobierania historii zamówień:', err);
+      console.error('Błąd pobierania zamówień:', err);
     } finally {
       setHistoryLoading(false);
     }
@@ -338,7 +337,7 @@ export default function ShopPage() {
     }
   }, [isHistoryOpen, historyFilter]);
 
-  // Zmiana statusu opłacenia zamówienia przez administratora
+  // Aktualizacja statusu opłacenia
   const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
     const isCurrentlyPaid = currentStatus?.toLowerCase() === 'opłacone' || currentStatus?.toLowerCase() === 'paid';
     const newStatus = isCurrentlyPaid ? 'oczekuje' : 'opłacone';
@@ -355,12 +354,12 @@ export default function ShopPage() {
         prev.map((ord) => (ord.id === orderId ? { ...ord, status: newStatus } : ord))
       );
     } catch (err: any) {
-      console.error('Błąd aktualizacji statusu zamówienia:', err);
+      console.error('Błąd aktualizacji statusu:', err);
       alert('Nie udało się zmienić statusu: ' + err.message);
     }
   };
 
-  // Filtrowanie historii zamówień
+  // Filtrowanie listy zamówień
   const filteredOrdersHistory = useMemo(() => {
     return ordersHistory.filter((ord) => {
       const query = historySearchQuery.toLowerCase().trim();
@@ -377,7 +376,7 @@ export default function ShopPage() {
     });
   }, [ordersHistory, historySearchQuery]);
 
-  // Pamięć podręczna koszyka
+  // Synchronizacja koszyka w pamięci podręcznej
   useEffect(() => {
     try {
       const savedCart = localStorage.getItem('fm_shop_cart');
@@ -395,7 +394,7 @@ export default function ShopPage() {
     }
   }, [cart]);
 
-  // Filtrowanie artykułów w sklepie
+  // Filtrowanie listy produktów
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
       if (!isAdmin || !adminEditMode) {
@@ -454,7 +453,7 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
-  // Składanie zamówienia (AutoPay)
+  // Zapis zamówienia z metodą AutoPay
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
@@ -524,15 +523,16 @@ export default function ShopPage() {
     }
   };
 
-  // Usuwanie wybranej kategorii
+  // Bezpieczne usuwanie kategorii i przeniesienie produktów
   const handleDeleteCategory = async (catToDelete: string) => {
-    if (catToDelete === 'Wszystko' || catToDelete === 'Ogólne') {
+    if (catToDelete === 'Wszystko') {
       alert('Tej kategorii systemowej nie można usunąć.');
       return;
     }
 
+    const fallbackCat = DEFAULT_CATEGORIES[0] || 'Odzież';
     const confirmDelete = window.confirm(
-      `Czy na pewno chcesz usunąć kategorię "${catToDelete}"? Produkty z tej kategorii zostaną bezpiecznie przeniesione do kategorii "Ogólne".`
+      `Czy na pewno chcesz usunąć kategorię "${catToDelete}"? Produkty z tej kategorii zostaną bezpiecznie przypisane do kategorii "${fallbackCat}".`
     );
     if (!confirmDelete) return;
 
@@ -540,7 +540,7 @@ export default function ShopPage() {
       setLoading(true);
       const { error: updateErr } = await supabase
         .from('products')
-        .update({ category: 'Ogólne', updated_at: new Date().toISOString() })
+        .update({ category: fallbackCat, updated_at: new Date().toISOString() })
         .eq('category', catToDelete);
 
       if (updateErr) throw updateErr;
@@ -558,7 +558,7 @@ export default function ShopPage() {
     }
   };
 
-  // Obsługa wyboru zdjęcia wyłącznie z galerii lub dysku urządzenia
+  // Wybór i kompresja zdjęcia z galerii urządzenia
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -599,7 +599,7 @@ export default function ShopPage() {
         setIsProcessingImage(false);
       };
       img.onerror = () => {
-        setProductModalError('Nie udało się załadować wybranego pliku graficznego.');
+        setProductModalError('Nie udało się przetworzyć wskazanego pliku graficznego.');
         setIsProcessingImage(false);
       };
       img.src = event.target?.result as string;
@@ -611,7 +611,7 @@ export default function ShopPage() {
     reader.readAsDataURL(file);
   };
 
-  // Funkcje administratora
+  // Formularz administratora
   const handleOpenAddModal = () => {
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
@@ -744,7 +744,7 @@ export default function ShopPage() {
   return (
     <div className="w-full rounded-3xl bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-8 shadow-2xl border border-zinc-800">
       
-      {/* Ostry nagłówek sklepu z ikonami koszyka i rejestru zamówień */}
+      {/* Nagłówek sklepu */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 shadow-inner">
@@ -766,7 +766,7 @@ export default function ShopPage() {
           </div>
         </div>
 
-        {/* Przyciski operacyjne: Rejestr zamówień + Koszyk */}
+        {/* Przyciski operacyjne: Tabela zamówień + Koszyk */}
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => {
@@ -859,7 +859,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Wyszukiwarka i kategorie z opcją usuwania przez administratora */}
+      {/* Wyszukiwarka i kategorie */}
       <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -977,7 +977,7 @@ export default function ShopPage() {
                       )}
                     </div>
 
-                    {/* Narzędzia edycji na kafelku */}
+                    {/* Narzędzia edycji na karcie produktu */}
                     {isAdmin && adminEditMode && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
@@ -1089,7 +1089,6 @@ export default function ShopPage() {
               </div>
             )}
 
-            {/* Ukryty input do wyboru pliku z galerii lub dysku */}
             <input
               type="file"
               ref={fileInputRef}
@@ -1114,7 +1113,6 @@ export default function ShopPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                {/* Wybór lub wpisanie własnej kategorii */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block font-bold uppercase tracking-wider text-zinc-300">
@@ -1214,7 +1212,7 @@ export default function ShopPage() {
                 </div>
               </div>
 
-              {/* Wybór zdjęcia wyłącznie z galerii lub dysku */}
+              {/* Zdjęcie artykułu wyłącznie z pamięci urządzenia */}
               <div>
                 <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
                   Zdjęcie artykułu (Galeria / Dysk)
@@ -1338,7 +1336,6 @@ export default function ShopPage() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm overflow-y-auto">
           <div className="relative w-full max-w-5xl rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-7 shadow-2xl my-6 flex flex-col max-h-[92vh]">
             
-            {/* Nagłówek okna zamówień */}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-4 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
@@ -1452,7 +1449,6 @@ export default function ShopPage() {
 
                         return (
                           <tr key={order.id} className="hover:bg-zinc-800/40 transition-colors">
-                            {/* Imię i nazwisko */}
                             <td className="py-3.5 px-4 align-top">
                               <div className="font-bold text-white text-sm">
                                 {order.customer_name || 'Brak danych'}
@@ -1463,7 +1459,6 @@ export default function ShopPage() {
                               </div>
                             </td>
 
-                            {/* Data zakupu */}
                             <td className="py-3.5 px-4 align-top whitespace-nowrap">
                               <div className="flex items-center gap-1.5 text-zinc-300 font-mono text-[11px]">
                                 <Clock className="h-3.5 w-3.5 text-amber-400/80 shrink-0" />
@@ -1474,7 +1469,6 @@ export default function ShopPage() {
                               </span>
                             </td>
 
-                            {/* Produkt / Kupione pozycje */}
                             <td className="py-3.5 px-4 align-top">
                               {order.order_items && order.order_items.length > 0 ? (
                                 <div className="space-y-1.5">
@@ -1498,7 +1492,6 @@ export default function ShopPage() {
                               )}
                             </td>
 
-                            {/* Kwota */}
                             <td className="py-3.5 px-4 align-top whitespace-nowrap">
                               <span className="font-black text-amber-400 font-mono text-sm">
                                 {Number(order.total_amount).toFixed(2)} PLN
@@ -1508,7 +1501,6 @@ export default function ShopPage() {
                               </span>
                             </td>
 
-                            {/* Czy opłacono */}
                             <td className="py-3.5 px-4 align-top text-center whitespace-nowrap">
                               {isPaid ? (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-emerald-400">
@@ -1523,7 +1515,6 @@ export default function ShopPage() {
                               )}
                             </td>
 
-                            {/* Akcja dla administratora */}
                             {isAdmin && (
                               <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
                                 <button
@@ -1604,7 +1595,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 1: Artykuły w koszyku */}
               {checkoutStep === 'cart' && (
                 <div className="mt-4 max-h-[55vh] space-y-4 overflow-y-auto pr-1">
                   {cart.length > 0 ? (
@@ -1671,7 +1661,6 @@ export default function ShopPage() {
                 </div>
               )}
 
-              {/* Krok 2: Formularz z automatycznie uzupełnionymi danymi klubowicza */}
               {checkoutStep === 'form' && (
                 <form id="checkout-form" onSubmit={handleSubmitOrder} className="mt-4 max-h-[55vh] space-y-3.5 overflow-y-auto pr-1">
                   <div>
@@ -1729,7 +1718,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Metoda płatności: AutoPay */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
