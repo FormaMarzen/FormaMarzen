@@ -258,17 +258,21 @@ export default function ShopPage() {
     return [];
   });
 
+  // Bezpieczna inicjalizacja uprawnień - domyślnie false dla każdego klubowicza
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
-      const storedEmail = (localStorage.getItem('fm_user_email') || '').toLowerCase();
-      return storedRole === 'admin' || storedEmail.includes('maciejklaput') || storedEmail.includes('klaput');
+      const storedEmail = (localStorage.getItem('fm_user_email') || '').toLowerCase().trim();
+      if (storedRole === 'admin' && (storedEmail === 'maciejklaput@gmail.com' || storedEmail === 'maciejklaput@icloud.com')) {
+        return true;
+      }
     }
-    return true;
+    return false;
   });
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
+  // Efektywny tryb administratora
   const isEffectiveAdmin = useMemo(() => {
     return isAdmin && adminEditMode;
   }, [isAdmin, adminEditMode]);
@@ -321,6 +325,7 @@ export default function ShopPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sizeChartFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Pobranie danych zalogowanego klubowicza ze ścisłym dopasowaniem e-mail
   const fetchLoggedMemberData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -332,11 +337,18 @@ export default function ShopPage() {
       const { data: clients } = await supabase.from('klienci').select('*');
 
       if (clients && clients.length > 0) {
-        const matched = clients.find((c: any) => {
+        let matched = clients.find((c: any) => {
           const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
-          const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
-          return (authEmail && cEmail === authEmail) || nazwisko.includes('kłaput');
+          return authEmail && cEmail === authEmail;
         });
+
+        // Tylko dla Twoich kont administratora pozwalamy na fallback
+        if (!matched && (authEmail === 'maciejklaput@gmail.com' || authEmail === 'maciejklaput@icloud.com')) {
+          matched = clients.find((c: any) => {
+            const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
+            return nazwisko.includes('kłaput');
+          });
+        }
 
         if (matched) {
           setCurrentClientRecord(matched);
@@ -357,7 +369,7 @@ export default function ShopPage() {
       setFormData((prev) => ({
         ...prev,
         customerEmail: authEmail,
-        customerName: authEmail.includes('klaput') ? 'Maciej Kłaput' : authEmail.split('@')[0],
+        customerName: authEmail.split('@')[0],
       }));
     } catch (err) {
       console.error('Błąd pobierania danych klubowicza:', err);
@@ -403,13 +415,17 @@ export default function ShopPage() {
     return ['Wszystko', ...availableCategories];
   }, [availableCategories]);
 
+  // Ścisła weryfikacja roli administratora bez fałszywych dopasowań
   useEffect(() => {
     const verifyAdmin = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!user || !user.email) {
+          setIsAdmin(false);
+          return;
+        }
 
-        const email = (user.email || '').toLowerCase().trim();
+        const email = user.email.toLowerCase().trim();
         if (email === 'maciejklaput@gmail.com' || email === 'maciejklaput@icloud.com') {
           setIsAdmin(true);
           localStorage.setItem('fm_user_role', 'admin');
@@ -418,26 +434,33 @@ export default function ShopPage() {
 
         const { data: clients } = await supabase.from('klienci').select('*');
         if (clients && clients.length > 0) {
-          const matched = clients.find((c: any) => {
+          const currentClient = clients.find((c: any) => {
             const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
-            const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
-            return (email && cEmail === email) || nazwisko.includes('kłaput');
+            return cEmail === email;
           });
 
-          if (matched) {
+          if (currentClient && String(currentClient.rola || '').toLowerCase() === 'admin') {
             setIsAdmin(true);
             localStorage.setItem('fm_user_role', 'admin');
+            return;
           }
+        }
+
+        // Zwykły klubowicz: blokada i czyszczenie roli
+        setIsAdmin(false);
+        if (localStorage.getItem('fm_user_role') === 'admin') {
+          localStorage.setItem('fm_user_role', 'klubowicz');
         }
       } catch (e) {
         console.error('Weryfikacja admina:', e);
+        setIsAdmin(false);
       }
     };
 
     verifyAdmin();
   }, []);
 
-  // Pobieranie asortymentu produktów z uwzględnieniem samodzielnej kolejności
+  // Pobieranie produktów ze sklepu
   const fetchProducts = async () => {
     try {
       setLoading(true);
@@ -463,26 +486,24 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Samodzielne przesuwanie kolejności produktów przez administratora
+  // Przesuwanie kolejności produktów (dostępne tylko dla administratora)
   const handleMoveProduct = async (product: Product, direction: 'prev' | 'next') => {
+    if (!isEffectiveAdmin) return;
     const list = [...filteredProducts];
     const currentIndex = list.findIndex(p => p.id === product.id);
     if (currentIndex === -1) return;
     const targetIndex = direction === 'prev' ? currentIndex - 1 : currentIndex + 1;
     if (targetIndex < 0 || targetIndex >= list.length) return;
 
-    // Zamiana miejscami w lokalnej liście
     const temp = list[currentIndex];
     list[currentIndex] = list[targetIndex];
     list[targetIndex] = temp;
 
-    // Przypisanie nowych kolejności 1, 2, 3...
     const updates = list.map((p, idx) => ({
       id: p.id,
       display_order: idx + 1
     }));
 
-    // Optymistyczna aktualizacja UI
     setProducts(prev => {
       const updatedList = prev.map(p => {
         const found = updates.find(u => u.id === p.id);
@@ -614,6 +635,9 @@ export default function ShopPage() {
   useEffect(() => {
     try {
       localStorage.setItem('fm_shop_cart', JSON.stringify(cart));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('fm_cart_updated'));
+      }
     } catch (e) {
       console.error('Błąd zapisu koszyka:', e);
     }
@@ -977,8 +1001,7 @@ export default function ShopPage() {
   };
 
   const handleDeleteCategory = async (catToDelete: string) => {
-    if (catToDelete === 'Wszystko') {
-      alert('Tej kategorii systemowej nie można usunąć.');
+    if (!isEffectiveAdmin || catToDelete === 'Wszystko') {
       return;
     }
 
@@ -1092,6 +1115,7 @@ export default function ShopPage() {
   };
 
   const handleOpenAddModal = () => {
+    if (!isEffectiveAdmin) return;
     setEditingProductId(null);
     setProductForm(INITIAL_PRODUCT_FORM);
     setAdminActiveGenderTab('Męski');
@@ -1101,6 +1125,7 @@ export default function ShopPage() {
   };
 
   const handleOpenEditModal = (product: Product) => {
+    if (!isEffectiveAdmin) return;
     setEditingProductId(product.id);
     const hasCategoryInList = availableCategories.includes(product.category);
     setIsCustomCategory(!hasCategoryInList);
@@ -1303,6 +1328,7 @@ export default function ShopPage() {
   };
 
   const handleToggleProductStatus = async (product: Product) => {
+    if (!isEffectiveAdmin) return;
     try {
       const { error: toggleErr } = await supabase
         .from('products')
@@ -1321,6 +1347,7 @@ export default function ShopPage() {
   };
 
   const handleDeleteProduct = async (product: Product) => {
+    if (!isEffectiveAdmin) return;
     const confirmDelete = window.confirm(`Czy na pewno chcesz usunąć produkt: "${product.name}"?`);
     if (!confirmDelete) return;
 
@@ -1402,8 +1429,8 @@ export default function ShopPage() {
         </div>
       </div>
 
-      {/* Złoty Panel Administratora */}
-      {isAdmin && (
+      {/* Złoty Panel Administratora - Widoczny WYŁĄCZNIE dla aktywnego administratora */}
+      {isEffectiveAdmin && (
         <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -1543,7 +1570,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Siatka produktów ze strzałkami kolejności w trybie administratora */}
+      {/* Siatka produktów */}
       {!loading && !error && (
         <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {filteredProducts.length > 0 ? (
@@ -1607,10 +1634,9 @@ export default function ShopPage() {
                         )}
                       </div>
 
-                      {/* Narzędzia administratora: Edycja, Widoczność, Usunięcie oraz PRZESUWANIE KOLEJNOŚCI */}
+                      {/* Przyciski edycji i zmiany kolejności WYŁĄCZNIE dla aktywnego administratora */}
                       {isEffectiveAdmin && (
                         <div className="absolute right-3 top-3 flex items-center gap-1 rounded-xl bg-black/85 p-1 border border-zinc-700 shadow-xl">
-                          {/* Przesuń w lewo / wyżej */}
                           <button
                             type="button"
                             disabled={isFirst}
@@ -1621,7 +1647,6 @@ export default function ShopPage() {
                             <ArrowLeft className="h-3.5 w-3.5" />
                           </button>
 
-                          {/* Przesuń w prawo / niżej */}
                           <button
                             type="button"
                             disabled={isLast}
@@ -1979,7 +2004,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Pole samodzielnej kolejności wyświetlania */}
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1 flex items-center gap-1" title="Kolejność w sklepie (np. 1 = pierwszy)">
                       <ArrowUpDown className="h-3 w-3 text-amber-400" />
@@ -2829,7 +2853,6 @@ export default function ShopPage() {
                     />
                   </div>
 
-                  {/* Wybór metody płatności: AutoPay lub Portfel */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
