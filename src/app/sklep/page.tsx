@@ -1644,11 +1644,13 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Edycji i Dodawania Produktu */}
+      {/* Modal Edycji i Dodawania Produktu - Nigdy nie obcinany u góry */}
       {isProductModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
-          <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl my-8">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm overflow-hidden">
+          <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl flex flex-col max-h-[92vh]">
+            
+            {/* Przyklejony nagłówek modalu */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3 shrink-0">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <PackagePlus className="h-5 w-5 text-amber-400" />
                 {editingProductId ? 'Edycja produktu / usługi' : 'Dodaj nowy produkt / usługę'}
@@ -1662,7 +1664,7 @@ export default function ShopPage() {
             </div>
 
             {productModalError && (
-              <div className="my-4 flex items-center gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400">
+              <div className="my-3 flex items-center gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400 shrink-0">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>{productModalError}</span>
               </div>
@@ -1683,438 +1685,442 @@ export default function ShopPage() {
               className="hidden"
             />
 
-            <form onSubmit={handleSaveProduct} className="mt-4 space-y-4 text-xs">
-              <div>
-                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                  Nazwa produktu / usługi *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="np. Koszulka Treningowa FORMA MARZEŃ"
-                  value={productForm.name}
-                  onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block font-bold uppercase tracking-wider text-zinc-300">
-                      Kategoria *
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextCustom = !isCustomCategory;
-                        setIsCustomCategory(nextCustom);
-                        if (nextCustom) {
-                          setProductForm({ ...productForm, category: '' });
-                        } else {
-                          setProductForm({ ...productForm, category: availableCategories[0] || 'Odzież' });
-                        }
-                      }}
-                      className="text-[10px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
-                    >
-                      {isCustomCategory ? 'Wybierz z listy' : '+ Wpisz własną'}
-                    </button>
-                  </div>
-
-                  {isCustomCategory ? (
-                    <input
-                      type="text"
-                      required
-                      placeholder="np. Usługi, Pakiety..."
-                      value={productForm.category}
-                      onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-                      className="w-full rounded-xl border border-amber-500/50 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-                    />
-                  ) : (
-                    <select
-                      value={productForm.category}
-                      onChange={(e) => {
-                        if (e.target.value === '__custom__') {
-                          setIsCustomCategory(true);
-                          setProductForm({ ...productForm, category: '' });
-                        } else {
-                          setProductForm({ ...productForm, category: e.target.value });
-                        }
-                      }}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
-                    >
-                      {availableCategories.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                      <option value="__custom__">+ Dodaj inną kategorię...</option>
-                    </select>
-                  )}
-                </div>
-
+            {/* Formularz ze scrollem wewnętrznym i przyklejonymi przyciskami */}
+            <form onSubmit={handleSaveProduct} className="flex-1 flex flex-col overflow-hidden mt-3">
+              <div className="flex-1 overflow-y-auto pr-1.5 space-y-4 text-xs">
                 <div>
                   <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                    Cena (PLN) *
+                    Nazwa produktu / usługi *
                   </label>
                   <input
                     type="text"
                     required
-                    placeholder="np. 149.00"
-                    value={productForm.price}
-                    onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
+                    placeholder="np. Koszulka Treningowa FORMA MARZEŃ"
+                    value={productForm.name}
+                    onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
                     className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                    Stan magazynowy (łączny)
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min="0"
-                    readOnly={productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')}
-                    placeholder="np. 20"
-                    value={productForm.stock}
-                    onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
-                    className={`w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none ${
-                      (productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) ? 'opacity-75 cursor-not-allowed font-mono' : ''
-                    }`}
-                  />
-                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                        Kategoria *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextCustom = !isCustomCategory;
+                          setIsCustomCategory(nextCustom);
+                          if (nextCustom) {
+                            setProductForm({ ...productForm, category: '' });
+                          } else {
+                            setProductForm({ ...productForm, category: availableCategories[0] || 'Odzież' });
+                          }
+                        }}
+                        className="text-[10px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                      >
+                        {isCustomCategory ? 'Wybierz z listy' : '+ Wpisz własną'}
+                      </button>
+                    </div>
 
-                <div>
-                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                    Odznaka / Badge (opcja)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="np. Bestseller, Nowość"
-                    value={productForm.badge}
-                    onChange={(e) => setProductForm({ ...productForm, badge: e.target.value })}
-                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Konfiguracja krojów i rozmiarów */}
-              {(productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) && (
-                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3.5">
-                  <div className="flex items-center gap-2">
-                    <Ruler className="h-4 w-4 text-amber-400" />
-                    <span className="font-black uppercase tracking-wider text-amber-300 text-xs">
-                      Stany Magazynowe Rozmiarów i Warianty
-                    </span>
+                    {isCustomCategory ? (
+                      <input
+                        type="text"
+                        required
+                        placeholder="np. Usługi, Pakiety..."
+                        value={productForm.category}
+                        onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
+                        className="w-full rounded-xl border border-amber-500/50 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                      />
+                    ) : (
+                      <select
+                        value={productForm.category}
+                        onChange={(e) => {
+                          if (e.target.value === '__custom__') {
+                            setIsCustomCategory(true);
+                            setProductForm({ ...productForm, category: '' });
+                          } else {
+                            setProductForm({ ...productForm, category: e.target.value });
+                          }
+                        }}
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
+                      >
+                        {availableCategories.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                        <option value="__custom__">+ Dodaj inną kategorię...</option>
+                      </select>
+                    )}
                   </div>
 
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
-                      Płeć / Przeznaczenie
+                      Cena (PLN) *
                     </label>
-                    <select
-                      value={productForm.target_gender}
-                      onChange={(e) => setProductForm({ ...productForm, target_gender: e.target.value })}
-                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
-                    >
-                      <option value="Męski / Damski (do wyboru)">Męski / Damski (do wyboru)</option>
-                      <option value="Męski">Męski</option>
-                      <option value="Damski">Damski</option>
-                      <option value="Unisex">Unisex</option>
-                    </select>
+                    <input
+                      type="text"
+                      required
+                      placeholder="np. 149.00"
+                      value={productForm.price}
+                      onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
+                      Stan magazynowy (łączny)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      readOnly={productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')}
+                      placeholder="np. 20"
+                      value={productForm.stock}
+                      onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
+                      className={`w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none ${
+                        (productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) ? 'opacity-75 cursor-not-allowed font-mono' : ''
+                      }`}
+                    />
                   </div>
 
                   <div>
-                    {productForm.target_gender === 'Męski / Damski (do wyboru)' ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <label className="block font-bold uppercase tracking-wider text-zinc-300">
-                            Stany magazynowe per krój:
-                          </label>
-                          <div className="flex rounded-lg bg-zinc-900 p-0.5 border border-zinc-800">
-                            <button
-                              type="button"
-                              onClick={() => setAdminActiveGenderTab('Męski')}
-                              className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
-                                adminActiveGenderTab === 'Męski'
-                                  ? 'bg-amber-500 text-black font-black'
-                                  : 'text-zinc-400 hover:text-white'
-                              }`}
-                            >
-                              👔 Męski
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setAdminActiveGenderTab('Damski')}
-                              className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
-                                adminActiveGenderTab === 'Damski'
-                                  ? 'bg-amber-500 text-black font-black'
-                                  : 'text-zinc-400 hover:text-white'
-                              }`}
-                            >
-                              👗 Damski
-                            </button>
-                          </div>
-                        </div>
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
+                      Odznaka / Badge (opcja)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="np. Bestseller, Nowość"
+                      value={productForm.badge}
+                      onChange={(e) => setProductForm({ ...productForm, badge: e.target.value })}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
 
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                          {STANDARD_SIZES.map((size) => {
-                            const isEnabled = size in productForm.gender_stocks[adminActiveGenderTab];
-                            const currentStock = productForm.gender_stocks[adminActiveGenderTab][size] ?? 0;
-                            return (
-                              <div
-                                key={size}
-                                className={`flex flex-col p-2.5 rounded-xl border transition-all ${
-                                  isEnabled
-                                    ? 'border-amber-500/50 bg-zinc-900'
-                                    : 'border-zinc-800 bg-zinc-950/40 opacity-60'
+                {/* Konfiguracja krojów i rozmiarów */}
+                {(productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) && (
+                  <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3.5">
+                    <div className="flex items-center gap-2">
+                      <Ruler className="h-4 w-4 text-amber-400" />
+                      <span className="font-black uppercase tracking-wider text-amber-300 text-xs">
+                        Stany Magazynowe Rozmiarów i Warianty
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1">
+                        Płeć / Przeznaczenie
+                      </label>
+                      <select
+                        value={productForm.target_gender}
+                        onChange={(e) => setProductForm({ ...productForm, target_gender: e.target.value })}
+                        className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
+                      >
+                        <option value="Męski / Damski (do wyboru)">Męski / Damski (do wyboru)</option>
+                        <option value="Męski">Męski</option>
+                        <option value="Damski">Damski</option>
+                        <option value="Unisex">Unisex</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      {productForm.target_gender === 'Męski / Damski (do wyboru)' ? (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                              Stany magazynowe per krój:
+                            </label>
+                            <div className="flex rounded-lg bg-zinc-900 p-0.5 border border-zinc-800">
+                              <button
+                                type="button"
+                                onClick={() => setAdminActiveGenderTab('Męski')}
+                                className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
+                                  adminActiveGenderTab === 'Męski'
+                                    ? 'bg-amber-500 text-black font-black'
+                                    : 'text-zinc-400 hover:text-white'
                                 }`}
                               >
-                                <div className="flex items-center justify-between mb-1">
-                                  <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
-                                    <input
-                                      type="checkbox"
-                                      checked={isEnabled}
-                                      onChange={() => toggleSizeInForm(adminActiveGenderTab, size)}
-                                      className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                                    />
-                                    <span>{size}</span>
-                                  </label>
-                                  {isEnabled && (
-                                    <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                      {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
-                                    </span>
-                                  )}
-                                </div>
-                                {isEnabled && (
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    placeholder="Ilość"
-                                    value={currentStock}
-                                    onChange={(e) => updateSizeStockInForm(adminActiveGenderTab, size, parseInt(e.target.value, 10) || 0)}
-                                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
-                                  />
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="block font-bold uppercase tracking-wider text-zinc-300">
-                            Rozmiary i stany magazynowe:
-                          </label>
-                          <span className="text-[10px] text-amber-400 font-mono">
-                            Razem: {productForm.stock} szt.
-                          </span>
-                        </div>
+                                👔 Męski
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setAdminActiveGenderTab('Damski')}
+                                className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
+                                  adminActiveGenderTab === 'Damski'
+                                    ? 'bg-amber-500 text-black font-black'
+                                    : 'text-zinc-400 hover:text-white'
+                                }`}
+                              >
+                                👗 Damski
+                              </button>
+                            </div>
+                          </div>
 
-                        {(() => {
-                          const genderKey = (productForm.target_gender === 'Damski' ? 'Damski' : productForm.target_gender === 'Męski' ? 'Męski' : 'Unisex') as 'Męski' | 'Damski' | 'Unisex';
-                          return (
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {STANDARD_SIZES.map((size) => {
-                                const isEnabled = size in productForm.gender_stocks[genderKey];
-                                const currentStock = productForm.gender_stocks[genderKey][size] ?? 0;
-                                return (
-                                  <div
-                                    key={size}
-                                    className={`flex flex-col p-2.5 rounded-xl border transition-all ${
-                                      isEnabled
-                                        ? 'border-amber-500/50 bg-zinc-900'
-                                        : 'border-zinc-800 bg-zinc-950/40 opacity-60'
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between mb-1">
-                                      <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
-                                        <input
-                                          type="checkbox"
-                                          checked={isEnabled}
-                                          onChange={() => toggleSizeInForm(genderKey, size)}
-                                          className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                                        />
-                                        <span>{size}</span>
-                                      </label>
-                                      {isEnabled && (
-                                        <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                          {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
-                                        </span>
-                                      )}
-                                    </div>
-                                    {isEnabled && (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            {STANDARD_SIZES.map((size) => {
+                              const isEnabled = size in productForm.gender_stocks[adminActiveGenderTab];
+                              const currentStock = productForm.gender_stocks[adminActiveGenderTab][size] ?? 0;
+                              return (
+                                <div
+                                  key={size}
+                                  className={`flex flex-col p-2.5 rounded-xl border transition-all ${
+                                    isEnabled
+                                      ? 'border-amber-500/50 bg-zinc-900'
+                                      : 'border-zinc-800 bg-zinc-950/40 opacity-60'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
                                       <input
-                                        type="number"
-                                        min="0"
-                                        placeholder="Ilość"
-                                        value={currentStock}
-                                        onChange={(e) => updateSizeStockInForm(genderKey, size, parseInt(e.target.value, 10) || 0)}
-                                        className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
+                                        type="checkbox"
+                                        checked={isEnabled}
+                                        onChange={() => toggleSizeInForm(adminActiveGenderTab, size)}
+                                        className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
                                       />
+                                      <span>{size}</span>
+                                    </label>
+                                    {isEnabled && (
+                                      <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                        {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
+                                      </span>
                                     )}
                                   </div>
-                                );
-                              })}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
-                      Zdjęcie tabeli rozmiarów (Galeria / Dysk)
-                    </label>
-
-                    {productForm.size_chart_url ? (
-                      <div className="relative h-32 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 group">
-                        <img
-                          src={productForm.size_chart_url}
-                          alt="Podgląd tabeli rozmiarów"
-                          className="h-full w-full object-contain"
-                        />
-                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => sizeChartFileInputRef.current?.click()}
-                            className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-black shadow hover:bg-amber-400 cursor-pointer"
-                          >
-                            <Upload className="h-3 w-3" />
-                            Zmień tabelę
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setProductForm({ ...productForm, size_chart_url: '' })}
-                            className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-rose-500 cursor-pointer"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Usuń
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        onClick={() => sizeChartFileInputRef.current?.click()}
-                        className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-4 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
-                      >
-                        {isProcessingSizeChart ? (
-                          <div className="flex flex-col items-center gap-1.5 text-amber-400">
-                            <Loader2 className="h-6 w-6 animate-spin" />
-                            <span className="text-xs font-semibold">Kompresowanie tabeli...</span>
+                                  {isEnabled && (
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      placeholder="Ilość"
+                                      value={currentStock}
+                                      onChange={(e) => updateSizeStockInForm(adminActiveGenderTab, size, parseInt(e.target.value, 10) || 0)}
+                                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
+                                    />
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
-                        ) : (
-                          <>
-                            <Ruler className="h-6 w-6 text-amber-400 mb-1" />
-                            <span className="text-xs font-bold text-zinc-200">
-                              Wybierz zdjęcie tabeli rozmiarów
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                              Rozmiary i stany magazynowe:
+                            </label>
+                            <span className="text-[10px] text-amber-400 font-mono">
+                              Razem: {productForm.stock} szt.
                             </span>
-                            <span className="text-[10px] text-zinc-500 mt-0.5">
-                              Pojawi się klubowiczom po kliknięciu "Tabela rozmiarów"
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+                          </div>
 
-              <div>
-                <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
-                  Zdjęcie artykułu (Galeria / Dysk)
-                </label>
+                          {(() => {
+                            const genderKey = (productForm.target_gender === 'Damski' ? 'Damski' : productForm.target_gender === 'Męski' ? 'Męski' : 'Unisex') as 'Męski' | 'Damski' | 'Unisex';
+                            return (
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {STANDARD_SIZES.map((size) => {
+                                  const isEnabled = size in productForm.gender_stocks[genderKey];
+                                  const currentStock = productForm.gender_stocks[genderKey][size] ?? 0;
+                                  return (
+                                    <div
+                                      key={size}
+                                      className={`flex flex-col p-2.5 rounded-xl border transition-all ${
+                                        isEnabled
+                                          ? 'border-amber-500/50 bg-zinc-900'
+                                          : 'border-zinc-800 bg-zinc-950/40 opacity-60'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between mb-1">
+                                        <label className="flex items-center gap-1.5 font-bold text-xs cursor-pointer text-zinc-200">
+                                          <input
+                                            type="checkbox"
+                                            checked={isEnabled}
+                                            onChange={() => toggleSizeInForm(genderKey, size)}
+                                            className="rounded border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                                          />
+                                          <span>{size}</span>
+                                        </label>
+                                        {isEnabled && (
+                                          <span className={`text-[10px] font-mono font-bold ${currentStock > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                            {currentStock > 0 ? `${currentStock} szt.` : 'Brak'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {isEnabled && (
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          placeholder="Ilość"
+                                          value={currentStock}
+                                          onChange={(e) => updateSizeStockInForm(genderKey, size, parseInt(e.target.value, 10) || 0)}
+                                          className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none font-mono text-center mt-1"
+                                        />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
 
-                {productForm.image_url ? (
-                  <div className="relative h-44 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
-                    <Image
-                      src={productForm.image_url}
-                      alt="Podgląd zdjęcia"
-                      fill
-                      unoptimized
-                      className="object-cover"
-                    />
-                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 transition-opacity">
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-2 text-xs font-bold text-black shadow-lg hover:bg-amber-400 cursor-pointer"
-                      >
-                        <Upload className="h-3.5 w-3.5" />
-                        Zmień z galerii
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProductForm({ ...productForm, image_url: '' })}
-                        className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-rose-500 cursor-pointer"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Usuń
-                      </button>
+                    <div>
+                      <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
+                        Zdjęcie tabeli rozmiarów (Galeria / Dysk)
+                      </label>
+
+                      {productForm.size_chart_url ? (
+                        <div className="relative h-32 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 group">
+                          <img
+                            src={productForm.size_chart_url}
+                            alt="Podgląd tabeli rozmiarów"
+                            className="h-full w-full object-contain"
+                          />
+                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => sizeChartFileInputRef.current?.click()}
+                              className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-black shadow hover:bg-amber-400 cursor-pointer"
+                            >
+                              <Upload className="h-3 w-3" />
+                              Zmień tabelę
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setProductForm({ ...productForm, size_chart_url: '' })}
+                              className="flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-rose-500 cursor-pointer"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Usuń
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => sizeChartFileInputRef.current?.click()}
+                          className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-4 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
+                        >
+                          {isProcessingSizeChart ? (
+                            <div className="flex flex-col items-center gap-1.5 text-amber-400">
+                              <Loader2 className="h-6 w-6 animate-spin" />
+                              <span className="text-xs font-semibold">Kompresowanie tabeli...</span>
+                            </div>
+                          ) : (
+                            <>
+                              <Ruler className="h-6 w-6 text-amber-400 mb-1" />
+                              <span className="text-xs font-bold text-zinc-200">
+                                Wybierz zdjęcie tabeli rozmiarów
+                              </span>
+                              <span className="text-[10px] text-zinc-500 mt-0.5">
+                                Pojawi się klubowiczom po kliknięciu "Tabela rozmiarów"
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
-                ) : (
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-6 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
-                  >
-                    {isProcessingImage ? (
-                      <div className="flex flex-col items-center gap-2 text-amber-400">
-                        <Loader2 className="h-7 w-7 animate-spin" />
-                        <span className="text-xs font-semibold">Kompresowanie grafiki z galerii...</span>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 mb-2">
-                          <ImageIcon className="h-6 w-6" />
-                        </div>
-                        <span className="text-xs font-bold text-zinc-200">
-                          Wybierz zdjęcie z galerii lub zrób aparatem
-                        </span>
-                        <span className="text-[11px] text-zinc-500 mt-1">
-                          Dotknij tutaj, aby otworzyć bibliotekę zdjęć urządzenia
-                        </span>
-                      </>
-                    )}
-                  </div>
                 )}
-              </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block font-bold uppercase tracking-wider text-zinc-300">
-                    Szczegółowy opis artykułu / usługi
+                <div>
+                  <label className="block font-bold uppercase tracking-wider text-zinc-300 mb-1.5">
+                    Zdjęcie artykułu (Galeria / Dysk)
                   </label>
-                  <span className="text-[10px] text-zinc-500">Powiększone okno edycji</span>
+
+                  {productForm.image_url ? (
+                    <div className="relative h-44 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 group">
+                      <Image
+                        src={productForm.image_url}
+                        alt="Podgląd zdjęcia"
+                        fill
+                        unoptimized
+                        className="object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 py-2 text-xs font-bold text-black shadow-lg hover:bg-amber-400 cursor-pointer"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          Zmień z galerii
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setProductForm({ ...productForm, image_url: '' })}
+                          className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-rose-500 cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Usuń
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-800 bg-zinc-900/60 p-6 text-center cursor-pointer hover:border-amber-500 hover:bg-zinc-900 transition-all"
+                    >
+                      {isProcessingImage ? (
+                        <div className="flex flex-col items-center gap-2 text-amber-400">
+                          <Loader2 className="h-7 w-7 animate-spin" />
+                          <span className="text-xs font-semibold">Kompresowanie grafiki z galerii...</span>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 mb-2">
+                            <ImageIcon className="h-6 w-6" />
+                          </div>
+                          <span className="text-xs font-bold text-zinc-200">
+                            Wybierz zdjęcie z galerii lub zrób aparatem
+                          </span>
+                          <span className="text-[11px] text-zinc-500 mt-1">
+                            Dotknij tutaj, aby otworzyć bibliotekę zdjęć urządzenia
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <textarea
-                  rows={5}
-                  placeholder="Wprowadź szczegółowy opis produktu, skład materiału, zasady konserwacji, specyfikację..."
-                  value={productForm.description}
-                  onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
-                  className="w-full min-h-[120px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
-                />
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold uppercase tracking-wider text-zinc-300">
+                      Szczegółowy opis artykułu / usługi
+                    </label>
+                    <span className="text-[10px] text-zinc-500">Powiększone okno edycji</span>
+                  </div>
+                  <textarea
+                    rows={5}
+                    placeholder="Wprowadź szczegółowy opis produktu, skład materiału, zasady konserwacji, specyfikację..."
+                    value={productForm.description}
+                    onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
+                    className="w-full min-h-[120px] rounded-xl border border-zinc-800 bg-zinc-900 p-3.5 text-sm text-zinc-100 placeholder-zinc-600 focus:border-amber-500 focus:outline-none resize-y leading-relaxed"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2.5 pt-1">
+                  <input
+                    type="checkbox"
+                    id="product-active-toggle"
+                    checked={productForm.is_active}
+                    onChange={(e) => setProductForm({ ...productForm, is_active: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <label htmlFor="product-active-toggle" className="font-bold text-zinc-200 cursor-pointer">
+                    Produkt aktywny i widoczny dla klubowiczów
+                  </label>
+                </div>
               </div>
 
-              <div className="flex items-center gap-2.5 pt-1">
-                <input
-                  type="checkbox"
-                  id="product-active-toggle"
-                  checked={productForm.is_active}
-                  onChange={(e) => setProductForm({ ...productForm, is_active: e.target.checked })}
-                  className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                />
-                <label htmlFor="product-active-toggle" className="font-bold text-zinc-200 cursor-pointer">
-                  Produkt aktywny i widoczny dla klubowiczów
-                </label>
-              </div>
-
-              <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800 pt-4">
+              {/* Przyklejona dolna belka z przyciskami wewnątrz modalu */}
+              <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800 pt-4 mt-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsProductModalOpen(false)}
