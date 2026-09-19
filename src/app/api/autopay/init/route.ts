@@ -44,17 +44,17 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1. Bezpieczny identyfikator OrderID (maksymalnie 32 znaki)
+    // 1. Bezpieczny identyfikator OrderID (maksymalnie 32 znaki alfanumeryczne)
     const rawOrderId = String(orderId).replace(/[^a-zA-Z0-9-]/g, '');
     const safeOrderId = rawOrderId.length > 32 ? rawOrderId.substring(0, 32) : rawOrderId;
 
-    // 2. Format kwoty i podstawowe parametry
+    // 2. Format kwoty i podstawowe parametry walutowe
     const formattedAmount = Number(amount).toFixed(2);
     const currency = 'PLN';
     const gatewayId = '0';
     const customerEmail = (email || '').trim().toLowerCase();
 
-    // 3. Czyszczenie opisu ze znaków specjalnych
+    // 3. Czyszczenie opisu ze znaków specjalnych i polskich znaków diakrytycznych
     const cleanDescription = (description || `Platnosc Forma Marzen ${formattedAmount} PLN`)
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -62,18 +62,21 @@ export async function POST(req: Request) {
       .trim()
       .substring(0, 100);
 
-    // 4. Budowa połączonych metadanych transakcji
+    // 4. Wyciągnięcie ID zamówienia ze sklepu (jeśli przekazano w metadata)
+    const resolvedZamowienieId = zamowienie_id || metadata?.order_db_id || null;
+
+    // 5. Budowa połączonych metadanych transakcji
     const combinedMetadata = {
       ...(metadata || {}),
       ...(wydarzenie_id ? { wydarzenie_id: Number(wydarzenie_id) } : {}),
       ...(edycja_id ? { edycja_id: Number(edycja_id) } : {}),
       ...(kampania_id ? { kampania_id: String(kampania_id) } : {}),
-      ...(zamowienie_id ? { zamowienie_id: String(zamowienie_id) } : {}),
+      ...(resolvedZamowienieId ? { zamowienie_id: String(resolvedZamowienieId) } : {}),
       ...(rozmiar ? { rozmiar: String(rozmiar) } : {}),
       ...(wariant ? { wariant: String(wariant) } : {})
     };
 
-    // 5. Zapis transakcji w tabeli autopay_transakcje
+    // 6. Zapis transakcji w tabeli autopay_transakcje ze statusem oczekującym
     const { error: dbError } = await supabase
       .from('autopay_transakcje')
       .insert([{
@@ -88,7 +91,7 @@ export async function POST(req: Request) {
           wydarzenie_id: wydarzenie_id ? Number(wydarzenie_id) : null,
           edycja_id: edycja_id ? Number(edycja_id) : null,
           kampania_id: kampania_id || null,
-          zamowienie_id: zamowienie_id || null,
+          zamowienie_id: resolvedZamowienieId || null,
           metadata: combinedMetadata,
           created_at: new Date().toISOString()
         }
@@ -102,7 +105,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 6. Wyliczenie sumy kontrolnej Hash SHA-256
+    // 7. Wyliczenie sumy kontrolnej Hash SHA-256 zgodnie ze specyfikacją AutoPay
     const hashDataArray: string[] = [
       serviceId,
       safeOrderId,
@@ -121,7 +124,7 @@ export async function POST(req: Request) {
     const hashString = hashDataArray.join(separator);
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
 
-    // 7. Pola formularza bramki Autopay
+    // 8. Pola formularza przekierowującego do bramki AutoPay
     const payload: Record<string, string> = {
       ServiceID: serviceId,
       OrderID: safeOrderId,
