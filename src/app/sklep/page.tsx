@@ -37,7 +37,8 @@ import {
   Lock,
   XCircle,
   RotateCcw,
-  Ruler
+  Ruler,
+  Wallet
 } from 'lucide-react';
 
 export interface Product {
@@ -90,7 +91,7 @@ interface OrderFormData {
   customerEmail: string;
   customerPhone: string;
   shippingNotes: string;
-  paymentMethod: string;
+  paymentMethod: 'autopay' | 'wallet';
 }
 
 interface ProductFormData {
@@ -240,6 +241,18 @@ export default function ShopPage() {
 
   const [currentClientRecord, setCurrentClientRecord] = useState<any>(null);
 
+  const [deletedCategories, setDeletedCategories] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('fm_shop_deleted_categories');
+        return saved ? JSON.parse(saved) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
+  });
+
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const storedRole = localStorage.getItem('fm_user_role');
@@ -272,9 +285,10 @@ export default function ShopPage() {
   const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'form'>('cart');
   const [orderSuccess, setOrderSuccess] = useState<boolean>(false);
+  const [orderSuccessMessage, setOrderSuccessMessage] = useState<string>('Zamówienie zostało zarejestrowane!');
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const isSubmittingAutopayRef = useRef<boolean>(false);
+  const isSubmittingRef = useRef<boolean>(false);
 
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
   const [ordersHistory, setOrdersHistory] = useState<OrderRecord[]>([]);
@@ -287,7 +301,7 @@ export default function ShopPage() {
     customerEmail: '',
     customerPhone: '',
     shippingNotes: '',
-    paymentMethod: 'AutoPay',
+    paymentMethod: 'autopay',
   });
 
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
@@ -302,66 +316,85 @@ export default function ShopPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sizeChartFileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const fetchLoggedMemberData = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        const storedEmail = (typeof window !== 'undefined' ? localStorage.getItem('fm_user_email') : '') || '';
-        const authEmail = (user?.email || storedEmail).toLowerCase().trim();
+  // Pobranie danych zalogowanego klubowicza i salda portfela
+  const fetchLoggedMemberData = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const storedEmail = (typeof window !== 'undefined' ? localStorage.getItem('fm_user_email') : '') || '';
+      const authEmail = (user?.email || storedEmail).toLowerCase().trim();
 
-        if (!authEmail) return;
+      if (!authEmail) return;
 
-        const { data: clients } = await supabase.from('klienci').select('*');
+      const { data: clients } = await supabase.from('klienci').select('*');
 
-        if (clients && clients.length > 0) {
-          const matched = clients.find((c: any) => {
-            const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
-            const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
-            return (authEmail && cEmail === authEmail) || nazwisko.includes('kłaput');
-          });
+      if (clients && clients.length > 0) {
+        const matched = clients.find((c: any) => {
+          const cEmail = (c['E-mail'] || c.email || '').toLowerCase().trim();
+          const nazwisko = (c.Nazwisko || c.nazwisko || '').toLowerCase().trim();
+          return (authEmail && cEmail === authEmail) || nazwisko.includes('kłaput');
+        });
 
-          if (matched) {
-            setCurrentClientRecord(matched);
-            const fullName = `${matched.Imię || ''} ${matched.Nazwisko || ''}`.trim();
-            const phone = matched['Numer tel.'] && matched['Numer tel.'] !== '-' ? matched['Numer tel.'] : '';
-            const memberEmail = matched['E-mail'] || matched.email || authEmail;
+        if (matched) {
+          setCurrentClientRecord(matched);
+          const fullName = `${matched.Imię || ''} ${matched.Nazwisko || ''}`.trim();
+          const phone = matched['Numer tel.'] && matched['Numer tel.'] !== '-' ? matched['Numer tel.'] : '';
+          const memberEmail = matched['E-mail'] || matched.email || authEmail;
 
-            setFormData((prev) => ({
-              ...prev,
-              customerName: fullName || authEmail.split('@')[0],
-              customerEmail: memberEmail,
-              customerPhone: phone,
-            }));
-            return;
-          }
+          setFormData((prev) => ({
+            ...prev,
+            customerName: fullName || authEmail.split('@')[0],
+            customerEmail: memberEmail,
+            customerPhone: phone,
+          }));
+          return;
         }
-
-        setFormData((prev) => ({
-          ...prev,
-          customerEmail: authEmail,
-          customerName: authEmail.includes('klaput') ? 'Maciej Kłaput' : authEmail.split('@')[0],
-        }));
-      } catch (err) {
-        console.error('Błąd pobierania danych klubowicza:', err);
       }
-    };
 
+      setFormData((prev) => ({
+        ...prev,
+        customerEmail: authEmail,
+        customerName: authEmail.includes('klaput') ? 'Maciej Kłaput' : authEmail.split('@')[0],
+      }));
+    } catch (err) {
+      console.error('Błąd pobierania danych klubowicza:', err);
+    }
+  };
+
+  useEffect(() => {
     fetchLoggedMemberData();
   }, []);
+
+  // Obliczenie salda portfela klubowicza
+  const clientWalletBalance = useMemo(() => {
+    if (!currentClientRecord) return 0;
+    const rawWallet = currentClientRecord.Portfel ?? currentClientRecord.portfel ?? '0.00 PLN';
+    if (typeof rawWallet === 'number') return rawWallet;
+    const isNeg = String(rawWallet).includes('-');
+    let num = parseFloat(String(rawWallet).replace(/[^0-9.]/g, '')) || 0;
+    return isNeg ? -Math.abs(num) : num;
+  }, [currentClientRecord]);
 
   const isMemberLoggedIn = useMemo(() => {
     return Boolean(formData.customerEmail && formData.customerEmail.trim().length > 0);
   }, [formData.customerEmail]);
 
   const availableCategories = useMemo(() => {
-    const set = new Set<string>(DEFAULT_CATEGORIES);
+    const set = new Set<string>();
+
+    DEFAULT_CATEGORIES.forEach((cat) => {
+      if (!deletedCategories.includes(cat)) {
+        set.add(cat);
+      }
+    });
+
     products.forEach((p) => {
-      if (p.category && p.category.trim()) {
+      if (p.category && p.category.trim() && !deletedCategories.includes(p.category.trim())) {
         set.add(p.category.trim());
       }
     });
+
     return Array.from(set);
-  }, [products]);
+  }, [products, deletedCategories]);
 
   const filterCategories = useMemo(() => {
     return ['Wszystko', ...availableCategories];
@@ -681,6 +714,7 @@ export default function ShopPage() {
     return cart.reduce((count, item) => count + item.quantity, 0);
   }, [cart]);
 
+  // Przekierowanie do bramki AutoPay
   const redirectToShopAutopay = async (amount: number, orderId: string, description: string, orderDbId: string) => {
     try {
       const userId = currentClientRecord?.id || Date.now();
@@ -732,11 +766,12 @@ export default function ShopPage() {
     }
   };
 
+  // Złożenie zamówienia z wyborem metody płatności: AutoPay lub Portfel
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
 
-    if (isSubmittingAutopayRef.current) return;
+    if (isSubmittingRef.current) return;
 
     if (!isMemberLoggedIn) {
       setSubmitError('Zakupy w sklepie są dostępne wyłącznie dla zalogowanych klubowiczów.');
@@ -748,18 +783,33 @@ export default function ShopPage() {
       return;
     }
 
+    const isWalletPayment = formData.paymentMethod === 'wallet';
+
+    // Weryfikacja salda portfela
+    if (isWalletPayment) {
+      if (clientWalletBalance < cartTotal) {
+        setSubmitError(
+          `Niewystarczające środki w portfelu. Posiadasz ${clientWalletBalance.toFixed(2)} PLN, a kwota zamówienia wynosi ${cartTotal.toFixed(2)} PLN. Wybierz AutoPay lub doładuj portfel.`
+        );
+        return;
+      }
+    }
+
     try {
-      isSubmittingAutopayRef.current = true;
+      isSubmittingRef.current = true;
       setIsCheckingOut(true);
+
+      const paymentMethodName = isWalletPayment ? 'Portfel' : 'AutoPay';
+      const initialStatus = isWalletPayment ? 'opłacone' : 'pending';
 
       const orderPayload = {
         customer_name: formData.customerName.trim(),
         customer_email: formData.customerEmail.trim(),
         customer_phone: formData.customerPhone.trim() || '-',
         shipping_notes: formData.shippingNotes.trim(),
-        payment_method: 'AutoPay',
+        payment_method: paymentMethodName,
         total_amount: cartTotal,
-        status: 'pending'
+        status: initialStatus
       };
 
       const { data: orderData, error: orderError } = await supabase
@@ -797,20 +847,98 @@ export default function ShopPage() {
 
       if (itemsError) throw new Error(itemsError.message);
 
-      const autopayOrderId = `SHOP-${orderData.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}-${Date.now()}`.substring(0, 32);
-      const opisOperacji = `Sklep Forma Marzen - Zamowienie #${orderData.id.slice(0, 8)}`;
+      // ŚCIEŻKA 1: PŁATNOŚĆ ŚRODKAMI Z PORTFELA
+      if (isWalletPayment) {
+        const newWalletNum = clientWalletBalance - cartTotal;
+        const newWalletStr = `${newWalletNum.toFixed(2)} PLN`;
 
-      setOrderSuccess(true);
-      setCart([]);
-      localStorage.removeItem('fm_shop_cart');
+        // Odliczenie środków z konta klubowicza
+        if (currentClientRecord?.id) {
+          await supabase
+            .from('klienci')
+            .update({
+              Portfel: newWalletStr,
+              portfel: newWalletNum
+            })
+            .eq('id', currentClientRecord.id);
 
-      await redirectToShopAutopay(cartTotal, autopayOrderId, opisOperacji, orderData.id);
+          // Zapisanie operacji finansowej w tabeli transakcje
+          await supabase.from('transakcje').insert([{
+            klient_id: currentClientRecord.id,
+            typ_operacji: 'sklep_portfel',
+            kwota: -cartTotal,
+            opis: `Zakup w sklepie klubowym z portfela: Zamówienie #${orderData.id.slice(0, 8)}`
+          }]);
+        }
+
+        // Natychmiastowa redukcja stanów magazynowych
+        for (const item of cart) {
+          const isClothing = item.product.category.toLowerCase().includes('odzież') || item.product.category.toLowerCase().includes('odziez');
+          const newTotalStock = Math.max(0, item.product.stock - item.quantity);
+
+          let updatedSizesPayload: any = item.product.available_sizes;
+
+          if (isClothing && item.selectedSize && item.product.available_sizes) {
+            const parsed = parseProductSizeStocks(item.product.available_sizes, item.product.target_gender);
+            const genderKey = (item.selectedGender === 'Damski' ? 'Damski' : item.selectedGender === 'Męski' ? 'Męski' : 'Unisex') as 'Męski' | 'Damski' | 'Unisex';
+
+            if (parsed.isDualGender) {
+              const currentStock = parsed.stocks[genderKey][item.selectedSize] ?? item.quantity;
+              parsed.stocks[genderKey][item.selectedSize] = Math.max(0, currentStock - item.quantity);
+              updatedSizesPayload = JSON.stringify({
+                'Męski': parsed.stocks.Męski,
+                'Damski': parsed.stocks.Damski
+              });
+            } else {
+              const currentStock = parsed.stocks[genderKey][item.selectedSize] ?? item.quantity;
+              parsed.stocks[genderKey][item.selectedSize] = Math.max(0, currentStock - item.quantity);
+              updatedSizesPayload = JSON.stringify(parsed.stocks[genderKey]);
+            }
+          }
+
+          await supabase
+            .from('products')
+            .update({
+              stock: newTotalStock,
+              available_sizes: updatedSizesPayload,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', item.product.id);
+        }
+
+        // Odświeżenie danych i sukces
+        setOrderSuccessMessage(`Zamówienie zostało pomyślnie opłacone z Twojego portfela! Nowy stan portfela: ${newWalletStr}`);
+        setOrderSuccess(true);
+        setCart([]);
+        localStorage.removeItem('fm_shop_cart');
+        await fetchProducts();
+        await fetchLoggedMemberData();
+
+        setTimeout(() => {
+          setOrderSuccess(false);
+          setIsCartOpen(false);
+          setCheckoutStep('cart');
+        }, 3500);
+
+      // ŚCIEŻKA 2: PŁATNOŚĆ ONLINE AUTOPAY
+      } else {
+        const autopayOrderId = `SHOP-${orderData.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 10)}-${Date.now()}`.substring(0, 32);
+        const opisOperacji = `Sklep Forma Marzen - Zamowienie #${orderData.id.slice(0, 8)}`;
+
+        setOrderSuccessMessage('Zamówienie zostało zarejestrowane! Przekierowywanie do płatności AutoPay...');
+        setOrderSuccess(true);
+        setCart([]);
+        localStorage.removeItem('fm_shop_cart');
+
+        await redirectToShopAutopay(cartTotal, autopayOrderId, opisOperacji, orderData.id);
+      }
 
     } catch (err: any) {
-      console.error('Błąd zamówienia / AutoPay:', err);
-      const exactError = err?.message || err?.error_description || 'Wystąpił problem z połączeniem z AutoPay.';
+      console.error('Błąd realizacji zamówienia:', err);
+      const exactError = err?.message || err?.error_description || 'Wystąpił problem podczas przetwarzania.';
       setSubmitError(`Błąd realizacji płatności: ${exactError}`);
-      isSubmittingAutopayRef.current = false;
+    } finally {
+      isSubmittingRef.current = false;
       setIsCheckingOut(false);
     }
   };
@@ -821,20 +949,29 @@ export default function ShopPage() {
       return;
     }
 
-    const fallbackCat = DEFAULT_CATEGORIES[0] || 'Odzież';
+    const remainingCategories = availableCategories.filter((c) => c !== catToDelete && c !== 'Wszystko');
+    const fallbackCat = remainingCategories[0] || 'Inne';
+
     const confirmDelete = window.confirm(
-      `Czy na pewno chcesz usunąć kategorię "${catToDelete}"? Produkty z tej kategorii zostaną bezpiecznie przypisane do kategorii "${fallbackCat}".`
+      `Czy na pewno chcesz usunąć kategorię "${catToDelete}" z paska sklepu? Produkty z tej kategorii zostaną przypisane do kategorii "${fallbackCat}".`
     );
     if (!confirmDelete) return;
 
     try {
       setLoading(true);
+
       const { error: updateErr } = await supabase
         .from('products')
         .update({ category: fallbackCat, updated_at: new Date().toISOString() })
         .eq('category', catToDelete);
 
       if (updateErr) throw updateErr;
+
+      const updatedDeleted = Array.from(new Set([...deletedCategories, catToDelete]));
+      setDeletedCategories(updatedDeleted);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('fm_shop_deleted_categories', JSON.stringify(updatedDeleted));
+      }
 
       if (selectedCategory.toLowerCase() === catToDelete.toLowerCase()) {
         setSelectedCategory('Wszystko');
@@ -1081,6 +1218,14 @@ export default function ShopPage() {
     try {
       setSavingProduct(true);
 
+      if (deletedCategories.includes(finalCategory)) {
+        const updatedDeleted = deletedCategories.filter((c) => c !== finalCategory);
+        setDeletedCategories(updatedDeleted);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('fm_shop_deleted_categories', JSON.stringify(updatedDeleted));
+        }
+      }
+
       const payload = {
         name: productForm.name.trim(),
         category: finalCategory,
@@ -1317,7 +1462,7 @@ export default function ShopPage() {
                 <button
                   onClick={() => setSelectedCategory(cat)}
                   className={`whitespace-nowrap rounded-xl py-2 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    isEffectiveAdmin && cat !== 'Wszystko' ? 'pl-3.5 pr-7' : 'px-4'
+                    isEffectiveAdmin && cat !== 'Wszystko' ? 'pl-3.5 pr-8' : 'px-4'
                   } ${
                     isSelected
                       ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
@@ -1332,12 +1477,13 @@ export default function ShopPage() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      e.preventDefault();
                       handleDeleteCategory(cat);
                     }}
-                    title={`Usuń kategorię "${cat}"`}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-4 w-4 items-center justify-center rounded-full bg-black/40 text-zinc-300 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                    title={`Usuń kategorię "${cat}" z paska`}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded-full bg-black/50 text-zinc-300 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer z-10"
                   >
-                    <X className="h-2.5 w-2.5" />
+                    <X className="h-3 w-3" />
                   </button>
                 )}
               </div>
@@ -1644,12 +1790,11 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Modal Edycji i Dodawania Produktu - Nigdy nie obcinany u góry */}
+      {/* Modal Edycji i Dodawania Produktu */}
       {isProductModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm overflow-hidden">
           <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-zinc-950 p-5 sm:p-6 shadow-2xl flex flex-col max-h-[92vh]">
             
-            {/* Przyklejony nagłówek modalu */}
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3 shrink-0">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <PackagePlus className="h-5 w-5 text-amber-400" />
@@ -1685,7 +1830,6 @@ export default function ShopPage() {
               className="hidden"
             />
 
-            {/* Formularz ze scrollem wewnętrznym i przyklejonymi przyciskami */}
             <form onSubmit={handleSaveProduct} className="flex-1 flex flex-col overflow-hidden mt-3">
               <div className="flex-1 overflow-y-auto pr-1.5 space-y-4 text-xs">
                 <div>
@@ -1805,7 +1949,6 @@ export default function ShopPage() {
                   </div>
                 </div>
 
-                {/* Konfiguracja krojów i rozmiarów */}
                 {(productForm.category.toLowerCase().includes('odzież') || productForm.category.toLowerCase().includes('odziez')) && (
                   <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3.5">
                     <div className="flex items-center gap-2">
@@ -2119,7 +2262,6 @@ export default function ShopPage() {
                 </div>
               </div>
 
-              {/* Przyklejona dolna belka z przyciskami wewnątrz modalu */}
               <div className="flex items-center justify-end gap-2.5 border-t border-zinc-800 pt-4 mt-3 shrink-0">
                 <button
                   type="button"
@@ -2318,7 +2460,7 @@ export default function ShopPage() {
                                 {Number(order.total_amount).toFixed(2)} PLN
                               </span>
                               <span className="block text-[10px] text-zinc-500 uppercase">
-                                AutoPay Online
+                                {order.payment_method === 'Portfel' ? '👛 Portfel' : 'AutoPay Online'}
                               </span>
                             </td>
 
@@ -2405,7 +2547,7 @@ export default function ShopPage() {
         </div>
       )}
 
-      {/* Drawer Koszyka i Realizacji Zamówienia */}
+      {/* Drawer Koszyka i Realizacji Zamówienia z wyborem AutoPay / Portfel */}
       {isCartOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
           <div
@@ -2437,8 +2579,8 @@ export default function ShopPage() {
               {orderSuccess && (
                 <div className="my-2 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-emerald-400">
                   <CheckCircle2 className="h-5 w-5 shrink-0" />
-                  <p className="text-xs font-medium">
-                    Zamówienie zostało zarejestrowane! Przekierowywanie do płatności AutoPay...
+                  <p className="text-xs font-medium leading-relaxed">
+                    {orderSuccessMessage}
                   </p>
                 </div>
               )}
@@ -2607,29 +2749,71 @@ export default function ShopPage() {
                     />
                   </div>
 
+                  {/* Wybór metody płatności: AutoPay lub Portfel */}
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center justify-between mb-2">
                       <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                        <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Metoda płatności
+                        <CreditCard className="h-3.5 w-3.5 text-amber-400" /> Wybierz metodę płatności
                       </label>
-                      <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-                        Bramka AutoPay
+                      <span className="text-[10px] font-mono text-zinc-400">
+                        Portfel: <strong className={clientWalletBalance >= cartTotal ? 'text-emerald-400' : 'text-rose-400'}>{clientWalletBalance.toFixed(2)} PLN</strong>
                       </span>
                     </div>
-                    
-                    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 flex items-center justify-between gap-3 shadow-inner">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400">
-                          <CreditCard className="h-5 w-5" />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {/* Opcja 1: AutoPay */}
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, paymentMethod: 'autopay' })}
+                        className={`rounded-2xl border p-3.5 text-left transition-all cursor-pointer flex flex-col justify-between ${
+                          formData.paymentMethod === 'autopay'
+                            ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/30'
+                            : 'border-zinc-800 bg-zinc-900/80 hover:border-zinc-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <CreditCard className={`h-4 w-4 ${formData.paymentMethod === 'autopay' ? 'text-amber-400' : 'text-zinc-400'}`} />
+                            <span className="text-xs font-black uppercase tracking-wider text-white">AutoPay</span>
+                          </div>
+                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-400">
+                            Online
+                          </span>
                         </div>
-                        <div>
-                          <p className="text-xs font-bold text-white">Płatność online przez AutoPay S.A.</p>
-                          <p className="text-[10px] text-zinc-300">BLIK, karta płatnicza, Apple Pay i szybki przelew</p>
+                        <p className="text-[11px] text-zinc-400 mt-2">
+                          BLIK, karta płatnicza, Apple Pay i szybki przelew
+                        </p>
+                      </button>
+
+                      {/* Opcja 2: Portfel */}
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, paymentMethod: 'wallet' })}
+                        className={`rounded-2xl border p-3.5 text-left transition-all cursor-pointer flex flex-col justify-between ${
+                          formData.paymentMethod === 'wallet'
+                            ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/30'
+                            : 'border-zinc-800 bg-zinc-900/80 hover:border-zinc-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Wallet className={`h-4 w-4 ${formData.paymentMethod === 'wallet' ? 'text-amber-400' : 'text-zinc-400'}`} />
+                            <span className="text-xs font-black uppercase tracking-wider text-white">Mój Portfel</span>
+                          </div>
+                          <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold font-mono ${
+                            clientWalletBalance >= cartTotal
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : 'bg-rose-500/20 text-rose-400'
+                          }`}>
+                            {clientWalletBalance.toFixed(2)} PLN
+                          </span>
                         </div>
-                      </div>
-                      <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30 shrink-0">
-                        AutoPay S.A.
-                      </span>
+                        <p className="text-[11px] text-zinc-400 mt-2">
+                          {clientWalletBalance >= cartTotal
+                            ? 'Środki zostaną natychmiast pobrane z salda portfela'
+                            : 'Niewystarczające środki w portfelu na ten zakup'}
+                        </p>
+                      </button>
                     </div>
                   </div>
                 </form>
@@ -2669,13 +2853,22 @@ export default function ShopPage() {
                   <button
                     type="submit"
                     form="checkout-form"
-                    disabled={isCheckingOut || !isMemberLoggedIn}
+                    disabled={
+                      isCheckingOut || 
+                      !isMemberLoggedIn || 
+                      (formData.paymentMethod === 'wallet' && clientWalletBalance < cartTotal)
+                    }
                     className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-amber-500 py-3.5 text-sm font-black uppercase tracking-wider text-black transition-all hover:bg-amber-400 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
                   >
                     {isCheckingOut ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        Przekierowywanie do AutoPay...
+                        Przetwarzanie...
+                      </>
+                    ) : formData.paymentMethod === 'wallet' ? (
+                      <>
+                        <Wallet className="h-4 w-4" />
+                        Opłać z portfela ({cartTotal.toFixed(2)} PLN)
                       </>
                     ) : (
                       <>
