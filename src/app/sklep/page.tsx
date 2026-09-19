@@ -145,6 +145,11 @@ export default function ShopPage() {
 
   const [adminEditMode, setAdminEditMode] = useState<boolean>(true);
 
+  // Efektywny tryb administratora (wyłączony w podglądzie klubowicza)
+  const isEffectiveAdmin = useMemo(() => {
+    return isAdmin && adminEditMode;
+  }, [isAdmin, adminEditMode]);
+
   // Filtrowanie i wyszukiwanie w sklepie
   const [selectedCategory, setSelectedCategory] = useState<string>('Wszystko');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -314,30 +319,45 @@ export default function ShopPage() {
     fetchProducts();
   }, []);
 
-  // Pobieranie zamówień z Supabase
+  // Pobieranie rejestru zamówień ze ścisłą separacją uprawnień i odpornością na podwójne maile
   const fetchOrderHistory = async () => {
     try {
       setHistoryLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      const currentEmail = (
-        user?.email || 
-        formData.customerEmail || 
-        (typeof window !== 'undefined' ? localStorage.getItem('fm_user_email') : '') || 
-        ''
-      ).toLowerCase().trim();
+
+      const candidateEmails = Array.from(
+        new Set(
+          [
+            user?.email,
+            formData.customerEmail,
+            currentClientRecord?.['E-mail'],
+            currentClientRecord?.email,
+            typeof window !== 'undefined' ? localStorage.getItem('fm_user_email') : null,
+          ]
+            .filter((e): e is string => Boolean(e && typeof e === 'string' && e.trim().length > 0))
+            .map((e) => e.toLowerCase().trim())
+        )
+      );
 
       let query = supabase
         .from('orders')
         .select('*, order_items(*)')
         .order('created_at', { ascending: false });
 
-      if (!isAdmin || historyFilter === 'my') {
-        if (!currentEmail) {
+      // Jeśli nie jesteśmy w aktywnym trybie admina lub włączono "Moje zakupy":
+      if (!isEffectiveAdmin || historyFilter === 'my') {
+        if (candidateEmails.length === 0) {
           setOrdersHistory([]);
           setHistoryLoading(false);
           return;
         }
-        query = query.eq('customer_email', currentEmail);
+
+        if (candidateEmails.length === 1) {
+          query = query.ilike('customer_email', candidateEmails[0]);
+        } else {
+          const orFilter = candidateEmails.map((e) => `customer_email.ilike.${e}`).join(',');
+          query = query.or(orFilter);
+        }
       }
 
       const { data, error: ordersErr } = await query;
@@ -355,14 +375,14 @@ export default function ShopPage() {
     if (isHistoryOpen) {
       fetchOrderHistory();
     }
-  }, [isHistoryOpen, historyFilter]);
+  }, [isHistoryOpen, historyFilter, isEffectiveAdmin]);
 
   // Zmiana statusu opłacenia zamówienia przez administratora
   const handleToggleOrderStatus = async (orderId: string, currentStatus: string) => {
-    if (!isAdmin) return;
+    if (!isEffectiveAdmin) return;
     const isCurrentlyPaid = 
       currentStatus?.toLowerCase() === 'opłacone' || 
-      currentStatus?.toLowerCase() === 'paid' ||
+      currentStatus?.toLowerCase() === 'paid' || 
       currentStatus?.toLowerCase() === 'completed';
 
     const newStatus = isCurrentlyPaid ? 'pending' : 'opłacone';
@@ -422,7 +442,7 @@ export default function ShopPage() {
   // Filtrowanie produktów
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
-      if (!isAdmin || !adminEditMode) {
+      if (!isEffectiveAdmin) {
         if (!item.is_active) return false;
       }
 
@@ -434,7 +454,7 @@ export default function ShopPage() {
         item.category.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     });
-  }, [products, selectedCategory, searchQuery, isAdmin, adminEditMode]);
+  }, [products, selectedCategory, searchQuery, isEffectiveAdmin]);
 
   // Akcje koszyka
   const addToCart = (product: Product) => {
@@ -551,7 +571,6 @@ export default function ShopPage() {
       isSubmittingAutopayRef.current = true;
       setIsCheckingOut(true);
 
-      // Uniwersalny status początkowy zgodny z constraintami bazy danych
       const orderPayload = {
         customer_name: formData.customerName.trim(),
         customer_email: formData.customerEmail.trim(),
@@ -836,7 +855,7 @@ export default function ShopPage() {
               <h1 className="text-2xl font-black tracking-tight text-white sm:text-3xl">
                 Sklep Klubowy
               </h1>
-              {isAdmin && (
+              {isEffectiveAdmin && (
                 <span className="flex items-center gap-1 rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-400 border border-amber-500/30">
                   <ShieldCheck className="h-3 w-3" />
                   Admin
@@ -847,19 +866,23 @@ export default function ShopPage() {
           </div>
         </div>
 
-        {/* Przyciski: Tabela zamówień + Koszyk */}
+        {/* Przyciski: Tabela zamówień (dla admina) / Moje zamówienia (dla klubowicza) + Koszyk */}
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => {
-              if (isAdmin) setHistoryFilter('all');
+              if (isEffectiveAdmin) {
+                setHistoryFilter('all');
+              } else {
+                setHistoryFilter('my');
+              }
               setIsHistoryOpen(true);
             }}
             className="relative flex items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-3 text-sm font-bold text-zinc-200 ring-1 ring-zinc-800 transition-all hover:bg-zinc-800 hover:text-white active:scale-95 cursor-pointer"
-            aria-label="Rejestr zamówień"
-            title={isAdmin ? "Tabela wszystkich zamówień klubowiczów" : "Twoja historia zakupów"}
+            aria-label={isEffectiveAdmin ? "Tabela zamówień" : "Twoje zamówienia"}
+            title={isEffectiveAdmin ? "Tabela wszystkich zamówień klubowiczów" : "Twoja historia zakupów"}
           >
-            {isAdmin ? <FileSpreadsheet className="h-5 w-5 text-amber-400" /> : <History className="h-5 w-5 text-amber-400" />}
-            <span className="hidden sm:inline">{isAdmin ? 'Tabela zamówień' : 'Zamówienia'}</span>
+            {isEffectiveAdmin ? <FileSpreadsheet className="h-5 w-5 text-amber-400" /> : <History className="h-5 w-5 text-amber-400" />}
+            <span className="hidden sm:inline">{isEffectiveAdmin ? 'Tabela zamówień' : 'Moje zamówienia'}</span>
           </button>
 
           <button
@@ -900,21 +923,29 @@ export default function ShopPage() {
             </div>
 
             <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setHistoryFilter('all');
-                  setIsHistoryOpen(true);
-                }}
-                className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-amber-500/40 px-3.5 py-2 text-xs font-bold text-amber-300 transition-all hover:bg-zinc-800 shadow-sm cursor-pointer"
-              >
-                <FileSpreadsheet className="h-4 w-4 text-amber-400" />
-                Tabela Zamówień
-              </button>
+              {adminEditMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryFilter('all');
+                    setIsHistoryOpen(true);
+                  }}
+                  className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-amber-500/40 px-3.5 py-2 text-xs font-bold text-amber-300 transition-all hover:bg-zinc-800 shadow-sm cursor-pointer"
+                >
+                  <FileSpreadsheet className="h-4 w-4 text-amber-400" />
+                  Tabela Zamówień
+                </button>
+              )}
 
               <button
                 type="button"
-                onClick={() => setAdminEditMode(!adminEditMode)}
+                onClick={() => {
+                  const nextMode = !adminEditMode;
+                  setAdminEditMode(nextMode);
+                  if (!nextMode) {
+                    setHistoryFilter('my');
+                  }
+                }}
                 className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all shadow-sm cursor-pointer ${
                   adminEditMode 
                     ? 'bg-zinc-900 text-zinc-200 border border-zinc-700 hover:bg-zinc-800' 
@@ -969,7 +1000,7 @@ export default function ShopPage() {
                 <button
                   onClick={() => setSelectedCategory(cat)}
                   className={`whitespace-nowrap rounded-xl py-2 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    isAdmin && adminEditMode && cat !== 'Wszystko' ? 'pl-3.5 pr-7' : 'px-4'
+                    isEffectiveAdmin && cat !== 'Wszystko' ? 'pl-3.5 pr-7' : 'px-4'
                   } ${
                     isSelected
                       ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
@@ -979,7 +1010,7 @@ export default function ShopPage() {
                   {cat}
                 </button>
 
-                {isAdmin && adminEditMode && cat !== 'Wszystko' && (
+                {isEffectiveAdmin && cat !== 'Wszystko' && (
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1059,7 +1090,7 @@ export default function ShopPage() {
                     </div>
 
                     {/* Narzędzia edycji na karcie produktu */}
-                    {isAdmin && adminEditMode && (
+                    {isEffectiveAdmin && (
                       <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-black/85 p-1.5 border border-zinc-700 shadow-xl">
                         <button
                           type="button"
@@ -1094,7 +1125,7 @@ export default function ShopPage() {
                       <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
                         {item.category}
                       </span>
-                      {isAdmin && adminEditMode && (
+                      {isEffectiveAdmin && (
                         <span className="text-xs text-zinc-400 font-mono">
                           Magazyn: <strong className={item.stock > 0 ? 'text-zinc-200' : 'text-rose-400'}>{item.stock} szt.</strong>
                         </span>
@@ -1420,17 +1451,17 @@ export default function ShopPage() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-4 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
-                  {isAdmin ? <FileSpreadsheet className="h-6 w-6" /> : <Receipt className="h-6 w-6" />}
+                  {isEffectiveAdmin && historyFilter === 'all' ? <FileSpreadsheet className="h-6 w-6" /> : <Receipt className="h-6 w-6" />}
                 </div>
                 <div>
                   <h2 className="text-xl font-black text-white flex items-center gap-2">
-                    {isAdmin && historyFilter === 'all' ? 'Tabela Zamówień Klubowych' : 'Twoja Historia Zamówień'}
+                    {isEffectiveAdmin && historyFilter === 'all' ? 'Tabela Zamówień Klubowych' : 'Twoja Historia Zamówień'}
                     <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-400">
                       {filteredOrdersHistory.length}
                     </span>
                   </h2>
                   <p className="text-xs text-zinc-400">
-                    {isAdmin && historyFilter === 'all' 
+                    {isEffectiveAdmin && historyFilter === 'all' 
                       ? 'Pełny rejestr kupionych pozycji z danymi klubowiczów i statusem wpłat' 
                       : 'Zestawienie Twoich zakupów i opłaconych pakietów'}
                   </p>
@@ -1438,7 +1469,8 @@ export default function ShopPage() {
               </div>
 
               <div className="flex items-center gap-2.5">
-                {isAdmin && (
+                {/* Przyciski filtrów widoczne WYŁĄCZNIE dla aktywnego administratora */}
+                {isEffectiveAdmin && (
                   <div className="flex items-center rounded-xl bg-zinc-900 p-1 border border-zinc-800">
                     <button
                       type="button"
@@ -1476,7 +1508,7 @@ export default function ShopPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
                 <input
                   type="text"
-                  placeholder={isAdmin ? "Filtruj tabelę po imieniu, nazwisku, mailu lub produkcie..." : "Szukaj w swoich zamówieniach..."}
+                  placeholder={isEffectiveAdmin && historyFilter === 'all' ? "Filtruj tabelę po imieniu, nazwisku, mailu lub produkcie..." : "Szukaj w swoich zamówieniach..."}
                   value={historySearchQuery}
                   onChange={(e) => setHistorySearchQuery(e.target.value)}
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900/80 py-2 pl-9 pr-8 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
@@ -1509,7 +1541,7 @@ export default function ShopPage() {
                         <th className="py-3 px-4">Produkt</th>
                         <th className="py-3 px-4">Kwota</th>
                         <th className="py-3 px-4 text-center">Czy opłacono</th>
-                        {isAdmin && <th className="py-3 px-4 text-right">Akcja</th>}
+                        {isEffectiveAdmin && <th className="py-3 px-4 text-right">Akcja</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60">
@@ -1597,7 +1629,7 @@ export default function ShopPage() {
                               )}
                             </td>
 
-                            {isAdmin && (
+                            {isEffectiveAdmin && (
                               <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
                                 <button
                                   type="button"
@@ -1624,7 +1656,7 @@ export default function ShopPage() {
                   <FileSpreadsheet className="mx-auto h-12 w-12 text-zinc-700" />
                   <p className="mt-3 text-sm text-zinc-300 font-bold">Brak zamówień do wyświetlenia</p>
                   <p className="text-xs text-zinc-500 mt-1">
-                    {isAdmin && historyFilter === 'all' 
+                    {isEffectiveAdmin && historyFilter === 'all' 
                       ? 'W klubie nie ma jeszcze zarejestrowanych zamówień.' 
                       : 'Nie złożyłeś jeszcze żadnego zamówienia na tym koncie.'}
                   </p>
