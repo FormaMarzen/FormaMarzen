@@ -157,6 +157,12 @@ export default function ClubChat() {
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
+  // Unifikacja tożsamości Administratora dostępna w całym komponencie
+  const adminClientIds = klienci
+    .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
+    .map((k: any) => String(k.id));
+  const allAdminIds = Array.from(new Set([...adminClientIds, "999999999", String(SYSTEM_ID)]));
+
   const scrollToBottom = () => {
     if (chatInsideTab === "messages") {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -185,7 +191,6 @@ export default function ClubChat() {
     if (!currentUserId) return;
     const uid = secondaryUserId || currentUserId;
 
-    // Odczyt preferencji wielkości czcionki
     const savedFontSize = localStorage.getItem(`chat_font_size_scale_${uid}`) || localStorage.getItem("chat_font_size_scale");
     if (savedFontSize === "normal" || savedFontSize === "large" || savedFontSize === "xlarge") {
       setFontSizeScale(savedFontSize);
@@ -467,6 +472,7 @@ export default function ClubChat() {
       console.error("Błąd usuwania grupy:", err);
     }
   };
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       const handleResize = () => {
@@ -875,7 +881,6 @@ export default function ClubChat() {
           }
         } else if (primaryProfile) {
           setCurrentUserId(primaryProfile.id);
-          // Jeśli klubowicz posiada archiwalny rekord pod tym samym mailem, zapisujemy go jako secondary
           if (myProfiles.length > 1) {
             setSecondaryUserId(myProfiles[1].id);
           }
@@ -930,6 +935,61 @@ export default function ClubChat() {
     }
   };
 
+  // POBIERANIE PEŁNEJ HISTORII DEDYKOWANEJ DLA OTWARTEJ ROZMOWY 1:1 (BEZ LIMITU POSTGREST)
+  const fetchDirectMessages = async (targetUser: any) => {
+    if (!currentUserId || !targetUser) return;
+    try {
+      const myIds = [
+        String(currentUserId),
+        secondaryUserId ? String(secondaryUserId) : null,
+        isAdmin ? String(SYSTEM_ID) : null,
+        isAdmin ? "999999999" : null,
+      ].filter(Boolean);
+
+      const isSys = Number(targetUser.id) === SYSTEM_ID;
+      const isTargetAdmin =
+        allAdminIds.includes(String(targetUser.id)) ||
+        ADMIN_EMAILS.includes(targetUser.email) ||
+        targetUser.name?.toLowerCase().includes("maciej kłaput");
+
+      let query = supabase
+        .from("czat_wiadomosci")
+        .select("*")
+        .is("grupa_id", null)
+        .order("created_at", { ascending: false })
+        .limit(3000);
+
+      if (isSys) {
+        const emailFilter = currentUserEmail ? `,odbiorca_email.eq.${currentUserEmail}` : "";
+        query = query.or(
+          `nadawca_id.eq.${SYSTEM_ID},nadawca_id.is.null,nadawca_rola.eq.system,odbiorca_id.in.(${myIds.join(",")})${emailFilter}`
+        );
+      } else {
+        const adminSenders = isTargetAdmin || isAdmin ? allAdminIds : [];
+        const participantIds = Array.from(
+          new Set([...myIds, ...adminSenders, String(targetUser.id)])
+        );
+        query = query
+          .in("nadawca_id", participantIds)
+          .in("odbiorca_id", participantIds);
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        setMessages((prev) => {
+          const map = new Map();
+          prev.forEach((m) => map.set(m.id, m));
+          data.forEach((m) => map.set(m.id, m));
+          return Array.from(map.values()).sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+        });
+      }
+    } catch (err) {
+      console.error("Błąd pobierania historii rozmowy 1:1:", err);
+    }
+  };
+
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
@@ -945,7 +1005,7 @@ export default function ClubChat() {
         .from("czat_wiadomosci")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(5000);
+        .limit(3000);
 
       if (!isAdmin) {
         const emailFilter = currentUserEmail ? `,odbiorca_email.eq.${currentUserEmail}` : "";
@@ -956,10 +1016,18 @@ export default function ClubChat() {
 
       const { data, error } = await query;
       if (!error && data) {
-        setMessages([...data].reverse());
+        // Bezpieczne scalanie bez usuwania starszych wiadomości z pamięci
+        setMessages((prev) => {
+          const map = new Map();
+          prev.forEach((m) => map.set(m.id, m));
+          data.forEach((m) => map.set(m.id, m));
+          return Array.from(map.values()).sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+        });
       }
     } catch (err) {
-      console.error("Błąd pobierania wiadomości:", err);
+      console.error("Błąd pobierania wiadomości ogólnych:", err);
     }
   };
   // REALTIME SYNCHRONIZACJA Z BROADCASTEM PISANIA I ZAPASOWYM POLLINGIEM
@@ -1028,7 +1096,9 @@ export default function ClubChat() {
 
             setMessages((prev) => {
               if (prev.some((m) => m.id === newRow.id)) return prev;
-              return [...prev, newRow];
+              return [...prev, newRow].sort(
+                (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
             });
 
             if (selectedGroupRef.current && String(newRow.grupa_id) === String(selectedGroupRef.current.id)) {
@@ -1102,6 +1172,9 @@ export default function ClubChat() {
         if (selectedGroupRef.current?.id) {
           fetchGroupMessages(selectedGroupRef.current.id);
         }
+        if (selectedUserRef.current) {
+          fetchDirectMessages(selectedUserRef.current);
+        }
       }
     }, 3500);
 
@@ -1126,6 +1199,12 @@ export default function ClubChat() {
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
+
+  useEffect(() => {
+    if (selectedUser?.id) {
+      fetchDirectMessages(selectedUser);
+    }
+  }, [selectedUser?.id]);
 
   const handleTypingBroadcast = () => {
     const now = Date.now();
@@ -1160,8 +1239,8 @@ export default function ClubChat() {
 
         const isSys = Number(selectedUser.id) === SYSTEM_ID;
         const isTargetAdmin =
+          allAdminIds.includes(String(selectedUser.id)) ||
           ADMIN_EMAILS.includes(selectedUser.email) ||
-          Number(selectedUser.id) === 999999999 ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
         // 1. Natychmiastowe optymistyczne zerowanie plakietki w stanie lokalnym
@@ -1174,7 +1253,7 @@ export default function ClubChat() {
             const isTargetSender = isSys
               ? m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system"
               : isTargetAdmin
-              ? sId === String(selectedUser.id) || sId === "999999999" || sId === String(SYSTEM_ID)
+              ? allAdminIds.includes(sId) || m.is_system || m.nadawca_rola === "system"
               : sId === String(selectedUser.id);
 
             const isTargetReceiver =
@@ -1211,14 +1290,13 @@ export default function ClubChat() {
 
             await sysQuery;
           } else if (isTargetAdmin) {
-            const adminSenders = [String(selectedUser.id), "999999999", String(SYSTEM_ID)];
             await supabase
               .from("czat_wiadomosci")
               .update({
                 przeczytana: true,
                 przeczytana_at: new Date().toISOString(),
               })
-              .in("nadawca_id", adminSenders)
+              .in("nadawca_id", allAdminIds)
               .in("odbiorca_id", myEffective)
               .eq("przeczytana", false);
           } else {
@@ -1237,6 +1315,7 @@ export default function ClubChat() {
         }
 
         fetchMessages();
+        fetchDirectMessages(selectedUser);
       };
       markAsRead();
     }
@@ -1447,7 +1526,14 @@ export default function ClubChat() {
       } else {
         if (data && data.length > 0) {
           const sentRow = data[0];
-          setMessages((prev) => (prev.some((m) => m.id === sentRow.id) ? prev : [...prev, sentRow]));
+          setMessages((prev) => {
+            const map = new Map();
+            prev.forEach((m) => map.set(m.id, m));
+            map.set(sentRow.id, sentRow);
+            return Array.from(map.values()).sort(
+              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+          });
         }
 
         const targetKey = String(selectedUser.id);
@@ -1506,6 +1592,7 @@ export default function ClubChat() {
     if (!error) {
       fetchMessages();
       if (selectedGroup) fetchGroupMessages(selectedGroup.id);
+      if (selectedUser) fetchDirectMessages(selectedUser);
     }
     setActiveMessageMenuId(null);
   };
@@ -1542,6 +1629,7 @@ export default function ClubChat() {
     if (!error) {
       fetchMessages();
       if (selectedGroup) fetchGroupMessages(selectedGroup.id);
+      if (selectedUser) fetchDirectMessages(selectedUser);
     }
     setActiveMessageMenuId(null);
   };
@@ -1674,6 +1762,7 @@ export default function ClubChat() {
       fetchGroupsAndTrainings();
     }
   };
+
   const handleAddMembersToGroup = async () => {
     if (!selectedGroup || selectedInviteMembers.length === 0) return;
 
@@ -1936,7 +2025,6 @@ export default function ClubChat() {
       console.error("Błąd aktualizacji grupy:", err);
     }
   };
-
   if (!currentUserId) return null;
 
   const effectiveIds = [
@@ -1946,19 +2034,13 @@ export default function ClubChat() {
     isAdmin ? "999999999" : null,
   ].filter(Boolean);
 
-  // UNIFIKACJA TOŻSAMOŚCI ADMINISTRATORA (ŁĄCZENIE 999999999, SYSTEM_ID I PROFILU MACIEJ KŁAPUT)
-  const adminClientIds = klienci
-    .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
-    .map((k: any) => String(k.id));
-  const allAdminIds = Array.from(new Set([...adminClientIds, "999999999", String(SYSTEM_ID)]));
-
   const isSelectedUserAdmin = selectedUser && (
     allAdminIds.includes(String(selectedUser.id)) ||
     ADMIN_EMAILS.includes(selectedUser.email) ||
     selectedUser.name?.toLowerCase().includes("maciej kłaput")
   );
 
-  // PRECYZYJNY FILTR WIADOMOŚCI 1:1 – HISTORIA NIGDY NIE ZNIKA PO PONOWNYM LOGOWANIU JOANNY
+  // PRECYZYJNY FILTR WIADOMOŚCI 1:1 – ODPORNY NA LIMIT POSTGREST I ROZDZIAŁ TOŻSAMOŚCI
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     if (m.grupa_id) return false;
@@ -2053,7 +2135,6 @@ export default function ClubChat() {
       }
 
       let otherId = isSenderMe ? rId : sId;
-      // Jeśli klubowicz pisze z tożsamością techniczną admina (999999999 / SYSTEM), mapujemy na ID konta Macieja
       if (!isAdmin && allAdminIds.includes(otherId)) {
         const maciejAccount = klienci.find((k: any) => ADMIN_EMAILS.includes(k.email));
         if (maciejAccount) otherId = String(maciejAccount.id);
@@ -2206,7 +2287,6 @@ export default function ClubChat() {
     (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
   ).length;
 
-  // CAŁKOWITA ILOŚĆ NIEPRZECZYTANYCH WIADOMOŚCI (BEZ TRENINGÓW)
   const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount;
 
   const formatLastSeen = (lastSeenString: string | null) => {
@@ -2656,7 +2736,6 @@ export default function ClubChat() {
         <button
           type="button"
           onClick={() => {
-            // Natychmiastowe zerowanie plakietki przy otwarciu wątku
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.grupa_id || m.przeczytana) return m;
@@ -2681,6 +2760,7 @@ export default function ClubChat() {
             );
             selectedUserRef.current = user;
             setSelectedUser(user);
+            fetchDirectMessages(user);
             setChatInsideTab("messages");
           }}
           className="flex items-center gap-3 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
@@ -2879,7 +2959,8 @@ export default function ClubChat() {
     : selectedUser
     ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
     : false;
-    return (
+
+  return (
     <div
       ref={containerRef}
       style={
@@ -3265,7 +3346,6 @@ export default function ClubChat() {
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3 sm:p-3.5 space-y-2.5 bg-slate-50/50 min-h-0">
               <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-2 shrink-0">
-                {/* Dwie główne zakładki: Prywatne i Grupy */}
                 <div className="flex-1 grid grid-cols-2 gap-1 bg-slate-200/90 p-1 rounded-xl">
                   <button
                     type="button"
@@ -3425,6 +3505,7 @@ export default function ClubChat() {
                                   onClick={() => {
                                     selectedUserRef.current = user;
                                     setSelectedUser(user);
+                                    fetchDirectMessages(user);
                                     setChatInsideTab("messages");
                                   }}
                                   className="flex items-center gap-2.5 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
@@ -3697,7 +3778,7 @@ export default function ClubChat() {
                 </div>
               )}
             </div>
-          ) : chatInsideTab === "media" ? (
+            ) : chatInsideTab === "media" ? (
             /* WIDOK GALERII ZDJĘĆ */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3 min-h-0">
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2 shrink-0">
