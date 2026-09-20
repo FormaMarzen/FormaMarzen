@@ -49,8 +49,8 @@ export default function ClubChat() {
   const [fontSizeScale, setFontSizeScale] = useState<"normal" | "large" | "xlarge">("normal");
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
 
-  // Główne zakładki widoku listy: Prywatne | Grupy | Treningi
-  const [activeTab, setActiveTab] = useState<"direct" | "groups" | "trainings">("trainings");
+  // Główne zakładki widoku listy: wyłącznie Prywatne | Grupy (usunięto Treningi)
+  const [activeTab, setActiveTab] = useState<"direct" | "groups">("direct");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public" | "closed">("my");
 
   // Rozwijanie sekcji czatów grupowych w zakładce Prywatne
@@ -107,10 +107,6 @@ export default function ClubChat() {
   const [messages, setMessages] = useState<any[]>([]);
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
-
-  // Stany dla grafiku zajęć i zapisów
-  const [grafikZajec, setGrafikZajec] = useState<any[]>([]);
-  const [zapisyZajec, setZapisyZajec] = useState<any[]>([]);
 
   const [newMessage, setNewMessage] = useState("");
 
@@ -196,8 +192,10 @@ export default function ClubChat() {
     }
 
     const savedActiveTab = localStorage.getItem(`chat_last_tab_${uid}`);
-    if (savedActiveTab === "direct" || savedActiveTab === "groups" || savedActiveTab === "trainings") {
+    if (savedActiveTab === "direct" || savedActiveTab === "groups") {
       setActiveTab(savedActiveTab);
+    } else {
+      setActiveTab("direct");
     }
 
     const savedArchived = localStorage.getItem(`chat_archived_${uid}`);
@@ -266,7 +264,7 @@ export default function ClubChat() {
     return "text-xs";
   };
 
-  const handleTabChange = (tab: "direct" | "groups" | "trainings") => {
+  const handleTabChange = (tab: "direct" | "groups") => {
     setActiveTab(tab);
     const uid = secondaryUserId || currentUserId;
     if (uid) {
@@ -365,6 +363,7 @@ export default function ClubChat() {
     setReplyingToMessage(null);
     setTypingUsers({});
   };
+
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
     const newOrder = [...categoriesOrder];
     const targetIndex = direction === "up" ? index - 1 : index + 1;
@@ -468,7 +467,6 @@ export default function ClubChat() {
       console.error("Błąd usuwania grupy:", err);
     }
   };
-
   useEffect(() => {
     if (typeof window !== "undefined") {
       const handleResize = () => {
@@ -660,10 +658,9 @@ export default function ClubChat() {
           adminSubs.forEach((s: any) => addSub(s.subscription));
         }
 
-        const { data: adminClients } = await supabase
-          .from("klienci")
-          .select("push_subscription")
-          .in("E-mail", ADMIN_EMAILS);
+        const { data: adminClients } = await (supabase.from("klienci") as any)
+          .select('push_subscription, "E-mail"')
+          .in('"E-mail"', ADMIN_EMAILS);
 
         if (adminClients) {
           adminClients.forEach((c: any) => addSub(c.push_subscription));
@@ -718,32 +715,26 @@ export default function ClubChat() {
     senderId: string,
     senderName: string,
     groupName: string,
-    messageText: string,
-    trainingObj?: any
+    messageText: string
   ) => {
     try {
       let recipientIds: string[] = [];
 
-      if (trainingObj) {
-        const signups = getSignupsForTraining(trainingObj);
-        recipientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
-      } else {
-        const { data: groupData } = await supabase
-          .from("czat_grupy")
-          .select("czlonkowie_ids, wyciszeni_ids, zbanowani_ids")
-          .eq("id", groupId)
-          .single();
+      const { data: groupData } = await supabase
+        .from("czat_grupy")
+        .select("czlonkowie_ids, wyciszeni_ids, zbanowani_ids")
+        .eq("id", groupId)
+        .single();
 
-        if (groupData) {
-          let rawMembers = groupData.czlonkowie_ids;
-          if (typeof rawMembers === "string") {
-            try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
-          }
-          const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
-          const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
-          const banned = Array.isArray(groupData.zbanowani_ids) ? groupData.zbanowani_ids.map(String) : [];
-          recipientIds = members.filter((id) => id && !muted.includes(id) && !banned.includes(id));
+      if (groupData) {
+        let rawMembers = groupData.czlonkowie_ids;
+        if (typeof rawMembers === "string") {
+          try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
         }
+        const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
+        const muted = Array.isArray(groupData.wyciszeni_ids) ? groupData.wyciszeni_ids.map(String) : [];
+        const banned = Array.isArray(groupData.zbanowani_ids) ? groupData.zbanowani_ids.map(String) : [];
+        recipientIds = members.filter((id) => id && !muted.includes(id) && !banned.includes(id));
       }
 
       recipientIds = recipientIds.filter(
@@ -829,9 +820,8 @@ export default function ClubChat() {
       const adminLogged = ADMIN_EMAILS.includes(userEmail);
       setIsAdmin(adminLogged);
 
-      const { data: klienciData } = await supabase
-        .from("klienci")
-        .select("*")
+      const { data: klienciData } = await (supabase.from("klienci") as any)
+        .select('*')
         .order("id", { ascending: false })
         .limit(5000);
 
@@ -866,7 +856,8 @@ export default function ClubChat() {
 
         setKlienci(allUsers);
 
-        const myProfile = enriched.find((c: any) => c.email === userEmail);
+        const myProfiles = enriched.filter((c: any) => c.email === userEmail);
+        const primaryProfile = myProfiles[0];
 
         if (adminLogged) {
           setCurrentUserId(999999999);
@@ -882,11 +873,15 @@ export default function ClubChat() {
             setSecondaryUserId(maciejClient.id);
             updateLastSeen(maciejClient.id);
           }
-        } else if (myProfile) {
-          setCurrentUserId(myProfile.id);
-          setCurrentUserName(myProfile.name);
-          setCurrentUserAvatar(myProfile.avatar);
-          updateLastSeen(myProfile.id);
+        } else if (primaryProfile) {
+          setCurrentUserId(primaryProfile.id);
+          // Jeśli klubowicz posiada archiwalny rekord pod tym samym mailem, zapisujemy go jako secondary
+          if (myProfiles.length > 1) {
+            setSecondaryUserId(myProfiles[1].id);
+          }
+          setCurrentUserName(primaryProfile.name);
+          setCurrentUserAvatar(primaryProfile.avatar);
+          updateLastSeen(primaryProfile.id);
         }
       }
     };
@@ -911,23 +906,8 @@ export default function ClubChat() {
           }
         }
       }
-
-      const { data: grafikData } = await supabase
-        .from("grafik_zajec")
-        .select("*")
-        .order("start", { ascending: true });
-
-      if (grafikData) setGrafikZajec(grafikData);
-
-      const { data: zapisyData } = await supabase
-        .from("zapisy_zajec")
-        .select("*")
-        .order("id", { ascending: false })
-        .limit(10000);
-
-      if (zapisyData) setZapisyZajec(zapisyData);
     } catch (err) {
-      console.error("Błąd pobierania danych grup i treningów:", err);
+      console.error("Błąd pobierania grup:", err);
     }
   };
 
@@ -982,7 +962,6 @@ export default function ClubChat() {
       console.error("Błąd pobierania wiadomości:", err);
     }
   };
-
   // REALTIME SYNCHRONIZACJA Z BROADCASTEM PISANIA I ZAPASOWYM POLLINGIEM
   useEffect(() => {
     if (!currentUserId) return;
@@ -1115,12 +1094,6 @@ export default function ClubChat() {
       .on("postgres_changes", { event: "*", schema: "public", table: "czat_grupy" }, () => {
         fetchGroupsAndTrainings();
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "grafik_zajec" }, () => {
-        fetchGroupsAndTrainings();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "zapisy_zajec" }, () => {
-        fetchGroupsAndTrainings();
-      })
       .subscribe();
 
     const pollInterval = setInterval(() => {
@@ -1174,7 +1147,7 @@ export default function ClubChat() {
     });
   };
 
-  // OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE
+  // OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE (BŁYSKAWICZNE ZNIKANIE PLAKIETKI "1")
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -1186,7 +1159,12 @@ export default function ClubChat() {
         ].filter(Boolean);
 
         const isSys = Number(selectedUser.id) === SYSTEM_ID;
+        const isTargetAdmin =
+          ADMIN_EMAILS.includes(selectedUser.email) ||
+          Number(selectedUser.id) === 999999999 ||
+          selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
+        // 1. Natychmiastowe optymistyczne zerowanie plakietki w stanie lokalnym
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1195,6 +1173,8 @@ export default function ClubChat() {
 
             const isTargetSender = isSys
               ? m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system"
+              : isTargetAdmin
+              ? sId === String(selectedUser.id) || sId === "999999999" || sId === String(SYSTEM_ID)
               : sId === String(selectedUser.id);
 
             const isTargetReceiver =
@@ -1212,6 +1192,7 @@ export default function ClubChat() {
           })
         );
 
+        // 2. Aktualizacja w bazie Supabase
         try {
           if (isSys) {
             let sysQuery = supabase
@@ -1229,6 +1210,17 @@ export default function ClubChat() {
             }
 
             await sysQuery;
+          } else if (isTargetAdmin) {
+            const adminSenders = [String(selectedUser.id), "999999999", String(SYSTEM_ID)];
+            await supabase
+              .from("czat_wiadomosci")
+              .update({
+                przeczytana: true,
+                przeczytana_at: new Date().toISOString(),
+              })
+              .in("nadawca_id", adminSenders)
+              .in("odbiorca_id", myEffective)
+              .eq("przeczytana", false);
           } else {
             await supabase
               .from("czat_wiadomosci")
@@ -1346,176 +1338,6 @@ export default function ClubChat() {
     }
   };
 
-  // OBSŁUGA GRAFIKU – PRECYZYJNA WERYFIKACJA CZY TRENING ODBYWA SIĘ DZISIAJ
-  const isTrainingToday = (training: any) => {
-    if (training.is_odwolane || training.is_usuniete) return false;
-    const now = new Date();
-    const jsDay = now.getDay();
-    const isoDay = jsDay === 0 ? 7 : jsDay;
-    const dayNames = ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"];
-    const dayShortNames = ["nie", "pon", "wt", "śr", "czw", "pt", "sob"];
-    const currentDayName = dayNames[jsDay];
-    const todayIso = now.toISOString().split("T")[0];
-
-    const specificDate = String(training.data || training.date || "").trim();
-    if (specificDate && (specificDate.includes(todayIso) || specificDate.includes(todayIso.split("-").reverse().join(".")))) {
-      return true;
-    }
-
-    if (!training.days) return false;
-
-    let daysArr: any[] = [];
-    if (Array.isArray(training.days)) {
-      daysArr = training.days;
-    } else if (typeof training.days === "object" && training.days !== null) {
-      daysArr = Object.entries(training.days)
-        .filter(([_, val]) => val)
-        .map(([key]) => key);
-    }
-
-    return daysArr.some((d: any) => {
-      const dStr = String(d).toLowerCase().trim();
-      return (
-        Number(d) === jsDay ||
-        Number(d) === isoDay ||
-        dStr === currentDayName ||
-        dStr.includes(dayShortNames[jsDay]) ||
-        dStr === String(jsDay) ||
-        dStr === String(isoDay)
-      );
-    });
-  };
-
-  // PRECYZYJNE DOPASOWANIE WSZYSTKICH ZAPISANYCH UCZESTNIKÓW NA DANY TRENING
-  const getSignupsForTraining = (training: any) => {
-    if (!training) return [];
-    const tId = String(training.id || "").trim();
-    const tTitle = String(training.title || training.nazwa || "").toLowerCase().trim();
-    const tStart = String(training.start || training.godzina || "").trim();
-    const now = new Date();
-    const todayIso = now.toISOString().split("T")[0];
-    const day = String(now.getDate()).padStart(2, "0");
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const year = String(now.getFullYear());
-    const todayPl = `${day}.${month}.${year}`;
-    const todayDash = `${day}-${month}-${year}`;
-
-    return zapisyZajec.filter((z: any) => {
-      if (!z || !z.klient_id) return false;
-      const st = String(z.status || "").toLowerCase().trim();
-      if (
-        st === "odwolany" ||
-        st === "odwołany" ||
-        st === "anulowany" ||
-        st === "cancelled" ||
-        st === "rezygnacja" ||
-        st === "wypisany"
-      ) {
-        return false;
-      }
-
-      const zClassId = String(z.zajecia_id || z.grafik_id || z.training_id || z.trening_id || "").trim();
-      if (zClassId && zClassId === tId) {
-        const zDate = String(z.data || z.data_zajec || z.date || z.created_at || "").trim();
-        if (zDate) {
-          return zDate.includes(todayIso) || zDate.includes(todayPl) || zDate.includes(todayDash);
-        }
-        return true;
-      }
-
-      const ck = String(z.class_key || "").trim();
-      if (!ck) return false;
-
-      if (ck === tId) return true;
-
-      const tokens = ck.split(/[_:-]/);
-      if (tokens.includes(tId)) {
-        const hasTodayDate = ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayDash);
-        const hasAnyDate = /\d{4}-\d{2}-\d{2}/.test(ck) || /\d{2}\.\d{2}\.\d{4}/.test(ck);
-        if (hasAnyDate) {
-          return hasTodayDate;
-        }
-        return true;
-      }
-
-      const ckLower = ck.toLowerCase();
-      const matchesTitle = tTitle && ckLower.includes(tTitle);
-      const matchesStart = tStart && (ck.includes(tStart) || ck.includes(tStart.replace(":", "-")));
-      const matchesDate = ck.includes(todayIso) || ck.includes(todayPl) || ck.includes(todayDash);
-
-      if (matchesTitle && matchesStart && matchesDate) {
-        return true;
-      }
-
-      return false;
-    });
-  };
-
-  // TWORZENIE ORAZ SYNCHRONIZACJA GRUPY CZATU TRENINGU
-  const getOrCreateTrainingGroup = async (training: any) => {
-    const todayStr = new Date().toLocaleDateString("pl-PL");
-    const groupName = `Trening: ${training.title || training.nazwa} (${todayStr} ${training.start || training.godzina})`;
-
-    const signups = getSignupsForTraining(training);
-    const signedClientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
-
-    const rawSenderId = secondaryUserId || currentUserId;
-    const parsedCreatorId = !isNaN(Number(rawSenderId)) ? Number(rawSenderId) : null;
-
-    const myClientId = String(secondaryUserId || currentUserId);
-    const adminIds = klienci
-      .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
-      .map((k: any) => String(k.id));
-
-    const allMembers = Array.from(new Set([...signedClientIds, myClientId, ...adminIds, "999999999", String(SYSTEM_ID)]));
-
-    const existing = groups.find(
-      (g: any) =>
-        g.nazwa === groupName ||
-        (g.typ === "trening" &&
-          g.nazwa?.includes(training.title || training.nazwa) &&
-          g.nazwa?.includes(training.start || training.godzina))
-    );
-
-    if (existing) {
-      let currentStoredRaw = existing.czlonkowie_ids;
-      if (typeof currentStoredRaw === "string") {
-        try { currentStoredRaw = JSON.parse(currentStoredRaw); } catch { currentStoredRaw = []; }
-      }
-      const currentStored = Array.isArray(currentStoredRaw) ? currentStoredRaw.map(String) : [];
-      const newCalculated = allMembers.map(String);
-
-      if (currentStored.length !== newCalculated.length || !newCalculated.every((id) => currentStored.includes(id))) {
-        await supabase
-          .from("czat_grupy")
-          .update({ czlonkowie_ids: allMembers })
-          .eq("id", existing.id);
-        existing.czlonkowie_ids = allMembers;
-      }
-      return existing;
-    }
-
-    const { data, error } = await supabase
-      .from("czat_grupy")
-      .insert([
-        {
-          nazwa: groupName,
-          kategoria: "Treningi",
-          tworca_id: parsedCreatorId,
-          czlonkowie_ids: allMembers,
-          typ: "trening",
-          ikona: "🏋️‍♂️",
-        },
-      ])
-      .select();
-
-    if (!error && data && data.length > 0) {
-      fetchGroupsAndTrainings();
-      return data[0];
-    }
-    return null;
-  };
-
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -1588,21 +1410,12 @@ export default function ClubChat() {
         setReplyingToMessage(null);
         updateLastSeen(senderId);
 
-        const isTrainingChat = selectedGroup.typ === "trening" || selectedGroup.nazwa?.startsWith("Trening:");
-        let matchedTraining = null;
-        if (isTrainingChat) {
-          matchedTraining =
-            grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title || t.nazwa) && selectedGroup.nazwa.includes(t.start || t.godzina)) ||
-            grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title || t.nazwa));
-        }
-
         sendGroupPushNotification(
           String(selectedGroup.id),
           String(senderId),
           currentUserName,
           selectedGroup.nazwa,
-          messageText || "📎 Załącznik",
-          matchedTraining
+          messageText || "📎 Załącznik"
         );
 
         if (targetReplyAuthorId && String(targetReplyAuthorId) !== String(senderId)) {
@@ -1664,6 +1477,7 @@ export default function ClubChat() {
 
     setIsUploading(false);
   };
+
   const handlePinMessage = async (msg: any) => {
     if (!isAdmin) return;
     const newStatus = !msg.przypinana;
@@ -1860,7 +1674,6 @@ export default function ClubChat() {
       fetchGroupsAndTrainings();
     }
   };
-
   const handleAddMembersToGroup = async () => {
     if (!selectedGroup || selectedInviteMembers.length === 0) return;
 
@@ -2133,6 +1946,19 @@ export default function ClubChat() {
     isAdmin ? "999999999" : null,
   ].filter(Boolean);
 
+  // UNIFIKACJA TOŻSAMOŚCI ADMINISTRATORA (ŁĄCZENIE 999999999, SYSTEM_ID I PROFILU MACIEJ KŁAPUT)
+  const adminClientIds = klienci
+    .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
+    .map((k: any) => String(k.id));
+  const allAdminIds = Array.from(new Set([...adminClientIds, "999999999", String(SYSTEM_ID)]));
+
+  const isSelectedUserAdmin = selectedUser && (
+    allAdminIds.includes(String(selectedUser.id)) ||
+    ADMIN_EMAILS.includes(selectedUser.email) ||
+    selectedUser.name?.toLowerCase().includes("maciej kłaput")
+  );
+
+  // PRECYZYJNY FILTR WIADOMOŚCI 1:1 – HISTORIA NIGDY NIE ZNIKA PO PONOWNYM LOGOWANIU JOANNY
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     if (m.grupa_id) return false;
@@ -2146,13 +1972,25 @@ export default function ClubChat() {
       effectiveIds.includes(rId) ||
       (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
 
-    const isSenderThem = sId === targetId;
-    const isReceiverThem = rId === targetId;
+    // Jeśli klubowicz rozmawia z Administratorem (lub Administrator z klubowiczem)
+    if (isSelectedUserAdmin) {
+      const isSenderAdmin = allAdminIds.includes(sId) || m.is_system || m.nadawca_rola === "system";
+      const isReceiverAdmin = allAdminIds.includes(rId);
+
+      if (isAdmin) {
+        return (isSenderMe && isReceiverAdmin) || (isSenderAdmin && isReceiverMe);
+      } else {
+        return (isSenderAdmin && isReceiverMe) || (isSenderMe && isReceiverAdmin);
+      }
+    }
 
     if (Number(selectedUser.id) === SYSTEM_ID) {
-      const isSysMsg = m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system";
+      const isSysMsg = m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.is_system || m.nadawca_rola === "system";
       return (isSysMsg && isReceiverMe) || (isSenderMe && Number(m.odbiorca_id) === SYSTEM_ID);
     }
+
+    const isSenderThem = sId === targetId;
+    const isReceiverThem = rId === targetId;
 
     return (isSenderMe && isReceiverThem) || (isSenderThem && isReceiverMe);
   });
@@ -2171,36 +2009,11 @@ export default function ClubChat() {
     groupBannedIds = Array.isArray(selectedGroup.zbanowani_ids) ? selectedGroup.zbanowani_ids.map(String) : [];
     groupPendingRequestIds = Array.isArray(selectedGroup.prosby_ids) ? selectedGroup.prosby_ids.map(String) : [];
 
-    const isTraining = selectedGroup.typ === "trening" || selectedGroup.nazwa?.startsWith("Trening:");
-    if (isTraining) {
-      const matchedTraining =
-        grafikZajec.find((t: any) =>
-          selectedGroup.nazwa.includes(t.title || t.nazwa) &&
-          (selectedGroup.nazwa.includes(t.start || t.godzina) || !selectedGroup.nazwa.includes(":"))
-        ) || grafikZajec.find((t: any) => selectedGroup.nazwa.includes(t.title || t.nazwa));
-
-      if (matchedTraining) {
-        const signups = getSignupsForTraining(matchedTraining);
-        const signedClientIds = signups.map((z: any) => String(z.klient_id)).filter(Boolean);
-        const adminIds = klienci
-          .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
-          .map((k: any) => String(k.id));
-        const creatorAndMe = [String(selectedGroup.tworca_id), String(secondaryUserId || currentUserId), "999999999", String(SYSTEM_ID)];
-        groupMemberIds = Array.from(new Set([...signedClientIds, ...adminIds, ...creatorAndMe]));
-      } else {
-        let rawMembers = selectedGroup.czlonkowie_ids;
-        if (typeof rawMembers === "string") {
-          try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
-        }
-        groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
-      }
-    } else {
-      let rawMembers = selectedGroup.czlonkowie_ids;
-      if (typeof rawMembers === "string") {
-        try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
-      }
-      groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
+    let rawMembers = selectedGroup.czlonkowie_ids;
+    if (typeof rawMembers === "string") {
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
     }
+    groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
   }
 
   const groupMembersList = klienci.filter((k: any) =>
@@ -2239,7 +2052,12 @@ export default function ClubChat() {
         return;
       }
 
-      const otherId = isSenderMe ? rId : sId;
+      let otherId = isSenderMe ? rId : sId;
+      // Jeśli klubowicz pisze z tożsamością techniczną admina (999999999 / SYSTEM), mapujemy na ID konta Macieja
+      if (!isAdmin && allAdminIds.includes(otherId)) {
+        const maciejAccount = klienci.find((k: any) => ADMIN_EMAILS.includes(k.email));
+        if (maciejAccount) otherId = String(maciejAccount.id);
+      }
 
       if (!latestMessageMap.has(otherId) || msgTime > latestMessageMap.get(otherId)!) {
         latestMessageMap.set(otherId, msgTime);
@@ -2258,12 +2076,22 @@ export default function ClubChat() {
       const sId = String(m.nadawca_id ?? SYSTEM_ID);
       const rId = String(m.odbiorca_id ?? SYSTEM_ID);
       if (effectiveIds.includes(sId)) {
-        chattedUserIds.add(rId);
+        let targetId = rId;
+        if (!isAdmin && allAdminIds.includes(targetId)) {
+          const maciejAccount = klienci.find((k: any) => ADMIN_EMAILS.includes(k.email));
+          if (maciejAccount) targetId = String(maciejAccount.id);
+        }
+        chattedUserIds.add(targetId);
       } else if (
         effectiveIds.includes(rId) ||
         (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase())
       ) {
-        chattedUserIds.add(sId);
+        let senderId = sId;
+        if (!isAdmin && allAdminIds.includes(senderId)) {
+          const maciejAccount = klienci.find((k: any) => ADMIN_EMAILS.includes(k.email));
+          if (maciejAccount) senderId = String(maciejAccount.id);
+        }
+        chattedUserIds.add(senderId);
       }
     }
   });
@@ -2313,9 +2141,7 @@ export default function ClubChat() {
   const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
 
   const allMyGroups = groups.filter((g: any) => {
-    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
-    if (isTraining) return false;
-
+    if (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) return false;
     if (isAdmin) return true;
     let rawMembers = g.czlonkowie_ids;
     if (typeof rawMembers === "string") {
@@ -2375,21 +2201,13 @@ export default function ClubChat() {
   const unreadDirectCount = unreadDirect1on1Count + unreadDirectGroupsCount;
 
   const myGroupIds = new Set(allMyGroups.map((g: any) => String(g.id)));
-  const trainingGroupIds = new Set(
-    groups
-      .filter((g: any) => g.typ === "trening" || g.nazwa?.startsWith("Trening:"))
-      .map((g: any) => String(g.id))
-  );
 
   const unreadGroupsCount = messages.filter(
     (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
   ).length;
 
-  const unreadTrainingsCount = messages.filter(
-    (m: any) => m.grupa_id && trainingGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
-  ).length;
-
-  const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount + unreadTrainingsCount;
+  // CAŁKOWITA ILOŚĆ NIEPRZECZYTANYCH WIADOMOŚCI (BEZ TRENINGÓW)
+  const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount;
 
   const formatLastSeen = (lastSeenString: string | null) => {
     if (!lastSeenString) return "Brak danych o aktywności";
@@ -2447,7 +2265,6 @@ export default function ClubChat() {
     const isSystemSender = Number(msg.nadawca_id) === SYSTEM_ID || msg.nadawca_id === null || msg.is_system || msg.nadawca_rola === "system";
     const rawText = msg.tresc || "";
 
-    // SPECJALNE POWIADOMIENIA CZATU DLA TRENERÓW (5 MIN PRZED ORAZ PO TRENINGACH DNIA)
     const isTrainer5MinReminder = rawText.includes("[REMINDER_5MIN_");
     const isTrainerEndOfDayReminder = rawText.includes("[REMINDER_END_OF_DAY_");
 
@@ -2505,7 +2322,6 @@ export default function ClubChat() {
       isSwipingMessage.current = false;
     };
 
-    // POWIADOMIENIE DLA TRENERA: 5 MINUT PRZED ROZPOCZĘCIEM TRENINGU
     if (isTrainer5MinReminder) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900 to-sky-950 border-2 border-amber-400 rounded-3xl p-4 shadow-xl text-white space-y-3">
@@ -2536,7 +2352,6 @@ export default function ClubChat() {
       );
     }
 
-    // POWIADOMIENIE DLA TRENERA: ZAKOŃCZENIE WSZYSTKICH TRENINGÓW DNIA
     if (isTrainerEndOfDayReminder) {
       return (
         <div className="w-full bg-gradient-to-br from-emerald-500/20 via-slate-900 to-slate-950 border-2 border-emerald-400 rounded-3xl p-4 shadow-xl text-white space-y-3">
@@ -2567,7 +2382,6 @@ export default function ClubChat() {
       );
     }
 
-    // WYRÓŻNIONE POWIADOMIENIE SYSTEMOWE DLA WYZWANIA REDUKCJI
     if (isRedukcjaAlert) {
       return (
         <div className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900/90 to-rose-950/40 border-2 border-amber-400 rounded-3xl p-4 shadow-lg text-white space-y-2.5">
@@ -2806,6 +2620,11 @@ export default function ClubChat() {
 
   const renderDirectUserItem = (user: any, isPinnedItem: boolean = false) => {
     const isSys = Number(user.id) === SYSTEM_ID;
+    const isTargetAdmin =
+      allAdminIds.includes(String(user.id)) ||
+      ADMIN_EMAILS.includes(user.email) ||
+      user.name?.toLowerCase().includes("maciej kłaput");
+
     const userUnread = messages.filter((m: any) => {
       const isForMe =
         effectiveIds.includes(String(m.odbiorca_id)) ||
@@ -2814,6 +2633,9 @@ export default function ClubChat() {
       if (!isForMe || m.grupa_id || m.przeczytana) return false;
       if (isSys) {
         return m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system";
+      }
+      if (isTargetAdmin) {
+        return allAdminIds.includes(String(m.nadawca_id)) || m.is_system || m.nadawca_rola === "system";
       }
       return String(m.nadawca_id) === String(user.id);
     }).length;
@@ -2834,13 +2656,17 @@ export default function ClubChat() {
         <button
           type="button"
           onClick={() => {
+            // Natychmiastowe zerowanie plakietki przy otwarciu wątku
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.grupa_id || m.przeczytana) return m;
                 const sId = String(m.nadawca_id ?? SYSTEM_ID);
                 const rId = String(m.odbiorca_id ?? SYSTEM_ID);
+
                 const isTargetSender = isSys
                   ? m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system"
+                  : isTargetAdmin
+                  ? allAdminIds.includes(sId) || m.is_system || m.nadawca_rola === "system"
                   : sId === String(user.id);
 
                 const isTargetReceiver =
@@ -2995,8 +2821,7 @@ export default function ClubChat() {
   );
 
   const publicDiscoverGroups = groups.filter((g: any) => {
-    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
-    if (isTraining) return false;
+    if (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) return false;
 
     const isPublic = g.typ === "publiczna";
     let rawMembers = g.czlonkowie_ids;
@@ -3013,8 +2838,7 @@ export default function ClubChat() {
   });
 
   const closedDiscoverGroups = groups.filter((g: any) => {
-    const isTraining = g.typ === "trening" || g.nazwa?.startsWith("Trening:");
-    if (isTraining) return false;
+    if (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) return false;
 
     const isClosed = g.typ === "zamknieta" || !g.typ;
     let rawMembers = g.czlonkowie_ids;
@@ -3028,17 +2852,6 @@ export default function ClubChat() {
     const members = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
     const isAlreadyMember = members.some((m: string) => effectiveIds.includes(m)) || effectiveIds.includes(String(g.tworca_id));
     return isClosed && !isAlreadyMember;
-  });
-
-  const todayTrainingsList = grafikZajec.filter((training: any) => {
-    const isToday = isTrainingToday(training);
-    if (!isToday) return false;
-
-    if (isAdmin) return true;
-
-    const myClientId = String(secondaryUserId || currentUserId);
-    const signups = getSignupsForTraining(training);
-    return signups.some((z: any) => String(z.klient_id) === myClientId);
   });
 
   const isPositioned = position !== null;
@@ -3066,8 +2879,7 @@ export default function ClubChat() {
     : selectedUser
     ? pinnedChatIds.includes(`direct_${selectedUser.id}`)
     : false;
-
-  return (
+    return (
     <div
       ref={containerRef}
       style={
@@ -3122,7 +2934,7 @@ export default function ClubChat() {
                         </div>
                         <div className="text-[9px] text-amber-400 font-medium truncate">
                           {selectedGroup.kategoria ? `${selectedGroup.kategoria} • ` : ""}
-                          {selectedGroup.typ === "publiczna" ? "Publiczna" : selectedGroup.typ === "trening" ? "Trening" : "Zamknięta"} • {getGroupMembersCount(selectedGroup)} os.
+                          {selectedGroup.typ === "publiczna" ? "Publiczna" : "Zamknięta"} • {getGroupMembersCount(selectedGroup)} os.
                         </div>
                       </div>
                     </>
@@ -3263,7 +3075,7 @@ export default function ClubChat() {
                         <span>{isCurrentChatPinned ? "Odepnij z góry" : "Przypnij na górze"}</span>
                       </button>
 
-                      {isAdmin && (!selectedGroup || selectedGroup.typ !== "trening") && (
+                      {isAdmin && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -3337,7 +3149,7 @@ export default function ClubChat() {
                         </button>
                       )}
 
-                      {selectedGroup && isAdmin && selectedGroup.typ !== "trening" && (
+                      {selectedGroup && isAdmin && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -3367,6 +3179,7 @@ export default function ClubChat() {
               </button>
             </div>
           </div>
+
           {/* PRZEŁĄCZNIK W AKTYWNEJ GRUPIE */}
           {selectedGroup && (
             <div className="bg-slate-900 border-t border-slate-800 px-3 py-1.5 flex items-center justify-center gap-3 text-base shrink-0">
@@ -3448,15 +3261,16 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP / TRENINGI) */}
+          {/* WIDOK GŁÓWNY (LISTA ROZMÓW / GRUP - UKŁAD DWÓCH ZAKŁADEK) */}
           {!selectedUser && !selectedGroup ? (
             <div className="flex-1 flex flex-col overflow-hidden p-3 sm:p-3.5 space-y-2.5 bg-slate-50/50 min-h-0">
               <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-2 shrink-0">
-                <div className="flex-1 grid grid-cols-3 gap-1 bg-slate-200/90 p-1 rounded-xl">
+                {/* Dwie główne zakładki: Prywatne i Grupy */}
+                <div className="flex-1 grid grid-cols-2 gap-1 bg-slate-200/90 p-1 rounded-xl">
                   <button
                     type="button"
                     onClick={() => handleTabChange("direct")}
-                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
                       activeTab === "direct" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -3471,7 +3285,7 @@ export default function ClubChat() {
                   <button
                     type="button"
                     onClick={() => handleTabChange("groups")}
-                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
+                    className={`py-1.5 rounded-lg text-xs font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
                       activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -3479,21 +3293,6 @@ export default function ClubChat() {
                     {unreadGroupsCount > 0 && (
                       <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
                         {unreadGroupsCount}
-                      </span>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange("trainings")}
-                    className={`py-1 rounded-lg text-[11px] font-bold transition-all relative flex items-center justify-center gap-1 cursor-pointer ${
-                      activeTab === "trainings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    <span>Treningi ({todayTrainingsList.length})</span>
-                    {unreadTrainingsCount > 0 && (
-                      <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
-                        {unreadTrainingsCount}
                       </span>
                     )}
                   </button>
@@ -3770,16 +3569,14 @@ export default function ClubChat() {
                                     >
                                       Przywróć ↩
                                     </button>
-                                    {group.typ !== "trening" && (
-                                      <button
-                                        type="button"
-                                        onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
-                                        className="text-slate-400 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg ml-1"
-                                        title="Usuń grupę na stałe"
-                                      >
-                                        🗑️
-                                      </button>
-                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleDeleteGroup(group.id, group.nazwa, e)}
+                                      className="text-slate-400 hover:text-rose-600 p-1 text-xs transition-colors cursor-pointer rounded-lg ml-1"
+                                      title="Usuń grupę na stałe"
+                                    >
+                                      🗑️
+                                    </button>
                                   </div>
                                 ))}
                               </div>
@@ -3899,71 +3696,6 @@ export default function ClubChat() {
                   </div>
                 </div>
               )}
-
-              {activeTab === "trainings" && (
-                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
-                  {todayTrainingsList.map((training: any) => {
-                    const matchedGroup = groups.find(
-                      (g: any) =>
-                        (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) &&
-                        g.nazwa?.includes(training.title || training.nazwa) &&
-                        (g.nazwa?.includes(training.start || training.godzina) || !training.start)
-                    );
-                    const trainingUnread = matchedGroup
-                      ? messages.filter(
-                          (m: any) =>
-                            String(m.grupa_id) === String(matchedGroup.id) &&
-                            !effectiveIds.includes(String(m.nadawca_id)) &&
-                            !m.przeczytana
-                        ).length
-                      : 0;
-
-                    return (
-                      <button
-                        key={training.id}
-                        type="button"
-                        onClick={async () => {
-                          const trainingGroup = await getOrCreateTrainingGroup(training);
-                          if (trainingGroup) {
-                            selectedGroupRef.current = trainingGroup;
-                            setSelectedGroup(trainingGroup);
-                            setChatInsideTab("messages");
-                          }
-                        }}
-                        className="w-full p-3 rounded-2xl border bg-white hover:bg-amber-50/50 border-slate-200 flex items-center justify-between transition-all shadow-sm cursor-pointer text-left group"
-                      >
-                        <div className="flex items-center gap-3 overflow-hidden min-w-0 flex-1">
-                          <div className="w-9 h-9 rounded-full bg-amber-400/20 text-amber-950 border border-amber-400 flex items-center justify-center font-bold text-sm shrink-0">
-                            🏋️‍♂️
-                          </div>
-                          <div className="overflow-hidden min-w-0 flex-1">
-                            <div className="font-bold text-xs text-slate-900 truncate">{training.title || training.nazwa}</div>
-                            <div className="text-[10px] text-slate-500 truncate">
-                              Godz: {training.start || training.godzina} {training.trainer ? `• Trener: ${training.trainer}` : ""}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0 ml-2">
-                          {trainingUnread > 0 && (
-                            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm shrink-0">
-                              {trainingUnread}
-                            </span>
-                          )}
-                          <span className="text-slate-400 text-xs font-bold group-hover:text-slate-900 transition-colors">→</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-
-                  {todayTrainingsList.length === 0 && (
-                    <div className="py-12 text-center text-slate-400 text-xs space-y-1">
-                      <div>Brak treningów zaplanowanych na dzisiaj.</div>
-                      <p className="text-[10px]">Wszystkie dzisiejsze zajęcia pojawią się tutaj automatycznie.</p>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           ) : chatInsideTab === "media" ? (
             /* WIDOK GALERII ZDJĘĆ */
@@ -4017,13 +3749,13 @@ export default function ClubChat() {
               </div>
             </div>
           ) : chatInsideTab === "members" ? (
-            /* WIDOK LISTY UCZESTNIKÓW W GRUPIE / TRENINGU */
+            /* WIDOK LISTY UCZESTNIKÓW W GRUPIE */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3 space-y-3 min-h-0">
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 shrink-0">
                 <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
                   Uczestnicy grupy ({groupMembersList.length})
                 </span>
-                {(isAdmin || String(selectedGroup?.tworca_id) === String(secondaryUserId || currentUserId)) && selectedGroup?.typ !== "trening" && (
+                {(isAdmin || String(selectedGroup?.tworca_id) === String(secondaryUserId || currentUserId)) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -4741,7 +4473,7 @@ export default function ClubChat() {
                     </button>
                   </div>
 
-                  {isAdmin && selectedGroup?.typ !== "trening" && (
+                  {isAdmin && (
                     <div className="pt-2 border-t border-slate-200">
                       <button
                         type="button"
