@@ -8,7 +8,7 @@ let globalCreatingLock = false;
 const SYSTEM_CHAT_ID = 5000;
 
 // ROZWIĄZANIE PROBLEMU LIMITU 1000 REKORDÓW SUPABASE
-const fetchAllFromSupabase = async (table: string, orderBy: string = 'id', ascending: boolean = false, maxPages: number = 5) => {
+const fetchAllFromSupabase = async (table: string, orderBy: string = 'id', ascending: boolean = false, maxPages: number = 15) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
     const { data, error } = await supabase
@@ -47,6 +47,42 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
   const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
   const resMonth = String(targetMonth + 1).padStart(2, '0');
   return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
+};
+
+// UNIWERSALNY, ODPORNY PARSER DATY Z CLASS_KEY
+const parseDateFromClassKey = (classKey: string): Date => {
+  const parts = classKey ? String(classKey).split('_') : [];
+  const datePart = parts[1] || '';
+  const currentYear = new Date().getFullYear();
+
+  if (!datePart) return new Date();
+
+  if (datePart.includes('/')) {
+    const segments = datePart.split('/');
+    if (segments.length === 2) {
+      const [d, m] = segments;
+      return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+    } else if (segments.length === 3) {
+      const [d, m, y] = segments;
+      const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
+      return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
+    }
+  } else if (datePart.includes('-')) {
+    const segments = datePart.split('-');
+    if (segments.length === 3) {
+      if (segments[0].length === 4) {
+        const [y, m, d] = segments;
+        return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+      } else {
+        const [d, m, y] = segments;
+        return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+      }
+    } else if (segments.length === 2) {
+      const [d, m] = segments;
+      return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+    }
+  }
+  return new Date();
 };
 
 // KULOODPORNY KALKULATOR PRZEDŁUŻANIA KARNETU Z PRAWDZIWEGO KALENDARZA
@@ -692,7 +728,7 @@ export default function KarnetyPage() {
     };
   };
 
-  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW (W TYM DYNAMICZNY BONUS DLA POLECONEGO Z AMBASSADOR_TIERS)
+  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number, targetPassNameToCheck?: string) => {
     if (!client) return { 
       percent: 0, 
@@ -743,12 +779,11 @@ export default function KarnetyPage() {
       }
     }
 
-    // OBSŁUGA DYNAMICZNEGO RABATU POWITALNEGO DLA OSOBY Z POLECENIA Z TABELI AMBASSADOR_TIERS
+    // OBSŁUGA DYNAMICZNEGO RABATU POWITALNEGO DLA OSOBY Z POLECENIA
     const rawRefereeDiscountVal = Number(client.refereeDiscountPercent) || 0;
     const refereeTierName = client.refereeTierName || '';
     const refereeTargetPass = (client.refereeTargetPass || 'all').toLowerCase().trim();
 
-    // Rabat powitalny przysługuje osobie z polecenia przed zakupem pierwszego płatnego karnetu
     const hasBoughtPaidPass = Array.isArray(client.karnetyKlubowicza) && client.karnetyKlubowicza.some((k: any) => {
       const price = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
       return price > 0;
@@ -834,6 +869,7 @@ export default function KarnetyPage() {
       isPassQualifiedForReferee
     };
   };
+
   const calculateContractProRata = (baseMonthlyPrice: number) => {
     const today = new Date();
     const currentYear = today.getFullYear();
@@ -904,7 +940,6 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
-
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -935,21 +970,18 @@ export default function KarnetyPage() {
           const now = new Date();
           const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
           
-          const { data: allSignups } = await supabase
-            .from('zapisy_zajec')
-            .select('id, class_key, klient_id');
+          // POBIERAMY ZAPISY Z UŻYCIEM fetchAllFromSupabase (SORTOWANIE DESC),
+          // ABY APLIKACJA NIGDY NIE STRACIŁA DANYCH PRZEZ LIMIT 1000 WIERSZY
+          const allSignups = await fetchAllFromSupabase('zapisy_zajec', 'id', false, 15);
 
           const clientFutureBookingsMap = new Map<number, number>();
           const clientFutureBookingDatesMap = new Map<number, string[]>();
 
           if (allSignups && allSignups.length > 0) {
             allSignups.forEach((s: any) => {
-              const parts = (s.class_key || '').split('_');
-              const dateStr = parts[1];
-              if (dateStr && s.klient_id) {
-                const [d, m] = dateStr.split('/').map(Number);
-                const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
-                const classDateIso = `${now.getFullYear()}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+              if (s.klient_id && s.class_key) {
+                const classDate = parseDateFromClassKey(s.class_key);
+                const classDateIso = `${classDate.getFullYear()}-${String(classDate.getMonth() + 1).padStart(2, '0')}-${String(classDate.getDate()).padStart(2, '0')}`;
                 
                 if (classDate >= todayBeginning) {
                   const kId = Number(s.klient_id);
@@ -1008,7 +1040,7 @@ export default function KarnetyPage() {
 
               const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
 
-              if (isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
+              if (isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0 && !hasFutureBookings) {
                 karnetyChanged = true;
                 return {
                   ...k,
@@ -1017,6 +1049,7 @@ export default function KarnetyPage() {
                 };
               }
 
+              // AUTO-HEAL: SYNCHRONIZACJA KARNETÓW ILOŚCIOWYCH Z PRZYSZŁYMI REZERWACJAMI
               if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
                 const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
                 const isLowPrice = passPriceNum <= 150;
@@ -1035,20 +1068,31 @@ export default function KarnetyPage() {
                     };
                   }
                 } else if (hasFutureBookings) {
-                  if (k.zeroEntriesGraceUntil !== null) {
-                    karnetyChanged = true;
+                  // Jeśli są rezerwacje w przód: bezwzględnie usuwamy błędny bufor 24h
+                  // oraz przywracamy nominalną ważność karnetu (co najmniej do daty ostatniego treningu)
+                  const latestBooking = [...futureBookingDates].sort().reverse()[0];
+                  let targetWaznyDo = k.waznyDo;
+                  if (!targetWaznyDo || (latestBooking && targetWaznyDo < latestBooking)) {
+                    targetWaznyDo = latestBooking;
                   }
-                  return {
-                    ...k,
-                    zeroEntriesGraceUntil: null,
-                    statusTekst: `Zarezerwowano wejścia (wygasa ${k.waznyDo})`
-                  };
+
+                  const targetStatus = `Zarezerwowano wejścia (wygasa ${targetWaznyDo})`;
+
+                  if (k.zeroEntriesGraceUntil !== null || k.waznyDo !== targetWaznyDo || k.statusTekst !== targetStatus) {
+                    karnetyChanged = true;
+                    return {
+                      ...k,
+                      waznyDo: targetWaznyDo,
+                      zeroEntriesGraceUntil: null,
+                      statusTekst: targetStatus
+                    };
+                  }
                 } else {
                   const tomorrowDate = new Date();
                   tomorrowDate.setDate(tomorrowDate.getDate() + 1);
                   const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
                   
-                  if (!k.zeroEntriesGraceUntil) {
+                  if (!k.zeroEntriesGraceUntil || k.zeroEntriesGraceUntil !== tomorrowStr) {
                     karnetyChanged = true;
                     return {
                       ...k,
@@ -1194,7 +1238,7 @@ export default function KarnetyPage() {
               }
             } catch(e) {}
 
-            // DYNAMICZNE POBIERANIE RABATU DLA OSOBY Z POLECENIA (REFEREE) Z BAZY AMBASSADOR_TIERS
+            // DYNAMICZNE POBIERANIE RABATU DLA OSOBY Z POLECENIA (REFEREE)
             let refDiscountPercent = 0;
             let refTierName = '';
             let refTargetPass = 'all';
@@ -2200,13 +2244,9 @@ export default function KarnetyPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
-        const parts = (signup.class_key || '').split('_');
-        const dateStr = parts[1];
-        if (dateStr) {
-          const [d, m] = dateStr.split('/').map(Number);
-          const classDate = new Date(now.getFullYear(), m - 1, d, 23, 59, 59);
-          const classDateForCheck = new Date(now.getFullYear(), m - 1, d);
-          const classDateStr = `${classDateForCheck.getFullYear()}-${String(classDateForCheck.getMonth() + 1).padStart(2, '0')}-${String(classDateForCheck.getDate()).padStart(2, '0')}`;
+        if (signup.class_key) {
+          const classDate = parseDateFromClassKey(signup.class_key);
+          const classDateStr = `${classDate.getFullYear()}-${String(classDate.getMonth() + 1).padStart(2, '0')}-${String(classDate.getDate()).padStart(2, '0')}`;
           
           const isAfterStart = classDateStr >= zawieszonyOd;
           const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
@@ -3319,7 +3359,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         )}
-
         {/* MODAL ZAWIESZENIA */}
         {isSuspendModalOpen && (() => {
           const selectedPass = karnetyList.find((k: any) => k.id.toString() === passToSuspendId.toString());
