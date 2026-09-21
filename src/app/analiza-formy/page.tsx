@@ -295,7 +295,6 @@ export const SecureImageThumbnail = ({
   );
 };
 
-// Pomocnicza funkcja pobierająca poprawny wzrost z profilu klubowicza
 export const getClientHeight = (client?: Klient | null): string => {
   if (!client) return 'Brak';
   const val = client.wzrost ?? client.Wzrost ?? client["Wzrost (cm)"];
@@ -323,7 +322,7 @@ const fetchAllFromSupabase = async (
   selectQuery: string = '*', 
   orderBy: string = 'id', 
   ascending: boolean = false, 
-  maxPages: number = 5
+  maxPages: number = 3
 ) => {
   let result: any[] = [];
   try {
@@ -363,6 +362,8 @@ export default function AnalizaFormyPage() {
   const [selectedKlient, setSelectedKlient] = useState<Klient | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
+  const [serverSearchResults, setServerSearchResults] = useState<Klient[]>([]);
+  const [isSearchingServer, setIsSearchingServer] = useState<boolean>(false);
 
   const [measurements, setMeasurements] = useState<AnalizaFormyWpis[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
@@ -533,18 +534,15 @@ export default function AnalizaFormyPage() {
     return () => window.removeEventListener("click", handleClickOutside);
   }, []);
 
-  // Czerwona kropka dla klubowicza: czy jest jakiekolwiek badanie z nieodczytaną interpretacją
   const hasUnreadInterpretation = useMemo(() => {
     return badaniaList.some(b => b.nowa_interpretacja === true);
   }, [badaniaList]);
 
-  // Licznik i alert dla administratora o badaniach krwi oczekujących na analizę
   const hasPendingBloodTestsForAdmin = useMemo(() => {
     if (appRole !== 'admin' && appRole !== 'trener') return false;
     return wszystkieOczekujaceBadania.length > 0;
   }, [appRole, wszystkieOczekujaceBadania]);
 
-  // Wskaźnik dla administratora: zakończone wyzwanie oczekujące na podliczenie i rozdanie nagród
   const hasFinishedChallengeAwaitingTally = useMemo(() => {
     if (appRole !== 'admin') return false;
     const today = new Date();
@@ -596,7 +594,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // AUTOMATYCZNE PRZENOSZENIE DO ARCHIWUM PO 1 DNIU KARENCJI OD DATY KOŃCA
   const checkAndAutoArchiveWithGracePeriod = async (edycje: RedukcjaEdycja[]): Promise<RedukcjaEdycja[]> => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
@@ -609,7 +606,6 @@ export default function AnalizaFormyPage() {
         const endDate = new Date(ed.data_koniec);
         endDate.setHours(0, 0, 0, 0);
 
-        // 1 dzień karencji (24 godziny po dacie zakończenia)
         const graceDeadline = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
 
         if (now > graceDeadline) {
@@ -712,6 +708,132 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // SZYBKA INICJALIZACJA: BŁYSKAWICZNY START W < 1 SEKUNDĘ DZIĘKI RÓWNOLEGŁYM ZAPYTANIOM
+  useEffect(() => {
+    let isMounted = true;
+
+    const initAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (!session?.user) {
+          if (isMounted) setIsLoading(false);
+          return;
+        }
+
+        const email = session.user.email || '';
+        const cleanEmail = email.toLowerCase().trim();
+        if (isMounted) setCurrentUserEmail(cleanEmail);
+
+        // 1. Natychmiastowe pobranie TYLKO profilu zalogowanego użytkownika (zamiast całej bazy)
+        const { data: myProfileData } = await supabase
+          .from('klienci')
+          .select('*')
+          .ilike('E-mail', cleanEmail)
+          .maybeSingle();
+
+        const myClientProfile = (myProfileData || null) as Klient | null;
+
+        if (myClientProfile && isMounted) {
+          setCurrentUserId(myClientProfile.id);
+          setSelectedKlient(myClientProfile);
+          
+          const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
+          if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
+          else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
+          
+          const hVal = myClientProfile.wzrost ?? myClientProfile.Wzrost ?? myClientProfile["Wzrost (cm)"];
+          if (hVal) setCalcHeight(String(hVal));
+          const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
+          if (age) setCalcAge(String(age));
+        }
+
+        // 2. Rozpoznanie roli użytkownika
+        let currentRole: 'admin' | 'trener' | 'klubowicz' = 'klubowicz';
+        if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
+          currentRole = 'admin';
+        } else {
+          const { data: trenerData } = await supabase
+            .from('trenerzy')
+            .select('id')
+            .ilike('email', cleanEmail)
+            .maybeSingle();
+          if (trenerData) currentRole = 'trener';
+        }
+
+        if (isMounted) setAppRole(currentRole);
+
+        // 3. Równoległe ładowanie danych kluczowych dla domyślnej zakładki
+        const targetId = myClientProfile?.id || null;
+        await Promise.allSettled([
+          fetchMeasurements(targetId || 0, cleanEmail),
+          fetchBadaniaKrwi(targetId, cleanEmail),
+          fetchRedukcjaData(myClientProfile ? [myClientProfile] : []),
+          (currentRole === 'admin' || currentRole === 'trener') ? checkAdminPendingBloodTests() : Promise.resolve()
+        ]);
+
+        // Wyłączamy spinner główny natychmiast po załadowaniu danych domyślnych
+        if (isMounted) setIsLoading(false);
+
+        // 4. Asynchroniczne załadowanie pełnej listy klientów w tle (nie blokuje interfejsu)
+        fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 5).then((allClients) => {
+          if (isMounted && allClients && allClients.length > 0) {
+            setKlienci(allClients as Klient[]);
+          }
+        });
+
+      } catch (err) {
+        console.error("Błąd podczas inicjalizacji widoku Analizy Formy:", err);
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    initAuth();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const fetchRedukcjaData = async (clientsOverride?: Klient[]) => {
+    try {
+      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'data_koniec', false, 2);
+      if (edycjeData && edycjeData.length > 0) {
+        let sorted = (edycjeData as RedukcjaEdycja[]).sort((a, b) => 
+          new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
+        );
+
+        // Automatyczna archiwizacja wyzwania z 1-dniową karencją od daty końca
+        sorted = await checkAndAutoArchiveWithGracePeriod(sorted);
+        setEdycjeRedukcji(sorted);
+        
+        await checkAndSendRedukcjaAlerts(sorted);
+
+        const activeEdycje = sorted.filter((e: any) => e.status === 'aktywne' || e.status === 'zapisy');
+        
+        if (activeEdycje.length > 0) {
+          if (typeof window !== 'undefined') {
+            const hasAnyUnseen = activeEdycje.some(e => !localStorage.getItem(`seen_challenge_${e.id}`));
+            setHasUnreadChallenge(hasAnyUnseen);
+          }
+        }
+
+        const defaultSelected = activeEdycje[0] || sorted[0];
+
+        if (!selectedEdycjaId) {
+          setSelectedEdycjaId(defaultSelected.id);
+          await loadEdycjaDetails(defaultSelected.id, sorted);
+        } else {
+          await loadEdycjaDetails(selectedEdycjaId, sorted);
+        }
+
+        // Pobranie podium ostatniej zakończonej edycji
+        await fetchLastFinishedPodium(sorted, (clientsOverride && clientsOverride.length > 0) ? clientsOverride : klienci);
+      }
+    } catch (err) {
+      console.error("Błąd ładowania wyzwań redukcji:", err);
+    }
+  };
   const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
     try {
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
@@ -812,7 +934,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // POBIERANIE WYNIKÓW I OBLICZENIE TOP 3 Z OSTATNIEGO ZAKOŃCZONEGO WYZWANIA (PODIUM)
   const fetchLastFinishedPodium = async (edycje: RedukcjaEdycja[], clientsList: Klient[]) => {
     try {
       const finishedEdycje = edycje
@@ -970,6 +1091,51 @@ export default function AnalizaFormyPage() {
     fetchMeasurements(klient.id, klient['E-mail']);
     fetchBadaniaKrwi(klient.id, klient['E-mail']);
   };
+
+  // Szybkie wyszukiwanie serwerowe podopiecznego z debouncingiem
+  useEffect(() => {
+    if (!searchQuery || searchQuery.trim().length < 2) {
+      setServerSearchResults([]);
+      return;
+    }
+
+    const query = searchQuery.trim().toLowerCase();
+
+    if (klienci.length > 0) {
+      const filtered = klienci.filter(k => 
+        `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase().includes(query) ||
+        (k['E-mail'] && k['E-mail'].toLowerCase().includes(query)) ||
+        (k['Numer tel.'] && k['Numer tel.'].includes(query))
+      ).slice(0, 8);
+      setServerSearchResults(filtered);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsSearchingServer(true);
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await supabase
+          .from('klienci')
+          .select('*')
+          .or(`Imię.ilike.%${query}%,Nazwisko.ilike.%${query}%,E-mail.ilike.%${query}%`)
+          .limit(8);
+
+        if (!isCancelled && data) {
+          setServerSearchResults(data as Klient[]);
+        }
+      } catch (err) {
+        console.warn("Błąd wyszukiwania klienta:", err);
+      } finally {
+        if (!isCancelled) setIsSearchingServer(false);
+      }
+    }, 250);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, klienci]);
 
   const handleSubmitMeasurement = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1460,59 +1626,7 @@ export default function AnalizaFormyPage() {
   const toggleTableHistory = (tableId: string) => {
     setExpandedTableHistory(prev => ({ ...prev, [tableId]: !prev[tableId] }));
   };
-const fetchRedukcjaData = async () => {
-    try {
-      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'data_koniec', false, 2);
-      if (edycjeData && edycjeData.length > 0) {
-        let sorted = (edycjeData as RedukcjaEdycja[]).sort((a, b) => 
-          new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
-        );
 
-        // Automatyczna archiwizacja wyzwania z 1-dniową karencją od daty końca
-        const now = new Date();
-        now.setHours(0, 0, 0, 0);
-        for (let i = 0; i < sorted.length; i++) {
-          const ed = sorted[i];
-          if (ed.status === 'aktywne' && ed.data_koniec) {
-            const endDate = new Date(ed.data_koniec);
-            endDate.setHours(0, 0, 0, 0);
-            const graceDeadline = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
-            if (now > graceDeadline) {
-              await supabase
-                .from('klub_redukcja_edycje')
-                .update({ status: 'zakonczone' })
-                .eq('id', ed.id);
-              sorted[i] = { ...ed, status: 'zakonczone' };
-            }
-          }
-        }
-
-        setEdycjeRedukcji(sorted);
-        
-        await checkAndSendRedukcjaAlerts(sorted);
-
-        const activeEdycje = sorted.filter((e: any) => e.status === 'aktywne' || e.status === 'zapisy');
-        
-        if (activeEdycje.length > 0) {
-          if (typeof window !== 'undefined') {
-            const hasAnyUnseen = activeEdycje.some(e => !localStorage.getItem(`seen_challenge_${e.id}`));
-            setHasUnreadChallenge(hasAnyUnseen);
-          }
-        }
-
-        const defaultSelected = activeEdycje[0] || sorted[0];
-
-        if (!selectedEdycjaId) {
-          setSelectedEdycjaId(defaultSelected.id);
-          await loadEdycjaDetails(defaultSelected.id, sorted);
-        } else {
-          await loadEdycjaDetails(selectedEdycjaId, sorted);
-        }
-      }
-    } catch (err) {
-      console.error("Błąd ładowania wyzwań redukcji:", err);
-    }
-  };
   // --- REDUKCJA LOGIKA ---
   const handleCreateEdycja = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2010,13 +2124,8 @@ const fetchRedukcjaData = async () => {
   };
 
   const searchResults = useMemo(() => {
-    if (!searchQuery || searchQuery.trim().length < 2) return [];
-    return (klienci || []).filter(k => 
-      `${k.Imię || ''} ${k.Nazwisko || ''}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (k['E-mail'] && k['E-mail'].toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (k['Numer tel.'] && k['Numer tel.'].includes(searchQuery))
-    ).slice(0, 8);
-  }, [klienci, searchQuery]);
+    return serverSearchResults;
+  }, [serverSearchResults]);
 
   const latestMeasurement = measurements[0] || null;
   const previousMeasurement = measurements[1] || null;
@@ -2027,7 +2136,7 @@ const fetchRedukcjaData = async () => {
     return diff > 0 ? `+${diff.toFixed(1)}` : `${diff.toFixed(1)}`;
   };
 
-  // ZAKRES DANYCH ANALIZY ROZSZERZONY NA 8 LAT
+  // Zakres danych analizy rozszerzony na 8 lat
   const chartData8Years = useMemo(() => {
     const cutoffDate = new Date();
     cutoffDate.setFullYear(cutoffDate.getFullYear() - 8);
@@ -2037,7 +2146,7 @@ const fetchRedukcjaData = async () => {
       .sort((a, b) => new Date(a.data_pomiaru).getTime() - new Date(b.data_pomiaru).getTime());
   }, [measurements]);
 
-  // LOGIKA PODZIAŁU POMIARÓW: 5 NAJNOWSZYCH + ARCHIWUM WG LAT
+  // Logika podziału pomiarów: 5 najnowszych + archiwum wg lat
   const { top5Measurements, olderMeasurementsByYear, availableYears } = useMemo(() => {
     const top5 = measurements.slice(0, 5);
     const older = measurements.slice(5);
@@ -2109,7 +2218,7 @@ const fetchRedukcjaData = async () => {
     });
   };
 
-  // ZMODERNIZOWANY GENERATOR WYKRESÓW: CO 3 LICZBA + INTERAKTYWNY DYMEK PO KLIKNIĘCIU
+  // Generator wykresów: etykieta co 3. punkt oraz na punkcie ostatnim + interaktywny dymek po kliknięciu
   const renderLineChart = (
     title: string, 
     dataKey: keyof AnalizaFormyWpis, 
@@ -2167,7 +2276,7 @@ const fetchRedukcjaData = async () => {
           </div>
         </div>
 
-        {/* INTERAKTYWNY PŁYWAJĄCY DYMEK ZE SZCZEGÓŁAMI PO KLIKNIĘCIU W KROPKĘ */}
+        {/* Interaktywny pływający dymek ze szczegółami po kliknięciu w kropkę */}
         {activeTooltipForThisChart && (
           <div 
             className="absolute z-30 bg-sky-950 text-white p-2.5 rounded-xl shadow-2xl border border-sky-700 text-[11px] animate-in fade-in zoom-in-95 duration-100 pointer-events-auto cursor-default"
@@ -2212,7 +2321,6 @@ const fetchRedukcjaData = async () => {
             <path d={pathD} fill="none" stroke={strokeColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
 
             {points.map((p, idx) => {
-              // Liczba pokazywana co 3. punkt oraz na punkcie ostatnim (najnowszym)
               const showLabel = idx % 3 === 0 || idx === points.length - 1;
               const isSelected = activeTooltipForThisChart?.index === idx;
 
@@ -2233,10 +2341,8 @@ const fetchRedukcjaData = async () => {
                     });
                   }}
                 >
-                  {/* Przezroczysty większy obszar kliknięcia dla wygody na telefonach */}
                   <circle cx={p.x} cy={p.y} r="14" fill="transparent" />
 
-                  {/* Kropka pomiaru */}
                   <circle 
                     cx={p.x} 
                     cy={p.y} 
@@ -2247,14 +2353,12 @@ const fetchRedukcjaData = async () => {
                     className="transition-all duration-150"
                   />
 
-                  {/* Liczba pomiaru: co trzecia lub ostatnia */}
                   {showLabel && (
                     <text x={p.x} y={p.y - 7} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#0f172a">
                       {p.val}
                     </text>
                   )}
 
-                  {/* Daty na osi poziomej */}
                   {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
                     <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
                       {p.date ? p.date.substring(2) : ''}
@@ -2269,7 +2373,6 @@ const fetchRedukcjaData = async () => {
     );
   };
 
-  // GENERATOR WYKRESÓW DLA BADAŃ KRWI KLUBOWICZA (ZAKRES 5 LAT)
   const renderBloodParamChart = (wpisy: WlasneBadanieWpis[], nazwaBadania: string, jednostka: string) => {
     const cutoffDate = new Date();
     cutoffDate.setFullYear(cutoffDate.getFullYear() - 5);
@@ -2376,7 +2479,6 @@ const fetchRedukcjaData = async () => {
     );
   }
 
-  // Funkcja renderująca pojedynczy wiersz pomiaru w tabeli
   const renderMeasurementRow = (m: AnalizaFormyWpis) => {
     const isStudio = !m.miejsce_pomiaru || m.miejsce_pomiaru.toUpperCase() === 'STUDIO';
     return (
@@ -2666,6 +2768,11 @@ const fetchRedukcjaData = async () => {
               }}
               className="w-full bg-sky-50/60 border border-sky-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-semibold"
             />
+            {isSearchingServer && (
+              <span className="absolute right-12 top-3 text-[10px] font-bold text-sky-600 animate-pulse">
+                Szukam...
+              </span>
+            )}
             {searchQuery && (
               <button
                 onClick={async () => {
@@ -3299,7 +3406,7 @@ const fetchRedukcjaData = async () => {
             </div>
           </div>
 
-          {/* NOWOŚĆ: PODIUM TOP 3 Z OSTATNIEJ ZAKOŃCZONEJ EDYCJI */}
+          {/* PODIUM TOP 3 Z OSTATNIEJ ZAKOŃCZONEJ EDYCJI */}
           {lastFinishedPodium && lastFinishedPodium.top3.length > 0 && (
             <div className="bg-gradient-to-br from-amber-500/10 via-white to-amber-50 border-2 border-amber-300 p-5 rounded-3xl shadow-sm space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200/60 pb-3">
@@ -4192,7 +4299,7 @@ const fetchRedukcjaData = async () => {
                     </button>
                   </div>
 
-                  {/* KOMPAKTOWA TABELA HISTORII BADAŃ DLA TELEFONÓW */}
+                  {/* KOMPAKTOWA TABELA HISTORII BADAŃ */}
                   <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
                     <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
                       <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
