@@ -192,7 +192,6 @@ export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> =>
     }
     filePath = decodeURIComponent(filePath).trim();
 
-    // 1. Próba Signed URL z Supabase Storage (ważny 2 godziny)
     const { data: signedData, error: signedErr } = await supabase.storage
       .from('badania')
       .createSignedUrl(filePath, 7200);
@@ -201,7 +200,6 @@ export const getSecureFileUrl = async (rawUrlOrPath: string): Promise<string> =>
       return signedData.signedUrl;
     }
 
-    // 2. Fallback: Publiczny adres URL z Supabase Storage
     const { data: pubData } = supabase.storage
       .from('badania')
       .getPublicUrl(filePath);
@@ -373,6 +371,22 @@ export default function AnalizaFormyPage() {
 
   const [expandedMeasurementYears, setExpandedMeasurementYears] = useState<Record<string, boolean>>({});
 
+  // Stany zwijania / rozwijania sekcji wykresów
+  const [isCompositionChartsExpanded, setIsCompositionChartsExpanded] = useState<boolean>(true);
+  const [isCircumferenceChartsExpanded, setIsCircumferenceChartsExpanded] = useState<boolean>(false);
+
+  // Stan aktywnego dymka (tooltipa) na wykresach
+  const [activeChartTooltip, setActiveChartTooltip] = useState<{
+    chartKey: string;
+    index: number;
+    x: number;
+    y: number;
+    val: number;
+    date: string;
+    miejsce: string;
+  } | null>(null);
+
+  // Stany dla wyzwania redukcji
   const [edycjeRedukcji, setEdycjeRedukcji] = useState<RedukcjaEdycja[]>([]);
   const [selectedEdycjaId, setSelectedEdycjaId] = useState<number | null>(null);
   const [uczestnicyRedukcji, setUczestnicyRedukcji] = useState<RedukcjaUczestnik[]>([]);
@@ -380,6 +394,13 @@ export default function AnalizaFormyPage() {
   const [nagrodyRedukcji, setNagrodyRedukcji] = useState<RedukcjaNagroda[]>([]);
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
   const [hasUnreadChallenge, setHasUnreadChallenge] = useState<boolean>(false);
+
+  // TOP 3 z ostatniego zakończonego wyzwania (Podium)
+  const [lastFinishedPodium, setLastFinishedPodium] = useState<{
+    edycjaNazwa: string;
+    dataKoniec: string;
+    top3: any[];
+  } | null>(null);
   
   const [isNewEdycjaModalOpen, setIsNewEdycjaModalOpen] = useState<boolean>(false);
   const [isRedukcjaPomiarModalOpen, setIsRedukcjaPomiarModalOpen] = useState<boolean>(false);
@@ -504,7 +525,10 @@ export default function AnalizaFormyPage() {
   } | null>(null);
 
   useEffect(() => {
-    const handleClickOutside = () => setOpenDropdownId(null);
+    const handleClickOutside = () => {
+      setOpenDropdownId(null);
+      setActiveChartTooltip(null);
+    };
     window.addEventListener("click", handleClickOutside);
     return () => window.removeEventListener("click", handleClickOutside);
   }, []);
@@ -570,6 +594,40 @@ export default function AnalizaFormyPage() {
         setEdycjeRedukcji(prev => prev.map(e => e.id === edycjaId ? { ...e, status: 'aktywne' } : e));
       }
     }
+  };
+
+  // AUTOMATYCZNE PRZENOSZENIE DO ARCHIWUM PO 1 DNIU KARENCJI OD DATY KOŃCA
+  const checkAndAutoArchiveWithGracePeriod = async (edycje: RedukcjaEdycja[]): Promise<RedukcjaEdycja[]> => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    let updatedList = [...edycje];
+
+    for (let i = 0; i < updatedList.length; i++) {
+      const ed = updatedList[i];
+      if (ed.status === 'aktywne' && ed.data_koniec) {
+        const endDate = new Date(ed.data_koniec);
+        endDate.setHours(0, 0, 0, 0);
+
+        // 1 dzień karencji (24 godziny po dacie zakończenia)
+        const graceDeadline = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
+
+        if (now > graceDeadline) {
+          try {
+            await supabase
+              .from('klub_redukcja_edycje')
+              .update({ status: 'zakonczone' })
+              .eq('id', ed.id);
+
+            updatedList[i] = { ...ed, status: 'zakonczone' };
+          } catch (err) {
+            console.error(`Błąd auto-archiwizacji wyzwania ${ed.id}:`, err);
+          }
+        }
+      }
+    }
+
+    return updatedList;
   };
 
   const checkAndSendRedukcjaAlerts = async (edycje: RedukcjaEdycja[]) => {
@@ -657,7 +715,7 @@ export default function AnalizaFormyPage() {
   const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
     try {
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('klub_wlasne_badania')
         .select('*')
         .or(`klient_id.eq.${klientId || 0},email_klienta.ilike.${email.trim()}`)
@@ -736,7 +794,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // Precyzyjne oznaczanie jako odczytane (nie kasuje flagi natychmiast przy wejściu w zakładkę)
   const markInterpretationAsRead = async (badanieId?: number) => {
     try {
       if (badanieId) {
@@ -755,115 +812,86 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  useEffect(() => {
-    const initAuth = async () => {
-      setIsLoading(true);
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (session?.user) {
-          const email = session.user.email || '';
-          const cleanEmail = email.toLowerCase().trim();
-          setCurrentUserEmail(cleanEmail);
-
-          const clientsData = await fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 10);
-          const mappedClients = (clientsData || []) as unknown as Klient[];
-          setKlienci(mappedClients);
-
-          const myClientProfile = mappedClients.find(c => (c['E-mail'] || '').toLowerCase().trim() === cleanEmail);
-          if (myClientProfile) {
-            setCurrentUserId(myClientProfile.id);
-          }
-
-          if (cleanEmail === 'maciejklaput@gmail.com' || cleanEmail === 'maciejklaput@icloud.com') {
-            setAppRole('admin');
-            await checkAdminPendingBloodTests();
-          } else {
-            const { data: trenerData } = await supabase
-              .from('trenerzy')
-              .select('*')
-              .ilike('email', cleanEmail)
-              .maybeSingle();
-
-            if (trenerData) {
-              setAppRole('trener');
-              await checkAdminPendingBloodTests();
-              if (myClientProfile) {
-                setSelectedKlient(myClientProfile);
-                const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
-                if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
-                else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
-                
-                const hVal = myClientProfile.wzrost ?? myClientProfile.Wzrost ?? myClientProfile["Wzrost (cm)"];
-                if (hVal) setCalcHeight(String(hVal));
-                const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
-                if (age) setCalcAge(String(age));
-
-                await fetchMeasurements(myClientProfile.id, cleanEmail);
-                await fetchBadaniaKrwi(myClientProfile.id, cleanEmail);
-              }
-            } else {
-              setAppRole('klubowicz');
-              if (myClientProfile) {
-                setSelectedKlient(myClientProfile);
-                const g = (myClientProfile.gender || myClientProfile.Płeć || myClientProfile.plec || '').toLowerCase();
-                if (g.includes('kobieta') || g === 'k') setCalcGender('kobieta');
-                else if (g.includes('mężczyzna') || g.includes('mezczyzna') || g === 'm') setCalcGender('mezczyzna');
-                
-                const hVal = myClientProfile.wzrost ?? myClientProfile.Wzrost ?? myClientProfile["Wzrost (cm)"];
-                if (hVal) setCalcHeight(String(hVal));
-                const age = calculateAge(myClientProfile.Urodziny || myClientProfile.urodziny);
-                if (age) setCalcAge(String(age));
-
-                await fetchMeasurements(myClientProfile.id, cleanEmail);
-                await fetchBadaniaKrwi(myClientProfile.id, cleanEmail);
-              }
-            }
-          }
-
-          await fetchRedukcjaData();
-        }
-      } catch (err) {
-        console.error("Błąd podczas inicjalizacji widoku Analizy Formy:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    initAuth();
-  }, []);
-
-  const fetchRedukcjaData = async () => {
+  // POBIERANIE WYNIKÓW I OBLICZENIE TOP 3 Z OSTATNIEGO ZAKOŃCZONEGO WYZWANIA (PODIUM)
+  const fetchLastFinishedPodium = async (edycje: RedukcjaEdycja[], clientsList: Klient[]) => {
     try {
-      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'data_koniec', false, 2);
-      if (edycjeData && edycjeData.length > 0) {
-        const sorted = (edycjeData as RedukcjaEdycja[]).sort((a, b) => 
-          new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
-        );
-        setEdycjeRedukcji(sorted);
-        
-        await checkAndSendRedukcjaAlerts(sorted);
+      const finishedEdycje = edycje
+        .filter(e => e.status === 'zakonczone')
+        .sort((a, b) => new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime());
 
-        const activeEdycje = sorted.filter((e: any) => e.status === 'aktywne' || e.status === 'zapisy');
-        
-        if (activeEdycje.length > 0) {
-          if (typeof window !== 'undefined') {
-            const hasAnyUnseen = activeEdycje.some(e => !localStorage.getItem(`seen_challenge_${e.id}`));
-            setHasUnreadChallenge(hasAnyUnseen);
-          }
-        }
-
-        const defaultSelected = activeEdycje[0] || sorted[0];
-
-        if (!selectedEdycjaId) {
-          setSelectedEdycjaId(defaultSelected.id);
-          await loadEdycjaDetails(defaultSelected.id, sorted);
-        } else {
-          await loadEdycjaDetails(selectedEdycjaId, sorted);
-        }
+      if (finishedEdycje.length === 0) {
+        setLastFinishedPodium(null);
+        return;
       }
+
+      const lastEd = finishedEdycje[0];
+
+      const [uczestnicyRes, pomiaryRes] = await Promise.all([
+        supabase.from('klub_redukcja_uczestnicy').select('*').eq('edycja_id', lastEd.id),
+        supabase.from('klub_redukcja_pomiary').select('*').eq('edycja_id', lastEd.id)
+      ]);
+
+      const parts = (uczestnicyRes.data || []) as RedukcjaUczestnik[];
+      const poms = (pomiaryRes.data || []) as RedukcjaPomiar[];
+
+      const calculated = parts.map(u => {
+        const kObj = clientsList.find(k => String(k.id) === String(u.klient_id));
+        const sP = poms.find(p => String(p.klient_id) === String(u.klient_id) && p.etap === 'start');
+        const kP = poms.find(p => String(p.klient_id) === String(u.klient_id) && p.etap === 'koniec');
+
+        let totalPkt = Number(u.punkty_calkowite) || 0;
+        let deltaWagaKg = 0;
+        let deltaFatProc = 0;
+
+        if (sP && kP) {
+          const sW = Number(sP.waga_kg) || 0;
+          const kW = Number(kP.waga_kg) || 0;
+          const sF = Number(sP.fat_proc) || 0;
+          const kF = Number(kP.fat_proc) || 0;
+          const sM = Number(sP.muscle_kg) || 0;
+          const kM = Number(kP.muscle_kg) || 0;
+          const sV = Number(sP.visceral_level) || 0;
+          const kV = Number(kP.visceral_level) || 0;
+
+          deltaWagaKg = kW - sW;
+          const deltaWagaProc = sW > 0 ? ((sW - kW) / sW) * 100 : 0;
+          deltaFatProc = sF - kF;
+          const deltaMuscleProc = sM > 0 ? ((kM - sM) / sM) * 100 : 0;
+          const deltaVisceral = sV - kV;
+
+          const pktWaga = deltaWagaProc;
+          const pktFat = deltaFatProc * 1.5;
+          const pktMuscle = deltaMuscleProc * 1.2;
+          const pktVisceral = deltaVisceral * 2.0;
+
+          totalPkt = parseFloat((pktWaga + pktFat + pktMuscle + pktVisceral).toFixed(2)) || totalPkt;
+        }
+
+        const name = kObj ? `${kObj.Imię || ''} ${kObj.Nazwisko || ''}`.trim() : 'Klubowicz';
+
+        return {
+          id: u.id,
+          klientId: u.klient_id,
+          name,
+          avatar: kObj?.avatarUrl || kObj?.AvatarUrl || null,
+          totalPkt,
+          deltaWagaKg,
+          deltaFatProc,
+          brakPomiaru: !!u.brak_pomiaru_koncowego,
+          hasBoth: !!(sP && kP)
+        };
+      })
+      .filter(p => !p.brakPomiaru && p.hasBoth)
+      .sort((a, b) => b.totalPkt - a.totalPkt)
+      .slice(0, 3);
+
+      setLastFinishedPodium({
+        edycjaNazwa: lastEd.nazwa,
+        dataKoniec: lastEd.data_koniec,
+        top3: calculated
+      });
     } catch (err) {
-      console.error("Błąd ładowania wyzwań redukcji:", err);
+      console.error("Błąd pobierania podium ostatniego wyzwania:", err);
     }
   };
   const loadEdycjaDetails = async (edycjaId: number, optionalEdycjeList?: RedukcjaEdycja[]) => {
@@ -1044,7 +1072,6 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // Bezpieczne otwieranie plików PDF i zdjęć z chmury Supabase
   const handleOpenSecureFile = async (rawUrl: string) => {
     if (!rawUrl) return;
     try {
@@ -1117,7 +1144,6 @@ export default function AnalizaFormyPage() {
     }
   };
 
-  // OBSŁUGA WGRYWANIA WIELU PLIKÓW PDF DO STORAGE
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -1181,7 +1207,6 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // OBSŁUGA ZDJĘĆ / SKANÓW
   const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -1435,7 +1460,59 @@ export default function AnalizaFormyPage() {
   const toggleTableHistory = (tableId: string) => {
     setExpandedTableHistory(prev => ({ ...prev, [tableId]: !prev[tableId] }));
   };
+const fetchRedukcjaData = async () => {
+    try {
+      const edycjeData = await fetchAllFromSupabase('klub_redukcja_edycje', '*', 'data_koniec', false, 2);
+      if (edycjeData && edycjeData.length > 0) {
+        let sorted = (edycjeData as RedukcjaEdycja[]).sort((a, b) => 
+          new Date(b.data_koniec).getTime() - new Date(a.data_koniec).getTime()
+        );
 
+        // Automatyczna archiwizacja wyzwania z 1-dniową karencją od daty końca
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        for (let i = 0; i < sorted.length; i++) {
+          const ed = sorted[i];
+          if (ed.status === 'aktywne' && ed.data_koniec) {
+            const endDate = new Date(ed.data_koniec);
+            endDate.setHours(0, 0, 0, 0);
+            const graceDeadline = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
+            if (now > graceDeadline) {
+              await supabase
+                .from('klub_redukcja_edycje')
+                .update({ status: 'zakonczone' })
+                .eq('id', ed.id);
+              sorted[i] = { ...ed, status: 'zakonczone' };
+            }
+          }
+        }
+
+        setEdycjeRedukcji(sorted);
+        
+        await checkAndSendRedukcjaAlerts(sorted);
+
+        const activeEdycje = sorted.filter((e: any) => e.status === 'aktywne' || e.status === 'zapisy');
+        
+        if (activeEdycje.length > 0) {
+          if (typeof window !== 'undefined') {
+            const hasAnyUnseen = activeEdycje.some(e => !localStorage.getItem(`seen_challenge_${e.id}`));
+            setHasUnreadChallenge(hasAnyUnseen);
+          }
+        }
+
+        const defaultSelected = activeEdycje[0] || sorted[0];
+
+        if (!selectedEdycjaId) {
+          setSelectedEdycjaId(defaultSelected.id);
+          await loadEdycjaDetails(defaultSelected.id, sorted);
+        } else {
+          await loadEdycjaDetails(selectedEdycjaId, sorted);
+        }
+      }
+    } catch (err) {
+      console.error("Błąd ładowania wyzwań redukcji:", err);
+    }
+  };
   // --- REDUKCJA LOGIKA ---
   const handleCreateEdycja = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1833,6 +1910,7 @@ export default function AnalizaFormyPage() {
       alert("Błąd zapisu pomiaru: " + error.message);
     }
   };
+
   const activeEdycjaObj = edycjeRedukcji.find(e => e.id === selectedEdycjaId) || null;
   const activeUserKlientId = selectedKlient?.id || currentUserId;
   const isCurrentUserJoined = (uczestnicyRedukcji || []).some(u => String(u.klient_id) === String(activeUserKlientId));
@@ -2031,7 +2109,7 @@ export default function AnalizaFormyPage() {
     });
   };
 
-  // GENERATOR WYKRESÓW ANALIZY FORMY (ZAKRES 8 LAT)
+  // ZMODERNIZOWANY GENERATOR WYKRESÓW: CO 3 LICZBA + INTERAKTYWNY DYMEK PO KLIKNIĘCIU
   const renderLineChart = (
     title: string, 
     dataKey: keyof AnalizaFormyWpis, 
@@ -2041,10 +2119,11 @@ export default function AnalizaFormyPage() {
   ) => {
     const validPoints = (chartData8Years || [])
       .map(item => ({
-        date: item.data_pomiaru,
+        date: item.data_pomiaru || '',
+        miejsce: item.miejsce_pomiaru || 'STUDIO',
         val: item[dataKey] !== null && item[dataKey] !== undefined ? Number(item[dataKey]) : null
       }))
-      .filter((p): p is { date: string; val: number } => p.val !== null && !isNaN(p.val));
+      .filter((p): p is { date: string; miejsce: string; val: number } => p.val !== null && !isNaN(p.val));
 
     if (validPoints.length < 2) {
       return (
@@ -2065,19 +2144,22 @@ export default function AnalizaFormyPage() {
 
     const width = 360;
     const height = 150;
-    const margin = { top: 15, right: 20, bottom: 25, left: 35 };
+    const margin = { top: 18, right: 20, bottom: 25, left: 35 };
 
     const points = validPoints.map((p, index) => {
       const x = margin.left + (index / (validPoints.length - 1)) * (width - margin.left - margin.right);
       const y = height - margin.bottom - ((p.val - yMin) / (yMax - yMin || 1)) * (height - margin.top - margin.bottom);
-      return { x, y, val: p.val, date: p.date };
+      return { x, y, val: p.val, date: p.date, miejsce: p.miejsce };
     });
 
     const pathD = points.reduce((acc, p, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${p.x},${p.y}`, '');
     const areaD = `${pathD} L ${points[points.length - 1].x},${height - margin.bottom} L ${points[0].x},${height - margin.bottom} Z`;
 
+    const chartKeyStr = String(dataKey);
+    const activeTooltipForThisChart = activeChartTooltip?.chartKey === chartKeyStr ? activeChartTooltip : null;
+
     return (
-      <div className="bg-white p-4 rounded-2xl border border-sky-200 shadow-sm flex flex-col justify-between">
+      <div className="bg-white p-4 rounded-2xl border border-sky-200 shadow-sm flex flex-col justify-between relative">
         <div className="flex items-center justify-between border-b border-sky-100 pb-2 mb-2">
           <div className="text-xs font-black text-sky-950 uppercase tracking-wider">{title}</div>
           <div className="text-xs font-black" style={{ color: strokeColor }}>
@@ -2085,10 +2167,38 @@ export default function AnalizaFormyPage() {
           </div>
         </div>
 
+        {/* INTERAKTYWNY PŁYWAJĄCY DYMEK ZE SZCZEGÓŁAMI PO KLIKNIĘCIU W KROPKĘ */}
+        {activeTooltipForThisChart && (
+          <div 
+            className="absolute z-30 bg-sky-950 text-white p-2.5 rounded-xl shadow-2xl border border-sky-700 text-[11px] animate-in fade-in zoom-in-95 duration-100 pointer-events-auto cursor-default"
+            style={{ 
+              left: `${Math.min(Math.max((activeTooltipForThisChart.x / width) * 100, 15), 85)}%`, 
+              top: `${Math.max((activeTooltipForThisChart.y / height) * 100 - 30, 5)}%`,
+              transform: 'translate(-50%, -50%)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-sky-800 pb-1 mb-1">
+              <span className="font-bold text-amber-400 text-xs">{activeTooltipForThisChart.val} {unit}</span>
+              <button 
+                type="button" 
+                onClick={() => setActiveChartTooltip(null)} 
+                className="text-slate-400 hover:text-white text-[10px] font-bold p-0.5 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="text-[10px] text-slate-300">📅 {activeTooltipForThisChart.date}</div>
+            <div className="text-[9px] text-sky-200 mt-0.5 font-bold">
+              {activeTooltipForThisChart.miejsce.toUpperCase() === 'STUDIO' ? '🏢 STUDIO' : `📍 ${activeTooltipForThisChart.miejsce}`}
+            </div>
+          </div>
+        )}
+
         <div className="w-full overflow-x-auto">
           <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-40">
             <defs>
-              <linearGradient id={`grad-${String(dataKey)}`} x1="0%" y1="0%" x2="0%" y2="100%">
+              <linearGradient id={`grad-${chartKeyStr}`} x1="0%" y1="0%" x2="0%" y2="100%">
                 <stop offset="0%" stopColor={fillGradient} stopOpacity="0.4" />
                 <stop offset="100%" stopColor={fillGradient} stopOpacity="0.0" />
               </linearGradient>
@@ -2098,22 +2208,61 @@ export default function AnalizaFormyPage() {
             <line x1={margin.left} y1={(height - margin.bottom + margin.top) / 2} x2={width - margin.right} y2={(height - margin.bottom + margin.top) / 2} stroke="#f1f5f9" strokeWidth="1" />
             <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#e2e8f0" strokeWidth="1" />
 
-            <path d={areaD} fill={`url(#grad-${String(dataKey)})`} />
+            <path d={areaD} fill={`url(#grad-${chartKeyStr})`} />
             <path d={pathD} fill="none" stroke={strokeColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
 
-            {points.map((p, idx) => (
-              <g key={idx}>
-                <circle cx={p.x} cy={p.y} r="3.5" fill="#ffffff" stroke={strokeColor} strokeWidth="2" />
-                <text x={p.x} y={p.y - 6} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#0f172a">
-                  {p.val}
-                </text>
-                {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
-                  <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
-                    {p.date ? p.date.substring(2) : ''}
-                  </text>
-                )}
-              </g>
-            ))}
+            {points.map((p, idx) => {
+              // Liczba pokazywana co 3. punkt oraz na punkcie ostatnim (najnowszym)
+              const showLabel = idx % 3 === 0 || idx === points.length - 1;
+              const isSelected = activeTooltipForThisChart?.index === idx;
+
+              return (
+                <g 
+                  key={idx} 
+                  className="cursor-pointer group"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveChartTooltip({
+                      chartKey: chartKeyStr,
+                      index: idx,
+                      x: p.x,
+                      y: p.y,
+                      val: p.val,
+                      date: p.date,
+                      miejsce: p.miejsce
+                    });
+                  }}
+                >
+                  {/* Przezroczysty większy obszar kliknięcia dla wygody na telefonach */}
+                  <circle cx={p.x} cy={p.y} r="14" fill="transparent" />
+
+                  {/* Kropka pomiaru */}
+                  <circle 
+                    cx={p.x} 
+                    cy={p.y} 
+                    r={isSelected ? "5.5" : "3.5"} 
+                    fill={isSelected ? strokeColor : "#ffffff"} 
+                    stroke={strokeColor} 
+                    strokeWidth={isSelected ? "3" : "2"} 
+                    className="transition-all duration-150"
+                  />
+
+                  {/* Liczba pomiaru: co trzecia lub ostatnia */}
+                  {showLabel && (
+                    <text x={p.x} y={p.y - 7} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#0f172a">
+                      {p.val}
+                    </text>
+                  )}
+
+                  {/* Daty na osi poziomej */}
+                  {(idx === 0 || idx === points.length - 1 || idx === Math.floor(points.length / 2)) && (
+                    <text x={p.x} y={height - 8} textAnchor="middle" fontSize="8" fill="#64748b">
+                      {p.date ? p.date.substring(2) : ''}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
           </svg>
         </div>
       </div>
@@ -2447,7 +2596,6 @@ export default function AnalizaFormyPage() {
           <span>🔥</span> 
           <span>3. Redukcja</span>
 
-          {/* Czerwona kropka z wykrzyknikiem dla administratora po zakończeniu wyzwania */}
           {appRole === 'admin' && hasFinishedChallengeAwaitingTally ? (
             <span className="relative flex h-4 w-4 ml-1" title="Termin wyzwania minął! Podlicz punkty i rozdaj nagrody.">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
@@ -2477,7 +2625,6 @@ export default function AnalizaFormyPage() {
           <span>🩸</span> 
           <span>4. Badania Krwi</span>
 
-          {/* Czerwona migająca kropka z wykrzyknikiem dla trenera lub dla klubowicza, gdy jest nowa analiza */}
           {((appRole === 'admin' || appRole === 'trener') && hasPendingBloodTestsForAdmin) ? (
             <span className="relative flex h-4 w-4 ml-1" title={`Nowe badania oczekujące na analizę: ${wszystkieOczekujaceBadania.length}`}>
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
@@ -2810,25 +2957,64 @@ export default function AnalizaFormyPage() {
             )}
           </div>
 
-          {/* WYKRESY PROGRESU NA 8 LAT */}
-          <div className="space-y-4 pt-4">
-            <div className="flex items-center justify-between border-b border-sky-200 pb-2">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                <span>📈</span> Wykresy Progresu (Zakres 8 Lat)
-              </h3>
-              <span className="text-xs text-slate-500 font-bold">
-                Liczba pomiarów w okresie 8 lat: {chartData8Years.length}
+          {/* AKORDEON 1: WYKRESY SKŁADU CIAŁA (ZAKRES 8 LAT) */}
+          <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setIsCompositionChartsExpanded(!isCompositionChartsExpanded)}
+              className="w-full p-4 flex items-center justify-between font-bold text-xs text-sky-950 hover:bg-sky-50 transition-colors cursor-pointer bg-slate-50 border-b border-sky-100"
+            >
+              <span className="flex items-center gap-2">
+                <span className="text-base">📈</span>
+                <span className="font-black uppercase tracking-wider text-xs sm:text-sm">Wykresy Składu Ciała (Zakres 8 Lat)</span>
+                <span className="text-[10px] text-slate-500 font-bold ml-1">({chartData8Years.length} pomiarów)</span>
               </span>
-            </div>
+              <span className="text-amber-600 text-xs sm:text-sm font-black">
+                {isCompositionChartsExpanded ? '▲ Zwiń wykresy' : '▼ Rozwiń wykresy'}
+              </span>
+            </button>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {renderLineChart("Waga", "waga", "kg", "#0284c7", "#0284c7")}
-              {renderLineChart("Tkanka Tłuszczowa", "tkanka_tluszczowa", "%", "#f59e0b", "#f59e0b")}
-              {renderLineChart("Masa Mięśniowa", "miesnie", "kg", "#10b981", "#10b981")}
-              {renderLineChart("Wiek Metaboliczny", "wiek_metaboliczny", "lat", "#8b5cf6", "#8b5cf6")}
-              {renderLineChart("Tłuszcz Wisceralny", "tluszcz_wisceralny", "lvl", "#ef4444", "#ef4444")}
-            </div>
+            {isCompositionChartsExpanded && (
+              <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {renderLineChart("Waga", "waga", "kg", "#0284c7", "#0284c7")}
+                {renderLineChart("Tkanka Tłuszczowa", "tkanka_tluszczowa", "%", "#f59e0b", "#f59e0b")}
+                {renderLineChart("Masa Mięśniowa", "miesnie", "kg", "#10b981", "#10b981")}
+                {renderLineChart("Wiek Metaboliczny", "wiek_metaboliczny", "lat", "#8b5cf6", "#8b5cf6")}
+                {renderLineChart("Tłuszcz Wisceralny", "tluszcz_wisceralny", "lvl", "#ef4444", "#ef4444")}
+              </div>
+            )}
           </div>
+
+          {/* AKORDEON 2: WYKRESY OBWODÓW CIAŁA (ZAKRES 8 LAT) */}
+          <div className="bg-white rounded-2xl border border-sky-200 shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setIsCircumferenceChartsExpanded(!isCircumferenceChartsExpanded)}
+              className="w-full p-4 flex items-center justify-between font-bold text-xs text-sky-950 hover:bg-sky-50 transition-colors cursor-pointer bg-slate-50 border-b border-sky-100"
+            >
+              <span className="flex items-center gap-2">
+                <span className="text-base">📏</span>
+                <span className="font-black uppercase tracking-wider text-xs sm:text-sm">Wykresy Obwodów Ciała (Zakres 8 Lat)</span>
+                <span className="text-[10px] text-slate-500 font-bold ml-1">({chartData8Years.length} pomiarów)</span>
+              </span>
+              <span className="text-amber-600 text-xs sm:text-sm font-black">
+                {isCircumferenceChartsExpanded ? '▲ Zwiń obwody' : '▼ Rozwiń obwody'}
+              </span>
+            </button>
+
+            {isCircumferenceChartsExpanded && (
+              <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {renderLineChart("Obwód Pasa", "obwod_pasa", "cm", "#0284c7", "#0284c7")}
+                {renderLineChart("Klatka Piersiowa", "klatka", "cm", "#0ea5e9", "#0ea5e9")}
+                {renderLineChart("Ramię", "ramie", "cm", "#6366f1", "#6366f1")}
+                {renderLineChart("Talia", "talia", "cm", "#f59e0b", "#f59e0b")}
+                {renderLineChart("Biodra", "biodra", "cm", "#ec4899", "#ec4899")}
+                {renderLineChart("Udo", "udo", "cm", "#10b981", "#10b981")}
+                {renderLineChart("Łydka", "lydka", "cm", "#14b8a6", "#14b8a6")}
+              </div>
+            )}
+          </div>
+
         </div>
       )}
 
@@ -3112,6 +3298,54 @@ export default function AnalizaFormyPage() {
               </div>
             </div>
           </div>
+
+          {/* NOWOŚĆ: PODIUM TOP 3 Z OSTATNIEJ ZAKOŃCZONEJ EDYCJI */}
+          {lastFinishedPodium && lastFinishedPodium.top3.length > 0 && (
+            <div className="bg-gradient-to-br from-amber-500/10 via-white to-amber-50 border-2 border-amber-300 p-5 rounded-3xl shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200/60 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl">👑</span>
+                  <div>
+                    <h3 className="font-black text-sm uppercase tracking-wider text-amber-950">
+                      Podium Ostatniego Wyzwania: {lastFinishedPodium.edycjaNazwa}
+                    </h3>
+                    <p className="text-[11px] text-amber-900/80 font-medium">
+                      Oficjalne TOP 3 finału z dnia: {lastFinishedPodium.dataKoniec}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-wider bg-amber-500 text-slate-950 px-2.5 py-1 rounded-full shadow-xs self-start sm:self-auto">
+                  🏆 Ostatni Zwycięzcy
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {lastFinishedPodium.top3.map((podiumUser: any, pIdx: number) => {
+                  const medal = pIdx === 0 ? '🥇' : pIdx === 1 ? '🥈' : '🥉';
+                  const placeLabel = pIdx === 0 ? '1. Miejsce' : pIdx === 1 ? '2. Miejsce' : '3. Miejsce';
+                  const borderCol = pIdx === 0 ? 'border-amber-400 bg-amber-50/80' : pIdx === 1 ? 'border-slate-300 bg-slate-50/80' : 'border-amber-700/40 bg-amber-100/40';
+
+                  return (
+                    <div key={pIdx} className={`p-4 rounded-2xl border-2 ${borderCol} flex items-center gap-3 shadow-xs relative overflow-hidden`}>
+                      <span className="text-3xl shrink-0">{medal}</span>
+                      <div className="w-10 h-10 rounded-full bg-sky-100 border border-amber-500 flex items-center justify-center font-bold text-xs text-sky-900 overflow-hidden shrink-0">
+                        {podiumUser.avatar ? (
+                          <img src={podiumUser.avatar} alt={podiumUser.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{podiumUser.name.charAt(0)}</span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">{placeLabel}</div>
+                        <div className="font-black text-xs text-slate-900 truncate">{podiumUser.name}</div>
+                        <div className="text-xs font-black text-amber-600 mt-0.5">{podiumUser.totalPkt} pkt</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {activeEdycjaObj ? (
             <div className="bg-gradient-to-br from-slate-900 via-sky-950 to-slate-950 text-white p-6 rounded-3xl shadow-xl space-y-6 border border-sky-900/50">
@@ -3803,7 +4037,6 @@ export default function AnalizaFormyPage() {
 
         </div>
       )}
-
       {/* ZAKŁADKA 4: BADANIA KRWI */}
       {activeTab === 'badania' && (
         <div className="space-y-6">
@@ -3959,7 +4192,7 @@ export default function AnalizaFormyPage() {
                     </button>
                   </div>
 
-                  {/* NOWA KOMPAKTOWA TABELA HISTORII BADAŃ - IDEALNIE MIEŚCI SIĘ NA TELEFONACH BEZ PRZEWIJANIA */}
+                  {/* KOMPAKTOWA TABELA HISTORII BADAŃ DLA TELEFONÓW */}
                   <div className="bg-white rounded-3xl border border-sky-200 shadow-sm overflow-hidden space-y-3">
                     <div className="p-4 bg-slate-50 border-b border-sky-100 flex items-center justify-between">
                       <h3 className="font-black text-xs text-sky-950 uppercase tracking-wider flex items-center gap-2">
@@ -4254,6 +4487,7 @@ export default function AnalizaFormyPage() {
 
         </div>
       )}
+
       {/* MODAL: UTWÓRZ NOWĄ TABELĘ WŁASNYCH BADAŃ (MAX 15) */}
       {isAddTabelaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -4711,7 +4945,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL 2: PODGLĄD SZCZEGÓŁÓW BADANIA Z NAPRAWIONYMI MINIATURKAMI ZDJĘĆ */}
+      {/* MODAL 2: PODGLĄD SZCZEGÓŁÓW BADANIA */}
       {isDetailViewOpen && selectedBadanieDetail && (
         <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 md:p-8 shadow-2xl space-y-6 my-8 border border-sky-100 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
@@ -4799,7 +5033,7 @@ export default function AnalizaFormyPage() {
               </div>
             </div>
 
-            {/* GALERIA ZDJĘĆ Z AUTOMATYCZNYM POBIERANIEM MINIATUREK Z BUCKETU */}
+            {/* GALERIA ZDJĘĆ */}
             {(selectedBadanieDetail.zdjecia || []).length > 0 && (
               <div className="space-y-2">
                 <span className="text-[11px] font-black text-sky-950 uppercase tracking-wider block">
@@ -5122,6 +5356,7 @@ export default function AnalizaFormyPage() {
           </div>
         </div>
       )}
+
       {/* MODAL: DODAWANIE / EDYCJA NAGRODY */}
       {isAddNagrodaModalOpen && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -5375,7 +5610,7 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: POMIAR REDUKCJI (POBIERA POPRAWNY WZROST Z PROFILU KLUBOWICZA) */}
+      {/* MODAL: POMIAR REDUKCJI */}
       {isRedukcjaPomiarModalOpen && (() => {
         const targetClient = (klienci || []).find(k => String(k.id) === String(targetPomiarKlientId));
         const targetAge = targetClient ? calculateAge(targetClient.Urodziny || targetClient.urodziny) : null;
