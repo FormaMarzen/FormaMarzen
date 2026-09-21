@@ -49,7 +49,7 @@ export default function ClubChat() {
   const [fontSizeScale, setFontSizeScale] = useState<"normal" | "large" | "xlarge">("normal");
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
 
-  // Główne zakładki widoku listy: wyłącznie Prywatne | Grupy (usunięto Treningi)
+  // Główne zakładki widoku listy: wyłącznie Prywatne | Grupy
   const [activeTab, setActiveTab] = useState<"direct" | "groups">("direct");
   const [groupFilterTab, setGroupFilterTab] = useState<"my" | "public" | "closed">("my");
 
@@ -88,6 +88,11 @@ export default function ClubChat() {
   const [newCategoryInput, setNewCategoryInput] = useState("");
 
   const [klienci, setKlienci] = useState<any[]>([]);
+  // Unifikacja tożsamości Administratora w całym komponencie
+  const adminClientIds = klienci
+    .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
+    .map((k: any) => String(k.id));
+  const allAdminIds = Array.from(new Set([...adminClientIds, "999999999", String(SYSTEM_ID)]));
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<any | null>(null);
@@ -156,12 +161,6 @@ export default function ClubChat() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-
-  // Unifikacja tożsamości Administratora dostępna w całym komponencie
-  const adminClientIds = klienci
-    .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
-    .map((k: any) => String(k.id));
-  const allAdminIds = Array.from(new Set([...adminClientIds, "999999999", String(SYSTEM_ID)]));
 
   const scrollToBottom = () => {
     if (chatInsideTab === "messages") {
@@ -893,7 +892,6 @@ export default function ClubChat() {
 
     initUser();
   }, []);
-
   const fetchGroupsAndTrainings = async () => {
     if (!currentUserId) return;
     try {
@@ -935,7 +933,7 @@ export default function ClubChat() {
     }
   };
 
-  // POBIERANIE PEŁNEJ HISTORII DEDYKOWANEJ DLA OTWARTEJ ROZMOWY 1:1 (BEZ LIMITU POSTGREST)
+  // POBIERANIE PEŁNEJ HISTORII DEDYKOWANEJ DLA OTWARTEJ ROZMOWY 1:1
   const fetchDirectMessages = async (targetUser: any) => {
     if (!currentUserId || !targetUser) return;
     try {
@@ -960,10 +958,9 @@ export default function ClubChat() {
         .limit(3000);
 
       if (isSys) {
-        const emailFilter = currentUserEmail ? `,odbiorca_email.eq.${currentUserEmail}` : "";
-        query = query.or(
-          `nadawca_id.eq.${SYSTEM_ID},nadawca_id.is.null,nadawca_rola.eq.system,odbiorca_id.in.(${myIds.join(",")})${emailFilter}`
-        );
+        query = query
+          .or(`nadawca_id.eq.${SYSTEM_ID},nadawca_id.is.null,nadawca_rola.eq.system`)
+          .in("odbiorca_id", myIds);
       } else {
         const adminSenders = isTargetAdmin || isAdmin ? allAdminIds : [];
         const participantIds = Array.from(
@@ -990,6 +987,7 @@ export default function ClubChat() {
     }
   };
 
+  // POBIERANIE GŁÓWNYCH WIADOMOŚCI (BEZ BŁĘDÓW SKŁADNIOWYCH POSTGREST)
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
@@ -1007,16 +1005,15 @@ export default function ClubChat() {
         .order("created_at", { ascending: false })
         .limit(3000);
 
+      // Czysty, bezbłędny filtr relacji nadawca-odbiorca dla klubowicza
       if (!isAdmin) {
-        const emailFilter = currentUserEmail ? `,odbiorca_email.eq.${currentUserEmail}` : "";
         query = query.or(
-          `nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")})${emailFilter},grupa_id.not.is.null`
+          `nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")})`
         );
       }
 
       const { data, error } = await query;
       if (!error && data) {
-        // Bezpieczne scalanie bez usuwania starszych wiadomości z pamięci
         setMessages((prev) => {
           const map = new Map();
           prev.forEach((m) => map.set(m.id, m));
@@ -1025,11 +1022,14 @@ export default function ClubChat() {
             (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
           );
         });
+      } else if (error) {
+        console.error("Błąd zapytania czat_wiadomosci:", error);
       }
     } catch (err) {
       console.error("Błąd pobierania wiadomości ogólnych:", err);
     }
   };
+
   // REALTIME SYNCHRONIZACJA Z BROADCASTEM PISANIA I ZAPASOWYM POLLINGIEM
   useEffect(() => {
     if (!currentUserId) return;
@@ -1062,9 +1062,7 @@ export default function ClubChat() {
 
             if (isDirectMsg && !isAdmin) {
               const amISender = myActualIds.includes(String(newRow.nadawca_id));
-              const amIReceiver =
-                myActualIds.includes(String(newRow.odbiorca_id)) ||
-                (currentUserEmail && String(newRow.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
+              const amIReceiver = myActualIds.includes(String(newRow.odbiorca_id));
 
               if (!amISender && !amIReceiver) {
                 return;
@@ -1078,10 +1076,7 @@ export default function ClubChat() {
               return updated;
             });
 
-            if (
-              myActualIds.includes(String(newRow.odbiorca_id)) ||
-              (currentUserEmail && String(newRow.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase())
-            ) {
+            if (myActualIds.includes(String(newRow.odbiorca_id))) {
               setDeletedDirectChatTimestamps((prev) => {
                 if (prev[senderKey]) {
                   const copy = { ...prev };
@@ -1095,8 +1090,10 @@ export default function ClubChat() {
             }
 
             setMessages((prev) => {
-              if (prev.some((m) => m.id === newRow.id)) return prev;
-              return [...prev, newRow].sort(
+              const map = new Map();
+              prev.forEach((m) => map.set(m.id, m));
+              map.set(newRow.id, newRow);
+              return Array.from(map.values()).sort(
                 (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
               );
             });
@@ -1226,7 +1223,7 @@ export default function ClubChat() {
     });
   };
 
-  // OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE (BŁYSKAWICZNE ZNIKANIE PLAKIETKI "1")
+  // OZNACZANIE WIADOMOŚCI JAKO PRZECZYTANE
   useEffect(() => {
     if (isOpen && selectedUser && currentUserId) {
       const markAsRead = async () => {
@@ -1243,7 +1240,7 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // 1. Natychmiastowe optymistyczne zerowanie plakietki w stanie lokalnym
+        // 1. Natychmiastowe optymistyczne zerowanie plakietki
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1256,9 +1253,7 @@ export default function ClubChat() {
               ? allAdminIds.includes(sId) || m.is_system || m.nadawca_rola === "system"
               : sId === String(selectedUser.id);
 
-            const isTargetReceiver =
-              myEffective.includes(rId) ||
-              (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
+            const isTargetReceiver = myEffective.includes(rId);
 
             if (isTargetSender && isTargetReceiver) {
               return {
@@ -1274,21 +1269,14 @@ export default function ClubChat() {
         // 2. Aktualizacja w bazie Supabase
         try {
           if (isSys) {
-            let sysQuery = supabase
+            await supabase
               .from("czat_wiadomosci")
               .update({
                 przeczytana: true,
                 przeczytana_at: new Date().toISOString(),
               })
+              .in("odbiorca_id", myEffective)
               .eq("przeczytana", false);
-
-            if (currentUserEmail) {
-              sysQuery = sysQuery.or(`odbiorca_id.in.(${myEffective.join(",")}),odbiorca_email.eq.${currentUserEmail}`);
-            } else {
-              sysQuery = sysQuery.in("odbiorca_id", myEffective);
-            }
-
-            await sysQuery;
           } else if (isTargetAdmin) {
             await supabase
               .from("czat_wiadomosci")
@@ -2040,7 +2028,7 @@ export default function ClubChat() {
     selectedUser.name?.toLowerCase().includes("maciej kłaput")
   );
 
-  // PRECYZYJNY FILTR WIADOMOŚCI 1:1 – ODPORNY NA LIMIT POSTGREST I ROZDZIAŁ TOŻSAMOŚCI
+  // PRECYZYJNY FILTR WIADOMOŚCI 1:1 DLA AKTYWNEGO OKNA CZATU
   const activeChatMessages = messages.filter((m: any) => {
     if (!selectedUser) return false;
     if (m.grupa_id) return false;
@@ -2050,11 +2038,9 @@ export default function ClubChat() {
     const targetId = String(selectedUser.id);
 
     const isSenderMe = effectiveIds.includes(sId);
-    const isReceiverMe =
-      effectiveIds.includes(rId) ||
-      (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
+    const isReceiverMe = effectiveIds.includes(rId);
 
-    // Jeśli klubowicz rozmawia z Administratorem (lub Administrator z klubowiczem)
+    // Relacja klubowicz <-> Administrator
     if (isSelectedUserAdmin) {
       const isSenderAdmin = allAdminIds.includes(sId) || m.is_system || m.nadawca_rola === "system";
       const isReceiverAdmin = allAdminIds.includes(rId);
@@ -2126,9 +2112,7 @@ export default function ClubChat() {
       const sId = String(m.nadawca_id ?? SYSTEM_ID);
       const rId = String(m.odbiorca_id ?? SYSTEM_ID);
       const isSenderMe = effectiveIds.includes(sId);
-      const isReceiverMe =
-        effectiveIds.includes(rId) ||
-        (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
+      const isReceiverMe = effectiveIds.includes(rId);
 
       if (!isSenderMe && !isReceiverMe && !isAdmin) {
         return;
@@ -2163,10 +2147,7 @@ export default function ClubChat() {
           if (maciejAccount) targetId = String(maciejAccount.id);
         }
         chattedUserIds.add(targetId);
-      } else if (
-        effectiveIds.includes(rId) ||
-        (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase())
-      ) {
+      } else if (effectiveIds.includes(rId)) {
         let senderId = sId;
         if (!isAdmin && allAdminIds.includes(senderId)) {
           const maciejAccount = klienci.find((k: any) => ADMIN_EMAILS.includes(k.email));
@@ -2177,6 +2158,7 @@ export default function ClubChat() {
     }
   });
 
+  // SORTOWANIE: NIEPRZECZYTANE NA GÓRZE, NASTĘPNIE WG DATY OSTATNIEJ WIADOMOŚCI
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
@@ -2211,6 +2193,31 @@ export default function ClubChat() {
       return k.name?.toLowerCase().includes(q);
     })
     .sort((a, b) => {
+      const isSysA = Number(a.id) === SYSTEM_ID;
+      const isTargetAdminA = allAdminIds.includes(String(a.id)) || ADMIN_EMAILS.includes(a.email);
+      const unreadA = messages.filter((m: any) => {
+        if (m.grupa_id || m.przeczytana) return false;
+        if (!effectiveIds.includes(String(m.odbiorca_id))) return false;
+        if (isSysA) return m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system";
+        if (isTargetAdminA) return allAdminIds.includes(String(m.nadawca_id)) || m.is_system || m.nadawca_rola === "system";
+        return String(m.nadawca_id) === String(a.id);
+      }).length;
+
+      const isSysB = Number(b.id) === SYSTEM_ID;
+      const isTargetAdminB = allAdminIds.includes(String(b.id)) || ADMIN_EMAILS.includes(b.email);
+      const unreadB = messages.filter((m: any) => {
+        if (m.grupa_id || m.przeczytana) return false;
+        if (!effectiveIds.includes(String(m.odbiorca_id))) return false;
+        if (isSysB) return m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system";
+        if (isTargetAdminB) return allAdminIds.includes(String(m.nadawca_id)) || m.is_system || m.nadawca_rola === "system";
+        return String(m.nadawca_id) === String(b.id);
+      }).length;
+
+      // 1. Priorytet dla wątków z nowymi wiadomościami
+      if (unreadA > 0 && unreadB === 0) return -1;
+      if (unreadB > 0 && unreadA === 0) return 1;
+
+      // 2. Sortowanie wg czasu ostatniej wiadomości
       const timeA = latestMessageMap.get(String(a.id)) || 0;
       const timeB = latestMessageMap.get(String(b.id)) || 0;
       return timeB - timeA;
@@ -2255,10 +2262,7 @@ export default function ClubChat() {
     const rId = String(m.odbiorca_id ?? SYSTEM_ID);
     const sId = String(m.nadawca_id ?? SYSTEM_ID);
 
-    const isForMe =
-      effectiveIds.includes(rId) ||
-      (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
-
+    const isForMe = effectiveIds.includes(rId);
     if (!isForMe || effectiveIds.includes(sId)) return false;
 
     const t = m.tresc || "";
@@ -2706,9 +2710,7 @@ export default function ClubChat() {
       user.name?.toLowerCase().includes("maciej kłaput");
 
     const userUnread = messages.filter((m: any) => {
-      const isForMe =
-        effectiveIds.includes(String(m.odbiorca_id)) ||
-        (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
+      const isForMe = effectiveIds.includes(String(m.odbiorca_id));
 
       if (!isForMe || m.grupa_id || m.przeczytana) return false;
       if (isSys) {
@@ -2748,9 +2750,7 @@ export default function ClubChat() {
                   ? allAdminIds.includes(sId) || m.is_system || m.nadawca_rola === "system"
                   : sId === String(user.id);
 
-                const isTargetReceiver =
-                  effectiveIds.includes(rId) ||
-                  (currentUserEmail && String(m.odbiorca_email || "").toLowerCase() === currentUserEmail.toLowerCase());
+                const isTargetReceiver = effectiveIds.includes(rId);
 
                 if (isTargetSender && isTargetReceiver) {
                   return { ...m, przeczytana: true, przeczytana_at: new Date().toISOString() };
@@ -3460,7 +3460,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {/* POZOSTAŁE ROZMOWY 1-NA-1 */}
+                    {/* POZOSTAŁE ROZMOWY 1-NA-1 (Z NIEPRZECZYTANYMI NA POCZĄTKU) */}
                     {regularDirectUsers.length > 0 && (
                       <div className="space-y-1">
                         {(pinnedDirectUsers.length > 0 || directTabGroupChats.length > 0) && (
