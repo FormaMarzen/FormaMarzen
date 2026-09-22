@@ -1130,10 +1130,11 @@ export default function KarnetyPage() {
                   statusTekst: `Ważny do: ${nextNewExpiry}`
                 };
                 karnetyChanged = true;
-              } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
-                const hasBookingsAfterExpiry = futureBookingDates.some(bookingDate => bookingDate > (primaryPass.waznyDo || todayDateOnly));
-                
-                if (hasBookingsAfterExpiry) {
+ } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
+                const hasBookingsAfterExpiry = futureBookingDates.some((bookingDate: string) => bookingDate > (primaryPass.waznyDo || todayDateOnly));
+                const alreadyExtendedForThisExpiry = primaryPass.lastAutoExtendedForExpiry === primaryPass.waznyDo;
+
+                if (hasBookingsAfterExpiry && !alreadyExtendedForThisExpiry) {
                   const defKarnetu = dostepneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
                   const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : (parseFloat(String(primaryPass.cena).replace(/[^0-9.-]/g, '')) || 0);
                   
@@ -1141,6 +1142,7 @@ export default function KarnetyPage() {
                   const priceAfterDiscount = basePrice * (1 - currentDiscountPercent / 100);
 
                   const extendedExpiry = getCalendarExpiryDate(todayDateOnly, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || primaryPass.dlugosc || '1 miesiąc');
+                  const oldExpiryStr = primaryPass.waznyDo;
                   
                   currentWalletAmount -= priceAfterDiscount;
                   walletChanged = true;
@@ -1153,24 +1155,36 @@ export default function KarnetyPage() {
                     brokenAt: todayDateOnly,
                     expiresAt: noticeExpiry.toISOString().split('T')[0],
                     extendedPassName: primaryPass.nazwa,
-                    reason: `Karnet ${primaryPass.nazwa} wygasł w dniu ${primaryPass.waznyDo}, lecz posiadałeś aktywne zapisy w grafiku. Karnet został automatycznie przedłużony o kolejny okres, a ciągłość została przerwana.`
+                    reason: `Karnet ${primaryPass.nazwa} wygasł w dniu ${oldExpiryStr}, lecz posiadałeś aktywne zapisy w grafiku. Karnet został automatycznie przedłużony o kolejny okres, a ciągłość została przerwana.`
                   };
 
                   tempKarnety[0] = {
                     ...primaryPass,
                     waznyDo: extendedExpiry,
                     pozostaloWejsc: null,
+                    lastAutoExtendedForExpiry: oldExpiryStr,
                     statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
                   };
 
                   karnetyChanged = true;
 
-                  await supabase.from('transakcje').insert([{
-                    klient_id: c.id,
-                    typ_operacji: 'auto_przedluzenie_karnetu',
-                    kwota: -priceAfterDiscount,
-                    opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
-                  }]);
+                  // Sprawdzenie unikalności: transakcja auto-przedłużenia może powstać maksymalnie 1 raz dziennie dla danego klienta
+                  const { data: existingTx } = await supabase
+                    .from('transakcje')
+                    .select('id')
+                    .eq('klient_id', c.id)
+                    .eq('typ_operacji', 'auto_przedluzenie_karnetu')
+                    .gte('created_at', `${todayDateOnly}T00:00:00`)
+                    .limit(1);
+
+                  if (!existingTx || existingTx.length === 0) {
+                    await supabase.from('transakcje').insert([{
+                      klient_id: c.id,
+                      typ_operacji: 'auto_przedluzenie_karnetu',
+                      kwota: -priceAfterDiscount,
+                      opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
+                    }]);
+                  }
                 }
               }
             }
@@ -1183,12 +1197,13 @@ export default function KarnetyPage() {
             const verifiedKarnety = tempKarnety.filter((k: any) => {
               if (isContractPassCheck(k)) return true;
               if (k.waznyDo && k.waznyDo < yesterdayStr) {
-                if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
-                  return true;
-                }
-                karnetyChanged = true;
-                return false;
-              }
+      // Jeśli klubowicz ma zaplanowane przyszłe treningi, żaden karnet (ilościowy ani OPEN) nie zostanie usunięty
+      if (hasFutureBookings) {
+        return true;
+      }
+      karnetyChanged = true;
+      return false;
+    }
               return true;
             });
 
