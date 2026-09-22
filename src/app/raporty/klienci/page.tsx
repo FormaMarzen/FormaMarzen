@@ -797,6 +797,7 @@ export default function KlienciPage() {
       }]);
     }
   };
+
   const handleWypiszZajecia = async (zajecieItem: any) => {
     if (!profileClient || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
@@ -1185,11 +1186,12 @@ export default function KlienciPage() {
             karnetyZmienione = true;
             primaryPass = parsedKarnety[0];
           }
-          // Auto-przedłużenie: WYŁĄCZNIE dla karnetów czasowych (OPEN)! Karnety ilościowe NIGDY nie są auto-przedłużane do debetu!
+          // Auto-przedłużenie: WYŁĄCZNIE dla karnetów czasowych (OPEN) zabezpieczone przed zapętleniem transakcji!
           else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBasedPass) {
             const hasBookingsAfterExpiry = futureBookingDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
+            const alreadyExtendedForThisExpiry = primaryPass.lastAutoExtendedForExpiry === primaryPass.waznyDo;
 
-            if (hasBookingsAfterExpiry) {
+            if (hasBookingsAfterExpiry && !alreadyExtendedForThisExpiry) {
               const defKarnetu = ustrukturyzowaneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
               const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : (parseFloat(String(primaryPass.cena).replace(/[^0-9.-]/g, '')) || 0);
 
@@ -1197,6 +1199,7 @@ export default function KlienciPage() {
               const priceAfterDiscount = basePrice * (1 - currentDiscountPercent / 100);
 
               const extendedExpiry = getCalendarExpiryDate(todayDateOnly, defKarnetu?.limitCzasowy || primaryPass.limitCzasowy || '1 miesiąc');
+              const oldExpiryStr = primaryPass.waznyDo;
 
               currentWalletNum -= priceAfterDiscount;
               walletChanged = true;
@@ -1209,24 +1212,36 @@ export default function KlienciPage() {
                 brokenAt: todayDateOnly,
                 expiresAt: noticeExpiry.toISOString().split('T')[0],
                 extendedPassName: primaryPass.nazwa,
-                reason: `Karnet ${primaryPass.nazwa} wygasł w dniu ${primaryPass.waznyDo}, lecz klubowicz posiadał aktywne zapisy w grafiku. Karnet został automatycznie przedłużony o kolejny okres, a ciągłość została przerwana.`
+                reason: `Karnet ${primaryPass.nazwa} wygasł w dniu ${oldExpiryStr}, lecz klubowicz posiadał aktywne zapisy w grafiku. Karnet został automatycznie przedłużony o kolejny okres, a ciągłość została przerwana.`
               };
 
               parsedKarnety[0] = {
                 ...primaryPass,
                 waznyDo: extendedExpiry,
                 pozostaloWejsc: null,
+                lastAutoExtendedForExpiry: oldExpiryStr,
                 statusTekst: `Ważny do: ${extendedExpiry} (Auto-przedłużenie)`
               };
 
               karnetyZmienione = true;
 
-              await supabase.from('transakcje').insert([{
-                klient_id: c.id,
-                typ_operacji: 'auto_przedluzenie_karnetu',
-                kwota: -priceAfterDiscount,
-                opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
-              }]);
+              // Weryfikacja unikalności w transakcjach – ochrona przed setkami wpisów w bazie
+              const { data: existingTx } = await supabase
+                .from('transakcje')
+                .select('id')
+                .eq('klient_id', c.id)
+                .eq('typ_operacji', 'auto_przedluzenie_karnetu')
+                .gte('created_at', `${todayDateOnly}T00:00:00`)
+                .limit(1);
+
+              if (!existingTx || existingTx.length === 0) {
+                await supabase.from('transakcje').insert([{
+                  klient_id: c.id,
+                  typ_operacji: 'auto_przedluzenie_karnetu',
+                  kwota: -priceAfterDiscount,
+                  opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
+                }]);
+              }
             }
           }
         }
@@ -1235,14 +1250,15 @@ export default function KlienciPage() {
         let utrataCiaglosci = false;
         let finalKarnety = [];
 
+        // 3. BEZPIECZNA WERYFIKACJA KARNETÓW - ŻADEN KARNET Z PRZYSZŁYMI REZERWACJAMI NIE JEST KASOWANY
         for (const k of parsedKarnety) {
           if (isContractPassCheck(k)) {
             finalKarnety.push(k);
             continue;
           }
 
-          // Karnety z zarezerwowanymi wejściami w przyszłości bezwzględnie zostają na liście
-          if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && hasFutureBookings) {
+          // Karnety z zarezerwowanymi treningami w przyszłości bezwzględnie zostają na liście (zarówno OPEN, jak i ilościowe)
+          if (hasFutureBookings) {
             finalKarnety.push(k);
             continue;
           }
@@ -1390,7 +1406,6 @@ export default function KlienciPage() {
       supabase.removeChannel(realtimeChannel);
     };
   }, []);
-
   const openProfile = async (clientToOpen: any) => {
     setProfileClient(clientToOpen);
     loadData(clientToOpen.id);
@@ -1754,6 +1769,7 @@ export default function KlienciPage() {
     };
     reader.readAsDataURL(file);
   };
+
   // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ ZAWSZE DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget || isSubmittingRef.current) return;
@@ -1967,7 +1983,7 @@ export default function KlienciPage() {
         : `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Zapłacono z góry)`;
 
       if (paymentMethod === 'later' && kwotaKarnetu > 0) {
-        const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+        const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]/g, "")) || 0;
         const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
         nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
         logKwota = -kwotaKarnetu;
@@ -2410,7 +2426,7 @@ export default function KlienciPage() {
         klient_id: profileClient.id,
         typ_operacji: 'edycja_karnetu',
         kwota: null,
-        opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata: ${editingPassModal.rata})` : ''}`
+        opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata:${editingPassModal.rata})` : ''}`
       }]);
 
       setEditingPassModal(null);
@@ -2496,7 +2512,7 @@ export default function KlienciPage() {
       const kwotaZmiany = parseFloat(walletAmountInput);
       if (isNaN(kwotaZmiany)) return;
 
-      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+      const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]/g, "")) || 0;
       const nowyStan = currentWalletNum + kwotaZmiany;
       const nowyStanStr = `${nowyStan.toFixed(2)} PLN`;
 
@@ -2541,7 +2557,7 @@ export default function KlienciPage() {
 
       return expA.localeCompare(expB);
     }
-    
+
     let valA: any = '';
     let valB: any = '';
 
@@ -3099,6 +3115,7 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
+
       {/* MODAL PROFILU KLIENTA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
@@ -3794,8 +3811,7 @@ export default function KlienciPage() {
                             });
                           }
                         });
-
-                      (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
+                        (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
                         const classDetails = findClassDetailsInGrafik(item.classKey, zapisaneZajecia, jednorazoweZajecia, nadpisaneZajeciaDni);
                         const { display: displayDate, sortTime: st } = formatDisplayClassDate(item.data);
                         const classItemMs = st || parseClassDate(item.data);
@@ -4327,7 +4343,7 @@ export default function KlienciPage() {
                   <label className="font-bold text-slate-700 whitespace-nowrap">Imię *</label>
                   <input 
                     type="text" 
-                    required
+                    required 
                     value={profileClient.firstName || ''} 
                     onChange={(e) => setProfileClient({...profileClient, firstName: e.target.value})} 
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
@@ -4337,7 +4353,7 @@ export default function KlienciPage() {
                   <label className="font-bold text-slate-700 whitespace-nowrap">Nazwisko *</label>
                   <input 
                     type="text" 
-                    required
+                    required 
                     value={profileClient.lastName || ''} 
                     onChange={(e) => setProfileClient({...profileClient, lastName: e.target.value})} 
                     className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800" 
