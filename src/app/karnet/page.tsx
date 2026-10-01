@@ -149,6 +149,7 @@ const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): 
 // POMOCNICZA FUNKCJA DO PEWNEGO ODCZYTU RABATU CIĄGŁOŚCI OD ADMINA
 const extractClientContinuityDiscount = (client: any): number | null => {
   if (!client) return null;
+  if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') return 0;
   
   if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
     const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
@@ -375,6 +376,10 @@ export default function KarnetyPage() {
   const [discountCodeStatus, setDiscountCodeStatus] = useState({ type: '', message: '' });
 
   const todayStr = new Date().toISOString().split('T')[0];
+
+  const tomorrowDateObj = new Date();
+  tomorrowDateObj.setDate(tomorrowDateObj.getDate() + 1);
+  const tomorrowStr = tomorrowDateObj.toISOString().split('T')[0];
 
   const resetDiscountState = () => {
     setDiscountCodeInput('');
@@ -645,7 +650,7 @@ export default function KarnetyPage() {
     }]);
   };
 
-  // WYKLUCZENIE Z CIĄGŁOŚCI KARNETÓW O CENIE RÓWNEJ LUB NIŻSZEJ NIŻ 150 ZŁ
+  // KONTROLA CIĄGŁOŚCI Z WYKLUCZENIEM KARNETÓW <= 150 ZŁ I ZEROWANIEM PO PRZERWIE
   const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
 
@@ -654,32 +659,20 @@ export default function KarnetyPage() {
     }
     
     if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
-      return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
-    }
-
-    const manualVal = extractClientContinuityDiscount(client);
-    if (manualVal !== null) {
-      if (manualVal <= 0) {
-        return { hasContinuity: false, percent: 0, label: '0% (Wyzerowano)' };
-      }
-      return {
-        hasContinuity: true,
-        percent: Math.min(25, manualVal),
-        label: `${manualVal}% (Rabat ciągłościowy)`
-      };
+      return { hasContinuity: false, percent: 0, label: '0% (Ciągłość przerwana)' };
     }
 
     const rawKarnety = client.karnetyKlubowicza || [];
-    const activePasses = rawKarnety.filter(isPassActive);
-    if (activePasses.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
+    if (rawKarnety.length === 0) return { hasContinuity: false, percent: 0, label: '0% (Pierwszy zakup)' };
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const todayIsoDate = today.toISOString().split('T')[0];
 
     let isContinuous = false;
     let maxCykl = 1;
 
-    for (const k of activePasses) {
+    for (const k of rawKarnety) {
       if (isContractPassCheck(k)) continue;
 
       const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
@@ -694,13 +687,30 @@ export default function KarnetyPage() {
         const diffDays = Math.floor((today.getTime() - exp.getTime()) / (1000 * 60 * 60 * 24));
         
         if (diffDays <= 1) {
-          isContinuous = true;
+          if (isQuantityPassCheck(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+            if (k.zeroEntriesGraceUntil && todayIsoDate <= k.zeroEntriesGraceUntil) {
+              isContinuous = true;
+            } else if (diffDays <= 1) {
+              isContinuous = true;
+            }
+          } else {
+            isContinuous = true;
+          }
         }
       }
     }
 
     if (!isContinuous) {
       return { hasContinuity: false, percent: 0, label: '0% (Brak ciągłości - zresetowano)' };
+    }
+
+    const manualVal = extractClientContinuityDiscount(client);
+    if (manualVal !== null && manualVal > 0) {
+      return {
+        hasContinuity: true,
+        percent: Math.min(25, manualVal),
+        label: `${manualVal}% (Rabat ciągłościowy)`
+      };
     }
 
     const liczbaKarnetow = maxCykl;
@@ -779,7 +789,6 @@ export default function KarnetyPage() {
       }
     }
 
-    // OBSŁUGA DYNAMICZNEGO RABATU POWITALNEGO DLA OSOBY Z POLECENIA
     const rawRefereeDiscountVal = Number(client.refereeDiscountPercent) || 0;
     const refereeTierName = client.refereeTierName || '';
     const refereeTargetPass = (client.refereeTargetPass || 'all').toLowerCase().trim();
@@ -970,8 +979,6 @@ export default function KarnetyPage() {
           const now = new Date();
           const todayBeginning = new Date(now.getFullYear(), now.getMonth(), now.getDate());
           
-          // POBIERAMY ZAPISY Z UŻYCIEM fetchAllFromSupabase (SORTOWANIE DESC),
-          // ABY APLIKACJA NIGDY NIE STRACIŁA DANYCH PRZEZ LIMIT 1000 WIERSZY
           const allSignups = await fetchAllFromSupabase('zapisy_zajec', 'id', false, 15);
 
           const clientFutureBookingsMap = new Map<number, number>();
@@ -1068,8 +1075,6 @@ export default function KarnetyPage() {
                     };
                   }
                 } else if (hasFutureBookings) {
-                  // Jeśli są rezerwacje w przód: bezwzględnie usuwamy błędny bufor 24h
-                  // oraz przywracamy nominalną ważność karnetu (co najmniej do daty ostatniego treningu)
                   const latestBooking = [...futureBookingDates].sort().reverse()[0];
                   let targetWaznyDo = k.waznyDo;
                   if (!targetWaznyDo || (latestBooking && targetWaznyDo < latestBooking)) {
@@ -1130,7 +1135,7 @@ export default function KarnetyPage() {
                   statusTekst: `Ważny do: ${nextNewExpiry}`
                 };
                 karnetyChanged = true;
- } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
+              } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
                 const hasBookingsAfterExpiry = futureBookingDates.some((bookingDate: string) => bookingDate > (primaryPass.waznyDo || todayDateOnly));
                 const alreadyExtendedForThisExpiry = primaryPass.lastAutoExtendedForExpiry === primaryPass.waznyDo;
 
@@ -1168,7 +1173,6 @@ export default function KarnetyPage() {
 
                   karnetyChanged = true;
 
-                  // Sprawdzenie unikalności: transakcja auto-przedłużenia może powstać maksymalnie 1 raz dziennie dla danego klienta
                   const { data: existingTx } = await supabase
                     .from('transakcje')
                     .select('id')
@@ -1197,22 +1201,63 @@ export default function KarnetyPage() {
             const verifiedKarnety = tempKarnety.filter((k: any) => {
               if (isContractPassCheck(k)) return true;
               if (k.waznyDo && k.waznyDo < yesterdayStr) {
-      // Jeśli klubowicz ma zaplanowane przyszłe treningi, żaden karnet (ilościowy ani OPEN) nie zostanie usunięty
-      if (hasFutureBookings) {
-        return true;
-      }
-      karnetyChanged = true;
-      return false;
-    }
+                if (hasFutureBookings) {
+                  return true;
+                }
+                karnetyChanged = true;
+                return false;
+              }
               return true;
             });
 
-            if (karnetyChanged || walletChanged) {
+            // ŚCISŁA WERYFIKACJA CIĄGŁOŚCI I SYNCHRONIZACJA W BAZIE SUPABASE
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            let hasValidContinuousPass = false;
+            for (const k of verifiedKarnety) {
+              if (isContractPassCheck(k)) {
+                hasValidContinuousPass = true;
+                break;
+              }
+              const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+              if (passPrice <= 150) continue;
+              if (k.waznyDo) {
+                const exp = new Date(k.waznyDo);
+                exp.setHours(0, 0, 0, 0);
+                const diffDays = Math.floor((today.getTime() - exp.getTime()) / (1000 * 60 * 60 * 24));
+                if (diffDays <= 1) {
+                  if (isQuantityPassCheck(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) {
+                    if (k.zeroEntriesGraceUntil && todayDateOnly <= k.zeroEntriesGraceUntil) {
+                      hasValidContinuousPass = true;
+                    } else if (diffDays <= 1) {
+                      hasValidContinuousPass = true;
+                    }
+                  } else {
+                    hasValidContinuousPass = true;
+                  }
+                }
+              }
+            }
+
+            if (!hasValidContinuousPass && !hasFutureBookings && (verifiedKarnety.length === 0 || !isPassActive(verifiedKarnety[0]))) {
+              continuityBroken = true;
+            }
+
+            const shouldPersistContinuityLoss = continuityBroken && (c.hasLostContinuity !== true || (c.rabat !== undefined && c.rabat !== null && Number(c.rabat) > 0));
+
+            if (karnetyChanged || walletChanged || shouldPersistContinuityLoss) {
               try {
                 const updatePayload: any = {
                   karnetyKlubowicza: verifiedKarnety,
                   hasLostContinuity: continuityBroken,
-                  continuityBreakNotice: continuityNotice
+                  continuityBreakNotice: continuityNotice,
+                  ...(continuityBroken ? { 
+                    rabat: 0, 
+                    rabat_za_ciaglosc: '0%', 
+                    'Rabat za ciągłość': '0%', 
+                    cyklCiaglosci: 1 
+                  } : {})
                 };
 
                 if (walletChanged) {
@@ -1222,7 +1267,7 @@ export default function KarnetyPage() {
 
                 await supabase.from('klienci').update(updatePayload).eq('id', c.id);
               } catch (errDb) {
-                console.error("Błąd aktualizacji automatycznej rotacji/przedłużenia:", errDb);
+                console.error("Błąd aktualizacji bazy w procesie ciągłości/karnetów:", errDb);
               }
             }
 
@@ -1253,7 +1298,6 @@ export default function KarnetyPage() {
               }
             } catch(e) {}
 
-            // DYNAMICZNE POBIERANIE RABATU DLA OSOBY Z POLECENIA (REFEREE)
             let refDiscountPercent = 0;
             let refTierName = '';
             let refTargetPass = 'all';
@@ -1299,9 +1343,9 @@ export default function KarnetyPage() {
               ostatnie_zyczenia_rok: c.ostatnie_zyczenia_rok || null,
               hasLostContinuity: continuityBroken,
               continuityBreakNotice: continuityNotice,
-              rabat: c.rabat,
-              rabat_za_ciaglosc: rawContinuity !== null ? `${rawContinuity}%` : null,
-              'Rabat za ciągłość': rawContinuity !== null ? `${rawContinuity}%` : null,
+              rabat: continuityBroken ? 0 : c.rabat,
+              rabat_za_ciaglosc: continuityBroken ? '0%' : (rawContinuity !== null ? `${rawContinuity}%` : null),
+              'Rabat za ciągłość': continuityBroken ? '0%' : (rawContinuity !== null ? `${rawContinuity}%` : null),
               system_discount_offset: c.system_discount_offset || 0,
               umowa_oplacona_do: c.umowa_oplacona_do || null,
               karnetyKlubowicza: verifiedKarnety,
@@ -1546,7 +1590,7 @@ export default function KarnetyPage() {
         const canvas = document.createElement('canvas');
         const MAX_WIDTH = 250; 
         const MAX_HEIGHT = 250;
-        let width = img.width;
+        let width = img.width; 
         let height = img.height;
 
         if (width > height) {
@@ -1555,7 +1599,7 @@ export default function KarnetyPage() {
           if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
         }
 
-        canvas.width = width;
+        canvas.width = width; 
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(img, 0, 0, width, height);
@@ -1879,7 +1923,6 @@ export default function KarnetyPage() {
       );
     }
     
-    // Ewaluacja polecenia dla programu ambasador
     await checkAndEvaluateAmbassadorReferral(currentUser.id, passToExtend.nazwa, cenaPoRabacie);
 
     await triggerPushNotificationToAdmin(
@@ -1915,7 +1958,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2083,9 +2125,13 @@ export default function KarnetyPage() {
       const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
       let nextContinuityVal = currentContinuityVal;
       
-      if (currentContinuityVal === 0) nextContinuityVal = 2;
-      else if (currentContinuityVal === 2) nextContinuityVal = 4;
-      else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
+      if (currentUser.hasLostContinuity === true || currentUser.hasLostContinuity === 'true') {
+        nextContinuityVal = 0;
+      } else {
+        if (currentContinuityVal === 0) nextContinuityVal = 2;
+        else if (currentContinuityVal === 2) nextContinuityVal = 4;
+        else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
+      }
 
       finalRabatInt = nextContinuityVal;
       finalCyklInt = finalCyklInt + 1;
@@ -2203,7 +2249,6 @@ export default function KarnetyPage() {
       );
     }
 
-    // Ewaluacja polecenia dla programu ambasador
     await checkAndEvaluateAmbassadorReferral(currentUser.id, selectedBuyPass, cenaPoRabacie);
 
     await triggerPushNotificationToAdmin(
@@ -2239,6 +2284,7 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -2325,7 +2371,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA
+  // ZATWIERDZENIE ZAWIESZENIA (Z NOWYMI REGUŁAMI: OD JUTRA ORAZ NA PRZEŁOMIE KWARTAŁÓW DO 28 DNI)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -2348,8 +2394,9 @@ export default function KarnetyPage() {
       return;
     }
 
-    if (suspendStartDate < todayStr) {
-      setSuspendError('Data rozpoczęcia nie może być w przeszłości. Zawieszenie jest możliwe od dzisiaj.');
+    // WYMÓG: Start najwcześniej od jutra
+    if (suspendStartDate <= todayStr) {
+      setSuspendError('Zawieszenie karnetu nie może rozpocząć się dzisiaj ani w przeszłości. Najwcześniejszy możliwy termin to jutro.');
       return;
     }
     if (suspendEndDate < suspendStartDate) {
@@ -2411,11 +2458,6 @@ export default function KarnetyPage() {
       newDaysLeft = Math.max(0, newDaysLeft - effectiveDaysToDeduct);
       newTotalUsed += effectiveDaysToDeduct;
     } else {
-      if (requestedDays > 14) {
-        setSuspendError(`Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays}).`);
-        return;
-      }
-
       const newPeriodDays: Record<string, { days: number; label: string; maxCount: number; isVacation: boolean }> = {};
       const curr = new Date(suspendStartDate);
       const end = new Date(suspendEndDate);
@@ -2440,6 +2482,18 @@ export default function KarnetyPage() {
 
         tempDate.setDate(tempDate.getDate() + 1);
         dayIndex++;
+      }
+
+      const periodKeys = Object.keys(newPeriodDays);
+      const maxAllowedTotalDays = periodKeys.length > 1 ? 28 : 14;
+
+      if (requestedDays > maxAllowedTotalDays) {
+        setSuspendError(
+          periodKeys.length > 1
+            ? `Zawieszenie na przełomie kwartałów nie może być dłuższe niż 28 dni łącznie (maksymalnie po 14 dni na kwartał). Twoje: ${requestedDays} dni.`
+            : `Jednorazowe zawieszenie nie może być dłuższe niż 14 dni (Twoje: ${requestedDays} dni).`
+        );
+        return;
       }
 
       const historyPeriodDays: Record<string, number> = {};
@@ -2475,19 +2529,22 @@ export default function KarnetyPage() {
         return;
       }
 
-      const currentStartCount = historyPeriodCounts[reqStartPeriodKey] || 0;
-      const maxAllowedCount = newPeriodDays[reqStartPeriodKey]?.maxCount ?? 2;
-      if (currentStartCount >= maxAllowedCount) {
-        setSuspendError(`Wykorzystano już limit ilościowy zawieszeń (${maxAllowedCount}) w okresie: ${newPeriodDays[reqStartPeriodKey]?.label || reqStartPeriodKey}.`);
-        return;
-      }
-
-      for (const key of Object.keys(newPeriodDays)) {
+      for (const key of periodKeys) {
         const used = historyPeriodDays[key] || 0;
         const adding = newPeriodDays[key].days;
+        if (adding > 14) {
+          setSuspendError(`W okresie "${newPeriodDays[key].label}" przekroczono limit 14 dni (próbujesz wykorzystać ${adding} dni).`);
+          return;
+        }
         if (used + adding > 14) {
           const left = Math.max(0, 14 - used);
-          setSuspendError(`W okresie "${newPeriodDays[key].label}" przekroczono limit 14 dni. Wykorzystano dotąd ${used} dni (pozostało ${left} dni), a próbujesz wykorzystać ${adding} dni.`);
+          setSuspendError(`W okresie "${newPeriodDays[key].label}" przekroczono łączny limit 14 dni. Wykorzystano dotąd ${used} dni (pozostało ${left} dni), a próbujesz wykorzystać ${adding} dni.`);
+          return;
+        }
+        const currentPeriodCount = historyPeriodCounts[key] || 0;
+        const maxAllowedCount = newPeriodDays[key]?.maxCount ?? 2;
+        if (currentPeriodCount >= maxAllowedCount) {
+          setSuspendError(`Wykorzystano już limit ilościowy zawieszeń (${maxAllowedCount}) w okresie: ${newPeriodDays[key]?.label || key}.`);
           return;
         }
       }
@@ -3135,7 +3192,6 @@ export default function KarnetyPage() {
                         </button>
                       </div>
                     )}
-                    
                     <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
                       {isSuspendedLocal ? (
                         <button 
@@ -3210,7 +3266,9 @@ export default function KarnetyPage() {
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex-1 text-center sm:text-left">
                 <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
-                <p className="text-xs text-slate-500 mt-1">Dla umów 12M masz 30 dni w roku. Niewykorzystane dni zostaną automatycznie doliczone po 12. racie jako <strong>bezpłatny okres bonusowy (0.00 PLN)</strong>.</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Zawieszenie rozpoczyna się najwcześniej od jutra. Na przełomie kwartałów możesz zawiesić karnet nawet do 28 dni (maks. 14 dni na kwartał). Dla umów 12M masz 30 dni w roku.
+                </p>
               </div>
               {suspendedPasses.length > 0 ? (
                 <button 
@@ -3238,8 +3296,8 @@ export default function KarnetyPage() {
                       return;
                     }
                     setPassToSuspendId(activePassesForSuspend[0].id.toString());
-                    setSuspendStartDate(todayStr);
-                    setSuspendEndDate(todayStr);
+                    setSuspendStartDate(tomorrowStr);
+                    setSuspendEndDate(tomorrowStr);
                     setIsSuspendModalOpen(true);
                   }}
                   className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
@@ -3324,15 +3382,23 @@ export default function KarnetyPage() {
                 <p className="font-bold">Limity i zasady zawieszeń dla Twoich karnetów:</p>
                 <ul className="list-disc pl-4 space-y-2 font-medium leading-relaxed">
                   <li>
+                    <strong>Termin rozpoczęcia:</strong> Zawieszenie można rozpocząć <strong>najwcześniej od jutra</strong> (brak możliwości zawieszenia z dniem dzisiejszym ani wstecz).
+                  </li>
+                  <li>
                     <strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku.
                     <div className="mt-1 pl-2 border-l-2 border-sky-300 space-y-1 text-[11px] text-slate-700">
                       <div>• <strong>Blokada weekendowa:</strong> Nie można zawiesić karnetu wyłącznie na sobotę i/lub niedzielę.</div>
                       <div>• <strong>Weekend + 1 dzień roboczy:</strong> Z puli 30 dni odliczany jest <strong>tylko 1 dzień</strong> (za dzień roboczy) i o 1 dzień wydłuża się karnet.</div>
-                      <div>• <strong>Weekend + min. 2 dni robocze:</strong> Odliczane są <strong>pełne dni</strong> kalendarzowe (np. 4 dni).</div>
+                      <div>• <strong>Weekend + min. 2 dni robocze:</strong> Odliczane są <strong>pełne dni</strong> kalendarzowe.</div>
                     </div>
                     Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!
                   </li>
-                  <li><strong>Karnety Standardowe:</strong> Maksymalnie do 14 dni zawieszenia w kwartale (podzielone na maksymalnie 2 okresy). W przypadku zawieszenia na przełomie kwartałów, dni są rozliczane proporcjonalnie w każdym kwartale.</li>
+                  <li>
+                    <strong>Karnety Standardowe:</strong> Do 14 dni zawieszenia w pojedynczym kwartale.
+                    <div className="mt-1 pl-2 border-l-2 border-sky-300 space-y-1 text-[11px] text-slate-700">
+                      <div>• <strong>Zawieszenie na przełomie kwartałów:</strong> Możesz zawiesić karnet <strong>nawet do 28 dni łącznie</strong>, pod warunkiem że w żadnym z kwartałów nie przekroczysz 14 dni (maksymalnie 14 dni w starym kwartale i maksymalnie 14 dni w nowym kwartale).</div>
+                    </div>
+                  </li>
                   <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
                   <li><strong>Aktywna blokada konta / karnetu:</strong> Zawieszenie karnetu jest niedozwolone w przypadku aktywnej blokady konta lub braku opłaty ratalnej.</li>
                   <li><strong>Odwieszenie przed czasem:</strong> Karnet możesz odwiesić w dowolnym momencie, a niewykorzystane dni zostaną automatycznie zwrócone do puli i uwzględnione w ważności karnetu.</li>
@@ -3374,6 +3440,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         )}
+
         {/* MODAL ZAWIESZENIA */}
         {isSuspendModalOpen && (() => {
           const selectedPass = karnetyList.find((k: any) => k.id.toString() === passToSuspendId.toString());
@@ -3427,11 +3494,11 @@ export default function KarnetyPage() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">
-                      <label className="font-bold text-slate-700 block">Od dnia *</label>
+                      <label className="font-bold text-slate-700 block">Od dnia (najwcześniej jutro) *</label>
                       <input 
                         type="date" 
                         required 
-                        min={todayStr} 
+                        min={tomorrowStr} 
                         value={suspendStartDate} 
                         onChange={(e) => setSuspendStartDate(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
@@ -3442,7 +3509,7 @@ export default function KarnetyPage() {
                       <input 
                         type="date" 
                         required 
-                        min={suspendStartDate || todayStr} 
+                        min={suspendStartDate || tomorrowStr} 
                         value={suspendEndDate} 
                         onChange={(e) => setSuspendEndDate(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-3 font-bold focus:outline-none focus:border-blue-500"
@@ -4047,6 +4114,7 @@ export default function KarnetyPage() {
       </div>
     );
   }
+
   // PANEL ADMINISTRATORA / TRENERA
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased relative">
@@ -4296,7 +4364,7 @@ export default function KarnetyPage() {
                       <label className="flex items-center gap-2.5 cursor-pointer">
                         <input 
                           type="checkbox" 
-                          checked={dodajLimitCzasowy}
+                          checked={dodajLimitCzasowy} 
                           onChange={(e) => setDodajLimitCzasowy(e.target.checked)}
                           className="w-4 h-4 accent-amber-700 rounded cursor-pointer"
                         />
