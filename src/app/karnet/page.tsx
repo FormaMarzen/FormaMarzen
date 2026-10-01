@@ -31,22 +31,37 @@ const fetchAllFromSupabase = async (table: string, orderBy: string = 'id', ascen
   return result;
 };
 
-// KALKULATOR PRZEDŁUŻENIA DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (DLA UMÓW 12M)
+// POPRAWIONY KALKULATOR PRZEDŁUŻENIA DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (DLA UMÓW 12M)
 const getContractEndOfMonthDate = (baseDateStr?: string): string => {
   const today = new Date();
-  let base = today;
+  today.setHours(0, 0, 0, 0);
+
+  let targetYear = today.getFullYear();
+  let targetMonthIndex = today.getMonth(); // 0 = styczeń, 9 = październik
+
   if (baseDateStr && baseDateStr !== '-') {
     const [y, m, d] = baseDateStr.split('-').map(Number);
     if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-      const parsed = new Date(y, m - 1, d);
-      if (parsed > today) base = parsed;
+      const expDate = new Date(y, m - 1, d);
+      expDate.setHours(0, 0, 0, 0);
+
+      // Jeśli karnet jest już opłacony do przodu (jego data ważności to dzisiaj lub przyszłość),
+      // kolejna rata przedłuża go o kolejny miesiąc kalendarzowy:
+      if (expDate >= today) {
+        targetYear = expDate.getFullYear();
+        targetMonthIndex = expDate.getMonth() + 1;
+      }
     }
   }
-  const targetYear = base.getFullYear();
-  const targetMonth = base.getMonth() + 1;
-  const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
-  const resMonth = String(targetMonth + 1).padStart(2, '0');
-  return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
+
+  // Obiekt Date z dniem 0 kolejnego miesiąca bezpiecznie zwraca ostatni dzień docelowego miesiąca
+  // oraz samoczynnie radzi sobie ze zmianą roku (np. przejście z grudnia na styczeń)
+  const lastDayObj = new Date(targetYear, targetMonthIndex + 1, 0);
+  const resYear = lastDayObj.getFullYear();
+  const resMonth = String(lastDayObj.getMonth() + 1).padStart(2, '0');
+  const resDay = String(lastDayObj.getDate()).padStart(2, '0');
+
+  return `${resYear}-${resMonth}-${resDay}`;
 };
 
 // UNIWERSALNY, ODPORNY PARSER DATY Z CLASS_KEY
@@ -2371,7 +2386,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA (Z NOWYMI REGUŁAMI: OD JUTRA ORAZ NA PRZEŁOMIE KWARTAŁÓW DO 28 DNI)
+  // ZATWIERDZENIE ZAWIESZENIA (Z REGUŁAMI: OD JUTRA ORAZ NA PRZEŁOMIE KWARTAŁÓW DO 28 DNI)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
