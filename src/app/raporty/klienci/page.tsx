@@ -53,22 +53,35 @@ const isContractPassCheck = (k: any, defKarnetu?: any): boolean => {
   return typ.includes('umowa') || typ.includes('12m') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12 miesięcy');
 };
 
-// KALKULATOR PRZEDŁUŻANIA UMÓW DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
+// NAPRAWIONY KALKULATOR PRZEDŁUŻENIA UMÓW DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (BEZ BŁĘDU PODWÓJNEGO DODAWANIA)
 const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
   const today = new Date();
-  let base = today;
+  today.setHours(0, 0, 0, 0);
+
+  let targetYear = today.getFullYear();
+  let targetMonthIndex = today.getMonth(); // 0 = styczeń, 9 = październik
+
   if (baseDateStr && baseDateStr !== '-') {
     const [y, m, d] = String(baseDateStr).split('-').map(Number);
     if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-      const parsed = new Date(y, m - 1, d);
-      if (parsed > today) base = parsed;
+      const expDate = new Date(y, m - 1, d);
+      expDate.setHours(0, 0, 0, 0);
+
+      // Jeśli umowa jest ważna w przód, kolejna rata przesuwa o kolejny miesiąc
+      if (expDate >= today) {
+        targetYear = expDate.getFullYear();
+        targetMonthIndex = expDate.getMonth() + 1;
+      }
     }
   }
-  const targetYear = base.getFullYear();
-  const targetMonth = base.getMonth() + 1; // kolejny miesiąc kalendarzowy (1-indexed)
-  const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
-  const resMonth = String(targetMonth + 1).padStart(2, '0');
-  return `${targetYear}-${resMonth}-${String(lastDay).padStart(2, '0')}`;
+
+  // Obiekt Date z dniem 0 kolejnego miesiąca zwraca ostatni dzień docelowego miesiąca
+  const lastDayObj = new Date(targetYear, targetMonthIndex + 1, 0);
+  const resYear = lastDayObj.getFullYear();
+  const resMonth = String(lastDayObj.getMonth() + 1).padStart(2, '0');
+  const resDay = String(lastDayObj.getDate()).padStart(2, '0');
+
+  return `${resYear}-${resMonth}-${resDay}`;
 };
 
 // KULOODPORNY KALKULATOR PRZEDŁUŻANIA KARNETU Z PRAWDZIWEGO KALENDARZA
@@ -478,7 +491,6 @@ const resolveAuthorAndMovementDetails = (
     detailsDesc: 'Zapis dokonany z telefonu'
   };
 };
-
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -598,8 +610,11 @@ export default function KlienciPage() {
 
     const transakcjeKarnetow = (client.transakcje || []).filter((t: any) => {
       if (new Date(t.created_at) <= new Date(lastResetDate)) return false;
-      const isPassPurchase = t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || 
-        (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')));
+      const isPassPurchase = t.typ_operacji === 'zakup_karnetu' || 
+        t.typ_operacji === 'zakup_umowy' || 
+        t.typ_operacji === 'oplata_raty_12m' ||
+        t.typ_operacji === 'oplata_raty_12m_autopay' ||
+        (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie') || t.opis.toLowerCase().includes('umow') || t.opis.toLowerCase().includes('rata')));
       if (!isPassPurchase) return false;
       if (t.opis && t.opis.toLowerCase().includes('usunięcie')) return false;
 
@@ -1100,14 +1115,12 @@ export default function KlienciPage() {
 
           // KARNETY ILOŚCIOWE: Korekta błędnego bufora i obsługa wejść
           if (isQuantityPass) {
-            // Jeśli klubowicz zarezerwował wejścia na przyszłe zajęcia, bufor NIE MOŻE się włączyć!
             if (hasFutureBookings && k.zeroEntriesGraceUntil) {
               k.zeroEntriesGraceUntil = null;
               k.statusTekst = k.waznyDo ? `Ważny do: ${k.waznyDo}` : 'Aktywny';
               karnetyZmienione = true;
             }
 
-            // Zerowanie wejść po dacie wygaśnięcia
             const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
             if (isExpiredDate && k.pozostaloWejsc > 0) {
               k.pozostaloWejsc = 0;
@@ -1115,7 +1128,6 @@ export default function KlienciPage() {
               karnetyZmienione = true;
             }
 
-            // Obsługa wykorzystania wejść
             if (k.pozostaloWejsc <= 0) {
               const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
               const isLowPrice = passPriceNum <= 150;
@@ -1131,14 +1143,12 @@ export default function KlienciPage() {
                   k.statusTekst = labelWejsc;
                 }
               } else if (hasFutureBookings) {
-                // Wejścia zarezerwowane na przyszłe zajęcia – bufor nie startuje dopóki nie zostaną one odbyte!
                 if (k.zeroEntriesGraceUntil !== null) {
                   k.zeroEntriesGraceUntil = null;
                   karnetyZmienione = true;
                 }
                 k.statusTekst = `Zarezerwowano wejścia (wygasa ${k.waznyDo})`;
               } else {
-                // Faktyczny brak wejść i brak przyszłych rezerwacji – bufor 24h na zakup kolejnego karnetu
                 const tomorrowDate = new Date();
                 tomorrowDate.setDate(tomorrowDate.getDate() + 1);
                 const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
@@ -1158,7 +1168,7 @@ export default function KlienciPage() {
           return k;
         });
 
-        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (TYLKO DLA KARNETÓW CZASOWYCH!)
+        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (DLA KARNETÓW CZASOWYCH)
         const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
           idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
         );
@@ -1171,7 +1181,6 @@ export default function KlienciPage() {
           const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
                                      (!isTimeBasedPass && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0 && !hasFutureBookings);
 
-          // Rotacja na kolejny zakupiony karnet w kolejce
           if (isPrimaryFinished && waitingPassIndex !== -1) {
             const nextPass = parsedKarnety[waitingPassIndex];
             const defNext = ustrukturyzowaneKarnety.find(dk => dk.nazwa === nextPass.nazwa);
@@ -1185,9 +1194,7 @@ export default function KlienciPage() {
             };
             karnetyZmienione = true;
             primaryPass = parsedKarnety[0];
-          }
-          // Auto-przedłużenie: WYŁĄCZNIE dla karnetów czasowych (OPEN) zabezpieczone przed zapętleniem transakcji!
-          else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBasedPass) {
+          } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBasedPass) {
             const hasBookingsAfterExpiry = futureBookingDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
             const alreadyExtendedForThisExpiry = primaryPass.lastAutoExtendedForExpiry === primaryPass.waznyDo;
 
@@ -1225,7 +1232,6 @@ export default function KlienciPage() {
 
               karnetyZmienione = true;
 
-              // Weryfikacja unikalności w transakcjach – ochrona przed setkami wpisów w bazie
               const { data: existingTx } = await supabase
                 .from('transakcje')
                 .select('id')
@@ -1250,14 +1256,13 @@ export default function KlienciPage() {
         let utrataCiaglosci = false;
         let finalKarnety = [];
 
-        // 3. BEZPIECZNA WERYFIKACJA KARNETÓW - ŻADEN KARNET Z PRZYSZŁYMI REZERWACJAMI NIE JEST KASOWANY
+        // 3. BEZPIECZNA WERYFIKACJA KARNETÓW
         for (const k of parsedKarnety) {
           if (isContractPassCheck(k)) {
             finalKarnety.push(k);
             continue;
           }
 
-          // Karnety z zarezerwowanymi treningami w przyszłości bezwzględnie zostają na liście (zarówno OPEN, jak i ilościowe)
           if (hasFutureBookings) {
             finalKarnety.push(k);
             continue;
@@ -1319,6 +1324,8 @@ export default function KlienciPage() {
                Cena: cenaAktywnegoKarnetu,
                discount: currentDiscount,
                rabat: currentRabat,
+               rabat_za_ciaglosc: hasLostContinuity ? '0%' : (c.rabat_za_ciaglosc ?? '0%'),
+               'Rabat za ciągłość': hasLostContinuity ? '0%' : (c['Rabat za ciągłość'] ?? '0%'),
                system_discount_offset: currentOffset,
                hasLostContinuity: hasLostContinuity,
                continuityBreakNotice: continuityNotice
@@ -1344,7 +1351,7 @@ export default function KlienciPage() {
           ...c,
           _rawKeys: Object.keys(c),
           id: c.id,
-          rabat: c.rabat,
+          rabat: currentRabat,
           systemDiscountOffset: currentOffset,
           hasLostContinuity: hasLostContinuity,
           continuityBreakNotice: continuityNotice,
@@ -1406,6 +1413,7 @@ export default function KlienciPage() {
       supabase.removeChannel(realtimeChannel);
     };
   }, []);
+
   const openProfile = async (clientToOpen: any) => {
     setProfileClient(clientToOpen);
     loadData(clientToOpen.id);
@@ -1491,17 +1499,14 @@ export default function KlienciPage() {
       let dataWygasnieciaStr: string | null = null;
       let initialUmowaOplaconaDo: string | null = null;
 
+      const defKarnetu = newClient.selectedPass ? dostepneKarnety.find(k => k.nazwa === newClient.selectedPass) : null;
+      const isContract = isContractPassCheck(null, defKarnetu) || newClient.isContractMigration;
+
       if (newClient.selectedPass) {
-        const defKarnetu = dostepneKarnety.find(k => k.nazwa === newClient.selectedPass);
-        const isContract = isContractPassCheck(null, defKarnetu) || newClient.isContractMigration;
         const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
         
         if (isContract) {
-          const now = new Date();
-          const year = now.getFullYear();
-          const month = now.getMonth() + 1;
-          const lastDay = new Date(year, month, 0).getDate();
-          initialUmowaOplaconaDo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+          initialUmowaOplaconaDo = getContractEndOfMonthDate(todayStr);
           dataWygasnieciaStr = initialUmowaOplaconaDo;
         } else {
           dataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy);
@@ -1534,6 +1539,14 @@ export default function KlienciPage() {
           zawieszonyOd: null,
           zawieszonyDo: null,
           historiaZawieszen: [],
+          historiaPrzedluzen: [{
+            data: todayStr,
+            staraWaznosc: null,
+            nowaWaznosc: dataWygasnieciaStr,
+            rata: isContract ? (newClient.customRata || '0 / 12') : '1 / 1',
+            cena: cenaKarnetu,
+            metodaPlatnosci: 'Zakup startowy'
+          }],
           pozostaloWejsc: parsedInitialWejscia,
           poczatkoweWejsc: parsedInitialWejscia
         });
@@ -1553,6 +1566,7 @@ export default function KlienciPage() {
         Cena: cenaKarnetu,
         Wygasa: dataWygasnieciaStr,
         Portfel: poczatkowyStanStr,
+        portfel: poczatkowyStan,
         Zarejestrowany: newClient.registered,
         karnetyKlubowicza: poczatkoweKarnety,
         umowa_oplacona_do: initialUmowaOplaconaDo
@@ -1563,11 +1577,11 @@ export default function KlienciPage() {
       if (!error && newClient.selectedPass) {
         await supabase.from('transakcje').insert([{
           klient_id: newClientId,
-          typ_operacji: 'zakup_karnetu',
+          typ_operacji: isContract ? 'zakup_umowy' : 'zakup_karnetu',
           kwota: cenaWartosc > 0 ? -cenaWartosc : 0,
           opis: cenaWartosc > 0 
-            ? `Pierwszy karnet: ${newClient.selectedPass} (Zadłużono portfel)` 
-            : `Pierwszy karnet: ${newClient.selectedPass} (Karnet bezpłatny / 0.00 PLN)`
+            ? `${isContract ? 'Pierwsza opłata umowy 12M' : 'Pierwszy karnet'}: ${newClient.selectedPass} (Zadłużono portfel)` 
+            : `${isContract ? 'Pierwsza opłata umowy 12M' : 'Pierwszy karnet'}: ${newClient.selectedPass} (Karnet bezpłatny / 0.00 PLN)`
         }]);
       }
 
@@ -1770,7 +1784,7 @@ export default function KlienciPage() {
     reader.readAsDataURL(file);
   };
 
-  // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ ZAWSZE DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
+  // PRZEDŁUŻENIE KARNETU (UMOWA 12M PRZEDŁUŻA SIĘ DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO)
   const handleConfirmExtendPass = async (paymentMethod: 'paid' | 'later') => {
     if (!profileClient || !extendPassTarget || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
@@ -1787,14 +1801,12 @@ export default function KlienciPage() {
         bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
       }
 
-      // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
       const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
       
       const cenaPoRabacie = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
       const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
       const kwotaKarnetu = cenaPoRabacie;
 
-      // ZAWSZE DO KOŃCA MIESIĄCA KALENDARZOWEGO DLA UMÓW 12M
       let targetExpiryDate = extendNewDate;
       if (isContract) {
         targetExpiryDate = getContractEndOfMonthDate(extendPassTarget.waznyDo);
@@ -1840,6 +1852,16 @@ export default function KlienciPage() {
       const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
       const uaktualnioneKarnety = stareKarnety.map((k: any) => {
         if (k.id === extendPassTarget.id) {
+          const passHistoria = safeJsonParse(k.historiaPrzedluzen, []);
+          const nowaHistoria = [...passHistoria, {
+            data: todayStr,
+            staraWaznosc: k.waznyDo,
+            nowaWaznosc: targetExpiryDate,
+            rata: isContract ? updatedRata : undefined,
+            cena: nowaCena,
+            rabat: znizkaTekst || null,
+            metodaPlatnosci: paymentMethod === 'paid' ? 'Gotówka / Zapłacono' : 'Portfel (Zadłużenie)'
+          }];
           return {
             ...k,
             nazwa: extendSelectedNewPassName,
@@ -1853,7 +1875,8 @@ export default function KlienciPage() {
             poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.poczatkoweWejsc || 0) + parsedExtWejscia) : k.poczatkoweWejsc),
             zeroEntriesGraceUntil: null,
             blokadaDo: isContract ? null : k.blokadaDo,
-            powodBlokady: isContract ? null : k.powodBlokady
+            powodBlokady: isContract ? null : k.powodBlokady,
+            historiaPrzedluzen: nowaHistoria
           };
         }
         return k;
@@ -1865,7 +1888,8 @@ export default function KlienciPage() {
         karnetyKlubowicza: uaktualnioneKarnety,
         Wygasa: latestExpiry,
         Cena: nowaCena,
-        Portfel: nowyStanStr
+        Portfel: nowyStanStr,
+        portfel: parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0
       };
 
       if (isContract) {
@@ -1961,7 +1985,6 @@ export default function KlienciPage() {
         bazowaCena = parseFloat(defKarnetu.cena) || 0;
       }
 
-      // WYKLUCZENIE Z CIĄGŁOŚCI DLA KARNETÓW <= 150 ZŁ
       const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
       const kwotaKarnetu = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
       const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
@@ -2011,7 +2034,15 @@ export default function KlienciPage() {
         powodBlokady: null,
         zawieszonyOd: null,
         zawieszonyDo: null,
-        historiaZawieszen: []
+        historiaZawieszen: [],
+        historiaPrzedluzen: [{
+          data: todayStr,
+          staraWaznosc: null,
+          nowaWaznosc: dataWygasnieciaStr,
+          rata: isContract ? (newPassCustomRata || '0 / 12') : '1 / 1',
+          cena: cenaObjKarnetu,
+          metodaPlatnosci: paymentMethod === 'paid' ? 'Zapłacono z góry' : 'Portfel'
+        }]
       };
       const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
       const uaktualnioneKarnety = [...stareKarnety, nowyKarnetObj];
@@ -2021,7 +2052,8 @@ export default function KlienciPage() {
         karnetyKlubowicza: uaktualnioneKarnety,
         Wygasa: latestExpiry,
         Cena: cenaObjKarnetu,
-        Portfel: nowyStanStr
+        Portfel: nowyStanStr,
+        portfel: parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0
       };
 
       if (isContract) {
@@ -3493,32 +3525,83 @@ export default function KlienciPage() {
                   )}
                 </div>
                 
-                {/* Rozwijana historia karnetów */}
+                {/* NAPRAWIONA ROZWIJANA HISTORIA WSZYSTKICH KUPIONYCH KARNETÓW */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 mt-4">
                   <button 
                     onClick={() => setIsPassHistoryOpen(!isPassHistoryOpen)} 
                     className="w-full flex justify-between items-center text-xs font-black text-slate-700 uppercase tracking-wider cursor-pointer"
                   >
-                    <span>📜 HISTORIA WSZYSTKICH KUPIONYCH KARNETÓW ({ (profileClient.transakcje || []).filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))).length })</span>
+                    <span>
+                      📜 HISTORIA WSZYSTKICH KUPIONYCH KARNETÓW (
+                      {
+                        (profileClient.transakcje || []).filter((t: any) => {
+                          const typ = String(t.typ_operacji || '').toLowerCase();
+                          const opis = String(t.opis || '').toLowerCase();
+                          if (opis.includes('usunięcie')) return false;
+                          return (
+                            typ.includes('karnet') ||
+                            typ.includes('umow') ||
+                            typ.includes('oplata_raty') ||
+                            typ.includes('pass_') ||
+                            opis.includes('karnet') ||
+                            opis.includes('przedłuż') ||
+                            opis.includes('przedluz') ||
+                            opis.includes('umow') ||
+                            opis.includes('rata ') ||
+                            opis.includes('rata:')
+                          );
+                        }).length
+                      }
+                      )
+                    </span>
                     <span>{isPassHistoryOpen ? '▲' : '▼'}</span>
                   </button>
                   {isPassHistoryOpen && (
-                    <div className="space-y-2 pt-2 border-t border-slate-200 max-h-48 overflow-y-auto text-xs">
-                      {(profileClient.transakcje || []).filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie'))).length > 0 ? (
-                        (profileClient.transakcje || [])
-                          .filter((t: any) => (t.typ_operacji === 'zakup_karnetu' || t.typ_operacji === 'zakup_umowy' || (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie')))) && (!t.opis || !t.opis.toLowerCase().includes('usunięcie')))
-                          .map((t: any) => (
-                            <div key={t.id} className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200">
-                              <div>
-                                <div className="font-bold text-slate-900">{t.opis || 'Zakup karnetu'}</div>
-                                <div className="text-[10px] font-mono text-slate-500">{new Date(t.created_at).toLocaleString('pl-PL')}</div>
+                    <div className="space-y-2 pt-2 border-t border-slate-200 max-h-56 overflow-y-auto text-xs">
+                      {(() => {
+                        const passTrans = (profileClient.transakcje || []).filter((t: any) => {
+                          const typ = String(t.typ_operacji || '').toLowerCase();
+                          const opis = String(t.opis || '').toLowerCase();
+                          if (opis.includes('usunięcie')) return false;
+                          return (
+                            typ.includes('karnet') ||
+                            typ.includes('umow') ||
+                            typ.includes('oplata_raty') ||
+                            typ.includes('pass_') ||
+                            opis.includes('karnet') ||
+                            opis.includes('przedłuż') ||
+                            opis.includes('przedluz') ||
+                            opis.includes('umow') ||
+                            opis.includes('rata ') ||
+                            opis.includes('rata:')
+                          );
+                        });
+
+                        if (passTrans.length === 0) {
+                          return <div className="text-slate-400 italic text-center py-3">Brak historii zakupów karnetów w bazie transakcji.</div>;
+                        }
+
+                        return passTrans.map((t: any) => {
+                          const kwotaNum = typeof t.kwota === 'number' ? t.kwota : parseFloat(String(t.kwota || '0').replace(/[^0-9.-]/g, ''));
+                          return (
+                            <div key={t.id} className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-200 shadow-xs hover:border-sky-300 transition-colors">
+                              <div className="space-y-0.5">
+                                <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                                  <span>🎟️</span>
+                                  <span>{t.opis || 'Zakup karnetu'}</span>
+                                </div>
+                                <div className="text-[10px] font-mono text-slate-500">
+                                  {t.created_at ? new Date(t.created_at).toLocaleString('pl-PL') : '-'}
+                                  {t.typ_operacji ? ` • ${String(t.typ_operacji).toUpperCase()}` : ''}
+                                </div>
                               </div>
-                              <div className="font-black text-slate-800">{t.kwota !== null ? `${t.kwota} PLN` : ''}</div>
+                              <div className="font-black text-slate-800 text-right whitespace-nowrap ml-2">
+                                {!isNaN(kwotaNum) && kwotaNum !== 0 ? `${Math.abs(kwotaNum).toFixed(2)} PLN` : (t.kwota === 0 ? '0.00 PLN (Bezpłatny)' : '')}
+                              </div>
                             </div>
-                          ))
-                      ) : (
-                        <div className="text-slate-400 italic text-center py-3">Brak historii zakupów karnetów w bazie transakcji.</div>
-                      )}
+                          );
+                        });
+                      })()}
                     </div>
                   )}
                 </div>
@@ -3811,7 +3894,8 @@ export default function KlienciPage() {
                             });
                           }
                         });
-                        (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
+
+                      (profileClient.zapisyPrzeszle || []).forEach((item: any) => {
                         const classDetails = findClassDetailsInGrafik(item.classKey, zapisaneZajecia, jednorazoweZajecia, nadpisaneZajeciaDni);
                         const { display: displayDate, sortTime: st } = formatDisplayClassDate(item.data);
                         const classItemMs = st || parseClassDate(item.data);
@@ -4156,7 +4240,6 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
-
       {/* MODAL: PRZEDŁUŻ KARNET */}
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -4482,7 +4565,7 @@ export default function KlienciPage() {
                     .map((item: any) => (
                     <tr key={item.id} className="hover:bg-sky-50/30 transition-colors">
                       <td className="py-3 px-3 font-mono whitespace-nowrap">{new Date(item.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
-                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800 whitespace-nowrap">{item.typ_operacji.replace('_', ' ')}</td>
+                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800 whitespace-nowrap">{item.typ_operacji.replace(/_/g, ' ')}</td>
                       <td className={`py-3 px-3 font-black text-sm whitespace-nowrap ${item.kwota !== null && item.kwota < 0 ? 'text-rose-600' : item.kwota !== null && item.kwota > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
                         {item.kwota !== null ? `${item.kwota > 0 ? '+' : ''}${item.kwota.toFixed(2)} PLN` : '-'}
                       </td>
