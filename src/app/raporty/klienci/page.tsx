@@ -53,13 +53,13 @@ const isContractPassCheck = (k: any, defKarnetu?: any): boolean => {
   return typ.includes('umowa') || typ.includes('12m') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12 miesięcy');
 };
 
-// NAPRAWIONY KALKULATOR PRZEDŁUŻENIA UMÓW DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (BEZ BŁĘDU PODWÓJNEGO DODAWANIA)
+// NAPRAWIONY KALKULATOR PRZEDŁUŻENIA UMÓW DO OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO
 const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   let targetYear = today.getFullYear();
-  let targetMonthIndex = today.getMonth(); // 0 = styczeń, 9 = październik
+  let targetMonthIndex = today.getMonth();
 
   if (baseDateStr && baseDateStr !== '-') {
     const [y, m, d] = String(baseDateStr).split('-').map(Number);
@@ -67,7 +67,6 @@ const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
       const expDate = new Date(y, m - 1, d);
       expDate.setHours(0, 0, 0, 0);
 
-      // Jeśli umowa jest ważna w przód, kolejna rata przesuwa o kolejny miesiąc
       if (expDate >= today) {
         targetYear = expDate.getFullYear();
         targetMonthIndex = expDate.getMonth() + 1;
@@ -75,7 +74,6 @@ const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
     }
   }
 
-  // Obiekt Date z dniem 0 kolejnego miesiąca zwraca ostatni dzień docelowego miesiąca
   const lastDayObj = new Date(targetYear, targetMonthIndex + 1, 0);
   const resYear = lastDayObj.getFullYear();
   const resMonth = String(lastDayObj.getMonth() + 1).padStart(2, '0');
@@ -448,7 +446,7 @@ const resolveAuthorAndMovementDetails = (
     }
     if (opis.includes('jako administrator') || opis.includes('przez klub')) {
       return {
-        authorLabel: '🛡️ Trener / Klub (Panel)',
+        authorLabel: '🛡️️ Trener / Klub (Panel)',
         isClient: false,
         rawActionType: 'ZAPIS (KLUB)',
         detailsDesc: opis,
@@ -491,6 +489,7 @@ const resolveAuthorAndMovementDetails = (
     detailsDesc: 'Zapis dokonany z telefonu'
   };
 };
+
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -634,7 +633,7 @@ export default function KlienciPage() {
 
   const calculateSystemDiscount = (client: any) => {
     if (!client) return 0;
-    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') return 0;
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') return 0;
 
     if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
       const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
@@ -1077,7 +1076,7 @@ export default function KlienciPage() {
         let currentWalletNum = getWalletNumber(c.Portfel ?? c.portfel ?? c.wallet);
         let walletChanged = false;
         let karnetyZmienione = false;
-        let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
+        let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true' || c.has_lost_continuity === true || c.has_lost_continuity === 'true';
 
         // 1. WERYFIKACJA STANU KARNETU I POPRAWNA OBSŁUGA BUFORA
         parsedKarnety = parsedKarnety.map((k: any) => {
@@ -1286,11 +1285,25 @@ export default function KlienciPage() {
 
         let currentDiscount = c.discount;
         let currentOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
-        let hasLostContinuity = continuityBroken || c.hasLostContinuity || false;
+        let hasLostContinuity = continuityBroken || c.hasLostContinuity || c.has_lost_continuity || false;
         let currentRabat = c.rabat !== undefined ? c.rabat : null;
 
-        if (utrataCiaglosci || finalKarnety.length === 0) {
-           if (currentDiscount > 0 || !hasLostContinuity) {
+        // KULOODPORNA BLOKADA ZAPĘTLANIA UTRATY CIĄGŁOŚCI W SUPABASE
+        const lastPassPurchaseTime = clientTransakcje
+          .filter((t: any) => {
+            const typ = String(t.typ_operacji || '').toLowerCase();
+            const op = String(t.opis || '').toLowerCase();
+            return typ.includes('karnet') || typ.includes('umow') || typ.includes('oplata_raty') || op.includes('karnet') || op.includes('umow');
+          })
+          .map((t: any) => new Date(t.created_at).getTime())
+          .sort((a: number, b: number) => b - a)[0] || 0;
+
+        const alreadyLoggedUtrata = clientTransakcje.some((t: any) => 
+          t.typ_operacji === 'utrata_ciaglosci' && new Date(t.created_at).getTime() >= lastPassPurchaseTime
+        );
+
+        if (utrataCiaglosci) {
+           if (!hasLostContinuity || currentDiscount > 0 || !alreadyLoggedUtrata) {
                currentDiscount = '';
                hasLostContinuity = true;
                currentRabat = 0;
@@ -1299,19 +1312,28 @@ export default function KlienciPage() {
                currentOffset = -staryStd;
                hasChanges = true;
 
-               supabase.from('transakcje').insert([{
-                 klient_id: c.id,
-                 typ_operacji: 'utrata_ciaglosci',
-                 kwota: null,
-                 opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
-               }]).then();
-               
-               clientTransakcje.push({
-                 typ_operacji: 'utrata_ciaglosci',
-                 created_at: new Date().toISOString(),
-                 opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
-               });
+               // Wstawiamy wpis do tabeli transakcje TYLKO JEDEN RAZ!
+               if (!alreadyLoggedUtrata) {
+                 await supabase.from('transakcje').insert([{
+                   klient_id: c.id,
+                   typ_operacji: 'utrata_ciaglosci',
+                   kwota: null,
+                   opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
+                 }]);
+                 
+                 clientTransakcje.push({
+                   typ_operacji: 'utrata_ciaglosci',
+                   created_at: new Date().toISOString(),
+                   opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
+                 });
+               }
            }
+        } else if (finalKarnety.length === 0 && !hasLostContinuity) {
+           // Jeśli klient nie ma karnetów i nie ma flagi utraty, ustawiamy wyłącznie flagę w profilu bez tworzenia transakcji
+           hasLostContinuity = true;
+           currentDiscount = '';
+           currentRabat = 0;
+           hasChanges = true;
         }
 
         const calculatedExpiry = getLatestPassExpiry(finalKarnety);
@@ -1328,6 +1350,7 @@ export default function KlienciPage() {
                'Rabat za ciągłość': hasLostContinuity ? '0%' : (c['Rabat za ciągłość'] ?? '0%'),
                system_discount_offset: currentOffset,
                hasLostContinuity: hasLostContinuity,
+               has_lost_continuity: hasLostContinuity,
                continuityBreakNotice: continuityNotice
            };
 
@@ -1354,6 +1377,7 @@ export default function KlienciPage() {
           rabat: currentRabat,
           systemDiscountOffset: currentOffset,
           hasLostContinuity: hasLostContinuity,
+          has_lost_continuity: hasLostContinuity,
           continuityBreakNotice: continuityNotice,
           firstName: c.Imię || c.firstName || '',
           lastName: c.Nazwisko || c.lastName || '',
@@ -1460,6 +1484,7 @@ export default function KlienciPage() {
     
     const fakeClient = {...profileClient};
     fakeClient.hasLostContinuity = false;
+    fakeClient.has_lost_continuity = false;
     const std = calculateStandardSystemDiscount(fakeClient);
     
     const newOffset = targetVal - std;
@@ -1468,13 +1493,15 @@ export default function KlienciPage() {
         ...profileClient, 
         rabat: targetVal, 
         systemDiscountOffset: newOffset, 
-        hasLostContinuity: false 
+        hasLostContinuity: false,
+        has_lost_continuity: false
     };
     
     const { error } = await supabase.from('klienci').update({ 
         rabat: targetVal, 
         system_discount_offset: newOffset, 
-        hasLostContinuity: false 
+        hasLostContinuity: false,
+        has_lost_continuity: false
     }).eq('id', profileClient.id);
     
     if (error) {
@@ -1486,7 +1513,6 @@ export default function KlienciPage() {
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingSystemDiscount(false);
   };
-
   const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingRef.current) return;
@@ -2817,7 +2843,7 @@ export default function KlienciPage() {
                         )}
                         {aktywnaBlokada && (
                           <span className="bg-rose-50 text-rose-800 text-[9px] font-black px-1.5 py-0.2 rounded border border-rose-200 inline-block w-fit whitespace-nowrap">
-                            ⚠️ Zablokowane: {client.blokadaDo || (client.karnetyKlubowicza && client.karnetyKlubowicza[0]?.blokadaDo)}
+                            ⚠️️ Zablokowane: {client.blokadaDo || (client.karnetyKlubowicza && client.karnetyKlubowicza[0]?.blokadaDo)}
                           </span>
                         )}
                       </div>
@@ -3332,7 +3358,7 @@ export default function KlienciPage() {
                        ) : (
                          <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => { setSystemDiscountInput(calculateSystemDiscount(profileClient).toString()); setIsEditingSystemDiscount(true); }}>
                            <span className="font-black text-sky-700 text-xs">{calculateSystemDiscount(profileClient)}%</span>
-                           <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
+                           <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️️</span>
                          </div>
                        )}
                     </div>
