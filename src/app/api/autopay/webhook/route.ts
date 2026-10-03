@@ -49,7 +49,7 @@ function calculateEndOfMonthDate(currentPaidUntil?: string | null): string {
   return `${baseYear}-${String(baseMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 }
 
-// AUTOMATYCZNA WERYFIKACJA POLECENIA AMBASADORA PRZY OPŁACIE ONLINE
+// AUTOMATYCZNA WERYFIKACJA POLECENIA AMBASADORA PRZY OPŁACIE ONLINE (ODPORNA NA BRAK REKORDU STARTOWEGO)
 async function evaluateAmbassadorReferralInWebhook(
   klientId: number, 
   clientName: string, 
@@ -57,15 +57,47 @@ async function evaluateAmbassadorReferralInWebhook(
   totalPassPrice: number
 ) {
   try {
-    const { data: pendingRef } = await supabase
+    // 1. Zabezpieczenie przed dublowaniem: sprawdzamy, czy to polecenie zostało już wcześniej zaliczone
+    const { data: existingConfirmed } = await supabase
       .from('referrals')
-      .select('id, referrer_id')
+      .select('id')
       .eq('referred_client_id', klientId)
-      .eq('status', 'oczekuje_na_pierwszy_karnet')
+      .eq('status', 'confirmed')
       .maybeSingle();
 
-    if (!pendingRef) return;
+    if (existingConfirmed) {
+      return;
+    }
 
+    // 2. Szukamy istniejącego rekordu w tabeli referrals
+    const { data: existingRef } = await supabase
+      .from('referrals')
+      .select('id, referrer_id, status')
+      .eq('referred_client_id', klientId)
+      .maybeSingle();
+
+    let targetReferrerId: number | null = existingRef?.referrer_id || null;
+    let refRecordId: number | null = existingRef?.id || null;
+
+    // 3. Jeśli nie ma rekordu w referrals, sprawdzamy powiązanie w tabeli klienci
+    if (!targetReferrerId) {
+      const { data: klientData } = await supabase
+        .from('klienci')
+        .select('referred_by')
+        .eq('id', klientId)
+        .maybeSingle();
+
+      if (klientData?.referred_by) {
+        targetReferrerId = Number(klientData.referred_by);
+      }
+    }
+
+    // Jeśli klient nie jest z polecenia, przerywamy
+    if (!targetReferrerId) {
+      return;
+    }
+
+    // 4. Pobieramy minimalną kwotę kwalifikującą z ambassador_settings
     let minPrice = 200;
     try {
       const { data: settingsData } = await supabase
@@ -81,21 +113,38 @@ async function evaluateAmbassadorReferralInWebhook(
     const isQualified = totalPassPrice >= minPrice;
     const newStatus = isQualified ? 'confirmed' : 'disqualified';
 
-    await supabase
-      .from('referrals')
-      .update({
-        pass_name: passName,
-        pass_price: totalPassPrice,
-        is_qualified: isQualified,
-        status: newStatus
-      })
-      .eq('id', pendingRef.id);
+    // 5. Zapis lub aktualizacja w tabeli referrals
+    if (refRecordId) {
+      await supabase
+        .from('referrals')
+        .update({
+          referrer_id: targetReferrerId,
+          pass_name: passName,
+          pass_price: totalPassPrice,
+          is_qualified: isQualified,
+          status: newStatus
+        })
+        .eq('id', refRecordId);
+    } else {
+      await supabase
+        .from('referrals')
+        .insert([{
+          referrer_id: targetReferrerId,
+          referred_client_id: klientId,
+          pass_name: passName,
+          pass_price: totalPassPrice,
+          is_qualified: isQualified,
+          status: newStatus,
+          created_at: new Date().toISOString()
+        }]);
+    }
 
-    if (isQualified && pendingRef.referrer_id) {
+    // 6. Powiadomienie na czacie dla osoby polecającej
+    if (isQualified && targetReferrerId) {
       await supabase.from('czat_wiadomosci').insert([{
         nadawca_id: SYSTEM_CHAT_ID,
         nadawca_nazwa: 'Program Ambasador',
-        odbiorca_id: pendingRef.referrer_id,
+        odbiorca_id: targetReferrerId,
         tresc: `🎉 Świetna wiadomość! Twój polecony znajomy (${clientName}) opłacił swój pierwszy karnet: "${passName}" za ${totalPassPrice.toFixed(2)} PLN. Polecenie zostało pomyślnie zaliczone do Twoich nagród Ambasadora!`,
         przeczytana: false,
         created_at: new Date().toISOString()
@@ -348,7 +397,6 @@ export async function POST(req: Request) {
             })
             .eq('id', targetOrderId);
         } else {
-          // Fallback: szukanie najnowszego oczekującego zamówienia tego klienta
           const customerEmail = gatewayResponse.email || (klient ? (klient['E-mail'] || klient.email) : '');
           if (customerEmail) {
             const { data: latestOrder } = await supabase
@@ -370,7 +418,6 @@ export async function POST(req: Request) {
           }
         }
 
-        // Automatyczna aktualizacja stanów magazynowych w tabeli products
         if (targetOrderId) {
           const { data: items } = await supabase
             .from('order_items')
