@@ -665,6 +665,10 @@ export async function POST(req: Request) {
             karnetyKlubowicza: updatedKarnety
           };
 
+          if (metadata.ambassador_claimed_tier_id) {
+            clientUpdatePayload.ambassador_claimed_tier_id = metadata.ambassador_claimed_tier_id;
+          }
+
           const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat') || klient.powodBlokady?.toLowerCase().includes('wplat');
           if (isBlockedForContract || klient.blokadaDo) {
             clientUpdatePayload.blokadaDo = null;
@@ -748,6 +752,11 @@ export async function POST(req: Request) {
             if (metadata.hasLostContinuity !== undefined) {
               clientUpdatePayload.hasLostContinuity = metadata.hasLostContinuity;
             }
+          }
+
+          // PROGRAM AMBASADOR: Zapis jednorazowo skonsumowanego progu Ambasadora
+          if (metadata.ambassador_claimed_tier_id) {
+            clientUpdatePayload.ambassador_claimed_tier_id = metadata.ambassador_claimed_tier_id;
           }
 
           if (metadata.cenaStr) {
