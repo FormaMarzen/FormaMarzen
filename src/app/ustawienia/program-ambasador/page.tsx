@@ -47,8 +47,18 @@ interface ReferralRecord {
   } | null;
 }
 
+interface ClientSearchResult {
+  id: number;
+  Imię: string | null;
+  Nazwisko: string | null;
+  'E-mail': string | null;
+  'Numer tel.': string | null;
+  referral_code: string | null;
+  rabat: number | null;
+}
+
 export default function ProgramAmbasadorUstawieniaPage() {
-  const [activeTab, setActiveTab] = useState<'tiers' | 'rules' | 'history'>('tiers');
+  const [activeTab, setActiveTab] = useState<'tiers' | 'rules' | 'history' | 'lookup'>('tiers');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -60,6 +70,12 @@ export default function ProgramAmbasadorUstawieniaPage() {
   });
   const [tiers, setTiers] = useState<AmbassadorTier[]>([]);
   const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
+
+  // WYSZUKIWARKA KLUBOWICZÓW
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchResults, setSearchResults] = useState<ClientSearchResult[]>([]);
+  const [isSearchingClient, setIsSearchingClient] = useState<boolean>(false);
+  const [selectedClient, setSelectedClient] = useState<ClientSearchResult | null>(null);
 
   const [isTierModalOpen, setIsTierModalOpen] = useState<boolean>(false);
   const [editingTierId, setEditingTierId] = useState<number | null>(null);
@@ -125,6 +141,37 @@ export default function ProgramAmbasadorUstawieniaPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleSearchClients = async (query: string) => {
+    setSearchQuery(query);
+    const cleanQuery = query.trim();
+    if (cleanQuery.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearchingClient(true);
+    try {
+      const { data, error } = await supabase
+        .from('klienci')
+        .select('id, "Imię", "Nazwisko", "E-mail", "Numer tel.", referral_code, rabat')
+        .or(`Imię.ilike.%${cleanQuery}%,Nazwisko.ilike.%${cleanQuery}%,"E-mail".ilike.%${cleanQuery}%`)
+        .limit(10);
+
+      if (!error && data) {
+        setSearchResults(data as ClientSearchResult[]);
+      }
+    } catch (err) {
+      console.error('Błąd wyszukiwania klienta:', err);
+    } finally {
+      setIsSearchingClient(false);
+    }
+  };
+
+  const handleSelectClient = (client: ClientSearchResult) => {
+    setSelectedClient(client);
+    setSearchResults([]);
+  };
 
   const handleSaveSettings = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -257,6 +304,17 @@ export default function ProgramAmbasadorUstawieniaPage() {
     .filter((r) => r.is_qualified)
     .reduce((acc, curr) => acc + Number(curr.pass_price || 0), 0);
 
+  // OBLICZENIA DLA WYBRANEGO KLUBOWICZA W WYSZUKIWARCE
+  const selectedClientReferrals = selectedClient
+    ? referrals.filter((r) => r.referrer?.id === selectedClient.id)
+    : [];
+  const selectedClientQualifiedCount = selectedClientReferrals.filter((r) => r.is_qualified).length;
+
+  const activeTiersSorted = [...tiers].filter((t) => t.is_active).sort((a, b) => a.required_referrals - b.required_referrals);
+  const unlockedTiers = activeTiersSorted.filter((t) => selectedClientQualifiedCount >= t.required_referrals);
+  const currentClientTier = unlockedTiers.length > 0 ? unlockedTiers[unlockedTiers.length - 1] : null;
+  const nextClientTier = activeTiersSorted.find((t) => selectedClientQualifiedCount < t.required_referrals) || null;
+
   return (
     <div className="w-full max-w-[1700px] mx-auto space-y-5 sm:space-y-6 pb-24 font-sans antialiased text-slate-800 px-3 sm:px-6 overflow-x-hidden">
       {statusMessage && (
@@ -372,6 +430,14 @@ export default function ProgramAmbasadorUstawieniaPage() {
           }`}
         >
           👥 Rejestr Poleconych ({referrals.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('lookup')}
+          className={`px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            activeTab === 'lookup' ? 'bg-amber-600 text-white shadow-sm' : 'bg-white text-amber-800 hover:bg-amber-50 border border-amber-300 font-bold'
+          }`}
+        >
+          🔍 Weryfikacja Klubowicza & Nagród
         </button>
       </div>
 
@@ -505,6 +571,302 @@ export default function ProgramAmbasadorUstawieniaPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* NOWA ZAKŁADKA: WYSZUKIWARKA I WERYFIKACJA KLUBOWICZA / NAGRÓD */}
+          {activeTab === 'lookup' && (
+            <div className="space-y-6">
+              {/* MODUŁ SZUKANIA */}
+              <div className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+                <div className="border-b border-sky-100 pb-3">
+                  <h3 className="font-black text-sm text-sky-950 uppercase flex items-center gap-2">
+                    <span>🔍</span> Wyszukaj Klubowicza z Bazy
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Wpisz imię, nazwisko lub adres e-mail, aby sprawdzić osiągnięty poziom Ambasadora, zdobyte nagrody oraz wykaz poleconych.
+                  </p>
+                </div>
+
+                <div className="relative max-w-xl">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Wpisz min. 2 litery (np. Izabela, Knap, Monika)..."
+                      value={searchQuery}
+                      onChange={(e) => handleSearchClients(e.target.value)}
+                      className="flex-1 bg-sky-50/50 border border-sky-200 rounded-2xl px-4 py-3 text-slate-800 font-bold text-sm focus:outline-none focus:border-sky-500 shadow-inner"
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-3 rounded-xl text-xs font-bold transition cursor-pointer"
+                      >
+                        ✕ Wyczyść
+                      </button>
+                    )}
+                  </div>
+
+                  {isSearchingClient && (
+                    <div className="text-xs text-slate-400 font-bold mt-2 ml-1 animate-pulse">
+                      Szukanie w bazie klientów...
+                    </div>
+                  )}
+
+                  {searchResults.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-sky-200 rounded-2xl shadow-2xl z-30 overflow-hidden divide-y divide-sky-100 max-h-72 overflow-y-auto">
+                      {searchResults.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => handleSelectClient(c)}
+                          className="w-full text-left p-3.5 hover:bg-sky-50/80 transition flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div>
+                            <div className="font-black text-slate-900 text-sm">
+                              {c.Imię || ''} {c.Nazwisko || ''}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              E-mail: {c['E-mail'] || '-'} • Tel: {c['Numer tel.'] || '-'}
+                            </div>
+                          </div>
+                          <span className="bg-sky-100 text-sky-900 font-black text-[10px] px-2.5 py-1 rounded-lg uppercase shrink-0">
+                            Wybierz →
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* SZCZEGÓŁOWY PROFIL I STATUS WYBRANEGO KLUBOWICZA */}
+              {selectedClient ? (
+                <div className="space-y-6 animate-in fade-in">
+                  {/* KARTA STATUSU AMBASADORA */}
+                  <div className="bg-white border border-sky-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-100 pb-4">
+                      <div>
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <h2 className="text-xl sm:text-2xl font-black text-slate-900">
+                            {selectedClient.Imię || ''} {selectedClient.Nazwisko || ''}
+                          </h2>
+                          {currentClientTier ? (
+                            <span
+                              className="px-3 py-1 rounded-xl text-xs font-black uppercase tracking-wider border shadow-sm"
+                              style={{
+                                backgroundColor: `${currentClientTier.badge_color}15`,
+                                color: currentClientTier.badge_color,
+                                borderColor: currentClientTier.badge_color
+                              }}
+                            >
+                              POZIOM: {currentClientTier.name}
+                            </span>
+                          ) : (
+                            <span className="bg-slate-100 text-slate-600 border border-slate-200 px-3 py-1 rounded-xl text-xs font-bold uppercase">
+                              Status: Początkujący
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          E-mail: <strong className="text-slate-800">{selectedClient['E-mail'] || '-'}</strong> • Tel: <strong className="text-slate-800">{selectedClient['Numer tel.'] || '-'}</strong> • Kod polecający: <span className="font-mono font-bold text-sky-900 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">{selectedClient.referral_code || 'Brak'}</span>
+                        </p>
+                      </div>
+
+                      <div className="text-right shrink-0 bg-emerald-50 border border-emerald-200 p-3 rounded-2xl text-center sm:text-right">
+                        <div className="text-[10px] font-black uppercase text-emerald-900">Zaliczone polecenia:</div>
+                        <div className="text-2xl font-black text-emerald-800">{selectedClientQualifiedCount}</div>
+                      </div>
+                    </div>
+
+                    {/* PROGRES DO NASTĘPNEGO PROGU */}
+                    <div className="bg-sky-50/50 border border-sky-200 p-4 rounded-2xl space-y-2">
+                      <div className="flex justify-between text-xs font-bold">
+                        <span className="text-slate-700">
+                          Aktualny poziom: <strong>{currentClientTier ? currentClientTier.name : 'Start'}</strong>
+                        </span>
+                        <span className="text-sky-950 font-black">
+                          {nextClientTier 
+                            ? `Następny cel: ${nextClientTier.name} (brakuje: ${nextClientTier.required_referrals - selectedClientQualifiedCount} poleceń)`
+                            : 'Osiągnięto najwyższy dostępny poziom! 👑'}
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 h-3 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full transition-all"
+                          style={{
+                            width: `${
+                              nextClientTier
+                                ? Math.min(100, Math.round((selectedClientQualifiedCount / nextClientTier.required_referrals) * 100))
+                                : 100
+                            }%`
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* PANEL PRZYZNAWANYCH NAGRÓD (DO WYDANIA W RECEPCJI) */}
+                    <div>
+                      <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-wider mb-3">
+                        🎁 Wykaz Nagród i Zniżek dla tego Klubowicza
+                      </h3>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                        {activeTiersSorted.map((tier) => {
+                          const isUnlocked = selectedClientQualifiedCount >= tier.required_referrals;
+
+                          return (
+                            <div
+                              key={tier.id}
+                              className={`rounded-2xl p-4 border flex flex-col justify-between transition relative overflow-hidden ${
+                                isUnlocked
+                                  ? 'bg-emerald-50/50 border-emerald-300 ring-2 ring-emerald-400/20 shadow-sm'
+                                  : 'bg-white border-slate-200 opacity-60'
+                              }`}
+                            >
+                              <div
+                                className="absolute top-0 left-0 right-0 h-1.5"
+                                style={{ backgroundColor: tier.badge_color || '#0284c7' }}
+                              />
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between mt-1">
+                                  <span
+                                    className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border"
+                                    style={{
+                                      borderColor: tier.badge_color,
+                                      color: tier.badge_color,
+                                      backgroundColor: `${tier.badge_color}15`
+                                    }}
+                                  >
+                                    {tier.name} ({tier.required_referrals} {tier.required_referrals === 1 ? 'os.' : 'os.'})
+                                  </span>
+
+                                  {isUnlocked ? (
+                                    <span className="bg-emerald-600 text-white text-[9px] font-black px-2 py-0.5 rounded uppercase">
+                                      ✓ ODBLOKOWANA
+                                    </span>
+                                  ) : (
+                                    <span className="bg-slate-100 text-slate-500 text-[9px] font-bold px-2 py-0.5 rounded uppercase">
+                                      ZABLOKOWANA
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="pt-1">
+                                  <div className="text-[10px] font-black uppercase text-slate-500">
+                                    Nagroda Ambasadora (-{tier.ambassador_discount_percent}%):
+                                  </div>
+                                  <div className={`text-xs font-bold leading-snug mt-0.5 ${isUnlocked ? 'text-slate-900' : 'text-slate-500'}`}>
+                                    {tier.reward_description}
+                                  </div>
+                                </div>
+
+                                <div className="pt-1 border-t border-slate-100">
+                                  <div className="text-[10px] font-black uppercase text-slate-500">
+                                    Bonus dla znajomego (-{tier.referee_discount_percent}%):
+                                  </div>
+                                  <div className="text-[11px] font-medium text-slate-600 leading-snug mt-0.5">
+                                    {tier.referee_reward_description || 'Darmowy trening + rabat'}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                                <span className="font-bold text-slate-500">Status nagrody:</span>
+                                <span className={`font-black ${isUnlocked ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                  {isUnlocked ? '🎉 Należy się klubowiczowi' : 'Wymaga więcej poleconych'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* REJESTR OSÓB POLECONYCH PRZEZ TEGO KLUBOWICZA */}
+                  <div className="bg-white border border-sky-200 rounded-3xl shadow-sm overflow-hidden">
+                    <div className="p-4 sm:p-5 border-b border-sky-100 flex items-center justify-between gap-2">
+                      <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase">
+                        👥 Osoby Polecone przez {selectedClient.Imię || ''} {selectedClient.Nazwisko || ''} ({selectedClientReferrals.length})
+                      </h3>
+                      <span className="text-xs bg-emerald-50 text-emerald-900 border border-emerald-200 font-bold px-3 py-1 rounded-full">
+                        Zaliczone do nagród: {selectedClientQualifiedCount}
+                      </span>
+                    </div>
+
+                    {selectedClientReferrals.length === 0 ? (
+                      <div className="p-10 text-center text-slate-400 text-xs italic">
+                        Ten klubowicz nie posiada jeszcze zarejestrowanych osób w systemie poleceń.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[650px] text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-sky-50/70 border-b border-sky-200 text-[11px] font-bold text-sky-900 uppercase tracking-wider">
+                              <th className="py-3.5 px-4">Nowy Klubowicz</th>
+                              <th className="py-3.5 px-4">Telefon</th>
+                              <th className="py-3.5 px-4">Zakupiony Karnet</th>
+                              <th className="py-3.5 px-4">Wartość</th>
+                              <th className="py-3.5 px-4 text-center">Status Kwalifikacji</th>
+                              <th className="py-3.5 px-4 text-right">Data</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-sky-100">
+                            {selectedClientReferrals.map((r) => (
+                              <tr key={r.id} className="hover:bg-sky-50/40 transition">
+                                <td className="py-3.5 px-4 font-bold text-slate-900">
+                                  {r.referred ? `${r.referred.Imię || ''} ${r.referred.Nazwisko || ''}` : 'Nowy klubowicz'}
+                                </td>
+                                <td className="py-3.5 px-4 text-slate-500 font-mono">
+                                  {r.referred?.['Numer tel.'] || '-'}
+                                </td>
+                                <td className="py-3.5 px-4 font-bold text-sky-950">
+                                  {r.pass_name || 'Trening próbny'}
+                                </td>
+                                <td className="py-3.5 px-4 font-black text-slate-800">
+                                  {Number(r.pass_price || 0).toFixed(2)} PLN
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  {r.is_qualified ? (
+                                    <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase">
+                                      ✓ ZALICZONE DO PROGU
+                                    </span>
+                                  ) : r.status === 'oczekuje_na_pierwszy_karnet' ? (
+                                    <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase">
+                                      ⏳ Trening próbny (Oczekuje na karnet)
+                                    </span>
+                                  ) : (
+                                    <span className="bg-rose-100 text-rose-900 border border-rose-300 text-[10px] font-black px-2.5 py-1 rounded-md uppercase">
+                                      ✕ Poniżej min. ({settings.min_pass_price} zł)
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4 text-right text-slate-500 font-medium">
+                                  {new Date(r.created_at).toLocaleDateString('pl-PL', {
+                                    day: '2-digit',
+                                    month: '2-digit',
+                                    year: 'numeric'
+                                  })}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-3xl p-12 text-center text-slate-400 space-y-2">
+                  <span className="text-4xl block">👤</span>
+                  <div className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                    Nie wybrano żadnego klubowicza
+                  </div>
+                  <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
+                    Skorzystaj z wyszukiwarki powyżej, aby znaleźć osobę i sprawdzić stan jej nagród Ambasadora.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </>
