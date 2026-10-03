@@ -37,7 +37,7 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
   today.setHours(0, 0, 0, 0);
 
   let targetYear = today.getFullYear();
-  let targetMonthIndex = today.getMonth(); // 0 = styczeń, 9 = październik
+  let targetMonthIndex = today.getMonth();
 
   if (baseDateStr && baseDateStr !== '-') {
     const [y, m, d] = baseDateStr.split('-').map(Number);
@@ -45,8 +45,6 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
       const expDate = new Date(y, m - 1, d);
       expDate.setHours(0, 0, 0, 0);
 
-      // Jeśli karnet jest już opłacony do przodu (jego data ważności to dzisiaj lub przyszłość),
-      // kolejna rata przedłuża go o kolejny miesiąc kalendarzowy:
       if (expDate >= today) {
         targetYear = expDate.getFullYear();
         targetMonthIndex = expDate.getMonth() + 1;
@@ -54,8 +52,6 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
     }
   }
 
-  // Obiekt Date z dniem 0 kolejnego miesiąca bezpiecznie zwraca ostatni dzień docelowego miesiąca
-  // oraz samoczynnie radzi sobie ze zmianą roku (np. przejście z grudnia na styczeń)
   const lastDayObj = new Date(targetYear, targetMonthIndex + 1, 0);
   const resYear = lastDayObj.getFullYear();
   const resMonth = String(lastDayObj.getMonth() + 1).padStart(2, '0');
@@ -753,7 +749,7 @@ export default function KarnetyPage() {
     };
   };
 
-  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW
+  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW (Z JEDNORAZOWYM RABATEM AMBASADORA I PRECYZYJNYM OZNACZENIEM TIER_ID)
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number, targetPassNameToCheck?: string) => {
     if (!client) return { 
       percent: 0, 
@@ -766,6 +762,7 @@ export default function KarnetyPage() {
       isBirthdayUsedThisYear: false, 
       ambassadorPercent: 0, 
       ambassadorTierName: '', 
+      ambassadorTierId: null,
       isPassQualifiedForAmbassador: true,
       refereePercent: 0,
       refereeTierName: '',
@@ -785,6 +782,7 @@ export default function KarnetyPage() {
     const rawAmbDiscountVal = Number(client.ambassadorDiscountPercent) || 0;
     const ambassadorTierName = client.ambassadorTierName || '';
     const tierTargetPass = (client.ambassadorTargetPass || 'all').toLowerCase().trim();
+    const ambassadorTierId = client.ambassadorTierId || null;
 
     let ambassadorDiscountVal = 0;
     let isPassQualifiedForAmbassador = true;
@@ -869,6 +867,7 @@ export default function KarnetyPage() {
         isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
         ambassadorPercent: ambassadorDiscountVal,
         ambassadorTierName: ambassadorTierName,
+        ambassadorTierId: ambassadorTierId,
         isPassQualifiedForAmbassador,
         refereePercent: refereeDiscountVal,
         refereeTierName: refereeTierName,
@@ -885,8 +884,9 @@ export default function KarnetyPage() {
       birthdayPercent: 0, 
       daysLeftBirthday: bStatus.daysLeft, 
       isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
-      ambassadorPercent: 0,
-      ambassadorTierName: '',
+      ambassadorPercent: 0, 
+      ambassadorTierName: '', 
+      ambassadorTierId: null,
       isPassQualifiedForAmbassador,
       refereePercent: 0,
       refereeTierName: '',
@@ -1117,7 +1117,7 @@ export default function KarnetyPage() {
                     return {
                       ...k,
                       zeroEntriesGraceUntil: tomorrowStr,
-                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`
+                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} • zachowaj ciągłość)`
                     };
                   }
                 }
@@ -1288,9 +1288,11 @@ export default function KarnetyPage() {
 
             const rawContinuity = extractClientContinuityDiscount(c);
 
+            // LOGIKA PROGRAMU AMBASADOR: JEDNORAZOWY RABAT DLA OSIĄGNIĘTEGO PROGU
             let ambDiscountPercent = 0;
             let ambTierName = '';
             let ambTargetPass = 'all';
+            let ambTierId: number | null = null;
             let qualifiedCount = 0;
 
             try {
@@ -1303,11 +1305,24 @@ export default function KarnetyPage() {
               qualifiedCount = qRefs ? qRefs.length : 0;
 
               if (ambassadorTiersList.length > 0 && qualifiedCount > 0) {
+                let highestMatchedTier: any = null;
                 for (const t of ambassadorTiersList) {
                   if (qualifiedCount >= t.required_referrals) {
-                    ambDiscountPercent = Number(t.ambassador_discount_percent) || 0;
-                    ambTierName = t.name;
-                    ambTargetPass = t.target_pass_name || 'all';
+                    highestMatchedTier = t;
+                  }
+                }
+
+                if (highestMatchedTier) {
+                  ambTierName = highestMatchedTier.name;
+                  ambTargetPass = highestMatchedTier.target_pass_name || 'all';
+                  ambTierId = highestMatchedTier.id;
+
+                  // Sprawdzamy, czy ten konkretny próg został już skonsumowany przez Ambasadora
+                  const claimedTierId = c.ambassador_claimed_tier_id ? Number(c.ambassador_claimed_tier_id) : null;
+                  if (claimedTierId !== highestMatchedTier.id) {
+                    ambDiscountPercent = Number(highestMatchedTier.ambassador_discount_percent) || 0;
+                  } else {
+                    ambDiscountPercent = 0; // Rabat z tego poziomu został już wykorzystany na wcześniejszy karnet/ratę!
                   }
                 }
               }
@@ -1363,11 +1378,13 @@ export default function KarnetyPage() {
               'Rabat za ciągłość': continuityBroken ? '0%' : (rawContinuity !== null ? `${rawContinuity}%` : null),
               system_discount_offset: c.system_discount_offset || 0,
               umowa_oplacona_do: c.umowa_oplacona_do || null,
+              ambassador_claimed_tier_id: c.ambassador_claimed_tier_id || null,
               karnetyKlubowicza: verifiedKarnety,
               historiaZawieszenGlobalna: parsedGlobalHistory,
               wallet: displayWallet,
               ambassadorDiscountPercent: ambDiscountPercent,
               ambassadorTierName: ambTierName,
+              ambassadorTierId: ambTierId,
               ambassadorTargetPass: ambTargetPass,
               qualifiedReferralsCount: qualifiedCount,
               refereeDiscountPercent: refDiscountPercent,
@@ -1400,6 +1417,7 @@ export default function KarnetyPage() {
                rabat_za_ciaglosc: '0%',
                system_discount_offset: 0,
                umowa_oplacona_do: null,
+               ambassador_claimed_tier_id: null,
                Zarejestrowany: new Date().toISOString().split('T')[0],
                karnetyKlubowicza: []
              };
@@ -1422,10 +1440,12 @@ export default function KarnetyPage() {
                  'Rabat za ciągłość': '0%',
                  system_discount_offset: 0,
                  umowa_oplacona_do: null,
+                 ambassador_claimed_tier_id: null,
                  historiaZawieszenGlobalna: [],
                  wallet: '0.00 PLN',
                  ambassadorDiscountPercent: 0,
                  ambassadorTierName: '',
+                 ambassadorTierId: null,
                  ambassadorTargetPass: 'all',
                  qualifiedReferralsCount: 0,
                  refereeDiscountPercent: 0,
@@ -1811,6 +1831,11 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
+    // Jeśli Ambasador skorzystał z rabatu w tej płatności, rejestrujemy wykorzystany poziom
+    const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
+      ? effectiveDiscount.ambassadorTierId
+      : null;
+
     if (amountToPayAutopay > 0 && !isBonus13thPeriod) {
       const orderId = `EXT-${currentUser.id}-${Date.now()}`.substring(0, 32);
       const opisOperacji = isContract 
@@ -1828,7 +1853,8 @@ export default function KarnetyPage() {
         newWalletBalance: nowyStanPortfelaStr,
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
-        appliedDiscountCodeId: appliedDiscountCode?.id || null
+        appliedDiscountCodeId: appliedDiscountCode?.id || null,
+        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist
       };
 
       setIsExtendModalOpen(false);
@@ -1852,6 +1878,10 @@ export default function KarnetyPage() {
       dbPayload.rabat = finalRabatInt;
       dbPayload.cyklCiaglosci = finalCyklInt;
       dbPayload.hasLostContinuity = false;
+    }
+
+    if (ambassadorClaimedTierToPersist) {
+      dbPayload.ambassador_claimed_tier_id = ambassadorClaimedTierToPersist;
     }
 
     if (isContract) {
@@ -1957,6 +1987,8 @@ export default function KarnetyPage() {
       portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
       wallet: nowyStanPortfelaStr,
       umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
+      ambassador_claimed_tier_id: dbPayload.ambassador_claimed_tier_id !== undefined ? dbPayload.ambassador_claimed_tier_id : currentUser.ambassador_claimed_tier_id,
+      ambassadorDiscountPercent: ambassadorClaimedTierToPersist ? 0 : currentUser.ambassadorDiscountPercent,
       blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
       powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
     });
@@ -2152,6 +2184,11 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
+    // Jeśli Ambasador skorzystał z rabatu w tym zakupie, zapisujemy wykorzystany poziom
+    const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
+      ? effectiveDiscount.ambassadorTierId
+      : null;
+
     if (amountToPayAutopay > 0) {
       const orderId = `BUY-${currentUser.id}-${Date.now()}`.substring(0, 32);
       const opisOperacji = `Zakup ${selectedBuyPass}`;
@@ -2168,7 +2205,8 @@ export default function KarnetyPage() {
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
         appliedDiscountCodeId: appliedDiscountCode?.id || null,
-        umowa_oplacona_do: isContract && contractInfo ? contractInfo.endOfFirstMonthStr : null
+        umowa_oplacona_do: isContract && contractInfo ? contractInfo.endOfFirstMonthStr : null,
+        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist
       };
 
       setIsBuyPassModalOpen(false);
@@ -2193,6 +2231,10 @@ export default function KarnetyPage() {
       dbPayload.rabat = finalRabatInt;
       dbPayload.cyklCiaglosci = finalCyklInt;
       dbPayload.hasLostContinuity = false;
+    }
+
+    if (ambassadorClaimedTierToPersist) {
+      dbPayload.ambassador_claimed_tier_id = ambassadorClaimedTierToPersist;
     }
 
     if (isContract && contractInfo) {
@@ -2283,6 +2325,8 @@ export default function KarnetyPage() {
       portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
       wallet: nowyStanPortfelaStr,
       umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
+      ambassador_claimed_tier_id: dbPayload.ambassador_claimed_tier_id !== undefined ? dbPayload.ambassador_claimed_tier_id : currentUser.ambassador_claimed_tier_id,
+      ambassadorDiscountPercent: ambassadorClaimedTierToPersist ? 0 : currentUser.ambassadorDiscountPercent,
       blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
       powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
     });
@@ -2409,7 +2453,6 @@ export default function KarnetyPage() {
       return;
     }
 
-    // WYMÓG: Start najwcześniej od jutra
     if (suspendStartDate <= todayStr) {
       setSuspendError('Zawieszenie karnetu nie może rozpocząć się dzisiaj ani w przeszłości. Najwcześniejszy możliwy termin to jutro.');
       return;
@@ -3255,7 +3298,7 @@ export default function KarnetyPage() {
                 );
               })
             )}
-          </div>
+            </div>
           <div className="mt-4 flex flex-wrap gap-3">
             <button 
               onClick={() => { resetDiscountState(); setActivationMode('today'); setSelectedBuyPass(''); setIsBuyPassModalOpen(true); }}
@@ -3573,7 +3616,7 @@ export default function KarnetyPage() {
             <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                  <span>🎟️</span> ZAKUP NOWEGO KARNETU ILOŚCIOWEGO
+                  <span>🎟️️</span> ZAKUP NOWEGO KARNETU ILOŚCIOWEGO
                 </h3>
                 <button 
                   onClick={() => { setIsQuantityTransferModalOpen(false); setPendingQuantityPassData(null); }} 
@@ -3917,7 +3960,7 @@ export default function KarnetyPage() {
 
                   {!effectiveDiscount.isPassQualifiedForReferee && effectiveDiscount.refereePercent > 0 && (
                     <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
-                      ℹ️ Twój rabat powitalny z polecenia ({effectiveDiscount.refereePercent}%) przysługuje na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
+                      ℹ️️ Twój rabat powitalny z polecenia ({effectiveDiscount.refereePercent}%) przysługuje na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
                     </div>
                   )}
 
